@@ -512,9 +512,12 @@ public class ImportChainsTests : IDisposable {
     }
 
     /// <summary>Cancels the import the moment the harness-title request goes out, and lets every other request
-    /// through to the stub server.</summary>
-    sealed class CancelOnHarnessTitle(CancellationTokenSource cts) : DelegatingHandler(new HttpClientHandler()) {
+    /// through to the stub server — except session-end, which fails outright when asked to.</summary>
+    sealed class CancelOnHarnessTitle(CancellationTokenSource cts, bool failSessionEnd = false) : DelegatingHandler(new HttpClientHandler()) {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (failSessionEnd && request.RequestUri!.AbsolutePath.StartsWith("/hooks/session-end", StringComparison.Ordinal))
+                throw new InvalidOperationException("session-end failed");
+
             if (request.RequestUri!.AbsolutePath != "/hooks/harness-title") return base.SendAsync(request, ct);
 
             cts.Cancel();
@@ -554,5 +557,38 @@ public class ImportChainsTests : IDisposable {
         await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/session-end/codex")).IsEqualTo(1);
         await Assert.That(titleTasks).IsEqualTo(0);
         await Assert.That(ended).IsEqualTo(0);
+    }
+
+    /// <summary>A held cancellation surfaces even when the session-end sent after it fails, on both the new and the
+    /// resumed path, rather than the failure turning the session into an ordinary error.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task ImportChainsAsync_codex_title_cancellation_propagates_when_session_end_fails(bool resumed) {
+        StubAllHookEndpoints();
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var errored = 0;
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => Interlocked.Increment(ref errored),
+            OnSessionWarning      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => { },
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var cts    = new CancellationTokenSource();
+        using var client = new HttpClient(new CancelOnHarnessTitle(cts, failSessionEnd: true));
+        var session = resumed
+            ? CodexSession() with { Status = ImportCommand.ClassificationStatus.Partial, ResumeFromLine = 1 }
+            : CodexSession();
+
+        await Assert.That(async () => await Import().ImportChainsAsync(client, _server.Url!, [[session]], events, cts.Token))
+                    .Throws<OperationCanceledException>();
+        await Assert.That(errored).IsEqualTo(0);
     }
 }

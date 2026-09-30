@@ -3275,11 +3275,16 @@ class ImportCommand(
                 if (resumeLastTs is not null) resumeEndHook["ended_at"] = resumeLastTs.Value.ToString("O");
 
                 using var endContent = new StringContent(resumeEndHook.ToJsonString(), Encoding.UTF8, "application/json");
-                using var endResp    = await httpClient.PostWithRetryAsync(
-                    $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time,
-                    ct: resumeTitleCancelled ? CancellationToken.None : ct, retryStatuses: true);
-
-                if (resumeTitleCancelled) ct.ThrowIfCancellationRequested();
+                HttpResponseMessage endPosted;
+                try {
+                    endPosted = await httpClient.PostWithRetryAsync(
+                        $"{baseUrl}/hooks/session-end/{session.Vendor.VendorId}", endContent, time,
+                        ct: resumeTitleCancelled ? CancellationToken.None : ct, retryStatuses: true);
+                } finally {
+                    // A held cancellation outranks however session-end ended.
+                    if (resumeTitleCancelled) ct.ThrowIfCancellationRequested();
+                }
+                using var endResp = endPosted;
 
                 if (!endResp.IsSuccessStatusCode) {
                     events.OnSessionErrored(slot, session.SessionId, $"resume session-end failed: HTTP {(int)endResp.StatusCode}");
