@@ -58,6 +58,14 @@ public class SessionTakeoverTests {
     }
 
     [Test]
+    public async Task Refuses_an_upper_case_dashed_guid_of_the_current_session() {
+        var routes = new Routes();
+        var r = await Run(routes, previous: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB");
+        await Assert.That(((TakeoverResult.Refused)r).Reason).Contains("cannot continue itself");
+        await Assert.That(routes.Requests.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Refuses_a_session_the_server_does_not_show() {
         var routes = new Routes();
         routes.Get($"/api/sessions/{Previous}/summary", 404, "");
@@ -103,6 +111,13 @@ public class SessionTakeoverTests {
     public async Task A_local_exit_record_proceeds_even_when_the_server_says_active() {
         DeadClaim(Previous);
         var r = await Run(Server(Active(TimeSpan.FromMinutes(1))));
+        await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("exited");
+    }
+
+    [Test]
+    public async Task An_upper_case_id_finds_the_local_exit_record() {
+        DeadClaim(Previous);
+        var r = await Run(Server(Active(TimeSpan.FromMinutes(1))), previous: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
         await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("exited");
     }
 

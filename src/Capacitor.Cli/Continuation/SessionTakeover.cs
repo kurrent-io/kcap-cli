@@ -21,17 +21,14 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
     public async Task<TakeoverResult> RunAsync(
             HttpClient client, string baseUrl, string previous, string current, bool force, CancellationToken ct = default) {
-        if (SessionId.Parse(previous) is not { } previousId)
-            return new TakeoverResult.Refused($"'{previous}' is not a session id.");
-
-        if (previousId == SessionId.Parse(current))
-            return new TakeoverResult.Refused("A session cannot continue itself: name the session whose work this one takes over.");
-
-        if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire)
+        if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire || SessionId.Parse(previousWire) is not { } previousId)
             return new TakeoverResult.Refused($"'{previous}' is not a session id.");
 
         if (WorkContextIds.CanonicalSessionId(current) is not { } currentWire)
             return new TakeoverResult.Refused($"'{current}' is not a session id.");
+
+        if (previousWire == currentWire)
+            return new TakeoverResult.Refused("A session cannot continue itself: name the session whose work this one takes over.");
 
         var escaped = Uri.EscapeDataString(previousWire);
 
