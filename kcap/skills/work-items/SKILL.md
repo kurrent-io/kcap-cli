@@ -51,6 +51,7 @@ no breakdown.
 1. **Attach the session to its work item** (if it isn't already). `declare_work_item`
    with exactly one of `issue_key`, `pr_number`, `work_item_id`, or `new_title`.
    Check `get_session_work_items` first if unsure what the session is attached to.
+   Continuing another session's work? `kcap recap <X> --continue` attaches this session to its work items (and plans) in one step.
 2. **Create the part items.** Each part is itself a work item — create one per
    sub-task with `declare_work_item` (`new_title`), keeping the id each returns.
 3. **Declare the breakdown.** `declare_work_breakdown` with `parent_id` and the
