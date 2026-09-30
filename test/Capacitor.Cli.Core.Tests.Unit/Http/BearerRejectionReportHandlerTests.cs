@@ -116,4 +116,15 @@ public class BearerRejectionReportHandlerTests {
         await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo(body)
             .Because("the bytes read while probing must be put back in front of the rest");
     }
+
+    [Test]
+    public async Task A_bearer_whose_payload_is_not_an_object_still_reports() {
+        static string B64Url(string s) =>
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+        var (_, reports) = await SendAsync(HttpStatusCode.Unauthorized, "{}", bearer: $"{B64Url("{}")}.{B64Url("[]")}.sig");
+
+        await Assert.That(reports).Count().IsEqualTo(1);
+        await Assert.That(reports[0]).Contains("bearer is not a readable JWT");
+    }
 }

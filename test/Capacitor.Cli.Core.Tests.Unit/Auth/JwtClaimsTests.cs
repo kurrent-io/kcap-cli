@@ -54,6 +54,9 @@ public class JwtClaimsTests {
     [Arguments("""{"exp":"soon"}""")]
     [Arguments("""{"sub":"u"}""")]
     [Arguments("""{"exp":1e300}""")]
+    [Arguments("null")]
+    [Arguments("[1]")]
+    [Arguments("\"text\"")]
     public async Task ANonNumericOrMissingTimeIsNullNeverThrows(string payload) =>
         await Assert.That(JwtClaims.TryGetTime(Token(payload), "exp")).IsNull();
 }

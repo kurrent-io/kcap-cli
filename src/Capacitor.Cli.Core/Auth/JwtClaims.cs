@@ -12,7 +12,8 @@ public static class JwtClaims {
     /// <summary>A NumericDate claim (<c>exp</c>, <c>iat</c>), or null when absent or not a number.</summary>
     public static DateTimeOffset? TryGetTime(string accessToken, string claimName) =>
         TryReadPayload(accessToken, root =>
-            root.TryGetProperty(claimName, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var seconds)
+            root.ValueKind == JsonValueKind.Object
+         && root.TryGetProperty(claimName, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var seconds)
                 ? DateTimeOffset.FromUnixTimeSeconds(seconds)
                 : (DateTimeOffset?)null);
 
