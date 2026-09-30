@@ -569,8 +569,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
      && value.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-');
 
     /// <summary>PostAsync buffers the whole reply before returning; this leaves the body to the bounded read.</summary>
-    static Task<HttpResponseMessage> PostHeadersFirstAsync(HttpClient client, string url, HttpContent content, CancellationToken ct) =>
-        client.SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = content }, HttpCompletionOption.ResponseHeadersRead, ct);
+    static async Task<HttpResponseMessage> PostHeadersFirstAsync(HttpClient client, string url, HttpContent content, CancellationToken ct) {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
 
     static bool IsWorkItemEvalTool(string toolName) =>
         toolName is "list_work_item_evals" or "get_work_item_eval" or "request_work_item_eval" or "cancel_work_item_eval";
