@@ -85,4 +85,28 @@ public class CodexSessionIndexTitleTests {
 
         await Assert.That(store.Read()!.Title).IsEqualTo("Appended");
     }
+
+    [Test]
+    public async Task ReadAll_keeps_the_last_named_line_per_session_and_skips_malformed_ones() {
+        const string other = "00000000-0000-0000-0000-000000000001";
+        Tmp.CreateFile("session_index.jsonl", string.Join('\n',
+            $$"""{"id":"{{Id}}","thread_name":"First","updated_at":"2026-09-29T10:00:00Z"}""",
+            "{oops",
+            """["not","an","object"]""",
+            """{"id":"not-a-guid","thread_name":"Nobody"}""",
+            $$"""{"id":"{{other}}","thread_name":"Other"}""",
+            $$"""{"id":"{{Id}}","thread_name":"Renamed","updated_at":"2026-09-29T12:00:00Z"}""",
+            $$"""{"id":"{{Id}}","thread_name":"  ","updated_at":"2026-09-29T13:00:00Z"}""") + "\n");
+
+        var all = CodexSessionIndexTitle.ReadAll(Tmp.Path);
+
+        await Assert.That(all.Count).IsEqualTo(2);
+        await Assert.That(all[Id.Replace("-", "")]).IsEqualTo(new StoreTitle("Renamed", HarnessTitleKind.Rename, DateTimeOffset.Parse("2026-09-29T12:00:00Z", CultureInfo.InvariantCulture)));
+        await Assert.That(all[other.Replace("-", "")]).IsEqualTo(new StoreTitle("Other", HarnessTitleKind.Rename, null));
+    }
+
+    [Test]
+    public async Task ReadAll_is_empty_without_an_index() {
+        await Assert.That(CodexSessionIndexTitle.ReadAll(Tmp.Path).Count).IsEqualTo(0);
+    }
 }

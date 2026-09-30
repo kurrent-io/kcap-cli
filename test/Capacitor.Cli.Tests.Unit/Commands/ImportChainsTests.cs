@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -372,5 +373,243 @@ public class ImportChainsTests : IDisposable {
 
         await Assert.That(body["workspace_root"]?.GetValue<string>()).IsEqualTo(resolvedRepoDir);
         await Assert.That(body["cwd"]?.GetValue<string>()).IsEqualTo(resolvedRepoDir);
+    }
+
+    const string CodexSid = "0199a2b3c4d5e6f708192a3b4c5d6e7f";
+
+    ImportCommand.SessionClassification CodexSession() => MakeNewNoGit(CodexSid, 3) with { Vendor = HarnessId.Codex };
+
+    void WriteCodexIndex(string name, string updatedAt) {
+        var codexHome = TestHarnesses.Under(Home).Of<CodexHarness>().Paths.Home;
+        Directory.CreateDirectory(codexHome);
+        File.WriteAllText(Path.Combine(codexHome, "session_index.jsonl"),
+            $$"""{"id":"{{Guid.ParseExact(CodexSid, "N"):D}}","thread_name":"{{name}}","updated_at":"{{updatedAt}}"}""" + "\n");
+    }
+
+    async Task<int> ImportCodexCountingTitleTasks() {
+        var titleTasks = 0;
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionWarning      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => Interlocked.Increment(ref titleTasks),
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var client = new HttpClient();
+        var result = await Import().ImportChainsAsync(client, _server.Url!, [[CodexSession()]], events, CancellationToken.None);
+        await Assert.That(result.Loaded).IsEqualTo(1);
+
+        return titleTasks;
+    }
+
+    /// <summary>Codex's own index title goes to /hooks/harness-title as a rename stamped with the index's
+    /// updated_at, and once the server takes it there no generated title is queued.</summary>
+    [Test]
+    public async Task ImportChainsAsync_posts_codex_index_title_and_skips_title_generation() {
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var titleTasks = await ImportCodexCountingTitleTasks();
+
+        var posts = _server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost());
+        await Assert.That(posts.Count).IsEqualTo(1);
+
+        var body = JsonNode.Parse(posts[0].RequestMessage.Body!)!;
+        await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo(CodexSid);
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo("Fix the flaky test");
+        await Assert.That(body["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(body["changed_at"]!.GetValue<DateTimeOffset>()).IsEqualTo(new DateTimeOffset(2026, 5, 1, 10, 20, 30, TimeSpan.Zero));
+        await Assert.That(titleTasks).IsEqualTo(0);
+    }
+
+    /// <summary>An older server takes the title only through /hooks/set-title, which fills an untitled session and
+    /// nothing more, so a generated title is still queued.</summary>
+    [Test]
+    public async Task ImportChainsAsync_still_generates_a_codex_title_when_only_the_legacy_route_took_it() {
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var titleTasks = await ImportCodexCountingTitleTasks();
+
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title").UsingPost()).Count).IsEqualTo(1);
+        await Assert.That(titleTasks).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ImportChainsAsync_posts_no_codex_title_when_the_index_names_none() {
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        var titleTasks = await ImportCodexCountingTitleTasks();
+
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost()).Count).IsEqualTo(0);
+        await Assert.That(titleTasks).IsEqualTo(1);
+    }
+
+    /// <summary>A Codex session the server already holds gets only its index name: no transcript, no lifecycle.</summary>
+    [Test]
+    public async Task PostAlreadyLoadedCodexTitles_posts_only_the_index_title() {
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+        const string unnamed = "0199a2b3c4d5e6f708192a3b4c5d6e70";
+
+        using var client = new HttpClient();
+        await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
+            CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+            MakeNewNoGit(unnamed, 3) with { Vendor = HarnessId.Codex, Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+        ], new Progress<ImportProgress>(), CancellationToken.None);
+
+        var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").ToList();
+        await Assert.That(posts.Select(e => e.RequestMessage.Path)).IsEquivalentTo(["/hooks/harness-title"]);
+
+        var body = JsonNode.Parse(posts[0].RequestMessage.Body!)!;
+        await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo(CodexSid);
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo("Fix the flaky test");
+        await Assert.That(body["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(body["changed_at"]!.GetValue<DateTimeOffset>()).IsEqualTo(new DateTimeOffset(2026, 5, 1, 10, 20, 30, TimeSpan.Zero));
+    }
+
+    [Test]
+    public async Task PostAlreadyLoadedCodexTitles_posts_nothing_for_a_session_the_index_does_not_name() {
+        WriteCodexIndex("Someone else", "2026-05-01T10:20:30Z");
+
+        using var client = new HttpClient();
+        await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
+            MakeNewNoGit("0199a2b3c4d5e6f708192a3b4c5d6e70", 3) with { Vendor = HarnessId.Codex, Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+        ], new Progress<ImportProgress>(), CancellationToken.None);
+
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+    }
+
+    /// <summary>The index is read once per import: a later change to the file is not seen by the same run.</summary>
+    [Test]
+    public async Task Codex_index_is_read_once_per_import() {
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Before", "2026-05-01T10:20:30Z");
+
+        var import = Import();
+        var loaded = CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded };
+        using var client = new HttpClient();
+
+        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], new Progress<ImportProgress>(), CancellationToken.None);
+        WriteCodexIndex("After", "2026-05-02T10:20:30Z");
+        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], new Progress<ImportProgress>(), CancellationToken.None);
+
+        var titles = _server.LogEntries.Select(e => JsonNode.Parse(e.RequestMessage.Body!)!["title"]!.GetValue<string>()).ToList();
+        await Assert.That(titles).IsEquivalentTo(["Before", "Before"]);
+    }
+
+    sealed class CancelOnHarnessTitle(CancellationTokenSource cts, bool failSessionEnd = false) : DelegatingHandler(new HttpClientHandler()) {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (failSessionEnd && request.RequestUri!.AbsolutePath.StartsWith("/hooks/session-end", StringComparison.Ordinal))
+                throw new InvalidOperationException("session-end failed");
+
+            if (request.RequestUri!.AbsolutePath != "/hooks/harness-title") return base.SendAsync(request, ct);
+
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+
+            throw new OperationCanceledException(cts.Token);
+        }
+    }
+
+    /// <summary>A cancellation during the title post still closes the session, then surfaces instead of reporting the
+    /// session loaded and queueing a generated title.</summary>
+    [Test]
+    public async Task ImportChainsAsync_codex_title_cancellation_sends_session_end_then_propagates() {
+        StubAllHookEndpoints();
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var titleTasks = 0;
+        var ended      = 0;
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionWarning      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => Interlocked.Increment(ref ended),
+            OnTitleTaskReady      = _ => Interlocked.Increment(ref titleTasks),
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var cts    = new CancellationTokenSource();
+        using var client = new HttpClient(new CancelOnHarnessTitle(cts));
+
+        await Assert.That(async () => await Import().ImportChainsAsync(client, _server.Url!, [[CodexSession()]], events, cts.Token))
+                    .Throws<OperationCanceledException>();
+
+        await Assert.That(_server.LogEntries.Count(e => e.RequestMessage.Path == "/hooks/session-end/codex")).IsEqualTo(1);
+        await Assert.That(titleTasks).IsEqualTo(0);
+        await Assert.That(ended).IsEqualTo(0);
+    }
+
+    /// <summary>A held cancellation surfaces even when the session-end sent after it fails, on both the new and the
+    /// resumed path, rather than the failure turning the session into an ordinary error.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task ImportChainsAsync_codex_title_cancellation_propagates_when_session_end_fails(bool resumed) {
+        StubAllHookEndpoints();
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var errored = 0;
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => Interlocked.Increment(ref errored),
+            OnSessionWarning      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => { },
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var cts    = new CancellationTokenSource();
+        using var client = new HttpClient(new CancelOnHarnessTitle(cts, failSessionEnd: true));
+        var session = resumed
+            ? CodexSession() with { Status = ImportCommand.ClassificationStatus.Partial, ResumeFromLine = 1 }
+            : CodexSession();
+
+        await Assert.That(async () => await Import().ImportChainsAsync(client, _server.Url!, [[session]], events, cts.Token))
+                    .Throws<OperationCanceledException>();
+        await Assert.That(errored).IsEqualTo(0);
+    }
+
+    sealed class CollectingProgress : IProgress<ImportProgress> {
+        public ConcurrentQueue<ImportProgress> Reports { get; } = new();
+
+        public void Report(ImportProgress value) => Reports.Enqueue(value);
+    }
+
+    [Test]
+    public async Task PostAlreadyLoadedCodexTitles_reports_a_title_the_server_refused() {
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(422));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var progress = new CollectingProgress();
+        using var client = new HttpClient();
+        await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
+            CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+        ], progress, CancellationToken.None);
+
+        var warning = progress.Reports.OfType<ImportTitleNotRecorded>().SingleOrDefault();
+        await Assert.That(warning).IsNotNull();
+        await Assert.That(warning!.SessionId).IsEqualTo(CodexSid);
     }
 }

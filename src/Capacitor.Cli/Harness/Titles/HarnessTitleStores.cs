@@ -19,14 +19,14 @@ internal static class HarnessTitleStores {
             "codex"       => new CodexSessionIndexTitle(harnesses.Of<CodexHarness>().Paths.Home, sessionId),
             "copilot"     => new CopilotWorkspaceTitle(Path.Combine(Path.GetDirectoryName(transcriptPath)!, "workspace.yaml")),
             "kiro"        => new KiroSessionTitle(Path.ChangeExtension(transcriptPath, ".json")),
-            "cursor"      => CursorStore(harnesses.Of<CursorHarness>().Paths, transcriptPath),
+            "cursor"      => Cursor(harnesses.Of<CursorHarness>().Paths, transcriptPath),
             "antigravity" => AntigravitySummaryTitle.ForTranscript(transcriptPath),
             _             => null,
         };
     }
 
     // The CLI's per-chat meta.json first; the IDE's composer record otherwise.
-    static IHarnessTitleStore CursorStore(CursorPaths paths, string transcriptPath) {
+    internal static IHarnessTitleStore Cursor(CursorPaths paths, string transcriptPath) {
         var chat = CursorChatTitle.ForTranscript(paths.ChatsDir, transcriptPath);
 
         return paths.GlobalStateDb is { } stateDb
