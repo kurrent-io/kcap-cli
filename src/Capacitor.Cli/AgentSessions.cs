@@ -7,8 +7,12 @@ namespace Capacitor.Cli;
 /// Which session each coding-agent process is running, so a process below it can name the session.
 /// The session whose hook ran last owns the process.
 /// </summary>
-sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf) {
+sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProvider? time = null) {
     const int MaxHops = 32;
+
+    static readonly TimeSpan ExitRetention = TimeSpan.FromDays(30);
+
+    readonly TimeProvider _time = time ?? TimeProvider.System;
 
     public static AgentSessions OnThisMachine(ConfigRoot config) => new(config, pid => ProcessHelpers.GetProcessInfo(pid)?.ppid);
 
@@ -59,15 +63,29 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf) {
     public bool IsClaimed(SessionId session) => Claimants().Any(pid => Of(pid) == session);
 
     /// <summary>
-    /// Drops every note no live process holds.
+    /// Drops every note no live process holds, keeping an exit record for its session: the only local
+    /// proof a session's agent is gone when nothing told the server, as for a private daemon agent.
     /// </summary>
     public void Reap() {
         foreach (var pid in Claimants()) {
-            if (Of(pid) is null) {
-                try { File.Delete(Note(pid)); } catch { }
-            }
+            if (Of(pid) is not null) continue;
+
+            try {
+                if (NotedSession(pid) is { } session) RecordExit(session);
+                File.Delete(Note(pid));
+            } catch { }
         }
+
+        PruneExitRecords();
     }
+
+    /// <summary>
+    /// A live claim wins over an exit record: a session resumed in a new process is running again.
+    /// </summary>
+    public SessionLiveness Liveness(SessionId session) =>
+        IsClaimed(session)              ? SessionLiveness.Running
+      : File.Exists(ExitRecord(session)) ? SessionLiveness.Exited
+      : SessionLiveness.Unknown;
 
     /// <summary>
     /// The session of the nearest agent process at or above <paramref name="pid"/>.
@@ -94,6 +112,33 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf) {
             return [];
         }
     }
+
+    SessionId? NotedSession(int pid) =>
+        File.ReadAllText(Note(pid)).Split('\n') is [var session, _] ? SessionId.Parse(session) : null;
+
+    void RecordExit(SessionId session) {
+        var record = ExitRecord(session);
+        Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+
+        var temp = $"{record}.{Environment.ProcessId}";
+        File.WriteAllText(temp, _time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture));
+        File.Move(temp, record, overwrite: true);
+    }
+
+    void PruneExitRecords() {
+        var cutoff = _time.GetUtcNow() - ExitRetention;
+
+        try {
+            foreach (var record in Directory.EnumerateFiles(config.Path("agent-sessions", "exited"))) {
+                try {
+                    if (!DateTimeOffset.TryParse(File.ReadAllText(record), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) || at < cutoff)
+                        File.Delete(record);
+                } catch { }
+            }
+        } catch { }
+    }
+
+    string ExitRecord(SessionId session) => config.Path("agent-sessions", "exited", session.Value);
 
     string Note(int pid) => config.Path("agent-sessions", pid.ToString(CultureInfo.InvariantCulture));
 }
