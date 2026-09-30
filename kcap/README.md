@@ -23,6 +23,12 @@ Search and recall past Kurrent Capacitor sessions from inside the agent.
 
 Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` defaults to *this* repo.
 
+### `kcap-handoff`
+
+| Tool | Description |
+|------|-------------|
+| `continue_session` | Attach this session to another session's work items and unfinished plans; refuses while that session may still be running |
+
 ### `kcap-review`
 
 PR review context tools. Each PR-scoped tool accepts an optional `pr` argument (`"owner/repo#123"` or a GitHub PR URL), so you can review any PR from any branch — no need to check it out first. When `pr` is omitted, the server falls back to the PR passed at startup (set by `kcap review <pr>`) or to git auto-detection against the current branch.

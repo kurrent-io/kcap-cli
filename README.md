@@ -273,6 +273,8 @@ The `kcap mcp workitems` stdio server lets agents attach the current session (an
 
 The `kcap mcp plans` stdio server lets agents declare the plan, spec or design document a session works from and the plan's task list — `declare_plan_document`, `set_plan_tasks`, `update_plan_task`, `get_plan` — so progress shows in the session view and the list survives context compaction. `kcap setup` / `kcap plugin install` **register it for every supported harness** alongside `kcap-workitems`. See the [Plans MCP server](#plans-mcp-server-for-agents) section for details.
 
+The `kcap mcp handoff` stdio server exposes `continue_session`, which attaches the current session to another session's work items and unfinished plans when that session's agent is gone. It refuses while the other session may still be running unless `force` is passed, and is registered for every supported harness like `kcap-plans`.
+
 The `kcap mcp analytics` stdio server lets agents answer analytics questions about the org's recorded coding sessions — spend, token/tool/model usage, outcomes, commits, PRs, evals — with governed read-only SQL over the server's curated analytics views. `kcap setup` **auto-registers it for Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, Gemini CLI, SST OpenCode, Google Antigravity, and AWS Kiro CLI** — alongside the other repo-aware servers. It's repo-aware: it resolves its scope from the working directory, so `cd` into a project before spawning your agent. See the [Analytics MCP server](#analytics-mcp-server-for-agents) section for details.
 
 ## What it records

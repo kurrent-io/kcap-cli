@@ -40,6 +40,8 @@ public static class KcapMcpServers {
             "Attach the current session to a work item (issue, PR, or a brand-new item), and list what a session is attached to.", AutoApprove: true),
         new("kcap-plans", ["mcp", "plans"], NeedsProjectCwd: true,
             "Declare the plan, spec or design document a session works from and the plan's task list; update task status and read the plan back after compaction.", AutoApprove: true),
+        new("kcap-handoff", ["mcp", "handoff"], NeedsProjectCwd: false,
+            "Continue a session whose agent is gone: attach this session to its work items and unfinished plans.", AutoApprove: true),
         new("kcap-artefacts", ["mcp", "artefacts"], NeedsProjectCwd: true,
             "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. Sandboxed with no network access, so everything is inlined; private until you set visibility."),
         new("kcap-analytics", ["mcp", "analytics"], NeedsProjectCwd: true,

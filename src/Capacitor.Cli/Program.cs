@@ -500,6 +500,8 @@ switch (command) {
                 return await Run<McpWorkItemsServer>().RunAsync();
             case "plans":
                 return await Run<McpPlansServer>().RunAsync();
+            case "handoff":
+                return await Run<McpHandoffServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
             case "artefacts":
