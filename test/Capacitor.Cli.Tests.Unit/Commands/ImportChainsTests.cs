@@ -468,7 +468,7 @@ public class ImportChainsTests : IDisposable {
         await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
             CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
             MakeNewNoGit(unnamed, 3) with { Vendor = HarnessId.Codex, Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
-        ], CancellationToken.None);
+        ], new Progress<ImportProgress>(), CancellationToken.None);
 
         var posts = _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").ToList();
         await Assert.That(posts.Select(e => e.RequestMessage.Path)).IsEquivalentTo(["/hooks/harness-title"]);
@@ -487,7 +487,7 @@ public class ImportChainsTests : IDisposable {
         using var client = new HttpClient();
         await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
             MakeNewNoGit("0199a2b3c4d5e6f708192a3b4c5d6e70", 3) with { Vendor = HarnessId.Codex, Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
-        ], CancellationToken.None);
+        ], new Progress<ImportProgress>(), CancellationToken.None);
 
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
     }
@@ -503,16 +503,14 @@ public class ImportChainsTests : IDisposable {
         var loaded = CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded };
         using var client = new HttpClient();
 
-        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], CancellationToken.None);
+        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], new Progress<ImportProgress>(), CancellationToken.None);
         WriteCodexIndex("After", "2026-05-02T10:20:30Z");
-        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], CancellationToken.None);
+        await import.PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [loaded], new Progress<ImportProgress>(), CancellationToken.None);
 
         var titles = _server.LogEntries.Select(e => JsonNode.Parse(e.RequestMessage.Body!)!["title"]!.GetValue<string>()).ToList();
         await Assert.That(titles).IsEquivalentTo(["Before", "Before"]);
     }
 
-    /// <summary>Cancels the import the moment the harness-title request goes out, and lets every other request
-    /// through to the stub server — except session-end, which fails outright when asked to.</summary>
     sealed class CancelOnHarnessTitle(CancellationTokenSource cts, bool failSessionEnd = false) : DelegatingHandler(new HttpClientHandler()) {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             if (failSessionEnd && request.RequestUri!.AbsolutePath.StartsWith("/hooks/session-end", StringComparison.Ordinal))
@@ -590,5 +588,28 @@ public class ImportChainsTests : IDisposable {
         await Assert.That(async () => await Import().ImportChainsAsync(client, _server.Url!, [[session]], events, cts.Token))
                     .Throws<OperationCanceledException>();
         await Assert.That(errored).IsEqualTo(0);
+    }
+
+    sealed class CollectingProgress : IProgress<ImportProgress> {
+        public ConcurrentQueue<ImportProgress> Reports { get; } = new();
+
+        public void Report(ImportProgress value) => Reports.Enqueue(value);
+    }
+
+    [Test]
+    public async Task PostAlreadyLoadedCodexTitles_reports_a_title_the_server_refused() {
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(422));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var progress = new CollectingProgress();
+        using var client = new HttpClient();
+        await Import().PostAlreadyLoadedCodexTitlesAsync(client, _server.Url!, [
+            CodexSession() with { Status = ImportCommand.ClassificationStatus.AlreadyLoaded },
+        ], progress, CancellationToken.None);
+
+        var warning = progress.Reports.OfType<ImportTitleNotRecorded>().SingleOrDefault();
+        await Assert.That(warning).IsNotNull();
+        await Assert.That(warning!.SessionId).IsEqualTo(CodexSid);
     }
 }

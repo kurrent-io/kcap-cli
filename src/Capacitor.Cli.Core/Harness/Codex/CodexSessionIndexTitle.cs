@@ -78,13 +78,12 @@ public sealed class CodexSessionIndexTitle(string codexHome, string sessionId) :
         return last;
     }
 
-    // A line naming no session or no title parses to nulls.
     static (Guid? Id, StoreTitle? Title) Parse(string line) {
         try {
             using var doc  = JsonDocument.Parse(line);
             var       root = doc.RootElement;
 
-            if (root.ValueKind != JsonValueKind.Object) return (null, null);
+            if (!root.IsObject) return (null, null);
             if (!Guid.TryParse(root.Str("id"), out var id)) return (null, null);
             if (root.Str("thread_name") is not { } name || string.IsNullOrWhiteSpace(name)) return (null, null);
 

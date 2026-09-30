@@ -1746,6 +1746,9 @@ class ImportCommand(
             classifications.Where(c => c.Status == ClassificationStatus.AlreadyLoaded
                                     && (selectedIds is null || selectedIds.Contains(c.SessionId))
                                     && !privacyBlocked.Contains(c.SessionId)),
+            new CallbackProgress(ev => {
+                if (ev is ImportWarning w) WarnSession(w.SessionId, w.Message);
+            }),
             CancellationToken.None);
 
         // --- Routed-source import phase (every non-chain source) ---
@@ -3503,11 +3506,13 @@ class ImportCommand(
             : Task.FromResult(false);
 
     /// <summary>Title-only pass for Codex sessions the server already holds: no transcript, lifecycle or generated
-    /// title, only the index name when there is one.</summary>
+    /// title, only the index name when there is one. A title the server did not record is reported to
+    /// <paramref name="progress"/>.</summary>
     internal async Task PostAlreadyLoadedCodexTitlesAsync(
             HttpClient                         httpClient,
             string                             baseUrl,
             IEnumerable<SessionClassification> sessions,
+            IProgress<ImportProgress>          progress,
             CancellationToken                  ct
         ) {
         var codex = sessions.Where(s => s.Vendor is HarnessId.Codex && s.Status == ClassificationStatus.AlreadyLoaded).ToList();
@@ -3516,7 +3521,7 @@ class ImportCommand(
         await Parallel.ForEachAsync(
             codex,
             new ParallelOptions { MaxDegreeOfParallelism = ImportWorkerCount, CancellationToken = ct },
-            async (session, token) => await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, null, token));
+            async (session, token) => await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, progress, token));
     }
 
     sealed class CallbackProgress(Action<ImportProgress> onReport) : IProgress<ImportProgress> {
