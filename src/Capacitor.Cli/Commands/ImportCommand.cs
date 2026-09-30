@@ -1550,6 +1550,8 @@ class ImportCommand(
         // it does not establish that anything is private. A session whose write was lost is dropped
         // from this run instead: uploading into it would publish new content to exactly the audience
         // the user just excluded, which is worse than not importing it at all.
+        IReadOnlySet<string> privacyBlocked = FrozenSet<string>.Empty;
+
         if (forcePrivate) {
             var existing = classifications
                 .Where(c => c.Status is ClassificationStatus.Partial
@@ -1565,6 +1567,7 @@ class ImportCommand(
 
                 if (unprivatized.Count > 0) {
                     var blocked = unprivatized.ToHashSet(StringComparer.Ordinal);
+                    privacyBlocked = blocked;
 
                     visibilityFailures += blocked.Count;
 
@@ -1740,10 +1743,12 @@ class ImportCommand(
         }
 
         // Chains carry only New/Partial sessions; a Codex session loaded by an earlier import still takes the name
-        // Codex has given it since.
+        // Codex has given it since — unless --private could not narrow it, which chains and routed skip too.
         await PostAlreadyLoadedCodexTitlesAsync(
             httpClient, baseUrl,
-            classifications.Where(c => c.Status == ClassificationStatus.AlreadyLoaded && (selectedIds is null || selectedIds.Contains(c.SessionId))),
+            classifications.Where(c => c.Status == ClassificationStatus.AlreadyLoaded
+                                    && (selectedIds is null || selectedIds.Contains(c.SessionId))
+                                    && !privacyBlocked.Contains(c.SessionId)),
             CancellationToken.None);
 
         // --- Routed-source import phase (every non-chain source) ---
