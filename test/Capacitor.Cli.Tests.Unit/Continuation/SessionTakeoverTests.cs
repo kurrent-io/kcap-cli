@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Continuation;
@@ -45,6 +46,15 @@ public class SessionTakeoverTests {
         Directory.CreateDirectory(Path.GetDirectoryName(note)!);
         File.WriteAllText(note, $"{session}\nlx:another-boot:1");
     }
+
+    void ExitRecord(string session, TimeSpan ago) {
+        var record = Config.Root.Path("agent-sessions", "exited", session);
+        Directory.CreateDirectory(Path.GetDirectoryName(record)!);
+        File.WriteAllText(record, (DateTimeOffset.UtcNow - ago).ToString("O", CultureInfo.InvariantCulture));
+    }
+
+    static string EndedAt(TimeSpan ago) =>
+        $$"""{"session_id":"{{Previous}}","status":"ended","last_event_at":"{{DateTimeOffset.UtcNow - ago:O}}"}""";
 
     // ── refusals ──
 
@@ -119,6 +129,28 @@ public class SessionTakeoverTests {
         DeadClaim(Previous);
         var r = await Run(Server(Active(TimeSpan.FromMinutes(1))), previous: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
         await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("exited");
+    }
+
+    [Test]
+    public async Task An_exit_record_newer_than_the_last_event_proceeds() {
+        ExitRecord(Previous, TimeSpan.FromMinutes(1));
+        var r = await Run(Server(Active(TimeSpan.FromMinutes(5))));
+        await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("exited");
+    }
+
+    /// <summary>The session was resumed elsewhere after this machine saw it exit.</summary>
+    [Test]
+    public async Task An_exit_record_older_than_a_recent_last_event_is_refused() {
+        ExitRecord(Previous, TimeSpan.FromMinutes(10));
+        var r = await Run(Server(Active(TimeSpan.FromMinutes(1))));
+        await Assert.That(r).IsTypeOf<TakeoverResult.Refused>();
+    }
+
+    [Test]
+    public async Task An_exit_record_older_than_the_last_event_defers_to_an_ended_server() {
+        ExitRecord(Previous, TimeSpan.FromMinutes(10));
+        var r = await Run(Server(EndedAt(TimeSpan.FromMinutes(1))));
+        await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("ended");
     }
 
     [Test]

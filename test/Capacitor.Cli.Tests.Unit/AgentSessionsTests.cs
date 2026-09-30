@@ -64,6 +64,16 @@ public class AgentSessionsTests {
     }
 
     [Test]
+    public async Task ExitedAt_reads_the_exit_record_time() {
+        var at = DateTimeOffset.UtcNow.AddHours(-2);
+        Directory.CreateDirectory(Path.GetDirectoryName(ExitRecord("gone"))!);
+        File.WriteAllText(ExitRecord("gone"), at.ToString("O", CultureInfo.InvariantCulture));
+
+        await Assert.That(Sessions.ExitedAt(SessionId.Parse("gone")!)).IsEqualTo(at);
+        await Assert.That(Sessions.ExitedAt(SessionId.Parse("elsewhere")!)).IsNull();
+    }
+
+    [Test]
     public async Task A_live_claim_is_running_even_with_an_exit_record() {
         DeadNote(Shell, Session.Value);
         Sessions.Reap();

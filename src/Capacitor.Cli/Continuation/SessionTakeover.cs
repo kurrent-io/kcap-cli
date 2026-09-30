@@ -9,9 +9,10 @@ namespace Capacitor.Cli.Continuation;
 
 /// <summary>
 /// Attaches the current session to the work items and unfinished plans of the session it continues.
-/// A live local process refuses the takeover; a local exit record allows it whatever the server
-/// still believes, because a private daemon agent's death never reaches the server. Only with no
-/// local evidence does the server's status decide.
+/// A live local process refuses the takeover; a local exit record allows it whatever the server's
+/// status says, because a private daemon agent's death never reaches the server — unless the server
+/// saw an event after that exit, which means the session was resumed elsewhere. Otherwise the
+/// server's status decides.
 /// </summary>
 sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
     /// <summary>The server's own threshold for treating an active session as stale.</summary>
@@ -46,7 +47,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
         local.Reap();
 
-        var (liveness, refusal) = Judge(previous, local.Liveness(previousId), ParseObject(await summary.Content.ReadAsStringAsync(ct)), force);
+        var (liveness, refusal) = Judge(previous, local.Liveness(previousId), local.ExitedAt(previousId), ParseObject(await summary.Content.ReadAsStringAsync(ct)), force);
         if (refusal is not null) return new TakeoverResult.Refused(refusal);
 
         var itemsRead = ReadAsync(client, $"{baseUrl}/api/work-items/session/{escaped}", ct);
@@ -71,24 +72,24 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         return new TakeoverResult.Completed(outcome, unsuccessful);
     }
 
-    (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, bool force) {
+    (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, DateTimeOffset? exitedAt, JsonObject? summary, bool force) {
         if (force) return ("forced", null);
 
-        switch (here) {
-            case SessionLiveness.Running:
-                return ("running", $"Session {previous} is still running on this machine. Take it over only if the user confirms, by retrying with force.");
-            case SessionLiveness.Exited:
-                return ("exited", null);
-        }
+        if (here == SessionLiveness.Running)
+            return ("running", $"Session {previous} is still running on this machine. Take it over only if the user confirms, by retrying with force.");
+
+        var lastEvent = Time(summary?["last_event_at"]);
+
+        if (here == SessionLiveness.Exited && exitedAt is { } exited && (lastEvent is null || exited >= lastEvent)) return ("exited", null);
 
         if (string.Equals(Str(summary?["status"]), "ended", StringComparison.OrdinalIgnoreCase)) return ("ended", null);
 
-        var lastSeen = Time(summary?["last_event_at"]) ?? Time(summary?["started_at"]);
+        var lastSeen = lastEvent ?? Time(summary?["started_at"]);
         if (lastSeen is { } seen && time.GetUtcNow() - seen > StaleAfter) return ("stale", null);
 
         var when = lastSeen?.ToString("u", CultureInfo.InvariantCulture) ?? "unknown";
 
-        return ("active", $"Session {previous} still looks active (last event {when}) and did not run on this machine. If its agent is gone, ask the user, then retry with force.");
+        return ("active", $"Session {previous} still looks active (last event {when}) and this machine has no record of its agent exiting since. If its agent is gone, ask the user, then retry with force.");
     }
 
     static async Task<JsonObject> AttachWorkItemsAsync(
