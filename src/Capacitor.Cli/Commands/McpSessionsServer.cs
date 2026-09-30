@@ -287,8 +287,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         }
     }
 
-    /// <summary>The recap and the session's declared plans, fetched together. The plans lookup is
-    /// best-effort: its failure or timeout returns the summary without them.</summary>
+    /// <summary>The recap, the session's declared plans and its work items, fetched together. The
+    /// plans and work-items lookups are best-effort: a failure, timeout or refusal returns the
+    /// summary without them.</summary>
     async Task<string> HandleSessionSummaryAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl) {
         try {
             var sessionId = arguments?["session_id"]?.GetValue<string>()
@@ -298,8 +299,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             var plansUrl = BuildSessionPlansUrl(baseUrl, sessionId);
 
             // The stdio loop is serial, so a stalled lookup would block every later request.
-            using var plansCts  = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
-            var       plansTask = FetchDeclaredPlansAsync(client, plansUrl, plansCts.Token);
+            using var lookupsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
+            var       plansTask  = FetchBestEffortAsync(client, plansUrl, "declared plans", lookupsCts.Token);
+            var       itemsTask  = FetchBestEffortAsync(client, $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(sessionId)}", "work items", lookupsCts.Token);
             try {
                 using var recap = await client.GetAsync(recapUrl);
                 var       body  = await recap.Content.ReadAsStringAsync();
@@ -312,10 +314,11 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     return BuildToolResult(id, $"Error: HTTP {(int)recap.StatusCode} — {body}", isError: true);
                 }
 
-                return BuildToolResult(id, ProjectRecapToSummary(body, await plansTask));
+                return BuildToolResult(id, ProjectRecapToSummary(body, await plansTask, await itemsTask));
             } finally {
-                plansCts.Cancel();   // a no-op once the lookup finished; otherwise ends it now, before the loop's next request
-                await plansTask;     // never throws: FetchDeclaredPlansAsync catches everything, cancellation included
+                lookupsCts.Cancel();   // a no-op once the lookups finished; otherwise ends them now, before the loop's next request
+                await plansTask;       // never throws: FetchBestEffortAsync catches everything, cancellation included
+                await itemsTask;
             }
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
@@ -324,13 +327,13 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         }
     }
 
-    static async Task<string?> FetchDeclaredPlansAsync(HttpClient client, string url, CancellationToken ct) {
+    static async Task<string?> FetchBestEffortAsync(HttpClient client, string url, string what, CancellationToken ct) {
         try {
             using var response = await client.GetAsync(url, ct);
 
             return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync(ct) : null;
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"kcap mcp sessions: declared plans lookup failed ({ex.GetType().Name}: {ex.Message}); returning the summary without them.");
+            await Console.Error.WriteLineAsync($"kcap mcp sessions: {what} lookup failed ({ex.GetType().Name}: {ex.Message}); returning the summary without them.");
 
             return null;
         }
@@ -826,7 +829,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     /// Projects a /recap response (RecapEntry[]) into { summary_text, plan, declared_plans? } for agent consumption.
     /// "Latest of type wins" — walks entries in order and keeps the last value for each type.
     /// </summary>
-    internal static string ProjectRecapToSummary(string body, string? plansBody = null) {
+    internal static string ProjectRecapToSummary(string body, string? plansBody = null, string? workItemsBody = null) {
         string? summaryText = null;
         string? plan        = null;
 
@@ -868,9 +871,45 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             sb.Append(declaredPlans);
         }
 
+        if (ProjectWorkItems(workItemsBody) is { } workItems) {
+            sb.Append(",\"work_items\":");
+            sb.Append(workItems);
+        }
+
         sb.Append('}');
 
         return sb.ToString();
+    }
+
+    /// <summary>The session's work items as JSON text, or null when there are none or they could not be read.</summary>
+    internal static string? ProjectWorkItems(string? body) {
+        if (body is null) return null;
+
+        try {
+            if (JsonNode.Parse(body) is not JsonArray items) return null;
+
+            var sb    = new StringBuilder("[");
+            var count = 0;
+
+            foreach (var item in items) {
+                if (item?["work_item_id"] is not JsonValue idValue || !idValue.TryGetValue(out string? workItemId) || workItemId is null) continue;
+
+                var label = item["label"] is JsonValue l && l.TryGetValue(out string? text) && text is not null ? text : workItemId;
+
+                if (count++ > 0) sb.Append(',');
+
+                sb.Append("{\"work_item_id\":");
+                AppendJsonString(sb, workItemId);
+                sb.Append(",\"label\":");
+                AppendJsonString(sb, label);
+                sb.Append(",\"is_primary\":").Append(item["is_primary"] is JsonValue p && p.TryGetValue(out bool primary) && primary ? "true" : "false");
+                sb.Append('}');
+            }
+
+            return count == 0 ? null : sb.Append(']').ToString();
+        } catch {
+            return null;
+        }
     }
 
     /// <summary>The declared-plans pointer as JSON text, or null when there is nothing to show.
@@ -1014,7 +1053,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_summary",
-            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Use this to orient yourself before drilling into the full transcript.",
+            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Also lists `work_items` the session is attached to. To take over a session's work items and unfinished plans — continuing a session whose agent is gone — call `continue_session` in kcap-handoff, or run `kcap recap <id> --continue`. Use this to orient yourself before drilling into the full transcript.",
             new(
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },

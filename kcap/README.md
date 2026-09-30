@@ -14,7 +14,7 @@ Search and recall past Kurrent Capacitor sessions from inside the agent.
 |------|-------------|
 | `search_sessions` | Keyword (one to three terms or identifiers) + author search over past sessions (and subagent transcripts), defaulted to the cwd's repo |
 | `list_repo_sessions` | List the sessions you can see on a repository or on all of them: running ones first, or those worked on in a period |
-| `get_session_summary` | Concise `summary_text` + `plan` + `declared_plans` for a session |
+| `get_session_summary` | Concise `summary_text` + `plan` + `declared_plans` + `work_items` for a session |
 | `list_turns` | Per-turn prose outline for a session |
 | `get_turn` | One turn's full transcript, by session id and turn index |
 | `get_session_transcript` | Speaker-tagged transcript window, with `around_event` drill-in for search hits |

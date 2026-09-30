@@ -829,4 +829,31 @@ public class McpSessionsServerTests {
         await Assert.That(pointers.Count).IsEqualTo(1);
         await Assert.That(pointers[0]!["plan_id"]!.GetValue<string>()).IsEqualTo("p-2");
     }
+
+    [Test]
+    public async Task Summary_lists_the_sessions_work_items() {
+        var json = McpSessionsServer.ProjectRecapToSummary("[]", null,
+            """[{"work_item_id":"w1","label":"#1 — One","source":"declared","confidence":1.0,"is_primary":true}]""");
+
+        var items = JsonNode.Parse(json)!["work_items"]!.AsArray();
+        await Assert.That(items.Count).IsEqualTo(1);
+        await Assert.That(items[0]!["work_item_id"]!.GetValue<string>()).IsEqualTo("w1");
+        await Assert.That(items[0]!["label"]!.GetValue<string>()).IsEqualTo("#1 — One");
+        await Assert.That(items[0]!["is_primary"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(items[0]!.AsObject().ContainsKey("confidence")).IsFalse();
+    }
+
+    [Test]
+    public async Task Summary_omits_work_items_when_there_are_none_or_they_are_unavailable() {
+        await Assert.That(JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary("[]", null, "[]"))!.AsObject().ContainsKey("work_items")).IsFalse();
+        await Assert.That(JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary("[]", null, null))!.AsObject().ContainsKey("work_items")).IsFalse();
+        await Assert.That(JsonNode.Parse(McpSessionsServer.ProjectRecapToSummary("[]", null, """{"code":"work_items_not_in_plan"}"""))!.AsObject().ContainsKey("work_items")).IsFalse();
+    }
+
+    [Test]
+    public async Task Summary_description_points_to_the_takeover() {
+        var tool = McpSessionsServer.BuildToolsList().Single(t => t.Name == "get_session_summary");
+        await Assert.That(tool.Description).Contains("continue_session");
+        await Assert.That(tool.Description).Contains("kcap recap");
+    }
 }
