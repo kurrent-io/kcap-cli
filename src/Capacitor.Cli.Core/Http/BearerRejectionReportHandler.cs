@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -27,7 +28,7 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
 
         try {
             var errorCode = await ReadErrorCodeAsync(response, ct)
-                         ?? ChallengeError(response.Headers.WwwAuthenticate.FirstOrDefault()?.ToString());
+                         ?? ChallengeError(response.Headers.WwwAuthenticate.Select(c => c.ToString()));
 
             report(Describe(request.Method.Method, request.RequestUri, errorCode, bearer, time.GetUtcNow()));
         } catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -61,11 +62,11 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
         } catch (WebSocketException) {
             if (webSocket.HttpStatusCode == HttpStatusCode.Unauthorized) {
                 try {
-                    var challenge = webSocket.HttpResponseHeaders?.TryGetValue("WWW-Authenticate", out var values) == true
-                        ? values.FirstOrDefault()
+                    var challenges = webSocket.HttpResponseHeaders?.TryGetValue("WWW-Authenticate", out var values) == true
+                        ? values
                         : null;
 
-                    report(Describe("GET", uri, ChallengeError(challenge), string.IsNullOrWhiteSpace(bearer) ? null : bearer, time.GetUtcNow()));
+                    report(Describe("GET", uri, ChallengeError(challenges), string.IsNullOrWhiteSpace(bearer) ? null : bearer, time.GetUtcNow()));
                 } catch {
                     // A diagnostic must never change the exception the caller sees.
                 }
@@ -83,20 +84,24 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
 
     // The server names the error in an RFC 6750 challenge too: `Bearer error="invalid_token"`. It is the
     // only place a refused WebSocket upgrade carries it, since the client never sees that response's body.
-    internal static string? ChallengeError(string? challenge) {
-        if (challenge is null) return null;
+    // Only a Bearer challenge's error describes the refused bearer; another scheme's is ignored.
+    internal static string? ChallengeError(IEnumerable<string>? challenges) {
+        foreach (var challenge in challenges ?? []) {
+            if (!AuthenticationHeaderValue.TryParse(challenge, out var parsed)
+                    || !parsed.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase)
+                    || parsed.Parameter is not { } parameters) {
+                continue;
+            }
 
-        const string marker = "error=\"";
+            foreach (var part in parameters.Split(',')) {
+                var pair = part.Split('=', 2, StringSplitOptions.TrimEntries);
 
-        var start = challenge.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (pair.Length == 2 && pair[0].Equals("error", StringComparison.OrdinalIgnoreCase))
+                    return pair[1].Trim('"') is { Length: > 0 } error ? error : null;
+            }
+        }
 
-        if (start < 0) return null;
-
-        start += marker.Length;
-
-        var end = challenge.IndexOf('"', start);
-
-        return end > start ? challenge[start..end] : null;
+        return null;
     }
 
     internal static string Describe(string method, Uri? uri, string? errorCode, string? bearer, DateTimeOffset now) =>
