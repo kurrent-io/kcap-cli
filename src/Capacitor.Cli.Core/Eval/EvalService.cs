@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -722,7 +723,8 @@ public static partial class EvalService {
 
     /// <summary>V4 finalize: aggregates <paramref name="assessments"/> and
     /// <paramref name="failures"/>, runs the retrospective only when at least one question was
-    /// assessed, and persists through <see cref="PersistAggregateV4Async"/>.</summary>
+    /// assessed, and persists through <see cref="PersistAggregateV4Async"/>. With no assessment but at least one failure it
+    /// persists a failure-only record and ends in <see cref="IEvalObserver.OnFailed"/>, never OnFinished.</summary>
     public static async Task<SessionEvalCompletedPayloadV4?> FinalizeAsync(
             EvalContext                            ctx,
             HttpClient                             httpClient,
@@ -735,6 +737,10 @@ public static partial class EvalService {
             CancellationToken                      ct
         ) {
         if (assessments.Count == 0) {
+            if (failures.Count > 0)
+                return await PersistFailureOnlyAsync(httpClient, baseUrl, ctx.EncodedSessionId,
+                    Aggregate(assessments, failures, ctx.EvalRunId, model, ctx.Questions), observer, time, ct);
+
             observer.OnFailed("all judge invocations failed");
 
             return null;
@@ -770,6 +776,24 @@ public static partial class EvalService {
         if (!ok) return null;
 
         observer.OnFinished(aggregate);
+
+        return aggregate;
+    }
+
+    /// <summary>Records a run whose every question failed, then reports it through
+    /// <see cref="IEvalObserver.OnFailed"/>: it is persisted, but it is not a finished evaluation.</summary>
+    static async Task<SessionEvalCompletedPayloadV4?> PersistFailureOnlyAsync(
+            HttpClient                    httpClient,
+            string                        baseUrl,
+            string                        encodedSessionId,
+            SessionEvalCompletedPayloadV4 aggregate,
+            IEvalObserver                 observer,
+            TimeProvider                  time,
+            CancellationToken             ct
+        ) {
+        if (!await PersistAggregateV4Async(httpClient, baseUrl, encodedSessionId, aggregate, observer, time, ct)) return null;
+
+        observer.OnFailed(aggregate.Summary);
 
         return aggregate;
     }
@@ -1498,7 +1522,9 @@ public static partial class EvalService {
         var judged          = stamped.Count;
         var total           = judged + failures.Count;
 
-        var summary = $"Evaluated {judged}/{total} questions across {byCategory.Count} categories. "
+        var summary = judged == 0 && failures.Count > 0
+            ? FailureOnlySummary(failures)
+            : $"Evaluated {judged}/{total} questions across {byCategory.Count} categories. "
             + $"{assessedCount} assessed, {unassessedCount} not assessed. "
             + (overall is { } o ? $"Overall: {o}/5 ({VerdictForScore(o)})." : "Overall: not scored.");
 
@@ -1516,6 +1542,22 @@ public static partial class EvalService {
             CoveragePolicyVersion = CoveragePolicyVersion
         };
     }
+
+    /// <summary>"Not evaluated: all 3 questions failed (spend_budget ×2, judge_timeout ×1)" — the server builds the same
+    /// summary for a failure-only run it records itself.</summary>
+    public static string FailureOnlySummary(IReadOnlyList<EvalQuestionFailure> failures) {
+        var codes = string.Join(", ", FailureCodeCounts(failures).Select(c => $"{c.Code} ×{c.Count.ToString(CultureInfo.InvariantCulture)}"));
+
+        return $"Not evaluated: all {failures.Count.ToString(CultureInfo.InvariantCulture)} questions failed ({codes})";
+    }
+
+    /// <summary>Each code present in <paramref name="failures"/> with its count, most frequent first, then by code.</summary>
+    public static IReadOnlyList<(string Code, int Count)> FailureCodeCounts(IEnumerable<EvalQuestionFailure> failures) =>
+        [.. failures
+            .GroupBy(f => f.Code, StringComparer.Ordinal)
+            .Select(g => (Code: g.Key, Count: g.Count()))
+            .OrderByDescending(c => c.Count)
+            .ThenBy(c => c.Code, StringComparer.Ordinal)];
 
     static int CategoryOrderFromTaxonomy(string category, IReadOnlyList<EvalQuestionDto> questions) {
         var idx  = 0;

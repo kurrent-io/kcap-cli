@@ -270,7 +270,7 @@ internal sealed class EvalRunner {
             var aggregate = await EvalService.FinalizeAsync(
                 ctx, httpClient, _baseUrl, cmd.Assessments, cmd.Failures, cmd.Model, observer, _time, _shutdownToken);
 
-            return new(aggregate is not null, aggregate is null ? "finalize failed" : null, null);
+            return FinalizedV2(aggregate);
         } catch (Exception ex) {
             _logger.LogError(ex, "FinalizeEvalV2 failed for {RunId}", cmd.EvalRunId);
 
@@ -289,7 +289,7 @@ internal sealed class EvalRunner {
 
         try {
             var aggregate = await EvalService.FinalizeEvidenceAsync(setup, httpClient, _baseUrl, cmd.Assessments, cmd.Failures, cmd.Model, observer, _time, phase.Token);
-            return new(aggregate is not null, aggregate is null ? "finalize failed" : null, null);
+            return FinalizedV2(aggregate);
         } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
             return new(false, "the finalize phase exceeded its budget", null);
         } catch (OperationCanceledException) when (lease.Cancelled.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
@@ -301,6 +301,12 @@ internal sealed class EvalRunner {
             _cache.Remove(cmd.EvalRunId, setup);
         }
     }
+
+    static FinalizeResult FinalizedV2(SessionEvalCompletedPayloadV4? aggregate) => aggregate switch {
+        null                    => new(false, "finalize failed", null),
+        { IsFailureOnly: true } => new(false, $"the failed run was persisted: {aggregate.Summary}", null),
+        _                       => new(true, null, null)
+    };
 
     async Task<FinalizeResult> HandleFinalizeAsync(FinalizeEvalCommand cmd) {
         var ctx = _cache.Get(cmd.EvalRunId);

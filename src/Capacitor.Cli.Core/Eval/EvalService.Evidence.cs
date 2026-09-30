@@ -301,13 +301,15 @@ public static partial class EvalService {
             IReadOnlyList<EvalQuestionFailure> failures, string model, IEvalObserver observer, TimeProvider time, CancellationToken ct) {
         if (assessments.Count == 0) {
             setup.Context.DiscardRetainedFacts();
-            observer.OnFailed("all judge invocations failed");
-            return null;
+            if (failures.Count == 0) {
+                observer.OnFailed("all judge invocations failed");
+                return null;
+            }
+            if (await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.PreDrainHeadroom, ct) == EvidenceScopeStatus.Moved) return ScopeMoved(setup, observer);
+            return await PersistFailureOnlyAsync(httpClient, baseUrl, setup.EncodedSessionId, EvidenceAggregate(setup, assessments, failures, model), observer, time, ct);
         }
 
-        var aggregate = Aggregate(assessments, failures, setup.EvalRunId, model, setup.Questions) with {
-            FactsUsed = [], CoveragePolicyVersion = EvidenceCoveragePolicyVersion, EvidenceScopeVersion = setup.Scope.State!.ScopeVersion
-        };
+        var aggregate = EvidenceAggregate(setup, assessments, failures, model);
 
         EvalRetrospectiveV2? retrospective = null;
         var clean = true;
@@ -349,6 +351,12 @@ public static partial class EvalService {
         try { await setup.DisposeAsync(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { observer.OnInfo($"could not remove {setup.Context.RunDirectory}: {e.Message}"); }
     }
+
+    static SessionEvalCompletedPayloadV4 EvidenceAggregate(EvidenceRunSetup setup, IReadOnlyList<EvalQuestionAssessment> assessments,
+            IReadOnlyList<EvalQuestionFailure> failures, string model) =>
+        Aggregate(assessments, failures, setup.EvalRunId, model, setup.Questions) with {
+            FactsUsed = [], CoveragePolicyVersion = EvidenceCoveragePolicyVersion, EvidenceScopeVersion = setup.Scope.State!.ScopeVersion
+        };
 
     static SessionEvalCompletedPayloadV4? ScopeMoved(EvidenceRunSetup setup, IEvalObserver observer) {
         setup.Context.DiscardRetainedFacts();
