@@ -52,6 +52,8 @@ partial class WatchCommand(
                     // outage must send whatever the credential is by then, not the one this watcher
                     // started with.
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
+                    options.HttpMessageHandlerFactory = inner =>
+                        new BearerRejectionReportHandler(time, report => Log(time, report)) { InnerHandler = inner };
                 }
             )
             .WithAutomaticReconnect(new InfiniteRetryPolicy())

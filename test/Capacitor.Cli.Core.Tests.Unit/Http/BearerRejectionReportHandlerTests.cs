@@ -1,0 +1,87 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Capacitor.Cli.Core.Tests.Unit.Http;
+
+/// <summary>
+/// A 401 is reported with the server's error code and the refused bearer's subject, issue time and
+/// expiry against local time — never the bearer — and the caller still gets the response, body
+/// included, exactly as the server sent it.
+/// </summary>
+public class BearerRejectionReportHandlerTests {
+    static readonly DateTimeOffset Now = new(2026, 9, 29, 22, 0, 0, TimeSpan.Zero);
+
+    sealed class Answer(HttpStatusCode status, string body) : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+    }
+
+    static string Token(long exp, long iat, string sub) {
+        static string B64Url(string s) =>
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(s)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+        return $"{B64Url("""{"alg":"RS256"}""")}.{B64Url($$"""{"sub":"{{sub}}","exp":{{exp}},"iat":{{iat}}}""")}.sig";
+    }
+
+    static async Task<(HttpResponseMessage response, List<string> reports)> SendAsync(
+            HttpStatusCode status, string body, string? bearer) {
+        var reports = new List<string>();
+        var client  = new HttpClient(new BearerRejectionReportHandler(new FakeTimeProvider(Now), reports.Add) {
+            InnerHandler = new Answer(status, body)
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://tenant.example/hubs/sessions/negotiate?negotiateVersion=1");
+
+        if (bearer is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+
+        return (await client.SendAsync(request), reports);
+    }
+
+    [Test]
+    public async Task A_401_reports_the_error_code_and_the_refused_bearers_times() {
+        var token = Token(exp: Now.AddSeconds(-90).ToUnixTimeSeconds(), iat: Now.AddMinutes(-6).ToUnixTimeSeconds(), sub: "user_1");
+
+        var (response, reports) = await SendAsync(
+            HttpStatusCode.Unauthorized, """{"error":"token_expired","message":"Token has expired."}""", token);
+
+        await Assert.That(reports).Count().IsEqualTo(1);
+        await Assert.That(reports[0]).Contains("401 from POST /hubs/sessions/negotiate:");
+        await Assert.That(reports[0]).Contains("server error=token_expired");
+        await Assert.That(reports[0]).Contains("sub=user_1");
+        await Assert.That(reports[0]).Contains("(-90s from now)");
+        await Assert.That(reports[0]).DoesNotContain(token).Because("the bearer itself must never be logged");
+        await Assert.That(reports[0]).DoesNotContain("negotiateVersion").Because("a query can carry an access token");
+
+        await Assert.That(await response.Content.ReadAsStringAsync()).Contains("token_expired")
+            .Because("reading the error code must leave the body readable for the caller");
+    }
+
+    [Test]
+    public async Task A_401_with_no_bearer_says_so() {
+        var (_, reports) = await SendAsync(HttpStatusCode.Unauthorized, """{"error":"unauthenticated"}""", bearer: null);
+
+        await Assert.That(reports).Count().IsEqualTo(1);
+        await Assert.That(reports[0]).Contains("server error=unauthenticated; no bearer sent");
+    }
+
+    [Test]
+    public async Task A_401_with_an_unreadable_body_or_bearer_still_reports() {
+        var (_, reports) = await SendAsync(HttpStatusCode.Unauthorized, "<html>nope</html>", bearer: "opaque");
+
+        await Assert.That(reports).Count().IsEqualTo(1);
+        await Assert.That(reports[0]).Contains("server error=-; bearer is not a readable JWT");
+    }
+
+    [Test]
+    [Arguments(HttpStatusCode.OK)]
+    [Arguments(HttpStatusCode.Forbidden)]
+    [Arguments(HttpStatusCode.ServiceUnavailable)]
+    public async Task Other_statuses_report_nothing(HttpStatusCode status) {
+        var (_, reports) = await SendAsync(status, "{}", bearer: "opaque");
+
+        await Assert.That(reports).IsEmpty();
+    }
+}

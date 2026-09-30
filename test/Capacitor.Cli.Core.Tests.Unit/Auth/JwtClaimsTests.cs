@@ -44,4 +44,16 @@ public class JwtClaimsTests {
     [Arguments("null")]
     public async Task NonObjectPayloadIsNullNeverThrows(string payload) =>
         await Assert.That(JwtClaims.TryGetString(Token(payload), "sub")).IsNull();
+
+    [Test]
+    public async Task ReadsANumericDateClaim() =>
+        await Assert.That(JwtClaims.TryGetTime(Token("""{"exp":1790000000}"""), "exp"))
+            .IsEqualTo(DateTimeOffset.FromUnixTimeSeconds(1790000000));
+
+    [Test]
+    [Arguments("""{"exp":"soon"}""")]
+    [Arguments("""{"sub":"u"}""")]
+    [Arguments("""{"exp":1e300}""")]
+    public async Task ANonNumericOrMissingTimeIsNullNeverThrows(string payload) =>
+        await Assert.That(JwtClaims.TryGetTime(Token(payload), "exp")).IsNull();
 }
