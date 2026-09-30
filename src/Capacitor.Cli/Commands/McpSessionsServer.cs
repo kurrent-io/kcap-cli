@@ -11,6 +11,7 @@ using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
@@ -297,11 +298,12 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
             var recapUrl = BuildSummaryUrl(baseUrl, sessionId);
             var plansUrl = BuildSessionPlansUrl(baseUrl, sessionId);
+            var itemsUrl = BuildSessionWorkItemsUrl(baseUrl, sessionId);
 
             // The stdio loop is serial, so a stalled lookup would block every later request.
             using var lookupsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
             var       plansTask  = FetchBestEffortAsync(client, plansUrl, "declared plans", lookupsCts.Token);
-            var       itemsTask  = FetchBestEffortAsync(client, $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(sessionId)}", "work items", lookupsCts.Token);
+            var       itemsTask  = itemsUrl is null ? Task.FromResult<string?>(null) : FetchBestEffortAsync(client, itemsUrl, "work items", lookupsCts.Token);
             try {
                 using var recap = await client.GetAsync(recapUrl);
                 var       body  = await recap.Content.ReadAsStringAsync();
@@ -505,6 +507,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
         return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans";
     }
+
+    internal static string? BuildSessionWorkItemsUrl(string baseUrl, string sessionId) =>
+        WorkContextIds.CanonicalSessionId(sessionId) is { } id ? $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(id)}" : null;
 
     // A non-string JSON value must surface as a validation error, not as the generic internal
     // error the outer guard produces for an InvalidOperationException from GetValue<string>().

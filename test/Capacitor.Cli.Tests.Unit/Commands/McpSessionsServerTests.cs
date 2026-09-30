@@ -12,6 +12,18 @@ public class McpSessionsServerTests {
     static readonly FakeTimeProvider Clock = new(new DateTimeOffset(2026, 9, 28, 15, 0, 0, TimeSpan.Zero));
 
     [Test]
+    public async Task BuildSessionWorkItemsUrl_canonicalises_a_dashed_guid() {
+        var url = McpSessionsServer.BuildSessionWorkItemsUrl("http://srv", "0B9A7E3C-1D2F-4A5B-8C6D-7E8F9A0B1C2D");
+
+        await Assert.That(url).IsEqualTo("http://srv/api/work-items/session/0b9a7e3c1d2f4a5b8c6d7e8f9a0b1c2d");
+    }
+
+    [Test]
+    public async Task BuildSessionWorkItemsUrl_skips_an_id_that_has_no_canonical_form() {
+        await Assert.That(McpSessionsServer.BuildSessionWorkItemsUrl("http://srv", "..")).IsNull();
+    }
+
+    [Test]
     public async Task BuildRepoSessionsUrl_no_repo_uses_cwd_hash_and_defaults_state_to_active() {
         var url = McpSessionsServer.BuildRepoSessionsUrl("http://srv", args: null, cwdRepoHash: CwdHash, time: Clock);
 
