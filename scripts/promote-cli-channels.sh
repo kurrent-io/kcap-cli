@@ -4,7 +4,6 @@
 # channel's version. An empty current version means the channel does not exist yet. Equal
 # promotes, so a re-run heals a channel an earlier attempt failed to write; lower never does, so
 # an older tag published late cannot regress a channel.
-# Usage: promote-cli-channels.sh <candidate> <current-latest|""> <current-beta|"">
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/semver.sh

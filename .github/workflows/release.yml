@@ -502,6 +502,13 @@ jobs:
             sha256_of publish/cli/${{ matrix.cli-binary }} > archive/bin/kcap.sha256
           fi
           cp -r kcap archive/kcap
+          # Claude Code reads a payload as new only when the plugin version moves. sed, not jq or
+          # node: neither is in the Alpine container.
+          plugin=archive/kcap/.claude-plugin/plugin.json
+          sed -i.bak -E 's/"version": *"[^"]*"/"version": "${{ steps.version.outputs.VERSION }}"/' "$plugin"
+          rm "$plugin.bak"
+          grep -qF '"version": "${{ steps.version.outputs.VERSION }}"' "$plugin" || {
+            echo "::error::could not stamp the plugin version into $plugin"; exit 1; }
           cp LICENSE.md archive/
           cd archive
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
@@ -658,14 +665,57 @@ jobs:
   github-release:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/cli
 
     steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Download all release archives
         uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: release-artifacts/
           merge-multiple: true
+
+      - name: Build the install manifest
+        shell: bash
+        run: >
+          bash scripts/build-cli-manifest.sh "${{ steps.version.outputs.VERSION }}" "${{ github.sha }}"
+          release-artifacts "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          > kcap-manifest.json
+
+      # A published manifest vouches for the archives already on this release. Rebuilt archives
+      # never match it (signing and archive timestamps), and uploading them would fail every
+      # install from that manifest's channels.
+      - name: Refuse to replace archives a published manifest covers
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY="${{ steps.version.outputs.VERSION }}/manifest.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  cmp -s published.json kcap-manifest.json || {
+                  echo "::error::cli/$KEY already vouches for other archives of this version. Re-run the failed jobs of the run that published it, or cut a new version."
+                  exit 1; } ;;
+            44) ;;
+            *)  exit 1 ;;
+          esac
+
+      - name: Upload the install manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-manifest
+          path: kcap-manifest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -698,39 +748,10 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download all release archives
+      - name: Download the install manifest
         uses: actions/download-artifact@v8
         with:
-          pattern: release-*
-          path: release-artifacts/
-          merge-multiple: true
-
-      - name: Build the manifest
-        shell: bash
-        run: >
-          bash scripts/build-cli-manifest.sh "${{ steps.version.outputs.VERSION }}" "${{ github.sha }}"
-          release-artifacts "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
-          > kcap-manifest.json
-
-      # Fetches an object to a file; exit 44 when it does not exist, 1 on any other failure, so a
-      # transient R2 error is never read as "no channel yet".
-      - name: Write the fetch helper
-        shell: bash
-        run: |
-          cat > fetch.sh <<'EOF'
-          #!/usr/bin/env bash
-          ERR="$(aws s3 cp $R2 "$DEST/$1" "$2" 2>&1 >/dev/null)"
-          rc=$?
-          if [ "$rc" -eq 0 ]; then
-            exit 0
-          elif echo "$ERR" | grep -qiE '404|Not Found'; then
-            exit 44
-          else
-            echo "$ERR" >&2
-            exit 1
-          fi
-          EOF
-          chmod +x fetch.sh
+          name: cli-manifest
 
       # A version's manifest is written once. A re-run finds identical bytes and carries on; a
       # re-cut tag finds different ones and stops before any channel moves.
@@ -739,7 +760,7 @@ jobs:
         run: |
           set -euo pipefail
           KEY="${{ steps.version.outputs.VERSION }}/manifest.json"
-          set +e; ./fetch.sh "$KEY" published.json; rc=$?; set -e
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
           case "$rc" in
             0)  cmp -s published.json kcap-manifest.json || {
                   echo "::error::cli/$KEY is already published with different contents"; exit 1; } ;;
@@ -753,7 +774,7 @@ jobs:
         run: |
           set -euo pipefail
           current() { # <channel> — the channel's version, empty when it does not exist yet
-            local rc; set +e; ./fetch.sh "channels/$1.json" "current-$1.json"; rc=$?; set -e
+            local rc; set +e; bash scripts/r2-fetch.sh "channels/$1.json" "current-$1.json"; rc=$?; set -e
             case "$rc" in
               0)  jq -er .version "current-$1.json" ;;
               44) echo "" ;;
@@ -761,7 +782,9 @@ jobs:
             esac
           }
           latest="$(current latest)"; beta="$(current beta)"
-          for channel in $(bash scripts/promote-cli-channels.sh "${{ steps.version.outputs.VERSION }}" "$latest" "$beta"); do
+          # Assigned first: a failure inside a for loop's word list does not fail the step.
+          channels="$(bash scripts/promote-cli-channels.sh "${{ steps.version.outputs.VERSION }}" "$latest" "$beta")"
+          for channel in $channels; do
             aws s3 cp $R2 kcap-manifest.json "$DEST/channels/$channel.json" \
               --content-type application/json --cache-control "no-cache"
             echo "cli/channels/$channel.json -> ${{ steps.version.outputs.VERSION }}"
@@ -980,7 +1003,7 @@ jobs:
           fi
           EOF
           chmod +x fetch.sh
-          bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" ./fetch.sh
+          bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" bash scripts/r2-fetch.sh
 
       - name: Upload the feed and packages
         run: >

@@ -3,7 +3,6 @@
 # and size. Built from the archive files themselves, so a checksum can never describe other bytes.
 # No timestamp: re-running over the same archives must produce the same bytes, which is what
 # lets the publish job tell a re-run from a re-cut.
-# Usage: build-cli-manifest.sh <version> <commit> <archive-dir> <base-url>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hash.sh
