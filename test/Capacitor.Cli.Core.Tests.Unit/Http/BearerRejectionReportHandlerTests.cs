@@ -146,6 +146,8 @@ public class BearerRejectionReportHandlerTests {
     [Arguments(new[] { "Bearer realm=\"kcap\", error=\"token_expired\", error_description=\"x\"" }, "token_expired")]
     [Arguments(new[] { "Basic realm=\"x\"", "Bearer error=\"invalid_token\"" }, "invalid_token")]
     [Arguments(new[] { "Custom error=\"not_ours\"" }, null)]
+    [Arguments(new[] { "Bearer error_description=\"detail, error=fake\", error=\"invalid_token\"" }, "invalid_token")]
+    [Arguments(new[] { "Bearer error_description=\"a \\\"quoted, error=fake\\\" b\", error=token_expired" }, "token_expired")]
     [Arguments(new[] { "Bearer" }, null)]
     public async Task The_bearer_challenge_yields_its_error(string[] challenges, string? error) =>
         await Assert.That(BearerRejectionReportHandler.ChallengeError(challenges)).IsEqualTo(error);

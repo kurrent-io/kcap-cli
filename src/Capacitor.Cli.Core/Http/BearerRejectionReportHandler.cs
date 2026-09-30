@@ -93,15 +93,50 @@ internal sealed class BearerRejectionReportHandler(TimeProvider time, Action<str
                 continue;
             }
 
-            foreach (var part in parameters.Split(',')) {
-                var pair = part.Split('=', 2, StringSplitOptions.TrimEntries);
-
-                if (pair.Length == 2 && pair[0].Equals("error", StringComparison.OrdinalIgnoreCase))
-                    return pair[1].Trim('"') is { Length: > 0 } error ? error : null;
+            foreach (var (name, value) in AuthParams(parameters)) {
+                if (name.Equals("error", StringComparison.OrdinalIgnoreCase)) return value.Length > 0 ? value : null;
             }
         }
 
         return null;
+    }
+
+    // RFC 7235 auth-params: `name=token` or `name="quoted, \"escaped\" text"`, comma-separated. A comma or
+    // `error=` inside a quoted value belongs to that value and must not start a parameter of its own.
+    static IEnumerable<(string Name, string Value)> AuthParams(string parameters) {
+        var i = 0;
+
+        while (i < parameters.Length) {
+            while (i < parameters.Length && (parameters[i] == ',' || char.IsWhiteSpace(parameters[i]))) i++;
+
+            var nameStart = i;
+
+            while (i < parameters.Length && parameters[i] != '=' && parameters[i] != ',') i++;
+
+            var name = parameters[nameStart..i].Trim();
+
+            if (i >= parameters.Length || parameters[i] != '=') continue;
+
+            i++;
+
+            while (i < parameters.Length && char.IsWhiteSpace(parameters[i])) i++;
+
+            var value = new StringBuilder();
+
+            if (i < parameters.Length && parameters[i] == '"') {
+                for (i++; i < parameters.Length && parameters[i] != '"'; i++) {
+                    if (parameters[i] == '\\' && i + 1 < parameters.Length) i++;
+
+                    value.Append(parameters[i]);
+                }
+
+                i++;
+            } else {
+                while (i < parameters.Length && parameters[i] != ',') value.Append(parameters[i++]);
+            }
+
+            yield return (name, value.ToString().Trim());
+        }
     }
 
     internal static string Describe(string method, Uri? uri, string? errorCode, string? bearer, DateTimeOffset now) =>
