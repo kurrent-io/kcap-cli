@@ -218,22 +218,24 @@ static partial class WorkItemEvalToolResults {
     static void AppendRetrospective(StringBuilder sb, JsonElement retro) {
         Line(sb, "Retrospective:");
         Field(sb, "overall", retro.Str("overall"), LongTextCap);
-        Items(sb, "strength", retro.Arr("strengths"));
-        Items(sb, "issue", retro.Arr("issues"));
+        Items(sb, "strength", "strengths", retro.Arr("strengths"));
+        Items(sb, "issue", "issues", retro.Arr("issues"));
 
         if (retro.Arr("suggestions") is not { } suggestions) return;
 
         foreach (var s in suggestions.EnumerateArray().Take(MaxListItems))
             if (s.IsObject && Text(s.Str("text"), LongTextCap) is { Length: > 0 } text)
                 Line(sb, $"  suggestion ({Text(s.Str("audience"), CodeCap)}): {text}");
+        More(sb, suggestions.GetArrayLength() - MaxListItems, "suggestions", indent: true);
     }
 
-    static void Items(StringBuilder sb, string label, JsonElement? items) {
+    static void Items(StringBuilder sb, string label, string plural, JsonElement? items) {
         if (items is not { } arr) return;
 
         foreach (var item in arr.EnumerateArray().Take(MaxListItems))
             if (item.IsString && Text(item.GetString(), LongTextCap) is { Length: > 0 } text)
                 Line(sb, $"  {label}: {text}");
+        More(sb, arr.GetArrayLength() - MaxListItems, plural, indent: true);
     }
 
     static string Citations(JsonElement? citations) {
@@ -260,10 +262,13 @@ static partial class WorkItemEvalToolResults {
         return r.Length == 0 ? "" : agent.Length > 0 ? $"{r} (session {session}, agent {agent})" : $"{r} (session {session})";
     }
 
-    static string? Joined(JsonElement? values, int cap) =>
-        values is { } arr
-            ? string.Join(", ", arr.EnumerateArray().Take(MaxListItems).Select(v => v.IsString ? Text(v.GetString(), cap) : "").Where(s => s.Length > 0))
-            : null;
+    static string? Joined(JsonElement? values, int cap) {
+        if (values is not { } arr) return null;
+
+        var shown = string.Join(", ", arr.EnumerateArray().Take(MaxListItems).Select(v => v.IsString ? Text(v.GetString(), cap) : "").Where(s => s.Length > 0));
+        var more  = arr.GetArrayLength() - MaxListItems;
+        return more > 0 ? $"{shown}, and {more.ToString(CultureInfo.InvariantCulture)} more" : shown;
+    }
 
     static void More(StringBuilder sb, int omitted, string what, bool indent = false) {
         if (omitted > 0) Line(sb, $"{(indent ? "  " : "")}({omitted.ToString(CultureInfo.InvariantCulture)} more {what} not shown)");

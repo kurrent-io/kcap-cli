@@ -233,9 +233,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                     WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
                 "get_work_item_eval"     => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
                     WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
-                "request_work_item_eval" => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id", "evals/runs"),
+                "request_work_item_eval" => await PostHeadersFirstAsync(client, ItemUrl(baseUrl, arguments, "work_item_id", "evals/runs"),
                     new StringContent(WorkItemEvalToolResults.RequestBody(McpToolArguments.OptionalString(arguments, "mode")), Encoding.UTF8, "application/json"), evalToken),
-                "cancel_work_item_eval"  => await client.PostAsync(ItemUrl(baseUrl, arguments, "work_item_id",
+                "cancel_work_item_eval"  => await PostHeadersFirstAsync(client, ItemUrl(baseUrl, arguments, "work_item_id",
                     WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"), "cancel")), ToJsonContent(new JsonObject()), evalToken),
 
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
@@ -567,6 +567,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static bool IsCursor(string value) =>
         value.Length is >= 1 and <= 1024
      && value.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-');
+
+    /// <summary>PostAsync buffers the whole reply before returning; this leaves the body to the bounded read.</summary>
+    static Task<HttpResponseMessage> PostHeadersFirstAsync(HttpClient client, string url, HttpContent content, CancellationToken ct) =>
+        client.SendAsync(new HttpRequestMessage(HttpMethod.Post, url) { Content = content }, HttpCompletionOption.ResponseHeadersRead, ct);
 
     static bool IsWorkItemEvalTool(string toolName) =>
         toolName is "list_work_item_evals" or "get_work_item_eval" or "request_work_item_eval" or "cancel_work_item_eval";

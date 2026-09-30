@@ -227,6 +227,38 @@ public class McpWorkItemEvalToolsTests {
         await Assert.That(text).DoesNotContain("c10 (session");
     }
 
+    /// <summary>Retrospective lists and scope reasons past their caps say how many were left out rather than dropping them
+    /// silently; the first entries still render, so the caps are what cut the rest.</summary>
+    [Test]
+    public async Task Retrospective_lists_and_scope_reasons_past_their_caps_say_how_many_were_left_out() {
+        var over      = WorkItemEvalToolResults.MaxListItems + 3;
+        string Strings(string prefix) => string.Join(",", Enumerable.Range(0, over).Select(i => $"\"{prefix}{i}\""));
+        var suggestions = string.Join(",", Enumerable.Range(0, over).Select(i => $$$"""{"text":"s{{{i}}}","audience":"agent"}"""));
+        var text = WorkItemEvalToolResults.RenderRun($$$"""
+            {"run":{{{Summary()}}},"session_count":1,"source_count":1,"scope_complete":false,"scope_incomplete_reasons":[{{{Strings("reason_")}}}],"questions":[],
+             "retrospective":{"overall":"o","strengths":[{{{Strings("st")}}}],"issues":[{{{Strings("is")}}}],"suggestions":[{{{suggestions}}}]}}
+            """)!;
+
+        await Assert.That(text).Contains("reason_0, reason_1");
+        await Assert.That(text).Contains(", and 3 more)");
+        await Assert.That(text).Contains("strength: st0");
+        await Assert.That(text).Contains("(3 more strengths not shown)");
+        await Assert.That(text).Contains("(3 more issues not shown)");
+        await Assert.That(text).Contains("suggestion (agent): s0");
+        await Assert.That(text).Contains("(3 more suggestions not shown)");
+    }
+
+    [Test]
+    [Arguments("request_work_item_eval", """{"work_item_id":"wi-1"}""")]
+    [Arguments("cancel_work_item_eval", """{"work_item_id":"wi-1","run_id":"0123456789abcdef0123456789abcdef"}""")]
+    public async Task An_oversized_reply_to_a_write_is_refused_like_a_read(string tool, string args) {
+        var huge = $$$"""{"outcome":"queued","pad":"{{{new string('x', WorkItemEvalToolResults.MaxResponseBytes)}}}"}""";
+        var (_, text, isError) = await DispatchAsync(tool, args, body: huge);
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).IsEqualTo(WorkItemEvalToolResults.TooLargeMessage);
+    }
+
     /// <summary>Headers that arrive with a body that never does: the shared deadline ends the call as a tool error rather than
     /// holding the one-call-at-a-time loop.</summary>
     [Test]
