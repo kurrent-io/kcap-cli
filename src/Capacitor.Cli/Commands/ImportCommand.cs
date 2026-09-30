@@ -6,12 +6,14 @@ using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Cursor;
+using Capacitor.Cli.Harness.Titles;
 using Spectre.Console;
 using Capacitor.Cli.PrDetection;
 
@@ -3241,6 +3243,8 @@ class ImportCommand(
                     failOnError: true
                 );
 
+                await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
+
                 // End-only reassertion: session-end has server-side idempotency guards,
                 // whereas the generic SessionStarted uses random ids — re-asserting start
                 // would duplicate it. So finalize a resumed session with end ONLY.
@@ -3403,6 +3407,8 @@ class ImportCommand(
             return (SessionImportOutcome.Errored, 0);
         }
 
+        var harnessTitled = await PostCodexHarnessTitleAsync(httpClient, baseUrl, session, perSessionProgress, ct);
+
         var lastTs = ExtractLastTimestamp(session.FilePath);
 
         var endHook = new JsonObject {
@@ -3437,10 +3443,33 @@ class ImportCommand(
             /* best effort */
         }
 
-        events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
+        if (!harnessTitled) events.OnTitleTaskReady((session.SessionId, session.FilePath, session.PreviousSessionId, session.Vendor));
         events.OnBackgroundWorkReady((session.SessionId, generateWhatsDone, session.Vendor));
 
         return (SessionImportOutcome.Loaded, importResult.LinesSent);
+    }
+
+    /// <summary>Posts the title Codex keeps for a session in its own index. True only when the server took it through
+    /// the harness-title route, where it outranks a generated title; an older server's fallback route only fills an
+    /// untitled session, so a generated title is still owed there. A cancellation skips it so session-end still runs.</summary>
+    async Task<bool> PostCodexHarnessTitleAsync(
+            HttpClient                 httpClient,
+            string                     baseUrl,
+            SessionClassification      session,
+            IProgress<ImportProgress>  progress,
+            CancellationToken          ct
+        ) {
+        if (session.Vendor is not HarnessId.Codex) return false;
+
+        try {
+            var outcome = await ImportHarnessTitle.PostFromStoreAsync(
+                new CodexSessionIndexTitle(harnesses.Of<CodexHarness>().Paths.Home, session.SessionId),
+                httpClient, time, baseUrl, session.SessionId, progress, ct);
+
+            return outcome is HarnessTitleOutcome.Posted;
+        } catch (OperationCanceledException) {
+            return false;
+        }
     }
 
     sealed class CallbackProgress(Action<ImportProgress> onReport) : IProgress<ImportProgress> {

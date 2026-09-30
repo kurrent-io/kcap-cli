@@ -1524,7 +1524,7 @@ sealed class SetupCommand(
         IReadOnlyList<IImportSource> all = [
             new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
             new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
-            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time),
+            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time, titlePaths: cursor),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
             new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, harnesses.Of<KiroHarness>().Crew, router, time),

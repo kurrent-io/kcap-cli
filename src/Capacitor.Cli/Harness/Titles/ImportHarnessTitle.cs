@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Harness.Titles;
@@ -14,7 +15,7 @@ internal static class ImportHarnessTitle {
         TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15),
     ];
 
-    public static Task PostAsync(
+    public static Task<HarnessTitleOutcome> PostAsync(
             HttpClient                 client,
             TimeProvider                time,
             string                      baseUrl,
@@ -24,11 +25,29 @@ internal static class ImportHarnessTitle {
             CancellationToken           ct
         ) => PostAsync(client, time, time, baseUrl, sessionId, post, progress, ct);
 
+    /// <summary>Posts the store's current title, stamped with its change time only when the store records one.
+    /// Null when the store holds no title, so nothing was sent.</summary>
+    public static async Task<HarnessTitleOutcome?> PostFromStoreAsync(
+            IHarnessTitleStore?        store,
+            HttpClient                 client,
+            TimeProvider                time,
+            string                      baseUrl,
+            string                      sessionId,
+            IProgress<ImportProgress>?  progress,
+            CancellationToken           ct
+        ) {
+        if (store?.Read() is not { } read) return null;
+
+        var post = new HarnessTitlePost(read.Title, read.Kind, store.RecordsChangeTime ? read.RecordedChangeAt : null);
+
+        return await PostAsync(client, time, baseUrl, sessionId, post, progress, ct);
+    }
+
     /// <summary>Splits the backoff-delay clock from the one <see cref="HarnessTitleClient"/> hands its
     /// per-attempt HTTP timeout, so a test can drive the backoff clock without also racing that timeout —
     /// production passes the same provider for both, and the public overload above is what every caller
     /// outside this file uses.</summary>
-    internal static async Task PostAsync(
+    internal static async Task<HarnessTitleOutcome> PostAsync(
             HttpClient                 client,
             TimeProvider                backoffTime,
             TimeProvider                httpTime,
@@ -46,13 +65,13 @@ internal static class ImportHarnessTitle {
                 if (outcome is HarnessTitleOutcome.Refused or HarnessTitleOutcome.Failed)
                     progress?.Report(new ImportTitleNotRecorded(sessionId, null, Reason(outcome)));
 
-                return;
+                return outcome;
             }
 
             if (attempt >= Backoff.Length) {
                 progress?.Report(new ImportTitleNotRecorded(sessionId, null, Reason(outcome)));
 
-                return;
+                return outcome;
             }
 
             await Task.Delay(Backoff[attempt], backoffTime, ct);

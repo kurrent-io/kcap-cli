@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
+using TUnit.Assertions.Enums;
 using TUnit.Core.Enums;
 using Capacitor.Cli.PrDetection;
 
@@ -469,6 +470,70 @@ public class CursorImportSourceTests {
         await Assert.That(endNode["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
         await Assert.That(endNode["hook_event_name"]!.GetValue<string>()).IsEqualTo("sessionEnd");
         await Assert.That(endNode["reason"]!.GetValue<string>()).IsEqualTo("historical-import");
+    }
+
+    async Task<List<(string Path, string Body)>> ImportWithChatTitle(string? chatTitle) {
+        using var fx    = new ProjectsDirFixture();
+        var       jsonl = fx.AddSession("Users-me-proj", "11111111-1111-1111-1111-111111111111", "{\"a\":1}\n");
+
+        var titlePaths = new CursorPaths(Home);
+        if (chatTitle is not null) {
+            var chatDir = Directory.CreateDirectory(Path.Combine(titlePaths.ChatsDir, "ws-hash", "11111111-1111-1111-1111-111111111111"));
+            File.WriteAllText(Path.Combine(chatDir.FullName, "meta.json"), new JsonObject { ["title"] = chatTitle }.ToJsonString());
+        }
+
+        var src = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System, titlePaths: titlePaths);
+
+        var posted = new List<(string Path, string Body)>();
+        using var handler = new StubHandler(
+            postCapture: (req, body) => {
+                posted.Add((req.RequestUri!.AbsolutePath, body));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        );
+        using var client = new HttpClient(handler);
+
+        var classification = new ImportCommand.SessionClassification {
+            SessionId  = "11111111111111111111111111111111",
+            FilePath   = "",
+            EncodedCwd = "",
+            Meta       = new SessionMetadata(),
+            Status     = ImportCommand.ClassificationStatus.New,
+            Vendor     = HarnessId.Cursor,
+            SourceMeta = new Dictionary<string, object?> { ["TranscriptPath"] = jsonl },
+        };
+
+        var outcome = await src.ImportSessionAsync(classification, new ImportContext(client, "http://localhost", ForcePrivate: false), CancellationToken.None);
+        await Assert.That(outcome.Outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        return posted;
+    }
+
+    /// <summary>The chat's own name, read by the dashed transcript id, is posted under the dashless session id as an
+    /// untimed rename before session-end.</summary>
+    [Test]
+    public async Task import_session_posts_the_chat_title_before_session_end() {
+        var posted = await ImportWithChatTitle("Refactor the auth flow");
+
+        await Assert.That(posted.Select(p => p.Path)).IsEquivalentTo(
+            ["/hooks/session-start/cursor", "/hooks/transcript", "/hooks/harness-title", "/hooks/session-end/cursor"],
+            CollectionOrdering.Matching);
+
+        var title = JsonNode.Parse(posted[2].Body)!.AsObject();
+        await Assert.That(title["session_id"]!.GetValue<string>()).IsEqualTo("11111111111111111111111111111111");
+        await Assert.That(title["title"]!.GetValue<string>()).IsEqualTo("Refactor the auth flow");
+        await Assert.That(title["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(title.ContainsKey("changed_at")).IsFalse();
+    }
+
+    [Test]
+    [Arguments("New Agent")]
+    [Arguments(null)]
+    public async Task import_session_posts_no_title_for_an_unnamed_chat(string? chatTitle) {
+        var posted = await ImportWithChatTitle(chatTitle);
+
+        await Assert.That(posted.Any(p => p.Path == "/hooks/harness-title")).IsFalse();
     }
 
     [Test, ExcludeOn(OS.Linux)]

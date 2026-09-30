@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -372,5 +373,86 @@ public class ImportChainsTests : IDisposable {
 
         await Assert.That(body["workspace_root"]?.GetValue<string>()).IsEqualTo(resolvedRepoDir);
         await Assert.That(body["cwd"]?.GetValue<string>()).IsEqualTo(resolvedRepoDir);
+    }
+
+    const string CodexSid = "0199a2b3c4d5e6f708192a3b4c5d6e7f";
+
+    ImportCommand.SessionClassification CodexSession() => MakeNewNoGit(CodexSid, 3) with { Vendor = HarnessId.Codex };
+
+    void WriteCodexIndex(string name, string updatedAt) {
+        var codexHome = TestHarnesses.Under(Home).Of<CodexHarness>().Paths.Home;
+        Directory.CreateDirectory(codexHome);
+        File.WriteAllText(Path.Combine(codexHome, "session_index.jsonl"),
+            $$"""{"id":"{{Guid.ParseExact(CodexSid, "N"):D}}","thread_name":"{{name}}","updated_at":"{{updatedAt}}"}""" + "\n");
+    }
+
+    async Task<int> ImportCodexCountingTitleTasks() {
+        var titleTasks = 0;
+        var events = new ImportCommand.ChainWorkerEvents {
+            OnSessionStarted      = (_, _) => { },
+            OnSubagentStarted     = (_, _, _) => { },
+            OnSubagentFinished    = (_, _, _, _) => { },
+            OnSessionProgress     = (_, _, _) => { },
+            OnSessionErrored      = (_, _, _) => { },
+            OnSessionWarning      = (_, _, _) => { },
+            OnSessionEnded        = (_, _, _, _) => { },
+            OnTitleTaskReady      = _ => Interlocked.Increment(ref titleTasks),
+            OnBackgroundWorkReady = _ => { },
+        };
+
+        using var client = new HttpClient();
+        var result = await Import().ImportChainsAsync(client, _server.Url!, [[CodexSession()]], events, CancellationToken.None);
+        await Assert.That(result.Loaded).IsEqualTo(1);
+
+        return titleTasks;
+    }
+
+    /// <summary>Codex's own index title goes to /hooks/harness-title as a rename stamped with the index's
+    /// updated_at, and once the server takes it there no generated title is queued.</summary>
+    [Test]
+    public async Task ImportChainsAsync_posts_codex_index_title_and_skips_title_generation() {
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var titleTasks = await ImportCodexCountingTitleTasks();
+
+        var posts = _server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost());
+        await Assert.That(posts.Count).IsEqualTo(1);
+
+        var body = JsonNode.Parse(posts[0].RequestMessage.Body!)!;
+        await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo(CodexSid);
+        await Assert.That(body["title"]!.GetValue<string>()).IsEqualTo("Fix the flaky test");
+        await Assert.That(body["kind"]!.GetValue<string>()).IsEqualTo("rename");
+        await Assert.That(body["changed_at"]!.GetValue<DateTimeOffset>()).IsEqualTo(new DateTimeOffset(2026, 5, 1, 10, 20, 30, TimeSpan.Zero));
+        await Assert.That(titleTasks).IsEqualTo(0);
+    }
+
+    /// <summary>An older server takes the title only through /hooks/set-title, which fills an untitled session and
+    /// nothing more, so a generated title is still queued.</summary>
+    [Test]
+    public async Task ImportChainsAsync_still_generates_a_codex_title_when_only_the_legacy_route_took_it() {
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/set-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        WriteCodexIndex("Fix the flaky test", "2026-05-01T10:20:30Z");
+
+        var titleTasks = await ImportCodexCountingTitleTasks();
+
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title").UsingPost()).Count).IsEqualTo(1);
+        await Assert.That(titleTasks).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ImportChainsAsync_posts_no_codex_title_when_the_index_names_none() {
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        var titleTasks = await ImportCodexCountingTitleTasks();
+
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost()).Count).IsEqualTo(0);
+        await Assert.That(titleTasks).IsEqualTo(1);
     }
 }
