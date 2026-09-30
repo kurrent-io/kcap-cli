@@ -32,6 +32,9 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     public int                 Reopens   { get; private set; }
     public string?             LastError { get; private set; }
 
+    /// <summary>Why releasing the hold failed, when it did; the hold then expires on the server.</summary>
+    public string? ReleaseFailure { get; private set; }
+
     /// <summary>True when the server was asked to hold the scope and refused, as it does for a scope too large to hold.</summary>
     public bool HoldRefused { get; private set; }
 
@@ -81,8 +84,8 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
         var (status, page) = await SendPageAsync(HttpMethod.Post, Route("renewal"), HoldBody(state.Token), ct);
         if (status is EvidenceScopeStatus.NotVisible or EvidenceScopeStatus.Moved) return EvidenceScopeStatus.Moved;
         if (status != EvidenceScopeStatus.Ok) return status;
-        if (page!.ScopeVersion != state.ScopeVersion) return EvidenceScopeStatus.Moved;
-        _heldToken = page.Token;
+        _heldToken = page!.Token;
+        if (page.ScopeVersion != state.ScopeVersion) return EvidenceScopeStatus.Moved;
         State = state with { Token = page.Token, Deadline = sentAt + Lifetime(page), ServerExpiresAt = page.ExpiresAt };
         return EvidenceScopeStatus.Ok;
     }
@@ -95,8 +98,9 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
         try {
             using var request = new HttpRequestMessage(HttpMethod.Delete, Route("hold")) { Content = HoldBody(token) };
             using var resp    = await http.SendAsync(request, timeout.Token);
+            if (!resp.IsSuccessStatusCode) ReleaseFailure = $"could not release the evidence scope hold: HTTP {(int)resp.StatusCode}";
         } catch (Exception e) {
-            LastError = $"could not release the evidence scope hold: {e.Message}";
+            ReleaseFailure = $"could not release the evidence scope hold: {e.Message}";
         }
     }
 

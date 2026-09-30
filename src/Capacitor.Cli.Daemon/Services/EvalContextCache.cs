@@ -158,17 +158,31 @@ internal sealed class EvalContextCache : IDisposable, IAsyncDisposable {
             return true;
         }
 
-        // Disposal is synchronous underneath, so it is waited on here; a failure is logged and never stops the rest.
+        // Releasing a held scope is a network call, so it runs in the background, never on the thread retiring the entry,
+        // and the owned client it uses is disposed after it; one the process does not finish expires on the server.
+        // Removing the directory is synchronous underneath, so it is waited on here; a failure of either is logged and
+        // never stops the rest.
         void Release() {
-            if (context is EvidenceRunSetup setup) {
-                try {
-                    var disposal = setup.DisposeAsync();
-                    if (!disposal.IsCompletedSuccessfully) disposal.AsTask().GetAwaiter().GetResult();
-                } catch (Exception e) {
-                    logger.LogWarning(e, "Could not remove the run directory of eval {RunId}", evalRunId);
-                }
+            if (context is not EvidenceRunSetup setup) {
+                owned?.Dispose();
+                return;
             }
-            owned?.Dispose();
+            _ = ReleaseHoldAsync(setup.Scope);
+            try {
+                var disposal = setup.Context.DisposeAsync();
+                if (!disposal.IsCompletedSuccessfully) disposal.AsTask().GetAwaiter().GetResult();
+            } catch (Exception e) {
+                logger.LogWarning(e, "Could not remove the run directory of eval {RunId}", evalRunId);
+            }
+        }
+
+        async Task ReleaseHoldAsync(EvidenceScopeClient scope) {
+            try {
+                await scope.DisposeAsync();
+                if (scope.ReleaseFailure is { } failure) logger.LogWarning("Eval {RunId}: {Failure}", evalRunId, failure);
+            } finally {
+                owned?.Dispose();
+            }
         }
 
         public void Dispose() => _retired.Dispose();

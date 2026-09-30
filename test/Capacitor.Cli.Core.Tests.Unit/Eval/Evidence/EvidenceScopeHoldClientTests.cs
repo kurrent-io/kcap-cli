@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>A held scope: taken with a fresh request key, renewed through the renewal route rather than resolved again,
 /// released when the client is disposed — with the latest token, and even when a later manifest page failed — and a
-/// server that refuses or does not offer a hold leaves today's renewal in place.</summary>
+/// server that refuses or does not offer a hold renews by resolving the scope again.</summary>
 public class EvidenceScopeHoldClientTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -63,6 +63,20 @@ public class EvidenceScopeHoldClientTests : IDisposable {
 
         time.Advance(TimeSpan.FromSeconds(1_800 - 780));
         await Assert.That(await client.EnsureScopeAsync(TimeSpan.FromSeconds(780), CancellationToken.None)).IsEqualTo(EvidenceScopeStatus.Moved);
+    }
+
+    [Test]
+    public async Task A_renewal_onto_another_version_still_releases_with_the_token_it_answered() {
+        ServeHold(); ServeRenewal("v2", "tok-2", S0.AddMinutes(18));
+        var time   = new FakeTimeProvider(S0);
+        var client = Client(time);
+        await client.ResolveAsync(CancellationToken.None);
+        time.Advance(TimeSpan.FromSeconds(1_800 - 780));
+        await client.EnsureScopeAsync(TimeSpan.FromSeconds(780), CancellationToken.None);
+
+        await client.DisposeAsync();
+
+        await Assert.That(ReleasedToken()).IsEqualTo("tok-2");
     }
 
     [Test]
@@ -139,6 +153,6 @@ public class EvidenceScopeHoldClientTests : IDisposable {
 
         await client.DisposeAsync();
 
-        await Assert.That(client.LastError).Contains("credential store unavailable");
+        await Assert.That(client.ReleaseFailure).Contains("credential store unavailable");
     }
 }
