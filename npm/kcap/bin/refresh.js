@@ -81,6 +81,7 @@ const PLUGIN_MCP_SERVERS = {
   "kcap-artefacts": "artefacts",
   "kcap-analytics": "analytics",
   "kcap-knowledge": "knowledge",
+  "kcap-handoff":   "handoff",
 };
 
 // A command this patcher may rewrite: the shipped literal "kcap", or an

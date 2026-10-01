@@ -10,6 +10,7 @@ static partial class ProcessHelpers {
     // -1 with errno = EPERM (1) if it exists but we can't signal it,
     // -1 with errno = ESRCH (3) if no such process.
     const int EPERM = 1;
+    const int ERROR_ACCESS_DENIED = 5;
 
     [LibraryImport("libc", EntryPoint = "getppid")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -1014,7 +1015,8 @@ static partial class ProcessHelpers {
         var handle = OpenProcess(SYNCHRONIZE, false, (uint)pid);
 
         if (handle == 0) {
-            return false;
+            // Like EPERM on Unix: a process this user may not open still exists.
+            return Marshal.GetLastPInvokeError() == ERROR_ACCESS_DENIED;
         }
 
         try {
