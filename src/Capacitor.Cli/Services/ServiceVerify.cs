@@ -71,8 +71,11 @@ public static class VerifyExit {
     public const string StartGateDriftToken = "verify_start_gate_drift";
 
     /// <summary><c>--retire</c> refused to remove the named unit: its plist is unreadable, or it is
-    /// not pinned to the profile being installed. Nothing is written for the new id — its own
-    /// entry-time leftover-marker recovery already ran, as on every install. The stderr line
+    /// not pinned to the profile being installed; or the new id is already taken by an installed unit,
+    /// or its state is unknown. No unit is written for the new id — its own entry-time leftover-marker
+    /// recovery already ran, as on every install. Every refusal but <c>target_claimed</c> leaves both
+    /// units untouched and writes nothing; <c>target_claimed</c> (the new id was taken while the old unit
+    /// was being retired) leaves the old unit retired and a captured marker for the new id. The stderr line
     /// <c>retire_reason=&lt;reason&gt;</c> names which.</summary>
     public const int RetireRefused = 30;
     public const string RetireRefusedToken = "verify_retire_refused";
@@ -108,6 +111,7 @@ sealed class ServiceVerify(
     static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan TargetProbeWait = TimeSpan.FromSeconds(5);
 
     public static readonly TimeSpan DefaultForwardBudget   = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
@@ -120,7 +124,8 @@ sealed class ServiceVerify(
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
     /// caller's 60s kill-timeout. <c>--retire</c>'s own budget starts only once its own
     /// <see cref="LockWait"/> is held, so a caller driving a rename must allow one more lock wait
-    /// PLUS one more forward budget on top of the sum above.</summary>
+    /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) on top of
+    /// the sum above.</summary>
     public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
@@ -787,10 +792,21 @@ sealed class ServiceVerify(
                 throw new ArgumentException("retireServiceId must differ from the service being installed");
 
             // A rename's target must be free: a live daemon under the new name is another daemon,
-            // not a stale unit for --replace to take over. No pre-query needed for this check.
+            // and an installed unit — even a stopped one, which has no socket — is another service.
+            // Neither is a stale unit for --replace to take over, so refuse before the old unit is touched.
             if (validatedDaemonPid(serviceId) is not null) {
                 Say(VerifyExit.ContendedToken);
                 return VerifyExit.Contended;
+            }
+
+            var target = manager.Query(serviceId, TargetProbeWait);
+            if (target.Probe == LabelProbe.Unknown) return RetireRefusal("target_unknown");
+            if (target.Probe == LabelProbe.Loaded || target.UnitPresent) {
+                if (validatedDaemonPid(serviceId) is not null) {
+                    Say(VerifyExit.ContendedToken);
+                    return VerifyExit.Contended;
+                }
+                return RetireRefusal("target_occupied");
             }
             // Retire spends its OWN forward budget — never the install's — so a late-but-successful
             // retire can never starve the install's own readiness poll and strand the operator with
@@ -1079,6 +1095,10 @@ sealed class ServiceVerify(
         }
 
         if (pre.Probe == LabelProbe.Loaded || pre.UnitPresent) {
+            // A rename found the target free before retiring, so a unit here was installed since by
+            // something that ignores the lock — someone else's, never ours to clear.
+            if (refuseLiveOwner) return RetireRefusal("target_claimed");
+
             // A non-owning/orphan label, or a stopped-but-installed unit — --replace may clear it.
             if (await ClearLabelAsync(serviceId, deadline) is { } clearExit) return clearExit;
             ServiceTxnMarker.Write(store, serviceId, new TxnMarker(1, op, "label-cleared", preState, "no-unit", null));
