@@ -63,21 +63,35 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     public bool IsClaimed(SessionId session) => Claimants().Any(pid => Of(pid) == session);
 
     /// <summary>
-    /// Drops every note no live process holds, keeping an exit record for its session: the only local
-    /// proof a session's agent is gone when nothing told the server, as for a private daemon agent.
+    /// Drops every note whose process is provably gone, keeping an exit record for its session: the
+    /// only local proof a session's agent is gone when nothing told the server, as for a private
+    /// daemon agent. A note whose holder cannot be compared stays, since an exit record lets another
+    /// session take this one over.
     /// </summary>
     public void Reap() {
         foreach (var pid in Claimants()) {
             if (Of(pid) is not null) continue;
 
             try {
-                if (NotedSession(pid) is { } session) RecordExit(session);
+                if (File.ReadAllText(Note(pid)).Split('\n') is [var session, var token]) {
+                    var alive = ProcessHelpers.IsProcessAlive(pid);
+                    if (!HolderIsGone(alive, alive ? ProcessStartToken.Matches(pid, token) : null)) continue;
+
+                    if (SessionId.Parse(session) is { } exited) RecordExit(exited);
+                }
+
                 File.Delete(Note(pid));
             } catch { }
         }
 
         PruneExitRecords();
     }
+
+    /// <summary>
+    /// Gone when no process has the pid, or one does under a different start token (the pid was
+    /// reused). A live process whose token cannot be read is not proof of anything.
+    /// </summary>
+    internal static bool HolderIsGone(bool processExists, bool? tokenMatches) => !processExists || tokenMatches == false;
 
     /// <summary>
     /// A live claim wins over an exit record: a session resumed in a new process is running again.
@@ -112,9 +126,6 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             return [];
         }
     }
-
-    SessionId? NotedSession(int pid) =>
-        File.ReadAllText(Note(pid)).Split('\n') is [var session, _] ? SessionId.Parse(session) : null;
 
     void RecordExit(SessionId session) {
         var record = ExitRecord(session);

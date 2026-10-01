@@ -64,6 +64,40 @@ public class AgentSessionsTests {
     }
 
     [Test]
+    public async Task Reap_treats_a_live_pid_under_another_start_token_as_reused() {
+        var live   = ProcessStartToken.ForCurrent()!;
+        var scheme = live[..live.IndexOf(':')];
+        Directory.CreateDirectory(Path.GetDirectoryName(Note(Agent))!);
+        File.WriteAllText(Note(Agent), $"reused\n{scheme}:another-boot:1");
+
+        Sessions.Reap();
+
+        await Assert.That(File.Exists(Note(Agent))).IsFalse();
+        await Assert.That(Sessions.Liveness(SessionId.Parse("reused")!)).IsEqualTo(SessionLiveness.Exited);
+    }
+
+    /// <summary>A note on a live pid whose token cannot be compared proves nothing about its session.</summary>
+    [Test]
+    public async Task Reap_leaves_a_note_it_cannot_compare_with_its_live_holder() {
+        Directory.CreateDirectory(Path.GetDirectoryName(Note(Agent))!);
+        File.WriteAllText(Note(Agent), "unclear\nlegacy-token-without-scheme");
+
+        Sessions.Reap();
+
+        await Assert.That(File.Exists(Note(Agent))).IsTrue();
+        await Assert.That(Sessions.Liveness(SessionId.Parse("unclear")!)).IsEqualTo(SessionLiveness.Unknown);
+    }
+
+    [Test]
+    [Arguments(false, null, true)]
+    [Arguments(true, false, true)]
+    [Arguments(true, null, false)]
+    [Arguments(true, true, false)]
+    public async Task A_holder_is_gone_only_when_absent_or_reused(bool exists, bool? matches, bool gone) {
+        await Assert.That(AgentSessions.HolderIsGone(exists, matches)).IsEqualTo(gone);
+    }
+
+    [Test]
     public async Task A_live_claim_is_running_even_with_an_exit_record() {
         DeadNote(Shell, Session.Value);
         Sessions.Reap();
