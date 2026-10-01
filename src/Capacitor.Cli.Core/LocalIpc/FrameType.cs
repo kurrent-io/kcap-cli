@@ -34,6 +34,11 @@ public enum FrameType : byte {
     DaemonSettingsPut = 23, // Text = DaemonSettingsPutDto JSON
     // Composer input with attachments — one-shot; acked on SendTextAck when the delivery settles.
     SendTextWithAttachments = 24, // Text = SendTextWithAttachmentsDto JSON
+    // Rename fence — long-lived: acquire holds the fence for the connection's life; commit and abort
+    // follow on the same connection. Every reply is AdmissionFenceAck.
+    AdmissionFenceAcquire = 25, // Text = AdmissionFenceAcquireDto JSON
+    AdmissionFenceCommit  = 26,
+    AdmissionFenceAbort   = 27,
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -55,4 +60,5 @@ public enum FrameType : byte {
     PermissionAck      = 79, // Text = PermissionAckDto JSON, reply to PermissionResolve
     SendTextAck = 80, // Text = SendTextAckDto JSON, reply to SendText
     DaemonSettingsAck = 81, // Text = DaemonSettingsAckDto JSON, reply to DaemonSettingsPut
+    AdmissionFenceAck = 82, // Text = AdmissionFenceAckDto JSON, reply to every fence frame
 }

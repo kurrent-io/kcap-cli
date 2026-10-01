@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
 using Microsoft.Extensions.Time.Testing;
 
@@ -40,6 +41,8 @@ public class ServiceVerifyRetireTests {
         public string UnitPath(string serviceId) => LaunchdUnit.PlistPath(home, serviceId);
         public readonly List<string> Calls = [];
         public bool OldUnitInstalled;
+        public bool OldLabelLoaded = true;
+        public int? OldJobPid = 1111;
         public bool Bootstrapped;
         public int? RunningPid = 4242;
 
@@ -60,9 +63,9 @@ public class ServiceVerifyRetireTests {
         public ServiceQuery Query(string serviceId, TimeSpan timeout) {
             Calls.Add($"query:{serviceId}");
             if (serviceId == OldId)
-                return OldUnitInstalled
-                    ? new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", 1111)
-                    : new ServiceQuery(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
+                return !OldUnitInstalled ? new ServiceQuery(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null)
+                    : OldLabelLoaded ? new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", OldJobPid)
+                    : new ServiceQuery(LabelProbe.Absent, true, ServiceState.Installed, "/x/kcap-daemon", null);
             if (NewProbeUnknown)
                 return new ServiceQuery(LabelProbe.Unknown, false, ServiceState.NotInstalled, null, null);
             if (!Bootstrapped && (NewUnitStopped || (NewUnitStoppedAfterRetire && !OldUnitInstalled)))
@@ -91,6 +94,40 @@ public class ServiceVerifyRetireTests {
         public bool Stop(string serviceId, TimeSpan timeout, out string? error) { error = null; return true; }
     }
 
+    /// <summary>The old daemon's fence as the transaction sees it, recording what was asked of it.</summary>
+    sealed class FakeFence(FakeServiceManager manager) {
+        public readonly List<string> Calls = [];
+        public AdmissionFenceOutcome Outcome = AdmissionFenceOutcome.Acquired;
+        public int? Pid = 1111;
+        public bool CommitAnswers = true;
+
+        public Task<AdmissionFenceAcquireResult> AcquireAsync(string name, CancellationToken _) {
+            Calls.Add($"acquire:{name}");
+            manager.Calls.Add($"fence-acquire:{name}");
+            return Task.FromResult(new AdmissionFenceAcquireResult(Outcome, Outcome == AdmissionFenceOutcome.Acquired ? new Session(this, manager) : null));
+        }
+
+        sealed class Session(FakeFence fence, FakeServiceManager manager) : IAdmissionFenceSession {
+            public int? Pid => fence.Pid;
+
+            public Task<bool> CommitAsync(TimeSpan timeout, CancellationToken ct) {
+                fence.Calls.Add("commit");
+                manager.Calls.Add("fence-commit");
+                return Task.FromResult(fence.CommitAnswers);
+            }
+
+            public Task<bool> AbortAsync(TimeSpan timeout, CancellationToken ct) {
+                fence.Calls.Add("abort");
+                return Task.FromResult(true);
+            }
+
+            public ValueTask DisposeAsync() {
+                fence.Calls.Add("close");
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
     string ViableDaemonPath() => Tmp.CreateFile("kcap-daemon");
 
     static ServiceSpec Spec(string daemonPath, string profile) =>
@@ -103,12 +140,13 @@ public class ServiceVerifyRetireTests {
             ? new HelloProbeResult(true, 1, ExpectedVersion, NewId)
             : new HelloProbeResult(false, null, null, null));
 
-    ServiceVerify Sut(FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null) =>
+    ServiceVerify Sut(FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null, FakeFence? fence = null) =>
         new(Daemons.Store, Config.Root, manager,
             validatedPid ?? (id => id == NewId && manager.Bootstrapped ? 4242 : null),
             Hello(manager), TimeProvider.System,
             readPlist: path => path == manager.UnitPath(OldId) ? oldPlist : OwnPlistContent,
-            plistExists: path => path == manager.UnitPath(OldId) ? oldPlist is not null : true);
+            plistExists: path => path == manager.UnitPath(OldId) ? oldPlist is not null : true,
+            acquireFence: (fence ?? new FakeFence(manager)).AcquireAsync);
 
     /// <summary>Same drive loop as ServiceVerifyInstallTests: Task.Delay(interval, time, ct)'s
     /// continuation resumes synchronously inside Advance(), so a tight Advance-loop reliably steps
@@ -141,7 +179,8 @@ public class ServiceVerifyRetireTests {
             time,
             forwardBudget: TimeSpan.FromSeconds(2),
             readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,
-            plistExists: _ => true);
+            plistExists: _ => true,
+            acquireFence: new FakeFence(manager).AcquireAsync);
 
         var task = sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
         var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
@@ -269,7 +308,8 @@ public class ServiceVerifyRetireTests {
         var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello(manager), TimeProvider.System,
             readPlist: path => path == manager.UnitPath(OldId) ? null : OwnPlistContent,
-            plistExists: _ => true);
+            plistExists: _ => true,
+            acquireFence: new FakeFence(manager).AcquireAsync);
 
         var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
 
@@ -295,7 +335,8 @@ public class ServiceVerifyRetireTests {
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2),
             readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,
-            plistExists: _ => true);
+            plistExists: _ => true,
+            acquireFence: new FakeFence(manager).AcquireAsync);
 
         var task = sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
         var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
@@ -354,5 +395,124 @@ public class ServiceVerifyRetireTests {
         await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
         var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines).IsEquivalentTo(["retire_reason=target_claimed", "verify_retire_refused"]);
+    }
+
+    [Test]
+    public async Task A_live_old_daemon_is_fenced_before_recovery_and_committed_before_bootout() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var fence = new FakeFence(manager);
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+        // The marker the old daemon wrote on commit; once it is confirmed gone nothing needs it.
+        var marker = Daemons.Store.RetiringMarkerPath(OldId);
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        await File.WriteAllTextAsync(marker, "{}");
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(fence.Calls).IsEquivalentTo(["acquire:" + OldId, "commit", "close"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        var calls = manager.Calls;
+        await Assert.That(calls.IndexOf($"fence-acquire:{OldId}")).IsLessThan(calls.IndexOf($"query:{NewId}"));
+        await Assert.That(calls.IndexOf("fence-commit")).IsLessThan(calls.IndexOf($"uninstall:{OldId}"));
+        await Assert.That(manager.OldUnitInstalled).IsFalse();
+        await Assert.That(File.Exists(marker)).IsFalse();
+    }
+
+    [Test, NotInParallel]
+    [Arguments(AdmissionFenceOutcome.Busy, "agents_active")]
+    [Arguments(AdmissionFenceOutcome.Unsupported, "fence_unsupported")]
+    [Arguments(AdmissionFenceOutcome.Unavailable, "fence_unavailable")]
+    public async Task An_old_daemon_that_cannot_be_fenced_is_refused_before_anything_changes(AdmissionFenceOutcome outcome, string reason) {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var fence = new FakeFence(manager) { Outcome = outcome };
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, reason);
+        await Assert.That(manager.Calls).DoesNotContain($"query:{NewId}");
+        await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, NewId)).IsFalse();
+    }
+
+    /// <summary>A fence granted by a process other than the one the bootout would kill protects nothing.</summary>
+    [Test, NotInParallel]
+    public async Task A_fence_granted_by_another_process_is_released_and_refused() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var fence = new FakeFence(manager) { Pid = 2222 };
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "fence_unavailable");
+        await Assert.That(fence.Calls).IsEquivalentTo(["acquire:" + OldId, "close"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test, NotInParallel]
+    public async Task A_loaded_old_label_without_a_pid_is_refused_unfenced() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, OldJobPid = null };
+        var fence = new FakeFence(manager);
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "fence_unavailable");
+        await Assert.That(fence.Calls).IsEmpty();
+    }
+
+    [Test, NotInParallel]
+    public async Task A_target_refusal_after_the_fence_releases_it_without_committing() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, NewUnitStopped = true };
+        var fence = new FakeFence(manager);
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "target_occupied");
+        await Assert.That(fence.Calls).IsEquivalentTo(["acquire:" + OldId, "close"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test, NotInParallel]
+    public async Task An_unanswered_commit_is_aborted_and_refused_without_bootout() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var fence = new FakeFence(manager) { CommitAnswers = false };
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "fence_unavailable");
+        await Assert.That(fence.Calls).IsEquivalentTo(["acquire:" + OldId, "commit", "abort", "close"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task An_old_unit_that_is_not_loaded_is_retired_without_a_fence() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, OldLabelLoaded = false };
+        var fence = new FakeFence(manager);
+        var sut = Sut(manager, OldPlist("mine"), fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(fence.Calls).IsEmpty();
+        await Assert.That(manager.Calls).Contains($"uninstall:{OldId}");
+    }
+
+    /// <summary>launchd keeps a job loaded after its plist is gone; its profile cannot be verified, so it
+    /// must not be left running beside the renamed daemon or booted out unchecked.</summary>
+    [Test, NotInParallel]
+    public async Task A_loaded_old_label_without_its_plist_is_refused() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var fence = new FakeFence(manager);
+        var sut = Sut(manager, oldPlist: null, fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "unit_unreadable");
+        await Assert.That(fence.Calls).IsEmpty();
     }
 }

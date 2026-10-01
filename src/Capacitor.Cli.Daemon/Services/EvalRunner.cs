@@ -23,6 +23,7 @@ internal sealed class EvalRunner {
     readonly HarnessRegistry      _harnesses;
     readonly ProfileContext       _profiles;
     readonly ICapacitorHttpClient _http;
+    readonly AdmissionFence       _admission;
 
     // Each evidence phase bounds itself one RPC margin inside the server's route-keyed deadline; settable so tests can shorten it.
     internal TimeSpan QuestionPhaseBudget { get; init; } = EvidencePhaseTimeouts.DaemonQuestion;
@@ -37,8 +38,10 @@ internal sealed class EvalRunner {
             ICapacitorHttpClient     http,
             IHostApplicationLifetime lifetime,
             ILogger<EvalRunner>      logger,
-            TimeProvider             time
+            TimeProvider             time,
+            AdmissionFence           admission
         ) {
+        _admission     = admission;
         _time          = time;
         _connection    = connection;
         _cache         = cache;
@@ -49,17 +52,32 @@ internal sealed class EvalRunner {
         _baseUrl       = config.ServerUrl.TrimEnd('/');
         _shutdownToken = lifetime.ApplicationStopping;
 
+        // A question or finalize can outlive its run's cache entry (a cancel removes it first), so each
+        // counts as in flight for the rename fence while it runs.
         _connection.PrepareEvalHandler     = HandlePrepareAsync;
-        _connection.RunQuestionHandler     = HandleRunQuestionAsync;
-        _connection.FinalizeEvalHandler    = HandleFinalizeAsync;
+        _connection.RunQuestionHandler     = cmd => TrackedAsync(HandleRunQuestionAsync, cmd);
+        _connection.FinalizeEvalHandler    = cmd => TrackedAsync(HandleFinalizeAsync, cmd);
         _connection.CancelEvalHandler      = HandleCancelAsync;
-        _connection.RunQuestionV2Handler   = HandleRunQuestionV2Async;
-        _connection.FinalizeEvalV2Handler  = HandleFinalizeV2Async;
+        _connection.RunQuestionV2Handler   = cmd => TrackedAsync(HandleRunQuestionV2Async, cmd);
+        _connection.FinalizeEvalV2Handler  = cmd => TrackedAsync(HandleFinalizeV2Async, cmd);
 
         EvidenceRunContext.SweepStale(Path.GetTempPath(), time, msg => logger.LogInformation("{Message}", msg));
     }
 
+    async Task<TResult> TrackedAsync<TCommand, TResult>(Func<TCommand, Task<TResult>> handler, TCommand cmd) {
+        using var _ = _admission.Track();
+        return await handler(cmd);
+    }
+
     async Task<PrepareResult> HandlePrepareAsync(PrepareEvalCommand cmd) {
+        // A prepared run lives in the cache until it is finalized, which the fence counts as busy.
+        using var admission = _admission.TryAdmit();
+        if (admission is null) return new(false, "daemon is being renamed", null, 0, 0, 0, 0, 0);
+
+        return await HandleAdmittedPrepareAsync(cmd);
+    }
+
+    async Task<PrepareResult> HandleAdmittedPrepareAsync(PrepareEvalCommand cmd) {
         // SignalR's On<T1, TResult> gives no per-call token: only shutdown cancels here, and a response the server has
         // already timed out is discarded on its side.
         var httpClient = await _http.ForBackgroundAsync(_shutdownToken);

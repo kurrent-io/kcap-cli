@@ -674,6 +674,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     // window between ApplicationStopping firing and DisposeAsync running where
     // server calls would still throw TaskCanceledException unguarded.
     readonly CancellationTokenSource _shutdownCts;
+    readonly AdmissionFence _admission;
     readonly LaunchConsentGate _consentGate;
 
     // Keyed by the sink, not the agent: a sink is tracked until its own stop returns, which can be
@@ -754,8 +755,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PermissionPromptBroker?                           permissionBroker = null,
             // Null in every pre-existing construction site — those launches carry no policy snapshot
             // at all. DaemonRunner's bare AddSingleton lets DI fill this in production.
-            PolicySnapshotProvider?                           policySnapshots = null
+            PolicySnapshotProvider?                           policySnapshots = null,
+            // Null outside DaemonRunner: a private fence over this daemon's own marker path. DaemonRunner
+            // passes the singleton the control socket fences.
+            AdmissionFence?                                   admissionFence = null
         ) {
+        _admission = admissionFence ?? new AdmissionFence(
+            config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<AdmissionFence>.Instance);
         _shutdownCts       = CancellationTokenSource.CreateLinkedTokenSource(lifetime.ApplicationStopping);
         _time              = time;
         _heartbeatTimer    = new(HeartbeatInterval, time);
@@ -2086,14 +2093,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         catch (Exception ex) { LogDetachedCommandFault(ex, agentId); }
     }
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the shipped launch body, now returning the
-    /// terminal <see cref="CommandOutcome"/> the sequenced lane needs (the legacy caller ignores it). Every
-    /// shipped pre-flight rejection maps to <c>LaunchRejected</c> — capacity to <c>daemon_capacity</c>, all
-    /// other validations to <c>semantic</c> — so the sequenced lane emits a CommandRejected alongside the
-    /// unchanged LaunchFailed; a spawn/registration failure that was cleaned up maps to
-    /// <c>launch_failed_cleaned</c>; a registered agent maps to <c>launch_executed</c>. The shipped
-    /// LaunchFailed / worktree-teardown / cleanup side effects are UNCHANGED — only the return value is added.</summary>
+    /// <summary>The daemon's rename fence; every new agent admits through it.</summary>
+    internal AdmissionFence Admission => _admission;
+
+    /// <summary>Admits a server launch through the rename fence; a fenced daemon fails it as a semantic
+    /// rejection, so the server does not read it as a transient full daemon.</summary>
     async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd) {
+        using var admission = _admission.TryAdmit();
+        if (admission is null) {
+            _logger.LogWarning("Launch {AgentId} refused: the daemon is being renamed", cmd.AgentId);
+            await _server.LaunchFailedAsync(cmd.AgentId, $"{AdmissionFenceWire.RetiringReasonPrefix}: this daemon is being renamed");
+
+            return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
+        }
+
+        return await HandleAdmittedLaunchAsync(cmd);
+    }
+
+    /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
+    /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
+    /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
+    /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
+    async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
         var prompt        = cmd.Prompt;
         var model         = cmd.Model;
