@@ -288,6 +288,16 @@ internal partial class AgentOrchestrator {
     /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
     /// </summary>
     public async Task HandleLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
+        using var admission = _admission.TryAdmit();
+        if (admission is null) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error("This daemon is being renamed; start the agent on the renamed daemon."), ct);
+            return;
+        }
+
+        await HandleAdmittedLocalSpawnAsync(spawn, stream, ct);
+    }
+
+    async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
         var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {

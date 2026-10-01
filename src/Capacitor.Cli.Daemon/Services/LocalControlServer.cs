@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed partial class LocalControlServer(
         DaemonConfig config, AgentOrchestrator orchestrator,
         RestartCoordinator restart, LaunchConsentIpc consentIpc, PermissionIpc permissionIpc, DaemonStatusIpc statusIpc,
-        DaemonSettingsIpc settingsIpc,
+        DaemonSettingsIpc settingsIpc, AdmissionFenceIpc fenceIpc,
         ILogger<LocalControlServer> logger
     ) : BackgroundService {
     protected override async Task ExecuteAsync(CancellationToken ct) {
@@ -77,7 +77,8 @@ internal sealed partial class LocalControlServer(
                 case FrameType.SendText: await orchestrator.HandleLocalSendTextAsync(first.Text, stream, ct); break;
                 case FrameType.SendTextWithAttachments: await orchestrator.HandleLocalSendTextWithAttachmentsAsync(first.Text, stream, ct); break;
                 case FrameType.DaemonSettingsPut: await settingsIpc.HandlePutAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut, got {first.Type}"), ct); break;
+                case FrameType.AdmissionFenceAcquire: await fenceIpc.HandleAcquireAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);

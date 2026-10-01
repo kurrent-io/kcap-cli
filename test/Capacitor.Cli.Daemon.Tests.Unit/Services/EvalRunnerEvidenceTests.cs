@@ -51,7 +51,8 @@ public class EvalRunnerEvidenceTests : IDisposable {
         var cache      = new EvalContextCache(TimeProvider.System);
         var probe      = claude is null ? TestBinaries.None : BinaryProbe.Searching(claude.BinDirectory);
         var runner = new EvalRunner(connection, cache, TestHarnesses.Under(Home, probe), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
-            NullLogger<EvalRunner>.Instance, time ?? TimeProvider.System) {
+            NullLogger<EvalRunner>.Instance, time ?? TimeProvider.System,
+            new AdmissionFence(Path.Combine(RunRoot, "retiring.json"), null, TimeProvider.System, NullLogger<AdmissionFence>.Instance)) {
             QuestionPhaseBudget = question ?? EvidencePhaseTimeouts.DaemonQuestion,
             FinalizePhaseBudget = finalize ?? EvidencePhaseTimeouts.DaemonFinalize,
             TempRoot            = RunRoot

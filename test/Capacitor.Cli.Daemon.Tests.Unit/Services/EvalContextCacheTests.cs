@@ -29,6 +29,10 @@ public class EvalContextCacheTests : IDisposable {
 
     string RunRoot => Tmp.PathTo("runs");
 
+    AdmissionFence? _fence;
+
+    AdmissionFence Fence => _fence ??= new AdmissionFence(Tmp.PathTo("retiring.json"), null, _time, NullLogger<AdmissionFence>.Instance);
+
     int RunDirectories() => Directory.Exists(RunRoot) ? Directory.GetDirectories(RunRoot, EvidenceRunContext.DirectoryPrefix + "*").Length : 0;
 
     (ServerConnection Connection, EvalContextCache Cache) Daemon(TimeSpan? heldReleaseDelay = null) {
@@ -50,7 +54,7 @@ public class EvalContextCacheTests : IDisposable {
         var connection = new ServerConnection(config, AuthFixtures.NewTokenStore(Config.Root), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var cache      = new EvalContextCache(_time);
         _ = new EvalRunner(connection, cache, TestHarnesses.Under(Home, TestBinaries.None), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
-            NullLogger<EvalRunner>.Instance, _time) { TempRoot = RunRoot };
+            NullLogger<EvalRunner>.Instance, _time, Fence) { TempRoot = RunRoot };
         return (connection, cache);
     }
 
@@ -61,6 +65,29 @@ public class EvalContextCacheTests : IDisposable {
 
     static PrepareEvalCommand Prepare(string runId) =>
         new(runId, EvidenceServerStub.SessionId, "sonnet", false, null, [new EvalQuestionDto { Category = "safety", Id = "q1", Text = "q1", Prompt = "q1" }]);
+
+    [Test]
+    public async Task A_fenced_daemon_refuses_to_prepare_a_run() {
+        var (connection, cache) = Daemon();
+        await Assert.That(Fence.TryAcquire(() => false, out _)).IsEqualTo(AdmissionFence.AcquireResult.Acquired);
+
+        var result = await connection.PrepareEvalHandler!(Prepare("run-1"));
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(cache.Count).IsEqualTo(0);
+        await Assert.That(RunDirectories()).IsEqualTo(0);
+    }
+
+    /// <summary>A prepared run is daemon-owned work until it is finalized; the rename's busy probe
+    /// reads the cache, which this pins as non-empty after prepare.</summary>
+    [Test]
+    public async Task A_prepared_run_stays_in_the_cache_after_its_admission_ends() {
+        var (connection, cache) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+
+        await Assert.That(cache.Count).IsEqualTo(1);
+        await Assert.That(Fence.TryAcquire(() => cache.Count > 0, out _)).IsEqualTo(AdmissionFence.AcquireResult.Busy);
+    }
 
     [Test]
     public async Task Cancel_removes_the_run_directory() {

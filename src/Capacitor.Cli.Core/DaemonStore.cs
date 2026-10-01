@@ -98,6 +98,10 @@ public sealed partial class DaemonStore(string directory) {
     public string BootRefusalPath(string daemonName) =>
         Path.Combine(StateDirectory(daemonName), "boot-refusal.json");
 
+    /// <summary>The rename fence's commit marker, owned end to end by the daemon's admission fence.</summary>
+    public string RetiringMarkerPath(string daemonName) =>
+        Path.Combine(StateDirectory(daemonName), "retiring.json");
+
     /// <summary>The per-daemon state directory.</summary>
     public string StateDirectory(string daemonName) => Path.Combine(Directory, Sanitize(daemonName));
 

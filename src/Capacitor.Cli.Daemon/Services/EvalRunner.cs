@@ -23,6 +23,7 @@ internal sealed class EvalRunner {
     readonly HarnessRegistry      _harnesses;
     readonly ProfileContext       _profiles;
     readonly ICapacitorHttpClient _http;
+    readonly AdmissionFence       _admission;
 
     // Each evidence phase bounds itself one RPC margin inside the server's route-keyed deadline; settable so tests can shorten it.
     internal TimeSpan QuestionPhaseBudget { get; init; } = EvidencePhaseTimeouts.DaemonQuestion;
@@ -37,8 +38,10 @@ internal sealed class EvalRunner {
             ICapacitorHttpClient     http,
             IHostApplicationLifetime lifetime,
             ILogger<EvalRunner>      logger,
-            TimeProvider             time
+            TimeProvider             time,
+            AdmissionFence           admission
         ) {
+        _admission     = admission;
         _time          = time;
         _connection    = connection;
         _cache         = cache;
@@ -60,6 +63,14 @@ internal sealed class EvalRunner {
     }
 
     async Task<PrepareResult> HandlePrepareAsync(PrepareEvalCommand cmd) {
+        // A prepared run lives in the cache until it is finalized, which the fence counts as busy.
+        using var admission = _admission.TryAdmit();
+        if (admission is null) return new(false, "daemon is being renamed", null, 0, 0, 0, 0, 0);
+
+        return await HandleAdmittedPrepareAsync(cmd);
+    }
+
+    async Task<PrepareResult> HandleAdmittedPrepareAsync(PrepareEvalCommand cmd) {
         // SignalR's On<T1, TResult> gives no per-call token: only shutdown cancels here, and a response the server has
         // already timed out is discarded on its side.
         var httpClient = await _http.ForBackgroundAsync(_shutdownToken);

@@ -379,6 +379,9 @@ public static partial class DaemonRunner {
         // a subscriber connected via ConsentSubscribe sees the gate's own pending requests.
         builder.Services.AddSingleton<LaunchConsentIpc>();
         builder.Services.AddSingleton<DaemonSettingsIpc>();
+        builder.Services.AddSingleton(sp => new AdmissionFence(
+            config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time, sp.GetRequiredService<ILogger<AdmissionFence>>()));
+        builder.Services.AddSingleton<AdmissionFenceIpc>();
 
         builder.Services.AddSingleton<PermissionPromptBroker>();
         builder.Services.AddSingleton<PermissionIpc>();
