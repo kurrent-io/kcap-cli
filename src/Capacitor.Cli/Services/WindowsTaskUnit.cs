@@ -57,7 +57,11 @@ static class WindowsTaskUnit {
           + $"`kcap daemon service install`.");
     }
 
-    /// <summary>.cmd wrapper: set the captured env, then exec the daemon (no Environment element in Task XML).</summary>
+    // systemd's RestartSec=5, applied to every relaunch. No burst limit: systemd gives up after five quick
+    // failures, but a Windows task the wrapper abandons stays down until the next logon.
+    internal const int RelaunchPauseSeconds = 5;
+
+    /// <summary>.cmd wrapper: set the captured env, then run and relaunch the daemon (no Environment element in Task XML).</summary>
     public static string Wrapper(ServiceSpec spec) {
         var sb = new StringBuilder();
         sb.Append("@echo off\r\n");
@@ -92,7 +96,22 @@ static class WindowsTaskUnit {
         var args = new[] { "--name", ExecValue("the service id", spec.ServiceId),
                            "--log-file", ExecValue("the log path", spec.LogPath) }
             .Concat(spec.ExtraArgs.Select(a => ExecValue("a daemon argument", a)));
+        // Task Scheduler's RestartOnFailure covers only a task that fails to start, never the exit code of the
+        // program it ran, so the wrapper relaunches the daemon itself — the same contract as systemd's
+        // Restart=on-failure and launchd's SuccessfulExit=false: exit 0 (a stop, or a deliberate supervised
+        // refusal) ends the task, and any other exit, a requested restart included, relaunches after a pause.
+        // `ping` is the sleep: `timeout` aborts when stdin is redirected, which would also spin.
+        // A variable named ERRORLEVEL — inherited or captured — would shadow cmd's dynamic exit code.
+        sb.Append("set \"ERRORLEVEL=\"\r\n");
+        sb.Append(":run\r\n");
         sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)}\r\n");
+        // EQU, not `if errorlevel`: that tests "at least", and a crash's exit code is negative.
+        sb.Append("if %ERRORLEVEL% EQU 0 exit /b 0\r\n");
+        // By absolute path: the captured PATH need not reach System32, and a sleep that fails to start would
+        // turn the loop into a spin. `call` keeps the line from opening with a quote, which BinaryFromWrapper
+        // reserves for the daemon's exec line.
+        sb.Append($"call \"%SystemRoot%\\System32\\PING.EXE\" -n {RelaunchPauseSeconds + 1} 127.0.0.1 >nul\r\n");
+        sb.Append("goto run\r\n");
         return sb.ToString();
     }
 
