@@ -25,7 +25,8 @@ public class WindowsTaskUnitTests {
     }
 
     /// <summary>Task Scheduler never relaunches on an exit code, so the wrapper must: the daemon runs inside a
-    /// loop that only a clean exit leaves.</summary>
+    /// loop that only a clean exit leaves, and every other exit — a requested restart too — pauses first, so a
+    /// daemon that keeps exiting cannot spin.</summary>
     [Test]
     public async Task Wrapper_relaunches_the_daemon_until_it_exits_cleanly() {
         var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
@@ -33,32 +34,23 @@ public class WindowsTaskUnitTests {
         var exec  = Array.FindIndex(lines, l => l.StartsWith("\"C:\\kcap\\kcap-daemon.exe\"", StringComparison.Ordinal));
 
         await Assert.That(loop).IsGreaterThan(0);
-        await Assert.That(exec).IsEqualTo(loop + 1);
-        await Assert.That(lines[exec + 1]).IsEqualTo("set \"KCAP_WRAPPER_EXIT=%ERRORLEVEL%\"");
-        await Assert.That(lines[exec + 2]).IsEqualTo("if \"%KCAP_WRAPPER_EXIT%\"==\"0\" exit /b 0");
-        await Assert.That(lines[^1]).IsEqualTo("goto run");
+        await Assert.That(lines[(loop + 1)..]).IsEquivalentTo(new[] {
+            lines[exec],
+            "if %ERRORLEVEL% EQU 0 exit /b 0",
+            $"ping -n {WindowsTaskUnit.RelaunchPauseSeconds + 1} 127.0.0.1 >nul",
+            "goto run",
+        }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
-    /// <summary>A requested restart (after an update) relaunches straight away and forgets earlier failures.</summary>
+    /// <summary>`if errorlevel N` means "at least N", which a crash's negative exit code fails; and `timeout`
+    /// aborts when stdin is redirected. Either would end or spin the loop.</summary>
     [Test]
-    public async Task Wrapper_relaunches_a_requested_restart_without_pausing() {
-        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+    public async Task Wrapper_tests_for_an_exact_zero_and_sleeps_with_ping() {
+        var wrapper = WindowsTaskUnit.Wrapper(Spec());
 
-        await Assert.That(lines).Contains($"if \"%KCAP_WRAPPER_EXIT%\"==\"{Capacitor.Cli.Core.ExitCodes.RestartRequested}\" (set \"KCAP_WRAPPER_FAILURES=0\" & goto run)");
-    }
-
-    /// <summary>Any other exit pauses before relaunching — longer once failures repeat — and never gives up:
-    /// a task the wrapper leaves stays down until the next logon.</summary>
-    [Test]
-    public async Task Wrapper_pauses_longer_once_failures_repeat() {
-        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
-        var pause = lines.Single(l => l.StartsWith("if %KCAP_WRAPPER_FAILURES%", StringComparison.Ordinal));
-
-        await Assert.That(lines).Contains("set /a KCAP_WRAPPER_FAILURES+=1 >nul");
-        await Assert.That(pause).IsEqualTo(
-            $"if %KCAP_WRAPPER_FAILURES% GEQ {WindowsTaskUnit.RepeatedFailures} (ping -n {WindowsTaskUnit.LongPauseSeconds + 1} 127.0.0.1 >nul) else (ping -n {WindowsTaskUnit.ShortPauseSeconds + 1} 127.0.0.1 >nul)");
-        await Assert.That(lines.Any(l => l.Contains("timeout", StringComparison.OrdinalIgnoreCase))).IsFalse();
-        await Assert.That(lines.Any(l => l.StartsWith("exit", StringComparison.OrdinalIgnoreCase) && l != "exit /b 0")).IsFalse();
+        await Assert.That(wrapper.Contains("if errorlevel", StringComparison.OrdinalIgnoreCase)).IsFalse();
+        await Assert.That(wrapper.Contains("if not errorlevel", StringComparison.OrdinalIgnoreCase)).IsFalse();
+        await Assert.That(wrapper.Contains("timeout", StringComparison.OrdinalIgnoreCase)).IsFalse();
     }
 
     [Test]
