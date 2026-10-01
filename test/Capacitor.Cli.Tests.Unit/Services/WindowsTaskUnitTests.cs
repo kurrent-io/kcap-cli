@@ -34,10 +34,11 @@ public class WindowsTaskUnitTests {
         var exec  = Array.FindIndex(lines, l => l.StartsWith("\"C:\\kcap\\kcap-daemon.exe\"", StringComparison.Ordinal));
 
         await Assert.That(loop).IsGreaterThan(0);
+        await Assert.That(lines[loop - 1]).IsEqualTo("set \"ERRORLEVEL=\"");
         await Assert.That(lines[(loop + 1)..]).IsEquivalentTo(new[] {
             lines[exec],
             "if %ERRORLEVEL% EQU 0 exit /b 0",
-            $"ping -n {WindowsTaskUnit.RelaunchPauseSeconds + 1} 127.0.0.1 >nul",
+            $"call \"%SystemRoot%\\System32\\PING.EXE\" -n {WindowsTaskUnit.RelaunchPauseSeconds + 1} 127.0.0.1 >nul",
             "goto run",
         }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
