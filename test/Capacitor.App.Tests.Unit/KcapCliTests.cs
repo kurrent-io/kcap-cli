@@ -153,7 +153,7 @@ public class KcapCliTests {
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "install", "--name", "daemon-a", "--profile", "work", "--verify", "--replace", "--retire", "old-name"],
             CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(100));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(120));
     }
 
     [Test]

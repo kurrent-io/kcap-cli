@@ -272,11 +272,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             var previous = await _settings.SaveNameAsync(name, _lifetime.Token);
             Message = "Name saved. Restarting the daemon…";
             var outcome = await _runMutation(request!, _lifetime.Token);
-            if (outcome is MutationOutcome.Failed { Reason: "target_occupied" or "target_unknown" } collision) {
+            if (outcome is MutationOutcome.Failed { Reason: { } refusal } && RenameRefusal.ChangedNothing(outcome)) {
                 await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
-                Message = collision.Reason == "target_occupied"
-                    ? $"A service named {name} is already installed on this machine, possibly stopped. Choose another name; nothing was changed."
-                    : $"Could not tell whether a service named {name} is installed. Nothing was changed; try again.";
+                Message = RenameRefusal.Message(refusal, name);
                 return;
             }
             if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {

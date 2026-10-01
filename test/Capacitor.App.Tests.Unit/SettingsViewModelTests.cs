@@ -134,7 +134,10 @@ public class SettingsViewModelTests {
     [Test]
     [Arguments("target_occupied", "already installed")]
     [Arguments("target_unknown", "Could not tell")]
-    public Task An_occupied_target_restores_the_name_and_reports_nothing_changed(string reason, string message) =>
+    [Arguments("agents_active", "Wait for it to finish")]
+    [Arguments("fence_unsupported", "Restart the daemon")]
+    [Arguments("fence_unavailable", "couple of minutes")]
+    public Task A_refusal_that_changed_nothing_restores_the_name_and_says_so(string reason, string message) =>
         AvaloniaSession.RunOnUiAsync(async () => {
             var store = Seed();
             var relaunches = 0;
