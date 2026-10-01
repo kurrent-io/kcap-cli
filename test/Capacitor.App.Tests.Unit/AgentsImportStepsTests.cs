@@ -5,7 +5,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using TUnit.Assertions.Enums;
@@ -624,7 +624,7 @@ public class AgentsImportTemplateTests {
             var vm = new OnboardingViewModel([agents, import, done]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -640,7 +640,7 @@ public class AgentsImportTemplateTests {
             var orgChoice        = window.GetVisualDescendants().OfType<RadioButton>().FirstOrDefault(r => r.Name == "OrgChoice");
             var orgBox           = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "OrgTextBox");
             var vendorCheckBoxes = window.GetVisualDescendants().OfType<CheckBox>().Where(c => c.Name == "ImportVendorCheckBox").ToList();
-            var stepScroll       = window.FindControl<ScrollViewer>("StepScroll");
+            var stepScroll       = window.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault(s => s.Name == "StepScroll");
             var orgHidden        = orgBox?.IsVisible;
 
             if (orgChoice is not null) orgChoice.IsChecked = true;
@@ -684,7 +684,7 @@ public class AgentsImportTemplateTests {
             var vm = new OnboardingViewModel([agents, new DoneStepViewModel(() => [])]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 

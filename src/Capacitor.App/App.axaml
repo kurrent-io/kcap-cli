@@ -36,6 +36,7 @@
             <SolidColorBrush x:Key="KcapSelectionBrush" Color="#1E2E52" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
+                <ResourceInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingResources.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
@@ -45,6 +46,7 @@
         <StyleInclude Source="avares://Kurrent Capacitor/Views/MarkdownStyles.axaml" />
         <StyleInclude Source="avares://Kurrent Capacitor/Views/PullRequestStyles.axaml" />
         <StyleInclude Source="avares://Kurrent Capacitor/Views/ChatBubbleStyles.axaml" />
+        <StyleInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingStyles.axaml" />
         <!-- Popup panels drawn on our tokens: the flyout presenter IS the panel (no inner Border
              fighting the theme's own chrome). Opted into per flyout via FlyoutPresenterClasses.
              Fluent's ControlTheme defaults ScrollViewer.HorizontalScrollBarVisibility=Auto on the

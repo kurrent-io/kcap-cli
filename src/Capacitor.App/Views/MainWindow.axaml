@@ -4,6 +4,7 @@
                      xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
                      xmlns:views="clr-namespace:Capacitor.App.Views"
                      xmlns:svc="clr-namespace:Capacitor.App.Services"
+                     xmlns:onboarding="clr-namespace:Capacitor.App.Views.Onboarding"
                      x:Class="Capacitor.App.Views.MainWindow"
                      x:TypeArguments="vm:MainWindowViewModel"
                      x:DataType="vm:MainWindowViewModel"
@@ -143,5 +144,8 @@
                 </ContentControl>
             </Panel>
         </Grid>
+
+        <!-- Onboarding covers the rail and launcher until it hands over; see Onboarding. -->
+        <onboarding:OnboardingPaneView x:Name="OnboardingPane" DataContext="{x:Null}" IsVisible="False" />
     </Panel>
 </rxui:ReactiveWindow>

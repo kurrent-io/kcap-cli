@@ -1,0 +1,365 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- The browser first-run setup's register, for the onboarding pane only (fr-prefixed classes):
+         an accent kept for what you can press, a rose eyebrow that is never interactive, and frosted
+         cards over a purple bloom. Outcome colours stay the app's KcapSuccess / KcapDanger, so a
+         tick here means what it means everywhere else. -->
+
+    <!-- Type -->
+    <Style Selector="TextBlock.frEyebrow">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="1.5" />
+        <Setter Property="Foreground" Value="{StaticResource FrAtmosphereBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frHeadline">
+        <Setter Property="FontSize" Value="30" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="LineHeight" Value="34" />
+        <Setter Property="LetterSpacing" Value="-0.75" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frLede">
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="LineHeight" Value="25" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource FrMutedBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frBody">
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="LineHeight" Value="21" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource FrMutedBrush}" />
+    </Style>
+    <!-- Section heads inside a card: "found on <machine>", "record", "how much history". -->
+    <Style Selector="TextBlock.frMicro">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="1.2" />
+        <Setter Property="Foreground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frLabel">
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="-0.1" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frSignal">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="Foreground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frNote">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18.5" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frDetail">
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="LineHeight" Value="17" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frMono">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frValue">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="26" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frUnit">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+    <Style Selector="TextBlock.frError">
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="LineHeight" Value="18" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+    </Style>
+
+    <!-- Surfaces -->
+    <Style Selector="Border.frCard">
+        <Setter Property="Background" Value="{StaticResource FrSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrSurfaceBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="22" />
+    </Style>
+    <Style Selector="Border.frDivider">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{StaticResource FrDividerBrush}" />
+    </Style>
+    <Style Selector="Border.frRowRule">
+        <Setter Property="BorderBrush" Value="{StaticResource FrDividerBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+    </Style>
+    <Style Selector="Border.frWarning">
+        <Setter Property="Background" Value="{StaticResource FrWarningFillBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrWarningBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="14,12" />
+    </Style>
+    <Style Selector="Border.frResolved">
+        <Setter Property="Background" Value="{StaticResource FrResolvedFillBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrResolvedBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="14,12" />
+    </Style>
+    <Style Selector="Border.frCallout">
+        <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="14,12" />
+    </Style>
+    <Style Selector="Border.frChip">
+        <Setter Property="BorderBrush" Value="{StaticResource FrPanelBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="2" />
+        <Setter Property="Padding" Value="6,2" />
+    </Style>
+    <Style Selector="Border.frChip TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="9" />
+        <Setter Property="LetterSpacing" Value="0.8" />
+        <Setter Property="Foreground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+
+    <!-- Buttons: Primary, Secondary (a real alternative), Quiet (a costless dismissal), Link. Fluent
+         paints PART_ContentPresenter, so each state pins it, as the kcap button classes do. -->
+    <Style Selector="Button.frPrimary, Button.frSecondary, Button.frQuiet, Button.frLink">
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="18,12" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.frPrimary">
+        <Setter Property="Background" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentOnBrush}" />
+    </Style>
+    <Style Selector="Button.frPrimary /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentOnBrush}" />
+    </Style>
+    <Style Selector="Button.frPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource FrAccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentHoverBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentOnBrush}" />
+    </Style>
+    <Style Selector="Button.frPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentOnBrush}" />
+    </Style>
+    <Style Selector="Button.frPrimary:disabled, Button.frSecondary:disabled, Button.frQuiet:disabled, Button.frLink:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="Button.frSecondary">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.frSecondary /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frSecondary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.frSecondary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frSecondary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.frQuiet">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource FrNeutralBrush}" />
+        <Setter Property="Padding" Value="4,12" />
+    </Style>
+    <Style Selector="Button.frQuiet /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frQuiet:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource FrNeutralBrush}" />
+    </Style>
+    <Style Selector="Button.frQuiet:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frQuiet:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.frLink">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Padding" Value="0,6" />
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="LetterSpacing" Value="1.1" />
+    </Style>
+    <Style Selector="Button.frLink /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frLink:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="Button.frLink:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frLink:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource FrAccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.frCompact">
+        <Setter Property="Padding" Value="14,9" />
+        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
+        <Setter Property="FontSize" Value="10.5" />
+        <Setter Property="LetterSpacing" Value="0.8" />
+    </Style>
+
+    <!-- Fields inside the pane keep the app's kcapField chrome, on the card's own surface. -->
+    <Style Selector="TextBox.frField">
+        <Setter Property="Background" Value="#0B0F10" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="CaretBrush" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="MinHeight" Value="40" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="PlaceholderForeground" Value="{StaticResource FrDimBrush}" />
+    </Style>
+    <Style Selector="TextBox.frField /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#0B0F10" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="TextBox.frField:pointerover /template/ Border#PART_BorderElement,
+                     TextBox.frField:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="#0B0F10" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <!-- Checkbox: a 16px square, accent fill when on. -->
+    <Style Selector="CheckBox.frCheck">
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="MinWidth" Value="0" />
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="CheckBox.frCheck /template/ Border#NormalRectangle">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrDimBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="CheckBox.frCheck:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="CheckBox.frCheck:checked /template/ Border#NormalRectangle,
+                     CheckBox.frCheck:checked:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="CheckBox.frCheck:checked /template/ Path#CheckGlyph,
+                     CheckBox.frCheck:checked:pointerover /template/ Path#CheckGlyph">
+        <Setter Property="Fill" Value="{StaticResource FrAccentOnBrush}" />
+        <Setter Property="Width" Value="10" />
+    </Style>
+    <Style Selector="CheckBox.frCheck:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- A radio row: the whole option is the hit area, accent border and wash when chosen. -->
+    <Style Selector="RadioButton.frOption">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="10,8" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="RadioButton">
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                        <Panel Width="15" Height="15" VerticalAlignment="Top" Margin="0,2,0,0">
+                            <Ellipse Name="Ring" Width="15" Height="15" StrokeThickness="1"
+                                     Stroke="{StaticResource FrDimBrush}" Fill="Transparent" />
+                            <Ellipse Name="Dot" Width="7" Height="7" Fill="{StaticResource FrAccentBrush}" IsVisible="False" />
+                        </Panel>
+                        <ContentPresenter Grid.Column="1" Name="OptionContent" Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Grid>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="RadioButton.frOption:checked">
+        <Setter Property="Background" Value="{StaticResource FrAccentWashBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="RadioButton.frOption:checked /template/ Ellipse#Ring">
+        <Setter Property="Stroke" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="RadioButton.frOption:checked /template/ Ellipse#Dot">
+        <Setter Property="IsVisible" Value="True" />
+    </Style>
+    <Style Selector="RadioButton.frOption:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+
+    <!-- A segment of a picker row (the history window): dim border, accent when chosen. -->
+    <Style Selector="RadioButton.frSegment">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrDimBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="Padding" Value="11,9" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <ControlTemplate TargetType="RadioButton">
+                <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                    <ContentPresenter Name="SegmentContent" Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="RadioButton.frSegment:pointerover">
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentHoverBrush}" />
+    </Style>
+    <Style Selector="RadioButton.frSegment:checked, RadioButton.frSegment:checked:pointerover">
+        <Setter Property="Background" Value="{StaticResource FrAccentWashBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="RadioButton.frSegment:disabled">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+</Styles>

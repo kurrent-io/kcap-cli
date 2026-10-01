@@ -50,6 +50,7 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Defaults;
     public string       Title      => "This machine";
     public bool         Applicable => true;
+    public string Lede => "Who can see sessions you start here, and what this machine is called.";
 
     public bool Satisfied {
         get => _satisfied;
