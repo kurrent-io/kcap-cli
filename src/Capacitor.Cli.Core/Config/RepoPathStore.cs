@@ -34,7 +34,8 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
 
     ReadResult Read() {
         for (var attempt = 1; ; attempt++) {
-            if (!File.Exists(StorePath)) return new(ReadStatus.Missing, []);
+            // Absence is taken only from the open failing as not-found: File.Exists also answers false
+            // when the check itself fails, which would let a write replace a store it never read.
             try {
                 var json = File.ReadAllText(StorePath);
                 try {
@@ -42,6 +43,8 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
                 } catch (JsonException) {
                     return new(ReadStatus.Corrupt, null);
                 }
+            } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
+                return new(ReadStatus.Missing, []);
             } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
                 if (attempt == ReadAttempts) return new(ReadStatus.Unreadable, null);
                 Thread.Sleep(ReadRetryDelay);
@@ -59,7 +62,7 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
             case ReadStatus.Ok or ReadStatus.Missing:
                 return [..read.Entries!];
             case ReadStatus.Corrupt:
-                File.Move(StorePath, $"{StorePath}.corrupt-{time.GetUtcNow():yyyyMMddHHmmss}", overwrite: true);
+                File.Move(StorePath, $"{StorePath}.corrupt-{time.GetUtcNow():yyyyMMddHHmmss}-{Guid.NewGuid():N}", overwrite: false);
                 return [];
             default:
                 throw new IOException($"Could not read {StorePath}; leaving it unchanged rather than overwriting the saved repositories.");

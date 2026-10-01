@@ -399,4 +399,19 @@ public class RepoPathStoreTests {
 
         await Assert.That((await Repos.LoadAsync()).Length).IsEqualTo(12);
     }
+
+    [Test]
+    public async Task Two_corrupt_stores_in_the_same_second_keep_both_copies() {
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
+        var repos = new RepoPathStore(Config.Root, time);
+
+        await File.WriteAllTextAsync(ReposJsonPath, "first {{{");
+        await repos.AddAsync(await RepoDir("a"));
+        await File.WriteAllTextAsync(ReposJsonPath, "second {{{");
+        await repos.AddAsync(await RepoDir("b"));
+
+        var aside = Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*")
+            .Select(File.ReadAllText).Order().ToArray();
+        await Assert.That(aside).IsEquivalentTo(["first {{{", "second {{{"]);
+    }
 }
