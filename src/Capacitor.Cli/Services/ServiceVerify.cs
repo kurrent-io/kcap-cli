@@ -107,11 +107,13 @@ sealed class ServiceVerify(
     Func<bool>? profileViable = null,
     Action? onCommitted = null,
     Func<string, string?>? gateEnv = null,
-    Func<string, bool>? digestMatches = null) {
+    Func<string, bool>? digestMatches = null,
+    Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
     static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
     static readonly TimeSpan TargetProbeWait = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan FenceWait       = TimeSpan.FromSeconds(3);
 
     public static readonly TimeSpan DefaultForwardBudget   = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
@@ -124,11 +126,14 @@ sealed class ServiceVerify(
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
     /// caller's 60s kill-timeout. <c>--retire</c>'s own budget starts only once its own
     /// <see cref="LockWait"/> is held, so a caller driving a rename must allow one more lock wait
-    /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) on top of
-    /// the sum above.</summary>
+    /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) PLUS the
+    /// old daemon's fence (acquire and commit, each within <see cref="FenceWait"/>) on top of the sum
+    /// above.</summary>
     public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
+    readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
+        acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
     readonly TimeSpan _rollbackReserve  = rollbackReserve ?? DefaultRollbackReserve;
 
     /// <summary>A small slice reserved INSIDE the forward budget for the final recheck, so a primary
@@ -776,6 +781,30 @@ sealed class ServiceVerify(
         }
         var fingerprint = ServiceTxnMarker.Fingerprint(generated.Content);
 
+        // A rename locks and fences the old daemon before anything below can change either id, so every
+        // refusal it can produce leaves both exactly as they were.
+        RetireTicket? retire = null;
+        if (retireServiceId is not null) {
+            if (retireServiceId == spec.ServiceId)
+                throw new ArgumentException("retireServiceId must differ from the service being installed");
+
+            var (prepareExit, ticket) = await PrepareRetireAsync(retireServiceId, spec);
+            if (prepareExit is { } refused) return refused;
+            retire = ticket;
+        }
+
+        try {
+            return await InstallAfterRetirePreparedAsync(spec, replace, expectedVersion, retireServiceId, retire,
+                serviceId, op, gated, unitExpectation, observedJobPids, generated, fingerprint);
+        } finally {
+            if (retire is not null) await retire.DisposeAsync();
+        }
+    }
+
+    async Task<int> InstallAfterRetirePreparedAsync(
+            ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId, RetireTicket? retire,
+            string serviceId, string op, bool gated, string? unitExpectation, HashSet<int> observedJobPids,
+            GeneratedFile generated, string fingerprint) {
         // A leftover marker means a prior attempt never reached a terminal state. "committed" is just a
         // crash between writing that phase and deleting the marker — self-heal. Any other phase may
         // have left residue; recovery authority is scoped by CONTENT (see RecoverLeftoverMarker).
@@ -787,10 +816,7 @@ sealed class ServiceVerify(
             }
         }
 
-        if (retireServiceId is not null) {
-            if (retireServiceId == spec.ServiceId)
-                throw new ArgumentException("retireServiceId must differ from the service being installed");
-
+        if (retire is not null) {
             // A rename's target must be free: a live daemon under the new name is another daemon,
             // and an installed unit — even a stopped one, which has no socket — is another service.
             // Neither is a stale unit for --replace to take over, so refuse before the old unit is touched.
@@ -811,7 +837,7 @@ sealed class ServiceVerify(
             // Retire spends its OWN forward budget — never the install's — so a late-but-successful
             // retire can never starve the install's own readiness poll and strand the operator with
             // no daemon at all (a retired unit is never restored on the install's own timeout).
-            if (await RetireAsync(retireServiceId, spec) is { } retireExit) return retireExit;
+            if (await RunRetireAsync(retireServiceId!, retire) is { } retireExit) return retireExit;
 
             // A daemon can claim the new name WHILE the old unit was being retired — the pre-retire
             // snapshot above is stale by the time retirement settles.
@@ -1020,21 +1046,24 @@ sealed class ServiceVerify(
     /// not provably pinned to the profile being installed is refused untouched; a bootout that
     /// cannot be confirmed stops the transaction before anything is written for the new id.
     /// </summary>
-    async Task<int?> RetireAsync(string retireId, ServiceSpec spec) {
+    /// <summary>
+    /// Locks the unit a rename leaves behind and, when a service-run daemon is live under it, takes that
+    /// daemon's admission fence — before anything is changed for either id. A unit not provably pinned to
+    /// the profile being installed is refused untouched; a live daemon that cannot be fenced is refused
+    /// rather than booted out with work it may have admitted.
+    /// </summary>
+    async Task<(int? Exit, RetireTicket? Ticket)> PrepareRetireAsync(string retireId, ServiceSpec spec) {
         // The lock must be held BEFORE reading the plist and deciding "same profile, mine to
         // destroy" — reading first would let a concurrent install/verify on this same id replace
         // the unit in the window between that read and acquiring the lock.
-        using var retireTxn = await ServiceTxnLock.TryAcquireAsync(store, retireId, LockWait, time);
+        var retireTxn = await ServiceTxnLock.TryAcquireAsync(store, retireId, LockWait, time);
         if (retireTxn is null) {
             Say(VerifyExit.ContendedToken);
-            return VerifyExit.Contended;
+            return (VerifyExit.Contended, null);
         }
 
-        // Started only once the lock is held — a contended lock must never eat into this budget.
-        var deadline = time.GetUtcNow() + _forwardBudget;
-
         var (status, content) = _discriminatedPlistRead(manager.UnitPath(retireId));
-        if (status == LaunchdUnit.PlistRead.Absent) return null;
+        if (status == LaunchdUnit.PlistRead.Absent) return (null, new RetireTicket(retireTxn, null, unitPresent: false));
 
         string? retiredProfile = null;
         var readable = status == LaunchdUnit.PlistRead.Ok;
@@ -1042,18 +1071,68 @@ sealed class ServiceVerify(
             try { LaunchdUnit.EnvFromPlist(content!).TryGetValue(ProfileVar, out retiredProfile); }
             catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException) { readable = false; }
         }
-        if (!readable) return RetireRefusal("unit_unreadable");
+        if (!readable) return Refuse("unit_unreadable");
 
         spec.Environment.TryGetValue(ProfileVar, out var pinnedProfile);
         if (string.IsNullOrEmpty(pinnedProfile) || !string.Equals(retiredProfile, pinnedProfile, StringComparison.Ordinal))
-            return RetireRefusal("foreign_profile");
+            return Refuse("foreign_profile");
 
+        // Only a loaded label has a process the bootout would kill.
+        var label = manager.Query(retireId, TargetProbeWait);
+        if (label.Probe == LabelProbe.Unknown) return Refuse("fence_unavailable");
+        if (label.Probe != LabelProbe.Loaded) return (null, new RetireTicket(retireTxn, null, unitPresent: true));
+        if (label.JobPid is not { } jobPid) return Refuse("fence_unavailable");
+
+        var fence = await _acquireFence(retireId, CancellationToken.None);
+        switch (fence.Outcome) {
+            case AdmissionFenceOutcome.Busy:        return Refuse("agents_active");
+            case AdmissionFenceOutcome.Unsupported: return Refuse("fence_unsupported");
+            case AdmissionFenceOutcome.Acquired:
+                // The socket must answer for the process the bootout will kill.
+                if (fence.Session!.Pid == jobPid) return (null, new RetireTicket(retireTxn, fence.Session, unitPresent: true));
+                await fence.Session.DisposeAsync();
+                return Refuse("fence_unavailable");
+            default:
+                return Refuse("fence_unavailable");
+        }
+
+        (int?, RetireTicket?) Refuse(string reason) {
+            retireTxn.Dispose();
+            return (RetireRefusal(reason), null);
+        }
+    }
+
+    /// <summary>
+    /// Commits the old daemon's fence, then boots its unit out. Once the daemon has answered the commit
+    /// nothing here releases the fence: a bootout that fails or cannot be confirmed leaves it to expire.
+    /// </summary>
+    async Task<int?> RunRetireAsync(string retireId, RetireTicket ticket) {
+        if (!ticket.UnitPresent) return null;
+
+        if (ticket.Fence is { } fence && !await fence.CommitAsync(FenceWait, CancellationToken.None)) {
+            await fence.AbortAsync(FenceWait, CancellationToken.None);
+            return RetireRefusal("fence_unavailable");
+        }
+
+        var deadline = time.GetUtcNow() + _forwardBudget;
         if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
         if (!await WaitForStopConfirmedAsync(retireId, deadline)) {
             Say(VerifyExit.StopUnconfirmedToken);
             return VerifyExit.StopUnconfirmed;
         }
         return null;
+    }
+
+    /// <summary>The old id's lock and, when a live daemon was fenced, its fence connection, held from
+    /// the prepare step until the transaction ends.</summary>
+    sealed class RetireTicket(ServiceTxnLock txn, IAdmissionFenceSession? fence, bool unitPresent) : IAsyncDisposable {
+        public IAdmissionFenceSession? Fence { get; } = fence;
+        public bool UnitPresent { get; } = unitPresent;
+
+        public async ValueTask DisposeAsync() {
+            if (Fence is not null) await Fence.DisposeAsync();
+            txn.Dispose();
+        }
     }
 
     static int RetireRefusal(string reason) {

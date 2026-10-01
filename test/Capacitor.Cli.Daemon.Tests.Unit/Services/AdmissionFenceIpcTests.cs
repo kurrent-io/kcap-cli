@@ -229,4 +229,55 @@ public class AdmissionFenceIpcTests {
             await Assert.That(dto.Capabilities).Contains(AdmissionFenceWire.Capability);
         });
     }
+
+    [Test]
+    public async Task The_core_client_acquires_commits_and_aborts_a_fence() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            var result = await AdmissionFenceClient.AcquireAsync(h.Config.Store, h.Config.Name, TimeSpan.FromSeconds(5), TimeProvider.System, ct);
+
+            await Assert.That(result.Outcome).IsEqualTo(AdmissionFenceOutcome.Acquired);
+            await using var session = result.Session!;
+            await Assert.That(session.Pid).IsEqualTo(Environment.ProcessId);
+            await Assert.That(h.Orchestrator.Admission.IsFenced).IsTrue();
+
+            await Assert.That(await session.CommitAsync(TimeSpan.FromSeconds(5), ct)).IsTrue();
+            await Assert.That(File.Exists(h.Config.Store.RetiringMarkerPath(h.Config.Name))).IsTrue();
+
+            await Assert.That(await session.AbortAsync(TimeSpan.FromSeconds(5), ct)).IsTrue();
+            await Assert.That(h.Orchestrator.Admission.IsFenced).IsFalse();
+        });
+    }
+
+    [Test]
+    public async Task The_core_client_reports_a_busy_daemon() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            h.Orchestrator.SeedAgentForTest("running");
+
+            var result = await AdmissionFenceClient.AcquireAsync(h.Config.Store, h.Config.Name, TimeSpan.FromSeconds(5), TimeProvider.System, ct);
+
+            await Assert.That(result.Outcome).IsEqualTo(AdmissionFenceOutcome.Busy);
+            await Assert.That(result.Session).IsNull();
+        });
+    }
+
+    [Test]
+    public async Task The_core_client_reports_an_absent_daemon_as_unavailable() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            var result = await AdmissionFenceClient.AcquireAsync(h.Config.Store, "no-such-daemon", TimeSpan.FromSeconds(2), TimeProvider.System, ct);
+
+            await Assert.That(result.Outcome).IsEqualTo(AdmissionFenceOutcome.Unavailable);
+        });
+    }
+
+    [Test]
+    public async Task Disposing_the_core_session_before_commit_releases_the_fence() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            var result = await AdmissionFenceClient.AcquireAsync(h.Config.Store, h.Config.Name, TimeSpan.FromSeconds(5), TimeProvider.System, ct);
+            await Assert.That(h.Orchestrator.Admission.IsFenced).IsTrue();
+
+            await result.Session!.DisposeAsync();
+
+            await WaitUnfencedAsync(h.Orchestrator);
+        });
+    }
 }
