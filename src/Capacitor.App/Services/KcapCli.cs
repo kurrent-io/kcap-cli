@@ -67,7 +67,7 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
-    // Retiring spends up to another 20s forward budget and 10s lock wait before installation.
+    // Retiring spends up to another 20s forward budget, 10s lock wait and 5s target probe before installation.
     static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(100);
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can

@@ -110,6 +110,7 @@ sealed class ServiceVerify(
     static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan TargetProbeWait = TimeSpan.FromSeconds(5);
 
     public static readonly TimeSpan DefaultForwardBudget   = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
@@ -122,7 +123,8 @@ sealed class ServiceVerify(
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
     /// caller's 60s kill-timeout. <c>--retire</c>'s own budget starts only once its own
     /// <see cref="LockWait"/> is held, so a caller driving a rename must allow one more lock wait
-    /// PLUS one more forward budget on top of the sum above.</summary>
+    /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) on top of
+    /// the sum above.</summary>
     public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
@@ -796,7 +798,7 @@ sealed class ServiceVerify(
                 return VerifyExit.Contended;
             }
 
-            var target = manager.Query(serviceId, _forwardBudget);
+            var target = manager.Query(serviceId, TargetProbeWait);
             if (target.Probe == LabelProbe.Unknown) return RetireRefusal("target_unknown");
             if (target.Probe == LabelProbe.Loaded || target.UnitPresent) {
                 if (validatedDaemonPid(serviceId) is not null) {
