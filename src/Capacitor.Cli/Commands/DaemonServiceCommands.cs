@@ -116,6 +116,10 @@ sealed class DaemonServiceCommands(
                     await Console.Out.WriteLineAsync(
                         $"Daemon '{serviceId}': busy, so its priority change waits for the next update.");
                     break;
+                case ProcessTypeRefresh.Unverified:
+                    await Console.Out.WriteLineAsync(
+                        $"Daemon '{serviceId}': launchd's state could not be read, so the check waits for the next update.");
+                    break;
                 case ProcessTypeRefresh.Failed:
                     await Console.Error.WriteLineAsync($"Daemon '{serviceId}': {error}");
                     failed++;

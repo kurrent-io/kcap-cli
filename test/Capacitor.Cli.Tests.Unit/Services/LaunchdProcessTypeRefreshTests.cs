@@ -35,8 +35,10 @@ public class LaunchdProcessTypeRefreshTests {
 
     /// <param name="bootstrapExits">Exit code of each successive bootstrap; the last repeats.</param>
     /// <param name="bootoutExit">A non-zero exit leaves the job loaded; zero unloads it.</param>
+    /// <param name="bootstrapTimesOut">Each bootstrap loads the job, then reports a timeout.</param>
     LaunchdServiceManager Manager(
-            List<string[]> calls, string spawnType, bool running = true, int bootoutExit = 0, params int[] bootstrapExits) {
+            List<string[]> calls, string spawnType, bool running = true, int bootoutExit = 0,
+            bool printFails = false, bool bootstrapTimesOut = false, params int[] bootstrapExits) {
         var bootstraps = 0;
         var loaded     = true;
 
@@ -45,8 +47,13 @@ public class LaunchdProcessTypeRefreshTests {
             runBounded: (_, args, _) => {
                 calls.Add(args);
                 switch (args[0]) {
+                    case "print" when printFails:
+                        return (5, "", "Input/output error", false);
                     case "print":
                         return loaded ? (0, Print(spawnType, running), "", false) : (113, "", "Could not find service", false);
+                    case "bootstrap" when bootstrapTimesOut:
+                        loaded = true;
+                        return (137, "", "", true);
                     case "bootout":
                         if (bootoutExit == 0) loaded = false;
                         return (bootoutExit, "", "", false);
@@ -142,7 +149,7 @@ public class LaunchdProcessTypeRefreshTests {
         var path  = Seed(AdaptivePlist());
         var calls = new List<string[]>();
 
-        var outcome = Manager(calls, "adaptive (6)", running: true, bootoutExit: 0, 5, 0).RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = Manager(calls, "adaptive (6)", running: true, bootoutExit: 0, false, false, 5, 0).RefreshProcessType("test", () => true, Plenty, out var error);
 
         await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
         await Assert.That(error).Contains("previous unit was restored and loaded");
@@ -156,7 +163,7 @@ public class LaunchdProcessTypeRefreshTests {
 
         Seed(AdaptivePlist());
 
-        var outcome = Manager([], "adaptive (6)", running: true, bootoutExit: 0, 5).RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = Manager([], "adaptive (6)", running: true, bootoutExit: 0, false, false, 5).RefreshProcessType("test", () => true, Plenty, out var error);
 
         await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
         await Assert.That(error).Contains("the daemon is not loaded");
@@ -235,5 +242,36 @@ public class LaunchdProcessTypeRefreshTests {
             LaunchdUnit.Plist(Spec()).Replace("<string>Standard</string>", "\n\t<string>Standard</string>"))).IsTrue();
         await Assert.That(LaunchdUnit.DeclaresStandardProcessType(AdaptivePlist())).IsFalse();
         await Assert.That(LaunchdUnit.DeclaresStandardProcessType("not xml")).IsFalse();
+    }
+
+    [Test]
+    public async Task Unreadable_launchd_state_rewrites_the_plist_but_reloads_nothing() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path  = Seed(AdaptivePlist());
+        var calls = new List<string[]>();
+        var asked = false;
+
+        var outcome = Manager(calls, "adaptive (6)", printFails: true).RefreshProcessType("test", () => asked = true, Plenty, out _);
+
+        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Unverified);
+        await Assert.That(asked).IsFalse();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
+    }
+
+    /// <summary>A bootstrap can load the job and still overrun its timeout; rolling back then would put
+    /// the Adaptive plist on disk under a job that loaded as Standard.</summary>
+    [Test]
+    public async Task Timed_out_bootstrap_that_loaded_the_job_counts_as_reloaded() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(AdaptivePlist());
+
+        var outcome = Manager([], "adaptive (6)", bootstrapTimesOut: true).RefreshProcessType("test", () => true, Plenty, out var error);
+
+        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Reloaded);
+        await Assert.That(error).IsNull();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
     }
 }
