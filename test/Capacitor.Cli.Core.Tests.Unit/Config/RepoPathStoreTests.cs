@@ -335,11 +335,7 @@ public class RepoPathStoreTests {
 
     // ── Writes never trust an unreadable store ───────────────────────────────
 
-    Task<string> RepoDir(string name) {
-        var dir = Config.PathTo("repos", name);
-        Directory.CreateDirectory(dir);
-        return Task.FromResult(dir);
-    }
+    Task<string> RepoDir(string name) => Task.FromResult(Config.CreateDir("repos", name).Path);
 
     /// <summary>A read that keeps failing — as a Windows sharing violation would — must not let the next
     /// add replace every saved repository with the one being added.</summary>
@@ -413,5 +409,19 @@ public class RepoPathStoreTests {
         var aside = Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*")
             .Select(File.ReadAllText).Order().ToArray();
         await Assert.That(aside).IsEquivalentTo(["first {{{", "second {{{"]);
+    }
+
+    /// <summary>JSON that parses but holds an entry with no path cannot be normalised; it is treated as
+    /// corrupt — empty to readers, kept aside by a writer — rather than throwing out of a read.</summary>
+    [Test]
+    public async Task An_entry_without_a_path_reads_as_corrupt() {
+        await File.WriteAllTextAsync(ReposJsonPath, """[{"path":null,"last_used":"2026-01-01T00:00:00Z"}]""");
+
+        await Assert.That(await Repos.LoadAsync()).IsEmpty();
+
+        var d = await RepoDir("d");
+        await Repos.AddAsync(d);
+        await Assert.That(Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*").Length).IsEqualTo(1);
+        await Assert.That((await Repos.LoadAsync()).Single().Path).IsEqualTo(d);
     }
 }

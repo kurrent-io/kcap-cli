@@ -38,9 +38,17 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
             // when the check itself fails, which would let a write replace a store it never read.
             try {
                 var json = File.ReadAllText(StorePath);
+                RepoEntry[] parsed;
                 try {
-                    return new(ReadStatus.Ok, Collapse(JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? []));
+                    parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? [];
                 } catch (JsonException) {
+                    return new(ReadStatus.Corrupt, null);
+                }
+                // An entry that parses but names no usable path is as unreadable as malformed JSON.
+                if (parsed.Any(e => e is null || string.IsNullOrWhiteSpace(e.Path))) return new(ReadStatus.Corrupt, null);
+                try {
+                    return new(ReadStatus.Ok, Collapse(parsed));
+                } catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) {
                     return new(ReadStatus.Corrupt, null);
                 }
             } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
