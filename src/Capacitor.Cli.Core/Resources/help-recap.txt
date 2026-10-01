@@ -13,7 +13,8 @@ Options:
   --continue              Take over the session's work: attach this session to
                           its work items and unfinished plans, then print the
                           recap. Needs an explicit sessionId. Refuses (exit 2,
-                          no recap) while that session may still be running;
+                          no recap) while that session may still be running
+                          or when no current session can be identified;
                           exits 1 after the recap when anything failed to link
   --force                 With --continue: take over even when the session
                           looks live. Only after confirming it is not

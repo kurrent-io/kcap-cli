@@ -38,13 +38,13 @@ public class RecapContinuationTests {
     }
 
     [Test]
-    public async Task No_current_session_is_a_failure_naming_the_fix() {
+    public async Task No_current_session_is_a_refusal_naming_the_fix() {
         using var error  = ConsoleOutput.StartErrorCapture();
         using var client = Serving(_ => (200, "{}"));
 
         var code = await Command().RunWithAsync(client, "http://x", Previous, current: null, force: false);
 
-        await Assert.That(code).IsEqualTo(1);
+        await Assert.That(code).IsEqualTo(RecapContinuation.Refused);
         await Assert.That(error.GetCapturedError()).Contains("inside the session that takes over");
     }
 

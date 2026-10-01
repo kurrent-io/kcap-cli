@@ -29,7 +29,7 @@ sealed class RecapContinuation(ConfigRoot config, ProfileContext profiles, Token
         if (current is null) {
             await Console.Error.WriteLineAsync(
                 "kcap recap --continue must run inside the session that takes over (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).");
-            return 1;
+            return Refused;
         }
 
         TakeoverResult result;

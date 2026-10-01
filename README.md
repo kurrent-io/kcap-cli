@@ -451,7 +451,7 @@ kcap recap 3f2a… --continue         # take over the session's work items and p
 kcap recap 3f2a… --continue --force # same, even when the session looks live
 ```
 
-`--continue` (run inside the session that takes over, with an explicit session id) attaches the current session to the continued session's work items and unfinished plans, then prints the recap. It refuses with exit code 2, and prints no recap, while the continued session may still be running; `--force` overrides that, and should be used only after confirming it is not. It exits 1, after the recap, when any work item or plan could not be linked.
+`--continue` (run inside the session that takes over, with an explicit session id) attaches the current session to the continued session's work items and unfinished plans, then prints the recap. It refuses with exit code 2, and prints no recap, while the continued session may still be running or when no current session can be identified; `--force` overrides that, and should be used only after confirming it is not. It exits 1, after the recap, when any work item or plan could not be linked.
 
 `--per-turn` prints a one-block-per-turn index — useful for orienting in a long session before drilling into a specific turn with `--get-turn <N>` (the turn number shown in the `--per-turn` index). `--get-turn` takes the turn number as its value; the session id is the usual positional (or comes from the current session), so `kcap recap <sessionId> --get-turn <N>` works too.
 

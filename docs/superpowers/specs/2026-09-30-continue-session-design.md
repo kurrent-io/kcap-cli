@@ -147,8 +147,9 @@ Steps:
   `--full` and `--per-turn`, which shape only the recap part.
 - Runs the takeover first, then prints the recap as today, preceded by a `## Continued` block: what
   was attached, what was skipped and why, and which plan is now current.
-- A refusal prints the reason to stderr, prints no recap, and exits 2, so an agent cannot read the
-  recap and carry on without noticing the takeover did not happen. Any other takeover failure exits
+- A refusal, an unresolved current session included, prints the reason to stderr, prints no
+  recap, and exits 2, so an agent cannot read the recap and carry on without noticing the takeover
+  did not happen. Any other takeover failure exits
   1 after the recap.
 - `help-recap.txt` and the `kcap recap` section of `README.md` document both flags.
 
