@@ -30,11 +30,10 @@ internal sealed record WizardFacadeSpec(
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
 /// (including ones the shell filtered out as inapplicable — the summary still names them), and the
-/// Import step by name — the close path must cancel its in-flight run directly, which
-/// CanLeaveAsync alone does not cover since closing the window never navigates away from a step.
+/// History step by name — its import outlives the wizard, and shutdown cancels it directly.
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
-    ImportStepViewModel Import, ConnectChoiceViewModel Connect);
+    HistoryStepViewModel History, ConnectChoiceViewModel Connect);
 
 /// <summary>Everything wizard-first mode is composed from; the daemon-facing entries are factories so a call never lands on a stale daemon.</summary>
 internal sealed record WizardGraphOptions(
@@ -134,8 +133,8 @@ internal static class WizardComposition {
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
             MachineLabel(Environment.MachineName),
             () => options.ResolveIdentity()?.Profile);
-        var import = new ImportStepViewModel(
-            cli, async ct => (await detect(ct).ConfigureAwait(false)).Keys.ToHashSet(), options.Bridges.Post);
+        var history = new HistoryStepViewModel(
+            cli, () => harnesses.Recording, options.Bridges.Post, MachineLabel(Environment.MachineName), options.Time);
         var daemon = new DaemonStepViewModel(
             cli, options.RunMutation,
             // Gated on a committed sign-in and resolved fresh per call, never the startup-cached profile.
@@ -148,7 +147,7 @@ internal static class WizardComposition {
             claims,
             options.ResolveConsentFlipIdentity, options.Surface, options.Probe.TerminalPathAsync, options.Time);
 
-        IWizardStep[] configured = [welcome, signIn, defaults, harnesses, import, daemon];
+        IWizardStep[] configured = [welcome, signIn, defaults, harnesses, history, daemon];
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => Summarize(configured, cli.CliPath is not null));
         IWizardStep[] steps = [.. configured, done];
@@ -156,7 +155,7 @@ internal static class WizardComposition {
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface);
         signIn.Completed += () => _ = AdvanceAfterHoldAsync(wizard, wizard.Visit, options.Time, options.ShutdownToken);
 
-        return new WizardGraph(wizard, auth, steps, import, connect);
+        return new WizardGraph(wizard, auth, steps, history, connect);
     }
 
     static async Task AdvanceAfterHoldAsync(
@@ -184,6 +183,7 @@ internal static class WizardComposition {
         SignInStepViewModel    => "Sign in",
         DefaultsStepViewModel  => "This machine",
         HarnessesStepViewModel => "Connect your harnesses",
+        HistoryStepViewModel   => "Import past sessions",
         _                      => step.Title,
     };
 

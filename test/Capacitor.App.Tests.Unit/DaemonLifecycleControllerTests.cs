@@ -1007,6 +1007,14 @@ sealed class FakeKcapCli : IKcapCli {
         return PluginInstallBehavior(vendorFlag, ct);
     }
 
+    public readonly List<IReadOnlyList<string>> DiscoverCalls = [];
+    public Func<IReadOnlyList<string>, Task<ImportDiscoveryReport?>> DiscoverBehavior =
+        _ => Task.FromResult<ImportDiscoveryReport?>(new ImportDiscoveryReport([], 0, []));
+    public Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {
+        DiscoverCalls.Add(vendorFlags);
+        return DiscoverBehavior(vendorFlags);
+    }
+
     public int ImportCallCount;
     public readonly List<ImportRequest> ImportRequests = [];
     public Func<ImportRequest, Action<StreamedLine>, CancellationToken, Task<StreamingResult>> ImportBehavior =
