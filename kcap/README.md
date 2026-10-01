@@ -27,7 +27,7 @@ Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` 
 
 | Tool | Description |
 |------|-------------|
-| `continue_session` | Attach this session to another session's work items and unfinished plans; refuses while that session may still be running |
+| `continue_session` | Attach this session to another session's work items and unfinished plans; refuses while that session may still be running; `current_session_id` names the taking-over session where the harness does not expose it |
 
 ### `kcap-review`
 

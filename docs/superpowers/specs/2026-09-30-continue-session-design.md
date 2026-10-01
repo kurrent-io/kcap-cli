@@ -50,7 +50,7 @@ Change:
   record's content is the reap time (ISO-8601 UTC). A note whose file is unreadable or malformed is
   deleted as today.
 - A note is dead only when its holder is provably gone: no process has the pid
-  (`ProcessHelpers.IsProcessAlive`, which counts EPERM as alive), or a live one has a readable start
+  (`ProcessHelpers.IsProcessAlive`, which counts EPERM, and access denied on Windows, as alive), or a live one has a readable start
   token that differs from the note's (the pid was reused). A live process whose token cannot be
   read or compared leaves the note in place and writes no record: an exit record lets another
   session take this one over, so it must never rest on a guess.
@@ -155,8 +155,8 @@ Steps:
 - `kcap-handoff` (`kcap mcp handoff`, `NeedsProjectCwd: false`) serves one tool, `continue_session`
   (`session_id` required, `force` and `current_session_id` optional), which returns the outcome JSON; a refusal is a tool
   error carrying the reason. Annotation `Additive`.
-- `AutoApprove: true`: it writes only the current session's own attachments, the kind of write the
-  hooks already make unprompted. The liveness refusal is the guard, not a permission prompt.
+- `AutoApprove: true`: it writes only attachments of the session the caller names (the harness session
+  or `current_session_id`), as kcap-plans' `session_id` override already does unprompted. The liveness refusal is the guard, not a permission prompt.
 - Not added to `ReviewFlowAutoApprovableServers`: a reviewer has no session to continue.
 - Registration: `KcapMcpServers.All`, the `mcp` switch in `Program.cs`, `CommandServices`, and the
   bundled `kcap/.mcp.json`. The existing harness config writers derive from `All`.

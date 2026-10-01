@@ -362,10 +362,11 @@ public class SessionTakeoverTests {
         routes.Throw($"/api/sessions/{Previous}/plans");
         routes.Post("/api/work-items/declare", 200, "{}");
 
-        var o = Outcome(await Run(routes));
+        var r = (TakeoverResult.Completed)await Run(routes);
 
-        await Assert.That(o["plans_error"]!.GetValue<string>()).IsNotEmpty();
-        await Assert.That(o["work_items"]!["items"]!.AsArray()[0]!["attached"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(r.Unsuccessful).IsTrue();
+        await Assert.That(r.Outcome["plans_error"]!.GetValue<string>()).IsNotEmpty();
+        await Assert.That(r.Outcome["work_items"]!["items"]!.AsArray()[0]!["attached"]!.GetValue<bool>()).IsTrue();
     }
 
     [Test]
