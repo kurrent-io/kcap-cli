@@ -11,7 +11,10 @@ static class DaemonNameHolder {
     public static async Task<(string Platform, string? Version)?> FindElsewhereAsync(
             HttpClient http, string serverUrl, string name, ConfigRoot config, CancellationToken ct = default) {
         try {
-            var localMachineId = new MachineId(config).ReadPersisted();
+            var machine        = new MachineId(config);
+            var localMachineId = machine.ReadPersisted();
+            // An id that exists but cannot be read right now could be the holder's own; that proves nothing.
+            if (localMachineId is null && machine.IsPersisted) return null;
 
             using var resp = await http.GetAsync($"{serverUrl.TrimEnd('/')}/api/daemons", ct);
             if (!resp.IsSuccessStatusCode) return null;
