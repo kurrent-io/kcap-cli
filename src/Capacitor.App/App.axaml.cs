@@ -1054,7 +1054,7 @@ public partial class App : Application {
             // this line is the only thing left telling the user how to resume.
             case AuthResult.Failed { Reason: AuthFailureReason.ProvisioningInProgress } pending:
                 Console.Error.WriteLine(
-                    $"kcap: {pending.Message} Join it from the Connect step once it is ready.");
+                    $"kcap: {pending.Message} Sign in to it once it is ready.");
                 break;
             case AuthResult.Failed failed:
                 Console.Error.WriteLine($"kcap: onboarding sign-in ended with a failure: {failed.Message}");

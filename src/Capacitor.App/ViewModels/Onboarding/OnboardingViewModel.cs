@@ -31,8 +31,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
             this.RaisePropertyChanged(nameof(Eyebrow));
             this.RaisePropertyChanged(nameof(NextLabel));
             this.RaisePropertyChanged(nameof(SkipLabel));
-            this.RaisePropertyChanged(nameof(SkipVisible));
-            this.RaisePropertyChanged(nameof(BackVisible));
+            RestateActions();
         }
     }
 
@@ -41,7 +40,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     public string NextLabel => Current.NextLabel ?? (_index == Steps.Count - 1 ? "Get started" : "Next");
     public string SkipLabel => Current.SkipLabel;
-    public bool SkipVisible => _index < Steps.Count - 1;
+    public bool NextVisible => !Current.OwnsPrimaryAction;
+    public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => _index > 0;
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
@@ -83,8 +83,18 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
-        if (e.PropertyName is nameof(IWizardStep.NextLabel)) this.RaisePropertyChanged(nameof(NextLabel));
-        else if (e.PropertyName is nameof(IWizardStep.SkipLabel)) this.RaisePropertyChanged(nameof(SkipLabel));
+        switch (e.PropertyName) {
+            case nameof(IWizardStep.NextLabel): this.RaisePropertyChanged(nameof(NextLabel)); break;
+            case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
+            case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
+            case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable): RestateActions(); break;
+        }
+    }
+
+    void RestateActions() {
+        this.RaisePropertyChanged(nameof(NextVisible));
+        this.RaisePropertyChanged(nameof(SkipVisible));
+        this.RaisePropertyChanged(nameof(BackVisible));
     }
 
     /// Idempotent — a Done-finish close and the window's own Closing event both route here.

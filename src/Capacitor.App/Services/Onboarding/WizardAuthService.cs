@@ -2,11 +2,12 @@ using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.App.Services.Onboarding;
 
-/// What the Connect step asked for; the composition root binds each case to one façade call.
+/// What the Sign-in step asked for; the composition root binds each case to one façade call.
 public abstract record ConnectIntent {
     public sealed record Paste(string ServerInput) : ConnectIntent;
-    public sealed record Discover : ConnectIntent;
-    public sealed record Create : ConnectIntent;
+
+    /// Single sign-on discovery; creating a workspace runs inside it when it finds none.
+    public sealed record Discover(bool ForceDevice = false) : ConnectIntent;
 }
 
 /// <summary>

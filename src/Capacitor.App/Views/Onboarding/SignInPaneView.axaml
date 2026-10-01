@@ -1,0 +1,226 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:auth="clr-namespace:Capacitor.Cli.Core.Auth;assembly=Capacitor.Cli.Core"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             x:Class="Capacitor.App.Views.Onboarding.SignInPaneView"
+             x:DataType="vm:SignInStepViewModel">
+    <!-- The onboarding pane's rendering of a sign-in. The re-auth dialog keeps SignInStepView. -->
+    <StackPanel Spacing="16">
+        <!-- Sign in -->
+        <Border Classes="frCard" IsVisible="{Binding StartPanelVisible}">
+            <StackPanel Spacing="16">
+                <Button x:Name="WorkAccountButton" Classes="frPrimary" HorizontalAlignment="Stretch"
+                        Content="CONTINUE WITH YOUR WORK ACCOUNT" Command="{Binding ContinueWithWorkAccountCommand}"
+                        IsEnabled="{Binding Idle}" />
+
+                <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Panel Classes="frSpinner" IsVisible="{Binding Busy}">
+                            <Ellipse />
+                            <Path Classes.kcapSpinning="{Binding Busy}" />
+                        </Panel>
+                        <TextBlock x:Name="SignInStatusText" Classes="frLabel" Text="{Binding Status}" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" Classes.failed="{Binding StatusIsError}">
+                            <TextBlock.Styles>
+                                <Style Selector="TextBlock.failed">
+                                    <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+                                </Style>
+                            </TextBlock.Styles>
+                        </TextBlock>
+                    </StackPanel>
+                    <TextBlock x:Name="SignInDetailText" Classes="frBody" Text="{Binding StatusDetail}"
+                               IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <!-- The browser fallback: open again or copy, never buried in a log. -->
+                <Border Classes="frCallout" IsVisible="{Binding BrowserUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="frMicro" Text="BROWSER DIDN'T OPEN?" />
+                        <SelectableTextBlock x:Name="SignInBrowserUrlText" Text="{Binding BrowserUrl}" TextWrapping="Wrap"
+                                             FontSize="11.5" FontFamily="{StaticResource FrMonoFont}"
+                                             Foreground="{StaticResource FrMutedBrush}" />
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <Button x:Name="OpenSignInUrlButton" Classes="frLink" Content="OPEN IT AGAIN"
+                                    Command="{Binding OpenSignInUrlCommand}" />
+                            <Button x:Name="CopySignInUrlButton" Classes="frLink" Content="COPY LINK" Click="OnCopySignInUrlClick" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="frCallout" IsVisible="{Binding DeviceCode, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="frMicro" Text="ENTER THIS CODE TO FINISH SIGNING IN" />
+                        <TextBlock x:Name="DeviceCodeText" Text="{Binding DeviceCode}" FontSize="28" FontWeight="Bold"
+                                   LetterSpacing="3" FontFamily="{StaticResource FrMonoFont}"
+                                   Foreground="{StaticResource KcapTextBrush}" />
+                        <Button x:Name="OpenVerificationUriButton" Classes="frLink" HorizontalAlignment="Left"
+                                Content="{Binding VerificationUri}" Command="{Binding OpenVerificationUriCommand}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Classes="frDivider" />
+
+                <StackPanel Orientation="Horizontal" Spacing="22">
+                    <Button x:Name="UseCodeButton" Classes="frLink" Content="USE A CODE INSTEAD"
+                            Command="{Binding UseCodeCommand}" IsEnabled="{Binding Idle}" />
+                    <Button x:Name="WorkspaceUrlButton" Classes="frLink" Content="I HAVE A WORKSPACE URL"
+                            Command="{Binding ToggleUrlPanelCommand}" IsEnabled="{Binding Idle}" />
+                    <Button x:Name="CancelSignInButton" Classes="frLink" Content="CANCEL"
+                            Command="{Binding CancelCommand}" IsVisible="{Binding Busy}" />
+                </StackPanel>
+
+                <StackPanel Spacing="8" IsVisible="{Binding UrlPanelVisible}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBox x:Name="ServerInputBox" Classes="frField" PlaceholderText="acme  ·  https://acme.kcap.ai"
+                                 Text="{Binding Connect.ServerInputText, Mode=TwoWay}" />
+                        <Button Grid.Column="1" x:Name="ContinueWithUrlButton" Classes="frSecondary" Content="CONTINUE"
+                                Command="{Binding ContinueWithUrlCommand}" IsEnabled="{Binding Idle}" />
+                    </Grid>
+                    <TextBlock x:Name="ConnectErrorText" Classes="frError" Text="{Binding Connect.InputError}"
+                               IsVisible="{Binding Connect.InputError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 2+ workspaces -->
+        <Border Classes="frCard" IsVisible="{Binding TenantPickerVisible}">
+            <StackPanel Spacing="14">
+                <TextBlock Classes="frMicro" Text="WORKSPACES FOR YOUR ACCOUNT" />
+                <ListBox x:Name="TenantList" Classes="frList" ItemsSource="{Binding Tenants}"
+                         SelectedItem="{Binding SelectedTenant, Mode=TwoWay}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="auth:DiscoveredTenant">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="frLabel" Text="{Binding Label}" />
+                                <TextBlock Classes="frSignal" Text="{Binding Origin}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="ConfirmTenantButton" Classes="frPrimary" Content="CONTINUE"
+                            Command="{Binding ConfirmTenantCommand}" />
+                    <Button x:Name="CancelTenantButton" Classes="frSecondary" Content="CANCEL"
+                            Command="{Binding CancelTenantCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 0 workspaces -->
+        <Border Classes="frCard" IsVisible="{Binding ModeChoiceVisible}">
+            <StackPanel Spacing="16">
+                <Button x:Name="CreateWorkspaceButton" Classes="frPrimary" HorizontalAlignment="Left"
+                        Content="CREATE A WORKSPACE" Command="{Binding CreateWorkspaceCommand}" />
+                <Border Classes="frDivider" />
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="frMicro" Text="ALREADY HAVE ONE?" />
+                    <TextBlock Classes="frDetail"
+                               Text="A workspace that signs in with the GitHub App won't appear in the list. Enter its name or address." />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBox x:Name="ExistingWorkspaceBox" Classes="frField" PlaceholderText="acme  ·  https://acme.kcap.ai"
+                                 Text="{Binding ExistingWorkspaceInput, Mode=TwoWay}" />
+                        <Button Grid.Column="1" x:Name="UseExistingWorkspaceButton" Classes="frSecondary"
+                                Content="USE THIS WORKSPACE" Command="{Binding UseExistingWorkspaceCommand}" />
+                    </Grid>
+                </StackPanel>
+                <Button x:Name="CancelWorkspaceButton" Classes="frQuiet" HorizontalAlignment="Left" Content="CANCEL"
+                        Command="{Binding CancelWorkspaceCommand}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Create a workspace: the name, and the address that follows it until edited. -->
+        <Border Classes="frCard" IsVisible="{Binding CreateFormVisible}">
+            <StackPanel Spacing="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="frMicro" Text="ORGANIZATION NAME" />
+                    <TextBox x:Name="OrgNameBox" Classes="frField" PlaceholderText="Acme"
+                             Text="{Binding OrgName, Mode=TwoWay}" IsEnabled="{Binding OrgNamePromptVisible}" />
+                </StackPanel>
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="frMicro" Text="WORKSPACE ADDRESS" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBox x:Name="SlugBox" Classes="frField" PlaceholderText="acme" Text="{Binding Slug, Mode=TwoWay}" />
+                        <TextBlock Grid.Column="1" Text=".kcap.ai" VerticalAlignment="Center"
+                                   FontFamily="{StaticResource FrMonoFont}" FontSize="13" Foreground="{StaticResource FrDimBrush}" />
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="7"
+                                IsVisible="{Binding SlugHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <Ellipse Width="6" Height="6" VerticalAlignment="Center" Classes.available="{Binding SlugAvailable}">
+                            <Ellipse.Styles>
+                                <Style Selector="Ellipse"><Setter Property="Fill" Value="{StaticResource FrAtmosphereBrush}" /></Style>
+                                <Style Selector="Ellipse.available"><Setter Property="Fill" Value="{StaticResource KcapSuccessBrush}" /></Style>
+                            </Ellipse.Styles>
+                        </Ellipse>
+                        <TextBlock x:Name="SlugHintText" Classes="frSignal" Text="{Binding SlugHint}" Classes.available="{Binding SlugAvailable}">
+                            <TextBlock.Styles>
+                                <Style Selector="TextBlock.available"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
+                            </TextBlock.Styles>
+                        </TextBlock>
+                    </StackPanel>
+                    <TextBlock x:Name="SlugErrorText" Classes="frError" Text="{Binding SlugError}"
+                               IsVisible="{Binding SlugError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="SubmitCreateFormButton" Classes="frPrimary" Content="CONTINUE"
+                            Command="{Binding SubmitCreateFormCommand}" />
+                    <Button x:Name="CancelCreateFormButton" Classes="frSecondary" Content="NOT NOW"
+                            Command="{Binding CancelCreateFormCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="frCard" IsVisible="{Binding ConfirmVisible}">
+            <StackPanel Spacing="16">
+                <TextBlock x:Name="ConfirmCreateText" Classes="frLabel" FontSize="15" Text="{Binding ConfirmText}" TextWrapping="Wrap" />
+                <TextBlock Classes="frBody"
+                           Text="You become its owner. Anyone your account invites signs in to it at that address." />
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="ConfirmCreateButton" Classes="frPrimary" Content="CREATE WORKSPACE"
+                            Command="{Binding ConfirmCreateCommand}" />
+                    <Button x:Name="DeclineCreateButton" Classes="frSecondary" Content="NOT NOW"
+                            Command="{Binding DeclineCreateCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="frCard" IsVisible="{Binding ProvisioningVisible}">
+            <StackPanel Spacing="14">
+                <StackPanel Orientation="Horizontal" Spacing="14">
+                    <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource FrAccentWashBrush}">
+                        <Panel Classes="frSpinner">
+                            <Ellipse />
+                            <Path Classes.kcapSpinning="{Binding ProvisioningVisible}" />
+                        </Panel>
+                    </Border>
+                    <StackPanel VerticalAlignment="Center" Spacing="2">
+                        <TextBlock Classes="frLabel" FontSize="15" Text="{Binding SlugOrigin, StringFormat='Setting up {0}'}" />
+                        <TextBlock x:Name="ProvisioningText" Classes="frSignal" Text="{Binding ProvisioningProgress}" />
+                    </StackPanel>
+                </StackPanel>
+                <ProgressBar IsIndeterminate="True" Height="2" MinHeight="2" Background="{StaticResource FrDividerBrush}"
+                             Foreground="{StaticResource FrAccentBrush}" />
+            </StackPanel>
+        </Border>
+
+        <Border Classes="frResolved" IsVisible="{Binding SignedInVisible}">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
+                      Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                <StackPanel Spacing="2">
+                    <TextBlock x:Name="SignedInText" Classes="frLabel" Text="{Binding Status}" />
+                    <TextBlock Classes="frBody" Text="{Binding StatusDetail}"
+                               IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Classes="frWarning" IsVisible="{Binding QuarantineNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <StackPanel Spacing="10">
+                <TextBlock x:Name="QuarantineNoticeText" Classes="frBody" Text="{Binding QuarantineNotice}" />
+                <Button x:Name="AcknowledgeQuarantineButton" Classes="frSecondary" HorizontalAlignment="Left"
+                        Content="ACKNOWLEDGE" Command="{Binding AcknowledgeQuarantineCommand}" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>
