@@ -72,9 +72,10 @@ public static class VerifyExit {
 
     /// <summary><c>--retire</c> refused to remove the named unit: its plist is unreadable, or it is
     /// not pinned to the profile being installed; or the new id is already taken by an installed unit,
-    /// or its state is unknown. Nothing is written for the new id — its own
-    /// entry-time leftover-marker recovery already ran, as on every install. The old unit is untouched
-    /// unless the new id was taken while it was being retired. The stderr line
+    /// or its state is unknown. No unit is written for the new id — its own entry-time leftover-marker
+    /// recovery already ran, as on every install. Every refusal but <c>target_claimed</c> leaves both
+    /// units untouched and writes nothing; <c>target_claimed</c> (the new id was taken while the old unit
+    /// was being retired) leaves the old unit retired and a captured marker for the new id. The stderr line
     /// <c>retire_reason=&lt;reason&gt;</c> names which.</summary>
     public const int RetireRefused = 30;
     public const string RetireRefusedToken = "verify_retire_refused";
