@@ -21,9 +21,12 @@ public static class AdmissionFenceWire {
     public const string Aborted   = "aborted";
 
     public const string Busy             = "busy";
+    /// Another rename holds or committed the fence.
+    public const string Fenced           = "fenced";
     public const string IdentityMismatch = "identity_mismatch";
     public const string Malformed        = "malformed";
     public const string CommitFailed     = "commit_failed";
+    public const string AbortFailed      = "abort_failed";
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]

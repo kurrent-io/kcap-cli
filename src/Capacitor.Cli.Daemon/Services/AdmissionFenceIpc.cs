@@ -29,9 +29,13 @@ internal sealed partial class AdmissionFenceIpc(
             return;
         }
 
-        if (fence.TryAcquire(() => orchestrator.EffectiveCount > 0 || evalCache.Count > 0, out var hold) is AdmissionFence.AcquireResult.Busy) {
-            await ReplyAsync(stream, Refuse(AdmissionFenceWire.Busy), ct);
-            return;
+        switch (fence.TryAcquire(() => orchestrator.EffectiveCount > 0 || evalCache.Count > 0, out var hold)) {
+            case AdmissionFence.AcquireResult.Busy:
+                await ReplyAsync(stream, Refuse(AdmissionFenceWire.Busy), ct);
+                return;
+            case AdmissionFence.AcquireResult.Fenced:
+                await ReplyAsync(stream, Refuse(AdmissionFenceWire.Fenced), ct);
+                return;
         }
 
         LogHeld();
@@ -58,9 +62,12 @@ internal sealed partial class AdmissionFenceIpc(
                     }
                     break;
                 case FrameType.AdmissionFenceAbort:
-                    hold.Abort();
-                    LogAborted();
-                    await ReplyAsync(stream, Ack(AdmissionFenceWire.Aborted), ct);
+                    if (hold.Abort()) {
+                        LogAborted();
+                        await ReplyAsync(stream, Ack(AdmissionFenceWire.Aborted), ct);
+                    } else {
+                        await ReplyAsync(stream, Refuse(AdmissionFenceWire.AbortFailed), ct);
+                    }
                     return;
                 default:
                     await ReplyAsync(stream, Refuse(AdmissionFenceWire.Malformed), ct);

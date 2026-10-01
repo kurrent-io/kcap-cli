@@ -67,9 +67,10 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
-    // Retiring spends up to another 20s forward budget, 10s lock wait, 5s target probe and the old
-    // daemon's fence (two 3s exchanges, plus an abort) before installation.
-    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(120);
+    // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
+    // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
+    // acquire, then a 3s commit or abort) and the retire's own 20s forward budget — about 118s in all.
+    static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150);
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can
     // never block the per-mutation gate forever once the lifecycle controller polls this.

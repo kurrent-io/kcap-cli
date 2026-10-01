@@ -1121,6 +1121,13 @@ sealed class ServiceVerify(
             Say(VerifyExit.StopUnconfirmedToken);
             return VerifyExit.StopUnconfirmed;
         }
+
+        // Every process that could have read the commit is gone; left behind, it would fence the next
+        // daemon started under this name until its lease ran out.
+        if (ticket.Fence is not null && File.Exists(store.RetiringMarkerPath(retireId))) {
+            try { File.Delete(store.RetiringMarkerPath(retireId)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Say($"retire: could not remove the retiring marker: {ex.Message}"); }
+        }
         return null;
     }
 

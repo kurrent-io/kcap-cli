@@ -756,8 +756,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Null in every pre-existing construction site — those launches carry no policy snapshot
             // at all. DaemonRunner's bare AddSingleton lets DI fill this in production.
             PolicySnapshotProvider?                           policySnapshots = null,
-            // Null in every pre-existing construction site — those get a private fence over this
-            // daemon's own marker path. DaemonRunner passes the singleton the control socket fences.
+            // Null outside DaemonRunner: a private fence over this daemon's own marker path. DaemonRunner
+            // passes the singleton the control socket fences.
             AdmissionFence?                                   admissionFence = null
         ) {
         _admission = admissionFence ?? new AdmissionFence(

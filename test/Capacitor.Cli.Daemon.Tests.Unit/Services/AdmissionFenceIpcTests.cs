@@ -280,4 +280,17 @@ public class AdmissionFenceIpcTests {
             await WaitUnfencedAsync(h.Orchestrator);
         });
     }
+
+    [Test]
+    public async Task A_second_rename_is_told_the_daemon_is_already_fenced() {
+        await RunAsync(new CaptureServerConnection(), async (h, ct) => {
+            await using var first = await ConnectAsync(h.SockPath, ct);
+            await SendAsync(first, AcquireFrame(h.Config.Name), ct);
+            await using var second = await ConnectAsync(h.SockPath, ct);
+
+            var ack = await SendAsync(second, AcquireFrame(h.Config.Name), ct);
+
+            await Assert.That(ack.Reason).IsEqualTo(AdmissionFenceWire.Fenced);
+        });
+    }
 }

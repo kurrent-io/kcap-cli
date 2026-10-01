@@ -402,6 +402,10 @@ public class ServiceVerifyRetireTests {
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
         var fence = new FakeFence(manager);
         var sut = Sut(manager, OldPlist("mine"), fence: fence);
+        // The marker the old daemon wrote on commit; once it is confirmed gone nothing needs it.
+        var marker = Daemons.Store.RetiringMarkerPath(OldId);
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        await File.WriteAllTextAsync(marker, "{}");
 
         var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
 
@@ -411,6 +415,7 @@ public class ServiceVerifyRetireTests {
         await Assert.That(calls.IndexOf($"fence-acquire:{OldId}")).IsLessThan(calls.IndexOf($"query:{NewId}"));
         await Assert.That(calls.IndexOf("fence-commit")).IsLessThan(calls.IndexOf($"uninstall:{OldId}"));
         await Assert.That(manager.OldUnitInstalled).IsFalse();
+        await Assert.That(File.Exists(marker)).IsFalse();
     }
 
     [Test, NotInParallel]

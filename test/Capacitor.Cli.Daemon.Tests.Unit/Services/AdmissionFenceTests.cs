@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text.Json;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -65,7 +66,32 @@ public class AdmissionFenceTests {
         Acquire(fence);
 
         await Assert.That(fence.TryAdmit()).IsNull();
+        await Assert.That(fence.TryAcquire(() => false, out _)).IsEqualTo(AdmissionFence.AcquireResult.Fenced);
+    }
+
+    /// <summary>A committed fence is reported as fenced, not busy: there may be no work at all.</summary>
+    [Test]
+    public async Task A_committed_fence_reports_fenced_to_a_retry() {
+        var fence = NewFence();
+        var hold = Acquire(fence);
+        hold.Commit();
+        hold.Close();
+
+        await Assert.That(fence.TryAcquire(() => false, out _)).IsEqualTo(AdmissionFence.AcquireResult.Fenced);
+    }
+
+    [Test]
+    public async Task Tracked_work_is_never_refused_and_keeps_the_daemon_busy() {
+        var fence = NewFence();
+        var tracked = fence.Track();
+
         await Assert.That(fence.TryAcquire(() => false, out _)).IsEqualTo(AdmissionFence.AcquireResult.Busy);
+
+        tracked.Dispose();
+        var hold = Acquire(fence);
+        using var duringFence = fence.Track();
+        await Assert.That(fence.TryAdmit()).IsNull();
+        hold.Close();
     }
 
     [Test]
@@ -129,8 +155,7 @@ public class AdmissionFenceTests {
 
     [Test]
     public async Task A_commit_that_cannot_be_persisted_fails_and_stays_held() {
-        Directory.CreateDirectory(Tmp.PathTo("state"));
-        Directory.CreateDirectory(MarkerPath); // a directory where the marker file belongs
+        Tmp.CreateDir("state", "retiring.json"); // a directory where the marker file belongs
         var fence = NewFence();
         var hold = Acquire(fence);
 
@@ -172,8 +197,7 @@ public class AdmissionFenceTests {
     /// modification time — recent here, so the daemon must start fenced.</summary>
     [Test]
     public async Task An_unreadable_marker_starts_the_daemon_fenced() {
-        Directory.CreateDirectory(Tmp.PathTo("state"));
-        await File.WriteAllTextAsync(MarkerPath, "{not json");
+        Tmp.CreateFile("state/retiring.json", "{not json");
         var fake = new FakeTimeProvider(DateTimeOffset.UtcNow);
 
         var fence = new AdmissionFence(MarkerPath, "instance-1", fake, NullLogger<AdmissionFence>.Instance);
@@ -193,5 +217,25 @@ public class AdmissionFenceTests {
         await Assert.That(fence.TryAdmit()).IsNotNull();
         await Assert.That(File.Exists(MarkerPath)).IsFalse();
         await Assert.That(hold.Commit()).IsFalse();
+    }
+
+    /// <summary>A marker left on disk would fence the next process, so an abort that cannot delete it
+    /// fails and the commit stands.</summary>
+    [Test]
+    [ExcludeOn(TUnit.Core.Enums.OS.Windows)] // directory write permission
+    [UnsupportedOSPlatform("windows")]
+    public async Task An_abort_that_cannot_delete_the_marker_fails_and_stays_committed() {
+        var fence = NewFence();
+        var hold = Acquire(fence);
+        hold.Commit();
+        var stateDir = Tmp.PathTo("state");
+        File.SetUnixFileMode(stateDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try {
+            await Assert.That(hold.Abort()).IsFalse();
+            await Assert.That(File.Exists(MarkerPath)).IsTrue();
+            await Assert.That(fence.TryAdmit()).IsNull();
+        } finally {
+            File.SetUnixFileMode(stateDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 }

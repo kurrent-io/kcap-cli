@@ -39,7 +39,7 @@ internal sealed partial class AdmissionFence {
         _committedAt = ReadMarker();
     }
 
-    public enum AcquireResult { Acquired, Busy }
+    public enum AcquireResult { Acquired, Busy, Fenced }
 
     /// <summary>True while a fence is held or committed — new work is refused.</summary>
     public bool IsFenced {
@@ -56,13 +56,21 @@ internal sealed partial class AdmissionFence {
         }
     }
 
+    /// <summary>Counts work that continues a run admitted earlier — it is never refused, but while it
+    /// runs the daemon is busy, even if its run has already left the cache.</summary>
+    public IDisposable Track() {
+        lock (_gate) {
+            _inFlight++;
+            return new Admission(this);
+        }
+    }
+
     /// <summary>Takes the fence when nothing is in flight and <paramref name="isBusy"/> reports idle.</summary>
     public AcquireResult TryAcquire(Func<bool> isBusy, out Hold? hold) {
         lock (_gate) {
-            if (FencedLocked() || _inFlight > 0 || isBusy()) {
-                hold = null;
-                return AcquireResult.Busy;
-            }
+            hold = null;
+            if (FencedLocked()) return AcquireResult.Fenced;
+            if (_inFlight > 0 || isBusy()) return AcquireResult.Busy;
             hold = _held = new Hold(this);
             return AcquireResult.Acquired;
         }
@@ -94,12 +102,13 @@ internal sealed partial class AdmissionFence {
         return true;
     }
 
-    void AbortLocked(Hold hold) {
-        if (!ReferenceEquals(_held, hold)) return;
+    bool AbortLocked(Hold hold) {
+        if (!ReferenceEquals(_held, hold)) return false;
+        // A marker that cannot be deleted would fence the next process, so the commit stands with it.
+        if (_committedAt is not null && !DeleteMarker()) return false;
         _held = null;
-        if (_committedAt is null) return;
         _committedAt = null;
-        DeleteMarker();
+        return true;
     }
 
     void CloseLocked(Hold hold) {
@@ -155,9 +164,14 @@ internal sealed partial class AdmissionFence {
         }
     }
 
-    void DeleteMarker() {
-        try { File.Delete(_markerPath); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { LogMarkerDeleteFailed(ex.Message); }
+    bool DeleteMarker() {
+        try {
+            File.Delete(_markerPath);
+            return true;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogMarkerDeleteFailed(ex.Message);
+            return false;
+        }
     }
 
     sealed class Admission(AdmissionFence fence) : IDisposable {
@@ -175,9 +189,10 @@ internal sealed partial class AdmissionFence {
             lock (fence._gate) return fence.CommitLocked(this);
         }
 
-        /// <summary>Undoes this hold, committed or not.</summary>
-        public void Abort() {
-            lock (fence._gate) fence.AbortLocked(this);
+        /// <summary>Undoes this hold, committed or not; false when it is no longer this hold's, or a
+        /// committed marker could not be deleted.</summary>
+        public bool Abort() {
+            lock (fence._gate) return fence.AbortLocked(this);
         }
 
         /// <summary>The connection ended: a held fence is released, a committed one stays.</summary>

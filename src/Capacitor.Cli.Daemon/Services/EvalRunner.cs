@@ -52,14 +52,21 @@ internal sealed class EvalRunner {
         _baseUrl       = config.ServerUrl.TrimEnd('/');
         _shutdownToken = lifetime.ApplicationStopping;
 
+        // A question or finalize can outlive its run's cache entry (a cancel removes it first), so each
+        // counts as in flight for the rename fence while it runs.
         _connection.PrepareEvalHandler     = HandlePrepareAsync;
-        _connection.RunQuestionHandler     = HandleRunQuestionAsync;
-        _connection.FinalizeEvalHandler    = HandleFinalizeAsync;
+        _connection.RunQuestionHandler     = cmd => TrackedAsync(HandleRunQuestionAsync, cmd);
+        _connection.FinalizeEvalHandler    = cmd => TrackedAsync(HandleFinalizeAsync, cmd);
         _connection.CancelEvalHandler      = HandleCancelAsync;
-        _connection.RunQuestionV2Handler   = HandleRunQuestionV2Async;
-        _connection.FinalizeEvalV2Handler  = HandleFinalizeV2Async;
+        _connection.RunQuestionV2Handler   = cmd => TrackedAsync(HandleRunQuestionV2Async, cmd);
+        _connection.FinalizeEvalV2Handler  = cmd => TrackedAsync(HandleFinalizeV2Async, cmd);
 
         EvidenceRunContext.SweepStale(Path.GetTempPath(), time, msg => logger.LogInformation("{Message}", msg));
+    }
+
+    async Task<TResult> TrackedAsync<TCommand, TResult>(Func<TCommand, Task<TResult>> handler, TCommand cmd) {
+        using var _ = _admission.Track();
+        return await handler(cmd);
     }
 
     async Task<PrepareResult> HandlePrepareAsync(PrepareEvalCommand cmd) {
