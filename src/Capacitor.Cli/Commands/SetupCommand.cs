@@ -898,6 +898,26 @@ sealed class SetupCommand(
                     .ShowDefaultValue());
         }
 
+        var localMachineId = (await AppConfig.LoadProfileConfig(config)).MachineId;
+
+        while (await FindDaemonNameHolderAsync(serverUrl, daemonName, localMachineId) is { } holder) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
+              + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
+              + "The server refuses a second daemon with the same name.[/]");
+
+            if (noPrompt) {
+                await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+
+                return 1;
+            }
+
+            daemonName = AnsiConsole.Prompt(
+                new TextPrompt<string>("Daemon name:")
+                    .DefaultValue($"{daemonName}-{MachineSlug()}")
+                    .ShowDefaultValue());
+        }
+
         await Console.Out.WriteLineAsync();
 
         // Save config
@@ -1503,6 +1523,25 @@ sealed class SetupCommand(
         } catch {
             return SkipHandoffVendor;
         }
+    }
+
+    async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
+            string serverUrl, string daemonName, string? localMachineId) {
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl);
+            using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
+
+            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, localMachineId);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    static string MachineSlug() {
+        var slug = new string(Environment.MachineName.ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+
+        return slug.Length > 0 ? slug : "2";
     }
 
     /// <inheritdoc cref="ChosenServerHttp.For"/>
