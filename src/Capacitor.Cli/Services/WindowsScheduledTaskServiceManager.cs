@@ -47,10 +47,10 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
         return new ServiceQuery(probe, File.Exists(wrapper), state, bin, null);
     }
 
-    /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
-    /// invoking schtasks.</summary>
     internal static readonly Encoding WrapperEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
+    /// invoking schtasks.</summary>
     internal IReadOnlyList<GeneratedFile> WriteUnitFiles(ServiceSpec spec) {
         var files = GenerateFiles(spec);
         foreach (var f in files) {

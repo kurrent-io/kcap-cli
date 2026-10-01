@@ -62,7 +62,7 @@ static class WindowsTaskUnit {
         var sb = new StringBuilder();
         sb.Append("@echo off\r\n");
         // cmd.exe decodes a batch file in the console code page, line by line; switching to UTF-8 before the
-        // first non-ASCII line keeps a path such as C:\Users\José intact. Both lines above it are ASCII.
+        // first non-ASCII line keeps a path such as C:\Users\José intact. This line and the one above are ASCII.
         sb.Append("chcp 65001 >nul\r\n");
         // The execution MODE is part of the artifact, not inherited from the machine. Delayed expansion is
         // off by default but can be turned on for every cmd session through the Command Processor registry
