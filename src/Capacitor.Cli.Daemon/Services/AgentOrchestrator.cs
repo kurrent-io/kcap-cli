@@ -2093,16 +2093,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         catch (Exception ex) { LogDetachedCommandFault(ex, agentId); }
     }
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): the shipped launch body, now returning the
-    /// terminal <see cref="CommandOutcome"/> the sequenced lane needs (the legacy caller ignores it). Every
-    /// shipped pre-flight rejection maps to <c>LaunchRejected</c> — capacity to <c>daemon_capacity</c>, all
-    /// other validations to <c>semantic</c> — so the sequenced lane emits a CommandRejected alongside the
-    /// unchanged LaunchFailed; a spawn/registration failure that was cleaned up maps to
-    /// <c>launch_failed_cleaned</c>; a registered agent maps to <c>launch_executed</c>. The shipped
-    /// LaunchFailed / worktree-teardown / cleanup side effects are UNCHANGED — only the return value is added.</summary>
     /// <summary>The daemon's rename fence; every new agent admits through it.</summary>
     internal AdmissionFence Admission => _admission;
 
+    /// <summary>Admits a server launch through the rename fence; a fenced daemon fails it as a semantic
+    /// rejection, so the server does not read it as a transient full daemon.</summary>
     async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd) {
         using var admission = _admission.TryAdmit();
         if (admission is null) {
@@ -2115,6 +2110,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return await HandleAdmittedLaunchAsync(cmd);
     }
 
+    /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
+    /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
+    /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
+    /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
         var prompt        = cmd.Prompt;

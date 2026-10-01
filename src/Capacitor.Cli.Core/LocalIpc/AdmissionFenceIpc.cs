@@ -24,7 +24,6 @@ public static class AdmissionFenceWire {
     public const string IdentityMismatch = "identity_mismatch";
     public const string Malformed        = "malformed";
     public const string CommitFailed     = "commit_failed";
-    public const string NotHeld          = "not_held";
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]

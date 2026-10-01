@@ -1042,11 +1042,6 @@ sealed class ServiceVerify(
     }
 
     /// <summary>
-    /// Removes the unit a rename leaves behind, inside this transaction. Absent is a no-op; a unit
-    /// not provably pinned to the profile being installed is refused untouched; a bootout that
-    /// cannot be confirmed stops the transaction before anything is written for the new id.
-    /// </summary>
-    /// <summary>
     /// Locks the unit a rename leaves behind and, when a service-run daemon is live under it, takes that
     /// daemon's admission fence — before anything is changed for either id. A unit not provably pinned to
     /// the profile being installed is refused untouched; a live daemon that cannot be fenced is refused
