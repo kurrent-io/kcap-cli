@@ -228,7 +228,7 @@
 
         <!-- Everything about the next turn — runs, queue, in-flight note, composer — shares one band,
              so the transcript's last card never reads as part of the input area. -->
-        <Border x:Name="ComposerBand" Grid.Row="1" Padding="22,12,22,18"
+        <Border x:Name="ComposerBand" Grid.Row="1" Padding="22,15,22,16"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto">
@@ -242,12 +242,12 @@
                                 Background="{StaticResource KcapWarningBrush}" RenderTransform="translateY(-1.5px)" />
                         <StackPanel x:Name="RunningSubagentText" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
                                     IsVisible="{Binding RunningSubagent, Converter={x:Static ObjectConverters.IsNotNull}}">
-                            <TextBlock Text="{Binding RunningSubagent.Name}" FontSize="12" FontWeight="SemiBold"
+                            <TextBlock Text="{Binding RunningSubagent.Name}" FontSize="13.5" FontWeight="SemiBold"
                                        Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding RunningSubagent.StateText}" FontSize="12"
+                            <TextBlock Text="{Binding RunningSubagent.StateText}" FontSize="13.5"
                                        Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                         </StackPanel>
-                        <TextBlock x:Name="SubagentSummaryText" Text="{Binding SubagentSummary}" FontSize="12" FontWeight="SemiBold"
+                        <TextBlock x:Name="SubagentSummaryText" Text="{Binding SubagentSummary}" FontSize="13.5" FontWeight="SemiBold"
                                    Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center"
                                    IsVisible="{Binding RunningSubagent, Converter={x:Static ObjectConverters.IsNull}}" />
                     </StackPanel>
@@ -279,15 +279,14 @@
                     </StackPanel>
                 </Border>
 
-                <StackPanel x:Name="ChatActivityNote" Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="2,0,0,8"
-                            IsVisible="{Binding ShowsActivityNote}">
-                    <TextBlock Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
-                               VerticalAlignment="Center" TextWrapping="Wrap" />
-                </StackPanel>
+                <!-- Inset to the cards' text edge; a horizontal StackPanel here would never wrap it. -->
+                <TextBlock x:Name="ChatActivityNote" Grid.Row="2" Margin="14,0,14,8" IsVisible="{Binding ShowsActivityNote}"
+                           Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
+                           TextWrapping="Wrap" />
 
                 <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
-                        BorderThickness="1" CornerRadius="10" Padding="13,12">
+                        BorderThickness="1" CornerRadius="10" Padding="13,8,13,12">
                     <StackPanel Spacing="6">
                         <Border x:Name="UsageLimitCard" IsVisible="{Binding HasUsageLimitQuestion}"
                                 Background="{StaticResource KcapWarningDimBrush}" BorderBrush="{StaticResource KcapWarningBrush}"
@@ -320,7 +319,7 @@
                         <views:AttachmentChipStrip x:Name="ChipStrip" Tray="{Binding Tray}"
                                                    IsVisible="{Binding Tray.HasAttachments}" />
                         <TextBox x:Name="ComposerInput" Classes="kcapEmbedded" Text="{Binding ComposerText}" AcceptsReturn="True" TextWrapping="Wrap"
-                                 MinHeight="44" MaxHeight="160" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}"
+                                 MinHeight="44" MaxHeight="160" Padding="0" PlaceholderText="Write a message" IsVisible="{Binding ShowsComposer}"
                                  IsEnabled="{Binding !HasUsageLimitQuestion}" />
                         <!-- A flow participant is addressed through the flow protocol, never messaged
                              directly, so the banner replaces the input rather than overlaying a dead one. -->
@@ -343,7 +342,7 @@
                             <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             <Button x:Name="SendButton" Grid.Column="2" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"
-                                    Padding="12,4" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
+                                    Height="24" Padding="12,0" VerticalContentAlignment="Center" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
                                     Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                                     IsVisible="{Binding ShowsComposer}" />
                         </Grid>

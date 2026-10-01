@@ -1601,7 +1601,7 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
             var queued = host.View.FindControl<Border>("QueuedMessagesBanner")!;
-            var note = host.View.FindControl<StackPanel>("ChatActivityNote")!;
+            var note = host.View.FindControl<TextBlock>("ChatActivityNote")!;
             var composer = host.View.FindControl<Border>("ComposerCard")!;
             var band = host.View.FindControl<Border>("ComposerBand")!;
             foreach (Control part in new Control[] { banner, queued, note, composer })
