@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Continuation;
 using Capacitor.Cli.Core;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Continuation;
 
@@ -22,8 +23,8 @@ public class SessionTakeoverTests {
     static string Plan(string id, bool current, string tasksJson, bool finished = false) =>
         $$"""{"plan_id":"{{id}}","is_current":{{(current ? "true" : "false")}},"is_complete":true,"progress":{"completed":0,"total":2,"total_known":true,"finished":{{(finished ? "true" : "false")}}},"tasks":{{tasksJson}}}""";
 
-    static string Task(string id, int ordinal, string status, string source = "mcp", string? note = null) =>
-        $$"""{"task_id":"{{id}}","ordinal":{{ordinal}},"title":"T{{ordinal}}","status":"{{status}}","source":"{{source}}","note":{{(note is null ? "null" : $"\"{note}\"")}}}""";
+    static string Task(string id, int ordinal, string status, string source = "mcp", string? note = null, bool partial = false) =>
+        $$"""{"task_id":"{{id}}","ordinal":{{ordinal}},"title":"T{{ordinal}}","status":"{{status}}","source":"{{source}}","note":{{(note is null ? "null" : $"\"{note}\"")}}{{(partial ? ",\"status_partial\":true" : "")}}}""";
 
     static Routes Server(string summary, string? items = "[]", string? plans = "[]") {
         var routes = new Routes();
@@ -45,8 +46,6 @@ public class SessionTakeoverTests {
         Directory.CreateDirectory(Path.GetDirectoryName(note)!);
         File.WriteAllText(note, $"{session}\nlx:another-boot:1");
     }
-
-    // ── refusals ──
 
     [Test]
     public async Task Refuses_to_continue_itself_across_id_forms() {
@@ -105,8 +104,6 @@ public class SessionTakeoverTests {
         await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("forced");
     }
 
-    // ── liveness that proceeds ──
-
     [Test]
     public async Task A_local_exit_record_proceeds_even_when_the_server_says_active() {
         DeadClaim(Previous);
@@ -140,8 +137,6 @@ public class SessionTakeoverTests {
         await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("stale");
     }
 
-    // ── work items ──
-
     [Test]
     public async Task Attaches_every_work_item_to_the_current_session() {
         var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"#1 — One","is_primary":true},{"work_item_id":"w2","label":"Two","is_primary":false}]""");
@@ -151,10 +146,22 @@ public class SessionTakeoverTests {
 
         var declares = routes.Posts.Where(p => p.Path == "/api/work-items/declare").ToList();
         await Assert.That(declares.Count).IsEqualTo(2);
-        await Assert.That(declares[0].Body!["session_id"]!.GetValue<string>()).IsEqualTo(Current);
-        await Assert.That(declares[0].Body!["work_item_id"]!.GetValue<string>()).IsEqualTo("w1");
+        await Assert.That(declares.All(d => d.Body!["session_id"]!.GetValue<string>() == Current)).IsTrue();
         await Assert.That(o["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("ok");
         await Assert.That(o["work_items"]!["items"]!.AsArray().Count).IsEqualTo(2);
+    }
+
+    /// <summary>The server makes the last declared item primary, so the previous primary must go last.</summary>
+    [Test]
+    public async Task The_previous_sessions_primary_work_item_is_declared_last() {
+        var items = """[{"work_item_id":"w1","label":"One","is_primary":false},{"work_item_id":"w2","label":"Two","is_primary":true},{"work_item_id":"w3","label":"Three","is_primary":false}]""";
+        var routes = Server(Ended(), items: items);
+        routes.Post("/api/work-items/declare", 200, "{}");
+
+        await Run(routes);
+
+        var order = routes.Posts.Select(p => p.Body!["work_item_id"]!.GetValue<string>()).ToList();
+        await Assert.That(order).IsEquivalentTo(new[] { "w1", "w3", "w2" }, CollectionOrdering.Matching);
     }
 
     [Test]
@@ -170,8 +177,6 @@ public class SessionTakeoverTests {
         await Assert.That(Outcome(r)["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("not_in_plan");
         await Assert.That(Outcome(r)["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
     }
-
-    // ── plans ──
 
     [Test]
     public async Task Adopts_the_in_progress_task_resending_its_status_and_note() {
@@ -211,7 +216,47 @@ public class SessionTakeoverTests {
         var reasons = o["skipped_plans"]!.AsArray().ToDictionary(n => n!["plan_id"]!.GetValue<string>(), n => n!["reason"]!.GetValue<string>());
         await Assert.That(reasons["done"]).IsEqualTo("finished");
         await Assert.That(reasons["closed"]).IsEqualTo("no_open_task");
-        await Assert.That(reasons["mine"]).IsEqualTo("user_owned");
+        await Assert.That(reasons["mine"]).IsEqualTo("not_adoptable");
+    }
+
+    /// <summary>A partial task's note is withheld, so adopting it would re-send null and erase the note.</summary>
+    [Test]
+    public async Task A_task_whose_status_is_partial_is_passed_over_for_a_later_pending_one() {
+        var tasks = $"[{Task("t1", 1, "in_progress", partial: true)},{Task("t2", 2, "pending")}]";
+        var routes = Server(Ended(), plans: $"[{Plan("p1", true, tasks)}]");
+        routes.Post("/api/plans/p1/tasks/t2", 200, "{}");
+
+        await Run(routes);
+
+        await Assert.That(routes.Posts.Single().Path).IsEqualTo("/api/plans/p1/tasks/t2");
+    }
+
+    [Test]
+    public async Task A_plan_whose_open_tasks_are_all_partial_is_not_adoptable() {
+        var tasks = $"[{Task("t1", 1, "in_progress", partial: true)},{Task("t2", 2, "pending", partial: true)}]";
+        var routes = Server(Ended(), plans: $"[{Plan("p1", true, tasks)}]");
+
+        var o = Outcome(await Run(routes));
+
+        await Assert.That(routes.Posts.Count).IsEqualTo(0);
+        await Assert.That(o["skipped_plans"]!.AsArray()[0]!["reason"]!.GetValue<string>()).IsEqualTo("not_adoptable");
+    }
+
+    [Test]
+    public async Task A_full_page_of_plans_is_flagged_as_truncated() {
+        var plans = "[" + string.Join(",", Enumerable.Range(0, SessionTakeover.PlansReadCap)
+            .Select(i => Plan($"p{i}", false, $"[{Task("a", 1, "completed")}]", finished: true))) + "]";
+
+        var o = Outcome(await Run(Server(Ended(), plans: plans)));
+
+        await Assert.That(o["plans_truncated"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task Fewer_plans_than_the_cap_are_not_flagged() {
+        var o = Outcome(await Run(Server(Ended(), plans: $"[{Plan("p1", false, $"[{Task("a", 1, "completed")}]", finished: true)}]")));
+
+        await Assert.That(o["plans_truncated"]).IsNull();
     }
 
     [Test]
@@ -254,8 +299,6 @@ public class SessionTakeoverTests {
         await Assert.That(routes.Posts.Single().Body!["note"]!.GetValue<string>()).IsEqualTo("");
     }
 
-    // ── failures ──
-
     [Test]
     public async Task A_summary_read_that_throws_is_a_failure() {
         var routes = new Routes();
@@ -272,10 +315,45 @@ public class SessionTakeoverTests {
         routes.Throw($"/api/work-items/session/{Previous}");
         routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
 
-        var o = Outcome(await Run(routes));
+        var r = (TakeoverResult.Completed)await Run(routes);
 
-        await Assert.That(o["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("failed");
-        await Assert.That(o["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
+        await Assert.That(r.Outcome["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(r.Outcome["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
+        await Assert.That(r.Unsuccessful).IsTrue();
+    }
+
+    [Test]
+    public async Task A_work_items_body_that_is_not_an_array_is_a_failed_read() {
+        var r = (TakeoverResult.Completed)await Run(Server(Ended(), items: """{"oops":true}"""));
+
+        await Assert.That(r.Outcome["work_items"]!["status"]!.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(r.Outcome["work_items"]!["error"]!.GetValue<string>()).Contains("malformed");
+        await Assert.That(r.Unsuccessful).IsTrue();
+    }
+
+    [Test]
+    public async Task A_plans_body_that_is_not_an_array_is_a_failed_read() {
+        var r = (TakeoverResult.Completed)await Run(Server(Ended(), plans: "<html>"));
+
+        await Assert.That(r.Outcome["plans_error"]!.GetValue<string>()).Contains("malformed");
+        await Assert.That(r.Unsuccessful).IsTrue();
+    }
+
+    [Test]
+    [Arguments("items")]
+    [Arguments("plans")]
+    public async Task A_401_on_a_follow_up_read_is_unauthorized_before_any_write(string which) {
+        var routes = Server(Ended(),
+            items: which == "items" ? null : """[{"work_item_id":"w1","label":"One"}]""",
+            plans: which == "plans" ? null : $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Get(which == "items" ? $"/api/work-items/session/{Previous}" : $"/api/sessions/{Previous}/plans", 401, "");
+        routes.Post("/api/work-items/declare", 200, "{}");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var r = await Run(routes);
+
+        await Assert.That(r).IsTypeOf<TakeoverResult.Unauthorized>();
+        await Assert.That(routes.Posts.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -303,14 +381,15 @@ public class SessionTakeoverTests {
     }
 
     [Test]
-    public async Task A_failed_write_is_reported_on_its_entry_and_is_not_a_failure_overall() {
+    public async Task One_failed_write_fails_the_takeover_and_is_reported_on_its_entry() {
         var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One"}]""", plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
         routes.Post("/api/work-items/declare", 500, "boom");
         routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
 
         var r = (TakeoverResult.Completed)await Run(routes);
 
-        await Assert.That(r.Unsuccessful).IsFalse();
+        await Assert.That(r.Unsuccessful).IsTrue();
+        await Assert.That(r.Outcome["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
         var item = r.Outcome["work_items"]!["items"]!.AsArray()[0]!;
         await Assert.That(item["attached"]!.GetValue<bool>()).IsFalse();
         await Assert.That(item["error"]!.GetValue<string>()).Contains("500");

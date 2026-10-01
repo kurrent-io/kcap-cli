@@ -49,6 +49,11 @@ Change:
 - `Reap()` moves a dead note to `agent-sessions/exited/<session id>` instead of deleting it. The
   record's content is the reap time (ISO-8601 UTC). A note whose file is unreadable or malformed is
   deleted as today.
+- A note is dead only when its holder is provably gone: no process has the pid
+  (`ProcessHelpers.IsProcessAlive`, which counts EPERM as alive), or a live one has a readable start
+  token that differs from the note's (the pid was reused). A live process whose token cannot be
+  read or compared leaves the note in place and writes no record: an exit record lets another
+  session take this one over, so it must never rest on a guess.
 - A `SessionId`-keyed file means the latest exit wins, which is what the check needs.
 - `Reap()` also deletes exit records older than 30 days, matching the spools' retention.
 - New query `AgentSessions.Liveness(SessionId) → Running | Exited | Unknown`:
@@ -73,7 +78,8 @@ to shell commands (`CLAUDE_CODE_SESSION_ID`, `KCAP_SESSION_ID`, `CODEX_THREAD_ID
 Steps:
 
 1. **Refusals** (error, nothing written):
-   - C cannot be resolved.
+   - C cannot be resolved. The MCP tool takes an optional `current_session_id` that wins over the
+     harness session, for a harness that does not export its own id.
    - X equals C after canonicalisation.
    - `GET /api/sessions/{X}/summary` is 404 — "not found or not visible".
 2. **Liveness**, unless `force`. Run `AgentSessions.Reap()` first so the answer does not depend on
@@ -85,16 +91,23 @@ Steps:
      refuse: "X still looks active (last event …) and did not run on this machine; if its agent is
      gone, ask the user and retry with force."
 3. **Read** in parallel: `GET /api/work-items/session/{X}` and `GET /api/sessions/{X}/plans` (the
-   latter follows X's continuation chain server-side).
-4. **Work items**: for each, `POST /api/work-items/declare {session_id: C, work_item_id}`. On a tier
+   latter follows X's continuation chain server-side). A 401 on either is `Unauthorized` before any
+   write. A 2xx whose body is not a JSON array is a failed read (`malformed response`), never an
+   empty list. The plans endpoint returns at most the 20 most recently touched plans, unpaged: a
+   full page sets `plans_truncated: true`, and the report says only those were checked.
+4. **Work items**: for each, `POST /api/work-items/declare {session_id: C, work_item_id}`. An MCP
+   declare makes the item primary (unless the user pinned one), so the last declare wins: X's
+   `is_primary` item is declared last, keeping it primary on C. On a tier
    without work items the read is a 403 with code `work_items_not_in_plan`: the part is reported as
    `not_in_plan` and the takeover goes on. Plans carry no tier gate.
 5. **Plans**: skip finished plans, using the same `finished` rule `get_session_summary` projects
    (server `finished` if present, else `total_known && completed == total && is_complete`). For each
    remaining plan pick the first `in_progress` task by ordinal, else the first `pending`, skipping
    tasks whose `source` is `user`: an `mcp` write cannot override a user-set status, so the server
-   would answer 409 even for an unchanged one. No open task → skip with reason `no_open_task`; open
-   tasks that are all user-set → `user_owned`. Then
+   would answer 409 even for an unchanged one. Tasks with `status_partial: true` are skipped too:
+   their status was set by a session the caller cannot see, the server returns their note as null,
+   and re-sending null would erase the stored note. No open task → skip with reason
+   `no_open_task`; open tasks that are all user-set or partial → `not_adoptable`. Then
    `POST /api/plans/{plan_id}/tasks/{task_id} {session_id: C, status, note}` carrying the task's
    current status and note. The server compares both, so re-sending them unchanged records only the
    attachment; omitting the note would record a change that erases it. The server makes the plan
@@ -109,15 +122,18 @@ Steps:
      "work_items": { "status": "ok | not_in_plan | failed",
                      "items": [{ "work_item_id": "…", "label": "…", "attached": true }] },
      "plans": [{ "plan_id": "…", "task_id": "…", "title": "…", "status": "in_progress", "attached": true }],
-     "skipped_plans": [{ "plan_id": "…", "reason": "finished | no_open_task | user_owned" }],
+     "skipped_plans": [{ "plan_id": "…", "reason": "finished | no_open_task | not_adoptable" }],
      "plans_error": "HTTP 500",
+     "plans_truncated": true,
      "current_plan_id": "…"
    }
    ```
 
-   `plans_error` appears only when the plans read fails. A failed write carries `"attached": false, "error": "<status or message>"` on its entry. The
-   takeover fails when every attempted write failed, or when no write succeeded and a read (work
-   items or plans) failed; X having nothing to attach is still a success. `current_plan_id` is the last plan
+   `plans_error` appears only when the plans read fails, `plans_truncated` only on a full page. A
+   failed write carries `"attached": false, "error": "<status or message>"` on its entry. The
+   takeover fails when any attempted write failed or any read (work items or plans) failed, so a
+   caller never mistakes a partial takeover for a whole one; `not_in_plan` is not a failure, and X
+   having nothing to attach is still a success. `current_plan_id` is the last plan
    attached successfully, omitted when none. A 401 surfaces the existing not-logged-in message.
 
 ### 3. `kcap recap <X> --continue [--force]`
@@ -137,7 +153,7 @@ Steps:
   (`KcapMcpRegistry.ReviewFlowAutoApprovableServers`), so a write tool there would run unprompted for
   reviewers. Not `kcap-workitems` or `kcap-plans`: continuing must not depend on either feature.
 - `kcap-handoff` (`kcap mcp handoff`, `NeedsProjectCwd: false`) serves one tool, `continue_session`
-  (`session_id` required, `force` optional), which returns the outcome JSON; a refusal is a tool
+  (`session_id` required, `force` and `current_session_id` optional), which returns the outcome JSON; a refusal is a tool
   error carrying the reason. Annotation `Additive`.
 - `AutoApprove: true`: it writes only the current session's own attachments, the kind of write the
   hooks already make unprompted. The liveness refusal is the guard, not a permission prompt.
@@ -172,6 +188,8 @@ top of it: merge #1236 first, or fold its text in here.
 `AgentSessionsTests`:
 
 - A dead claimant's note becomes an exit record keyed by its session; a live one is untouched.
+- A live pid under a different start token is reused and yields an exit record; a live pid whose
+  token cannot be compared keeps its note and yields none.
 - `Liveness` returns `Running` for a live claim, `Exited` for an exit record with no live claim,
   `Running` when both exist, `Unknown` for neither.
 - Exit records older than 30 days are reaped; `Claimants()` ignores the `exited` directory.
@@ -186,7 +204,11 @@ top of it: merge #1236 first, or fold its text in here.
   the last two.
 - `Exited` proceeds even when the server says active and recent.
 - A 403 `work_items_not_in_plan` reports work items as `not_in_plan` and still adopts the plans.
-- Partial failure is reported per entry and is not a failure; all writes failing is.
+- A failed write is reported on its entry and fails the takeover; so does a failed or malformed
+  read. A 401 on a follow-up read is `Unauthorized` with nothing written.
+- A partial task is passed over; a plan whose open tasks are all partial or user-set is
+  `not_adoptable`. A full page of plans sets `plans_truncated`.
+- X's primary work item is declared last.
 
 `RecapCommand` tests: `--continue` prints the `## Continued` block before the recap; a refusal exits
 2 with no recap; `--continue` without a session id, or with `--repo`, is a usage error.

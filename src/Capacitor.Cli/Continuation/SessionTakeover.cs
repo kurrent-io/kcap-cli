@@ -19,6 +19,11 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
     const string NotInPlanCode = "work_items_not_in_plan";
 
+    const string MalformedResponse = "malformed response";
+
+    /// <summary>The plans endpoint returns at most this many, the most recently touched, with no paging.</summary>
+    public const int PlansReadCap = 20;
+
     public async Task<TakeoverResult> RunAsync(
             HttpClient client, string baseUrl, string previous, string current, bool force, CancellationToken ct = default) {
         if (WorkContextIds.CanonicalSessionId(previous) is not { } previousWire || SessionId.Parse(previousWire) is not { } previousId)
@@ -56,6 +61,9 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         using var itemsResponse = items;
         using var plansResponse = plans;
 
+        if (items?.StatusCode == HttpStatusCode.Unauthorized || plans?.StatusCode == HttpStatusCode.Unauthorized)
+            return new TakeoverResult.Unauthorized();
+
         var writes  = new WriteCount();
         var outcome = new JsonObject {
             ["continued_from"] = previousWire,
@@ -65,10 +73,9 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
         await AdoptPlansAsync(client, baseUrl, plans, plansError, currentWire, outcome, writes, ct);
 
-        var readFailed   = Str(outcome["work_items"]?["status"]) == "failed" || outcome["plans_error"] is not null;
-        var unsuccessful = writes.Failed == writes.Attempted && (writes.Attempted > 0 || readFailed);
+        var readFailed = Str(outcome["work_items"]?["status"]) == "failed" || outcome["plans_error"] is not null;
 
-        return new TakeoverResult.Completed(outcome, unsuccessful);
+        return new TakeoverResult.Completed(outcome, Unsuccessful: writes.Failed > 0 || readFailed);
     }
 
     (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, bool force) {
@@ -104,9 +111,13 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         if (!read.IsSuccessStatusCode)
             return new JsonObject { ["status"] = "failed", ["error"] = $"HTTP {(int)read.StatusCode}", ["items"] = new JsonArray() };
 
+        if (ParseArray(body) is not { } list)
+            return new JsonObject { ["status"] = "failed", ["error"] = MalformedResponse, ["items"] = new JsonArray() };
+
         var attached = new JsonArray();
 
-        foreach (var item in ParseArray(body)) {
+        // The last declare becomes primary, so the previous session's primary goes last.
+        foreach (var item in list.OrderBy(i => IsTrue(i?["is_primary"])).ToList()) {
             if (Str(item?["work_item_id"]) is not { } workItemId) continue;
 
             var entry = new JsonObject { ["work_item_id"] = workItemId, ["label"] = Str(item?["label"]) ?? workItemId };
@@ -131,10 +142,17 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
             return;
         }
 
+        if (ParseArray(await read.Content.ReadAsStringAsync(ct)) is not { } list) {
+            outcome["plans_error"] = MalformedResponse;
+            return;
+        }
+
+        if (list.Count >= PlansReadCap) outcome["plans_truncated"] = true;
+
         string? currentPlan = null;
 
         // The previous session's current plan goes last, so it ends up current on this one too.
-        var plans = ParseArray(await read.Content.ReadAsStringAsync(ct))
+        var plans = list
             .OfType<JsonObject>()
             .Where(p => Str(p["plan_id"]) is not null)
             .OrderBy(p => IsTrue(p["is_current"]))
@@ -155,7 +173,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
             }
 
             if (Adoptable(open) is not { } task) {
-                skipped.Add((JsonNode?)Skip(planId, "user_owned"));
+                skipped.Add((JsonNode?)Skip(planId, "not_adoptable"));
                 continue;
             }
 
@@ -187,9 +205,12 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
                    .ToList()
             : [];
 
-    /// <summary>A user-set status outranks an MCP write, so the server would refuse even an unchanged one.</summary>
+    /// <summary>
+    /// A user-set status outranks an MCP write, so the server would refuse even an unchanged one. A
+    /// partial task's note is withheld from this caller, and re-sending it as null would erase it.
+    /// </summary>
     static JsonObject? Adoptable(List<JsonObject> open) {
-        var mine = open.Where(t => Str(t["source"]) != "user").ToList();
+        var mine = open.Where(t => Str(t["source"]) != "user" && !IsTrue(t["status_partial"])).ToList();
 
         return mine.FirstOrDefault(t => Str(t["status"]) == "in_progress") ?? mine.FirstOrDefault();
     }
@@ -230,8 +251,8 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         try { return JsonNode.Parse(text) as JsonObject; } catch { return null; }
     }
 
-    static JsonArray ParseArray(string text) {
-        try { return JsonNode.Parse(text) as JsonArray ?? new JsonArray(); } catch { return new JsonArray(); }
+    static JsonArray? ParseArray(string text) {
+        try { return JsonNode.Parse(text) as JsonArray; } catch { return null; }
     }
 
     static string? Str(JsonNode? node) => node is JsonValue v && v.TryGetValue(out string? s) && !string.IsNullOrEmpty(s) ? s : null;

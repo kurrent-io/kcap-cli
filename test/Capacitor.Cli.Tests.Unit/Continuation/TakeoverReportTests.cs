@@ -25,6 +25,23 @@ public class TakeoverReportTests {
     }
 
     [Test]
+    public async Task Says_when_only_the_most_recent_plans_were_checked() {
+        var outcome = JsonNode.Parse("""{"continued_from":"aaa","work_items":{"status":"ok","items":[]},"plans":[],"skipped_plans":[{"plan_id":"p1","reason":"not_adoptable"}],"plans_truncated":true}""")!.AsObject();
+
+        var text = TakeoverReport.Render(outcome);
+
+        await Assert.That(text).Contains("Only the 20 most recently touched plans were checked.");
+        await Assert.That(text).Contains("p1 — skipped: no open task this session can take over");
+    }
+
+    [Test]
+    public async Task Says_nothing_about_truncation_otherwise() {
+        var outcome = JsonNode.Parse("""{"continued_from":"aaa","work_items":{"status":"ok","items":[]},"plans":[],"skipped_plans":[]}""")!.AsObject();
+
+        await Assert.That(TakeoverReport.Render(outcome)).DoesNotContain("most recently touched");
+    }
+
+    [Test]
     public async Task Says_when_work_items_are_not_in_the_plan() {
         var outcome = JsonNode.Parse("""{"continued_from":"aaa","liveness":"ended","work_items":{"status":"not_in_plan","items":[]},"plans":[],"skipped_plans":[]}""")!.AsObject();
 

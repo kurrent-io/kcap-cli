@@ -43,7 +43,10 @@ static class TakeoverReport {
             }
 
             foreach (var plan in skipped)
-                sb.AppendLine($"- {Str(plan?["plan_id"])} — skipped: {Str(plan?["reason"])?.Replace('_', ' ')}");
+                sb.AppendLine($"- {Str(plan?["plan_id"])} — skipped: {SkipReason(Str(plan?["reason"]))}");
+
+            if (IsTrue(outcome["plans_truncated"]))
+                sb.AppendLine($"Only the {SessionTakeover.PlansReadCap} most recently touched plans were checked.");
         }
 
         if (Str(outcome["current_plan_id"]) is { } current) {
@@ -53,6 +56,11 @@ static class TakeoverReport {
 
         return sb.ToString();
     }
+
+    static string? SkipReason(string? reason) => reason switch {
+        "not_adoptable" => "no open task this session can take over (set by the user, or by a session you cannot see)",
+        _               => reason?.Replace('_', ' '),
+    };
 
     static string? Str(JsonNode? node) => node is JsonValue v && v.TryGetValue(out string? s) ? s : null;
 

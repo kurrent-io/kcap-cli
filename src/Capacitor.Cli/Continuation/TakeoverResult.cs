@@ -13,6 +13,6 @@ abstract record TakeoverResult {
     /// <summary>The previous session could not be read, so nothing was attempted.</summary>
     public sealed record Failed(string Reason) : TakeoverResult;
 
-    /// <summary><paramref name="Unsuccessful"/>: every attempted write failed, or none succeeded and a read failed.</summary>
+    /// <summary><paramref name="Unsuccessful"/>: a write or a read failed, so not everything was carried over.</summary>
     public sealed record Completed(JsonObject Outcome, bool Unsuccessful) : TakeoverResult;
 }
