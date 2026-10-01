@@ -57,7 +57,13 @@ static class WindowsTaskUnit {
           + $"`kcap daemon service install`.");
     }
 
-    /// <summary>.cmd wrapper: set the captured env, then exec the daemon (no Environment element in Task XML).</summary>
+    // Mirrors systemd's RestartSec=5 and its five-in-a-minute burst, without giving up: a Windows task the
+    // wrapper abandons stays down until the next logon.
+    internal const int ShortPauseSeconds = 5;
+    internal const int LongPauseSeconds  = 60;
+    internal const int RepeatedFailures  = 5;
+
+    /// <summary>.cmd wrapper: set the captured env, then run and relaunch the daemon (no Environment element in Task XML).</summary>
     public static string Wrapper(ServiceSpec spec) {
         var sb = new StringBuilder();
         sb.Append("@echo off\r\n");
@@ -89,7 +95,21 @@ static class WindowsTaskUnit {
         var args = new[] { "--name", ExecValue("the service id", spec.ServiceId),
                            "--log-file", ExecValue("the log path", spec.LogPath) }
             .Concat(spec.ExtraArgs.Select(a => ExecValue("a daemon argument", a)));
+        // Task Scheduler's RestartOnFailure covers only a task that fails to start, never the exit code of the
+        // program it ran, so the wrapper relaunches the daemon itself — the same contract as systemd's
+        // Restart=on-failure and launchd's SuccessfulExit=false: exit 0 (a stop, or a deliberate supervised
+        // refusal) ends the task; a requested restart relaunches at once; any other exit relaunches after a
+        // pause that lengthens once failures repeat. `ping` is the sleep: `timeout` aborts when stdin is
+        // redirected, which would turn the loop into a spin.
+        sb.Append("set \"KCAP_WRAPPER_FAILURES=0\"\r\n");
+        sb.Append(":run\r\n");
         sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)}\r\n");
+        sb.Append("set \"KCAP_WRAPPER_EXIT=%ERRORLEVEL%\"\r\n");
+        sb.Append("if \"%KCAP_WRAPPER_EXIT%\"==\"0\" exit /b 0\r\n");
+        sb.Append($"if \"%KCAP_WRAPPER_EXIT%\"==\"{ExitCodes.RestartRequested}\" (set \"KCAP_WRAPPER_FAILURES=0\" & goto run)\r\n");
+        sb.Append("set /a KCAP_WRAPPER_FAILURES+=1 >nul\r\n");
+        sb.Append($"if %KCAP_WRAPPER_FAILURES% GEQ {RepeatedFailures} (ping -n {LongPauseSeconds + 1} 127.0.0.1 >nul) else (ping -n {ShortPauseSeconds + 1} 127.0.0.1 >nul)\r\n");
+        sb.Append("goto run\r\n");
         return sb.ToString();
     }
 

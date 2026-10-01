@@ -24,6 +24,43 @@ public class WindowsTaskUnitTests {
         await Assert.That(cmd).Contains("\"C:\\kcap\\kcap-daemon.exe\" --name \"laptop\" --log-file \"C:\\Users\\u\\.config\\kcap\\daemon-laptop.log\" \"--max-agents\" \"8\"");
     }
 
+    /// <summary>Task Scheduler never relaunches on an exit code, so the wrapper must: the daemon runs inside a
+    /// loop that only a clean exit leaves.</summary>
+    [Test]
+    public async Task Wrapper_relaunches_the_daemon_until_it_exits_cleanly() {
+        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        var loop  = Array.IndexOf(lines, ":run");
+        var exec  = Array.FindIndex(lines, l => l.StartsWith("\"C:\\kcap\\kcap-daemon.exe\"", StringComparison.Ordinal));
+
+        await Assert.That(loop).IsGreaterThan(0);
+        await Assert.That(exec).IsEqualTo(loop + 1);
+        await Assert.That(lines[exec + 1]).IsEqualTo("set \"KCAP_WRAPPER_EXIT=%ERRORLEVEL%\"");
+        await Assert.That(lines[exec + 2]).IsEqualTo("if \"%KCAP_WRAPPER_EXIT%\"==\"0\" exit /b 0");
+        await Assert.That(lines[^1]).IsEqualTo("goto run");
+    }
+
+    /// <summary>A requested restart (after an update) relaunches straight away and forgets earlier failures.</summary>
+    [Test]
+    public async Task Wrapper_relaunches_a_requested_restart_without_pausing() {
+        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+
+        await Assert.That(lines).Contains($"if \"%KCAP_WRAPPER_EXIT%\"==\"{Capacitor.Cli.Core.ExitCodes.RestartRequested}\" (set \"KCAP_WRAPPER_FAILURES=0\" & goto run)");
+    }
+
+    /// <summary>Any other exit pauses before relaunching — longer once failures repeat — and never gives up:
+    /// a task the wrapper leaves stays down until the next logon.</summary>
+    [Test]
+    public async Task Wrapper_pauses_longer_once_failures_repeat() {
+        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        var pause = lines.Single(l => l.StartsWith("if %KCAP_WRAPPER_FAILURES%", StringComparison.Ordinal));
+
+        await Assert.That(lines).Contains("set /a KCAP_WRAPPER_FAILURES+=1 >nul");
+        await Assert.That(pause).IsEqualTo(
+            $"if %KCAP_WRAPPER_FAILURES% GEQ {WindowsTaskUnit.RepeatedFailures} (ping -n {WindowsTaskUnit.LongPauseSeconds + 1} 127.0.0.1 >nul) else (ping -n {WindowsTaskUnit.ShortPauseSeconds + 1} 127.0.0.1 >nul)");
+        await Assert.That(lines.Any(l => l.Contains("timeout", StringComparison.OrdinalIgnoreCase))).IsFalse();
+        await Assert.That(lines.Any(l => l.StartsWith("exit", StringComparison.OrdinalIgnoreCase) && l != "exit /b 0")).IsFalse();
+    }
+
     [Test]
     public async Task Wrapper_doubles_percent_in_values() {
         var spec = Spec() with { Environment = new Dictionary<string, string> { ["X"] = "50%done" } };
