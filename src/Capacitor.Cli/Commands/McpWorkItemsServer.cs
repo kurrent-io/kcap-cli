@@ -939,8 +939,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             }, []), McpToolAnnotations.Read),
 
         new("get_next_work",
-            "What the user should work on next, ranked: others waiting on them first, then their own "
-          + "unfinished work (work items, interrupted sessions, loose ends), then new backlog. Each row "
+            "What the user should work on next. Rows alternate between kinds of work, one of each in "
+          + "turn: when others work alongside the user, work others are waiting on leads; when the user "
+          + "works alone, their own unfinished work (loose ends, work items) leads. Each row "
           + "carries a because-clause, evidence, and a target_key to pass to dismiss_next_work if the "
           + "user turns it down. Read this before proposing new work; prefer finishing a listed item "
           + "over starting something new.",
