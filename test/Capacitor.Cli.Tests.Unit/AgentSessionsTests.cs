@@ -76,16 +76,56 @@ public class AgentSessionsTests {
         await Assert.That(Sessions.Liveness(SessionId.Parse("reused")!)).IsEqualTo(SessionLiveness.Exited);
     }
 
-    /// <summary>A note on a live pid whose token cannot be compared proves nothing about its session.</summary>
+    void UncomparableNote(string session) {
+        Directory.CreateDirectory(Path.GetDirectoryName(Note(Agent))!);
+        File.WriteAllText(Note(Agent), $"{session}\nlegacy-token-without-scheme");
+    }
+
+    /// <summary>A note on a live pid whose token cannot be compared may be a live claimant.</summary>
     [Test]
     public async Task Reap_leaves_a_note_it_cannot_compare_with_its_live_holder() {
-        Directory.CreateDirectory(Path.GetDirectoryName(Note(Agent))!);
-        File.WriteAllText(Note(Agent), "unclear\nlegacy-token-without-scheme");
+        UncomparableNote("unclear");
 
         Sessions.Reap();
 
         await Assert.That(File.Exists(Note(Agent))).IsTrue();
-        await Assert.That(Sessions.Liveness(SessionId.Parse("unclear")!)).IsEqualTo(SessionLiveness.Unknown);
+        await Assert.That(Sessions.Liveness(SessionId.Parse("unclear")!)).IsEqualTo(SessionLiveness.Running);
+    }
+
+    [Test]
+    public async Task A_possibly_live_claimant_outweighs_an_exit_record() {
+        DeadNote(Shell, Session.Value);
+        Sessions.Reap();
+        UncomparableNote(Session.Value);
+
+        await Assert.That(Sessions.Liveness(Session)).IsEqualTo(SessionLiveness.Running);
+    }
+
+    [Test]
+    public async Task A_new_claim_deletes_the_sessions_exit_record() {
+        DeadNote(Shell, Session.Value);
+        Sessions.Reap();
+        await Assert.That(File.Exists(ExitRecord(Session.Value))).IsTrue();
+
+        Sessions.Claim(Agent, Session);
+
+        await Assert.That(File.Exists(ExitRecord(Session.Value))).IsFalse();
+        await Assert.That(Sessions.Liveness(Session)).IsEqualTo(SessionLiveness.Running);
+    }
+
+    [Test]
+    public async Task A_claim_in_another_case_is_running_for_the_canonical_id() {
+        Sessions.Claim(Agent, SessionId.Parse("ABCD-EF01")!);
+
+        await Assert.That(Sessions.Liveness(SessionId.Parse("abcdef01")!)).IsEqualTo(SessionLiveness.Running);
+    }
+
+    [Test]
+    public async Task An_exit_recorded_in_another_case_is_found_for_the_canonical_id() {
+        DeadNote(Shell, "ABCD-EF01");
+        Sessions.Reap();
+
+        await Assert.That(Sessions.Liveness(SessionId.Parse("abcdef01")!)).IsEqualTo(SessionLiveness.Exited);
     }
 
     [Test]

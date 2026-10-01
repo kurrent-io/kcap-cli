@@ -54,14 +54,19 @@ Change:
   token that differs from the note's (the pid was reused). A live process whose token cannot be
   read or compared leaves the note in place and writes no record: an exit record lets another
   session take this one over, so it must never rest on a guess.
-- A `SessionId`-keyed file means the latest exit wins, which is what the check needs.
+- A `SessionId`-keyed file means the latest exit wins, which is what the check needs. The file
+  name is the lower-cased id: a hook may write the id in a different case than the canonical one a
+  takeover looks up.
+- `Claim(pid, session)` deletes that session's exit record: a hook firing for it proves it is live.
 - `Reap()` also deletes exit records older than 30 days, matching the spools' retention.
 - New query `AgentSessions.Liveness(SessionId) → Running | Exited | Unknown`:
-  - `Running` — a live claimant's note names the session (`IsClaimed`).
-  - `Exited` — no live claimant and an exit record exists.
+  - `Running` — a note names the session (compared case-insensitively) and its holder is not
+    provably gone, by the same rule `Reap()` uses. A note whose token cannot be read or compared
+    counts: it may be a live claimant.
+  - `Exited` — no such note and an exit record exists.
   - `Unknown` — neither.
   `Running` is checked first: a session can be exited in one process and resumed in another
-  (`claude --resume`), and a live claim is the stronger evidence.
+  (`claude --resume`), and a possibly-live claimant must not be taken over on old death evidence.
 - `Claimants()` must skip the `exited` subdirectory (it enumerates files, so it already does; a test
   pins it).
 
@@ -191,7 +196,9 @@ top of it: merge #1236 first, or fold its text in here.
 - A live pid under a different start token is reused and yields an exit record; a live pid whose
   token cannot be compared keeps its note and yields none.
 - `Liveness` returns `Running` for a live claim, `Exited` for an exit record with no live claim,
-  `Running` when both exist, `Unknown` for neither.
+  `Running` when both exist, `Unknown` for neither. A note whose token cannot be compared is
+  `Running` even beside an exit record; a new claim deletes the exit record.
+- A claim note or exit record in another case is found for the lower-case canonical id.
 - Exit records older than 30 days are reaped; `Claimants()` ignores the `exited` directory.
 
 `SessionTakeoverTests` (WireMock):

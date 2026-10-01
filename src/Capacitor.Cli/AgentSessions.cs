@@ -23,7 +23,12 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// </summary>
     public static bool HostsOneSession(string vendor) => vendor is not ("antigravity" or "cursor" or "opencode");
 
+    /// <summary>
+    /// A hook firing for <paramref name="session"/> proves it is running, so any exit record for it goes.
+    /// </summary>
     public void Claim(int agentPid, SessionId session) {
+        try { File.Delete(ExitRecord(session)); } catch { }
+
         try {
             if (ProcessStartToken.ForPid(agentPid) is not { } token) return;
 
@@ -74,8 +79,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
             try {
                 if (File.ReadAllText(Note(pid)).Split('\n') is [var session, var token]) {
-                    var alive = ProcessHelpers.IsProcessAlive(pid);
-                    if (!HolderIsGone(alive, alive ? ProcessStartToken.Matches(pid, token) : null)) continue;
+                    if (!HolderIsGone(pid, token)) continue;
 
                     if (SessionId.Parse(session) is { } exited) RecordExit(exited);
                 }
@@ -93,13 +97,28 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// </summary>
     internal static bool HolderIsGone(bool processExists, bool? tokenMatches) => !processExists || tokenMatches == false;
 
+    static bool HolderIsGone(int pid, string token) {
+        var alive = ProcessHelpers.IsProcessAlive(pid);
+        return HolderIsGone(alive, alive ? ProcessStartToken.Matches(pid, token) : null);
+    }
+
     /// <summary>
-    /// A live claim wins over an exit record: a session resumed in a new process is running again.
+    /// Running while any note names the session and its holder is not provably gone, whatever exit
+    /// record exists: a resumed session is running again, and a takeover must not rest on a guess.
+    /// Hooks may write the id in another case than the one asked about, so the match ignores case.
     /// </summary>
-    public SessionLiveness Liveness(SessionId session) =>
-        IsClaimed(session)              ? SessionLiveness.Running
-      : File.Exists(ExitRecord(session)) ? SessionLiveness.Exited
-      : SessionLiveness.Unknown;
+    public SessionLiveness Liveness(SessionId session) {
+        foreach (var pid in Claimants()) {
+            try {
+                if (File.ReadAllText(Note(pid)).Split('\n') is [var named, var token]
+                 && string.Equals(SessionId.Parse(named)?.Value, session.Value, StringComparison.OrdinalIgnoreCase)
+                 && !HolderIsGone(pid, token))
+                    return SessionLiveness.Running;
+            } catch { }
+        }
+
+        return File.Exists(ExitRecord(session)) ? SessionLiveness.Exited : SessionLiveness.Unknown;
+    }
 
     /// <summary>
     /// The session of the nearest agent process at or above <paramref name="pid"/>.
@@ -149,7 +168,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         } catch { }
     }
 
-    string ExitRecord(SessionId session) => config.Path("agent-sessions", "exited", session.Value);
+    string ExitRecord(SessionId session) => config.Path("agent-sessions", "exited", session.Value.ToLowerInvariant());
 
     string Note(int pid) => config.Path("agent-sessions", pid.ToString(CultureInfo.InvariantCulture));
 }
