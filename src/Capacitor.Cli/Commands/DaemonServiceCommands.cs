@@ -124,7 +124,7 @@ sealed class DaemonServiceCommands(
     /// <summary>True only when the daemon accepted a restart it applies only while idle.</summary>
     bool RequestIdleRestart(string serviceId) {
         try {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
             var reply = DaemonRestartClient.RequestAsync(store, serviceId, "now", cts.Token).GetAwaiter().GetResult();
 
             return reply is { Type: Core.LocalIpc.FrameType.RestartAck, Text: "restarting" };

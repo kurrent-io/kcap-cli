@@ -109,10 +109,14 @@ sealed partial class LaunchdServiceManager(
             throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {err.Trim()}");
     }
 
+    /// <summary>Per launchctl call. Refresh runs under the npm refresh wrapper's 60s kill, and a full
+    /// reload with its rollback is four calls.</summary>
+    static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>
     /// Moves an installed job off the Adaptive process type. The plist is rewritten whenever it carries
     /// the Adaptive line, but launchd reads the type only when the job loads, and the reload kills
-    /// whatever the daemon hosts. So a loaded Adaptive job is reloaded only once
+    /// whatever the daemon hosts. So a running Adaptive job is reloaded only once
     /// <paramref name="requestIdleRestart"/> reports that the daemon accepted an idle-only restart. A
     /// busy daemon refuses that restart, and the reload waits for a later refresh.
     /// </summary>
@@ -123,27 +127,43 @@ sealed partial class LaunchdServiceManager(
         if (LaunchdUnit.TryReadPlist(path, out var original) != LaunchdUnit.PlistRead.Ok)
             return ProcessTypeRefresh.Unchanged;
 
-        var upgraded = LaunchdUnit.UpgradeProcessType(original!);
-        var (printExit, printOut, printErr, _) = RunCtl(null, LaunchdUnit.PrintArgs(Uid(), serviceId));
-        var loaded = LaunchdUnit.ClassifyPrint(printExit, printOut, printErr) == LabelProbe.Loaded;
-        var stale  = loaded && LaunchdUnit.LoadedAsAdaptive(printOut);
+        var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
+        if (printTimedOut) return ProcessTypeRefresh.Unchanged;
 
+        var loaded   = LaunchdUnit.ClassifyPrint(printExit, printOut, printErr) == LabelProbe.Loaded;
+        var stale    = loaded && LaunchdUnit.LoadedAsAdaptive(printOut);
+        var upgraded = LaunchdUnit.UpgradeProcessType(original!);
+
+        // A plist this writer cannot upgrade would reload as Adaptive again.
+        if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return ProcessTypeRefresh.Unchanged;
         if (upgraded is null && !stale) return ProcessTypeRefresh.Unchanged;
         if (upgraded is not null) _writeUnit(path, upgraded, null);
         if (!stale) return ProcessTypeRefresh.Rewritten;
-        if (!requestIdleRestart()) return ProcessTypeRefresh.Deferred;
+
+        // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
+        var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
+        if (running && !requestIdleRestart()) return ProcessTypeRefresh.Deferred;
 
         // The accepted restart is already exiting the daemon. Booting out now unloads the job before
         // launchd can relaunch it from the definition it cached at load.
-        RunCtl(null, LaunchdUnit.BootoutArgs(Uid(), serviceId));
-        var (bootstrapExit, _, bootstrapErr, _) = RunCtl(null, LaunchdUnit.BootstrapArgs(Uid(), path));
-        if (bootstrapExit == 0) return ProcessTypeRefresh.Reloaded;
+        RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+        if (TryBootstrap(path, out var bootstrapError)) return ProcessTypeRefresh.Reloaded;
 
-        error = $"launchctl bootstrap failed (exit {bootstrapExit}): {bootstrapErr.Trim()}";
         if (upgraded is not null) _writeUnit(path, original!, null);
-        RunCtl(null, LaunchdUnit.BootstrapArgs(Uid(), path));
+        error = TryBootstrap(path, out var rollbackError)
+            ? $"{bootstrapError}; the previous unit was restored and loaded"
+            : $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), so the daemon is not loaded — run `kcap daemon service start`";
 
         return ProcessTypeRefresh.Failed;
+    }
+
+    bool TryBootstrap(string plistPath, out string? error) {
+        var (exit, _, err, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootstrapArgs(Uid(), plistPath));
+        error = timedOut ? "launchctl bootstrap timed out and was terminated"
+              : exit != 0 ? $"launchctl bootstrap failed (exit {exit}): {err.Trim()}"
+              : null;
+
+        return error is null;
     }
 
     /// <summary>

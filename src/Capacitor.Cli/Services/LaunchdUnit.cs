@@ -23,6 +23,17 @@ static class LaunchdUnit {
             ? plistXml.Replace(AdaptiveProcessTypeLine, StandardProcessTypeLine, StringComparison.Ordinal)
             : null;
 
+    /// <summary>True when the plist's top-level <c>ProcessType</c> is Standard, however it is formatted.
+    /// An unparseable plist is not.</summary>
+    public static bool DeclaresStandardProcessType(string plistXml) {
+        try {
+            var topDict = XDocument.Parse(plistXml).Root?.Element("dict");
+            return topDict is not null && TopLevelValue(topDict, "ProcessType") is { Name.LocalName: "string", Value: "Standard" };
+        } catch (Exception ex) when (ex is System.Xml.XmlException or InvalidDataException) {
+            return false;
+        }
+    }
+
     /// <summary>True when <c>launchctl print</c> shows the loaded job running as Adaptive. launchd reads
     /// <c>ProcessType</c> only when the job loads, so a rewritten plist leaves this true until a reload.</summary>
     public static bool LoadedAsAdaptive(string printStdout) =>
