@@ -6,7 +6,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Setup;
@@ -217,7 +217,7 @@ public class WizardSimpleStepsTests {
             var vm = new OnboardingViewModel([h.Vm, defaults, done]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -315,7 +315,7 @@ public class DefaultsStepViewModelTests {
         var defaults = new DefaultsStepViewModel(Config.Root);
         var vm = new OnboardingViewModel([defaults, new DoneStepViewModel(() => [])]);
         await vm.PendingEnterForTesting;
-        var window = new OnboardingWindow { DataContext = vm };
+        var window = new MainWindow { Onboarding = vm };
         try {
             window.Show();
             Dispatcher.UIThread.RunJobs();

@@ -7,7 +7,7 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
 using Microsoft.Extensions.Time.Testing;
 using ReactiveUI.Reactive;
@@ -816,7 +816,7 @@ public class SignInStepViewModelTests {
             var vm = new OnboardingViewModel([h.Connect, h.Vm]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 

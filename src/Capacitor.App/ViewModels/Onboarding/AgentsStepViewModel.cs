@@ -94,6 +94,7 @@ public sealed class AgentsStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Agents;
     public string       Title      => "Coding agents";
     public bool         Applicable => true;
+    public string Lede => "Install kcap's hooks into the agents you use. You can skip any you don't want.";
 
     public IReadOnlyList<AgentVendorRow> Rows { get; }
 

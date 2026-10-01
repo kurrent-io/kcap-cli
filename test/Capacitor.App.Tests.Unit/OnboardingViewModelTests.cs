@@ -4,7 +4,8 @@ using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
+using AppUnderTest = Capacitor.App.App;
 using ReactiveUI.Reactive;
 using TUnit.Assertions.Enums;
 
@@ -212,8 +213,8 @@ public class OnboardingViewModelTests {
             var count = 0;
             vm.CloseRequested += () => count++;
 
-            var window = new OnboardingWindow { DataContext = vm };
-            window.Show();
+            var (desktop, _) = FakeClassicDesktopLifetime.Create();
+            var window = AppUnderTest.ShowWizardWindow(desktop, vm);
             Dispatcher.UIThread.RunJobs();
 
             window.Close();
@@ -233,24 +234,23 @@ public class OnboardingViewModelTests {
             var vm = new OnboardingViewModel([connect]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "StepTitleText");
-            var chromeTitle = window.Title;
+            var texts = window.GetVisualDescendants().OfType<TextBlock>().ToList();
+            var title = texts.FirstOrDefault(t => t.Name == "StepTitleText");
+            var eyebrow = texts.FirstOrDefault(t => t.Name == "StepEyebrowText");
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (text?.Text, text?.LetterSpacing, text?.Classes.Contains("kcapTitle"), chromeTitle);
+            return (title?.Text, title?.Classes.Contains("frHeadline"), eyebrow?.Text);
         });
 
         await Assert.That(rendered.Item1).IsEqualTo("Connect to Capacitor");
-        await Assert.That(rendered.Item2).IsEqualTo(-0.3);
-        await Assert.That(rendered.Item3).IsTrue();
-        await Assert.That(rendered.Item4).IsEqualTo("Kurrent Capacitor — Setup");
+        await Assert.That(rendered.Item2).IsTrue();
+        await Assert.That(rendered.Item3).IsEqualTo("STEP 1 OF 1 · CONNECT TO CAPACITOR");
     }
 
     // ── Busy gate and veto handling ──────────────────────────

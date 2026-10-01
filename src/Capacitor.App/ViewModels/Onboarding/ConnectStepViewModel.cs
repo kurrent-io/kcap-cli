@@ -20,6 +20,7 @@ public sealed class ConnectStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Connect;
     public string       Title      => "Connect to Capacitor";
     public bool         Applicable => true;
+    public string Lede => "You'll sign in on the next step. Choose how to reach a workspace.";
 
     public ConnectChoice Choice {
         get => _choice;

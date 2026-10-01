@@ -104,6 +104,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Daemon;
     public string       Title      => "Enable the daemon";
     public bool         Applicable => true;
+    public string Lede => "Runs hosted agents and reviews in the background. Starts again after a reboot.";
 
     /// Set ONLY by the lane's own success outcome or the already-enabled row, and never cleared —
     /// a later re-classification must not re-derive (or revoke) a mutation's success from a snapshot.
