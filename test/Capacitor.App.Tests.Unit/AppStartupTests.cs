@@ -62,7 +62,7 @@ public class AppStartupTests {
     public async Task BuildAndShowMainWindow_takes_over_the_onboarding_window() {
         var (same, paneVisible, surfaceVisible, handedVm) = await AvaloniaSession.DispatchAsync(async () => {
             var (desktop, _) = FakeClassicDesktopLifetime.Create();
-            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Connect)]);
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Welcome)]);
             await wizard.PendingEnterForTesting;
             var onboarding = AppUnderTest.ShowWizardWindow(desktop, wizard);
             Dispatcher.UIThread.RunJobs();
