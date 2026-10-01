@@ -84,65 +84,8 @@
             <views:HarnessesPaneView />
         </DataTemplate>
 
-        <DataTemplate DataType="vm:ImportStepViewModel">
-            <StackPanel Spacing="14">
-                <TextBlock x:Name="ImportMessageText" Text="{Binding Message}" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
-                           IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                <Border Classes="frCard">
-                    <StackPanel Spacing="8">
-                        <TextBlock Classes="kcapLabel" Text="Agents" />
-                        <ItemsControl x:Name="ImportVendorsList" ItemsSource="{Binding Vendors}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel ItemWidth="220" ItemSpacing="8" LineSpacing="8" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <CheckBox x:Name="ImportVendorCheckBox" Content="{Binding Label}"
-                                              IsChecked="{Binding IsSelected, Mode=TwoWay}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
-
-                <Border Classes="frCard">
-                    <StackPanel Spacing="8">
-                        <TextBlock Classes="kcapLabel" Text="What to import" />
-                        <RadioButton x:Name="EverythingChoice" GroupName="ImportScope" Content="All sessions from those agents"
-                                     IsChecked="{Binding EverythingSelected, Mode=TwoWay}" />
-                        <RadioButton x:Name="OrgChoice" GroupName="ImportScope" Content="One organization"
-                                     IsChecked="{Binding OrgSelected, Mode=TwoWay}" />
-                        <TextBox x:Name="OrgTextBox" Classes="kcapField" PlaceholderText="acme"
-                                 Text="{Binding OrgText, Mode=TwoWay}" IsVisible="{Binding OrgSelected}" />
-                        <RadioButton x:Name="RepoChoice" GroupName="ImportScope" Content="One repository"
-                                     IsChecked="{Binding RepoSelected, Mode=TwoWay}" />
-                        <TextBox x:Name="RepoTextBox" Classes="kcapField" PlaceholderText="owner/name"
-                                 Text="{Binding RepoText, Mode=TwoWay}" IsVisible="{Binding RepoSelected}" />
-                    </StackPanel>
-                </Border>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button x:Name="RunImportButton" Classes="kcapPrimary" Content="Import" Command="{Binding RunCommand}" />
-                    <Button x:Name="CancelImportButton" Classes="kcapChip" Content="Cancel" Command="{Binding CancelCommand}"
-                            IsVisible="{Binding Busy}" />
-                    <TextBlock x:Name="ImportStatusText" Classes="kcapHint" Text="{Binding Status}" TextWrapping="Wrap" VerticalAlignment="Center" />
-                </StackPanel>
-
-                <TextBlock x:Name="ImportTruncationText" Classes="kcapHint" Text="…older lines dropped" FontStyle="Italic"
-                           IsVisible="{Binding Truncated}" />
-                <ItemsControl x:Name="ImportLog" ItemsSource="{Binding Log}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="x:String">
-                            <TextBlock Text="{Binding}" FontSize="12" LetterSpacing="0.2"
-                                       Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </StackPanel>
+        <DataTemplate DataType="vm:HistoryStepViewModel">
+            <views:HistoryPaneView />
         </DataTemplate>
 
         <DataTemplate DataType="vm:DaemonStepViewModel">

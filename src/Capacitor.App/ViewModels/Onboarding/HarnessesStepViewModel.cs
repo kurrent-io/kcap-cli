@@ -35,6 +35,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     readonly Action<IEnumerable<HarnessId>>                                     _stampOffered;
 
     bool    _detected;
+    bool    _declinedAll;
     bool    _installed;
     bool    _busy;
     bool    _satisfied;
@@ -135,6 +136,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public int SelectedCount => Rows.Count(r => r.Selected);
 
+    /// The harnesses this machine records, once the page has been answered: none after Not now.
+    public IReadOnlyList<HarnessId> Recording => _declinedAll ? [] : [.. Rows.Where(r => r.Record).Select(r => r.Id)];
+
     public string? NextLabel =>
         _installed                 ? "Continue"
         : !CliAvailable            ? "Continue"
@@ -182,7 +186,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         if (direction == WizardNavigation.Back) return true;
 
         _stampOffered(Rows.Select(r => r.Id));
-        if (direction == WizardNavigation.Skip) return true;
+        _declinedAll = direction == WizardNavigation.Skip;
+        if (_declinedAll) return true;
 
         if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
         if (_installed || !CliAvailable) return true;
