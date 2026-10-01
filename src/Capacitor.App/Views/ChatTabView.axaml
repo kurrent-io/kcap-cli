@@ -279,10 +279,13 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Inset to the cards' text edge; a horizontal StackPanel here would never wrap it. -->
+                <!-- Inset to the cards' text edge; a horizontal StackPanel here would never wrap it. The
+                     band does not scroll, so the line cap keeps a server-sent reason from pushing the
+                     composer off-screen. -->
                 <TextBlock x:Name="ChatActivityNote" Grid.Row="2" Margin="14,0,14,8" IsVisible="{Binding ShowsActivityNote}"
-                           Text="{Binding ActivityNote}" Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
-                           TextWrapping="Wrap" />
+                           Text="{Binding ActivityNote}" ToolTip.Tip="{Binding ActivityNote}"
+                           Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
+                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
 
                 <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
