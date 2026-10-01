@@ -176,12 +176,11 @@ public partial class App : Application {
     TrayIconManager? _tray;
     DaemonRestartPendingWatcher? _restartPending;
     // Wizard-first mode only: the sign-in driver shutdown cancels and awaits before anything is
-    // disposed, the Import step whose in-flight run shutdown must also kill (closing the window
-    // never navigates through ImportStepViewModel.CanLeaveAsync), and
-    // the window that owns dialogs while no main window exists. All three are cleared again by the
-    // handoff at the end of RunWizardModeAsync.
+    // disposed, and the window that owns dialogs while no main window exists. Both are cleared again
+    // by the handoff at the end of RunWizardModeAsync.
     WizardAuthService? _wizardAuth;
-    ImportStepViewModel? _wizardImport;
+    // The History step, kept past the handoff: its import outlives onboarding and only shutdown stops it.
+    HistoryStepViewModel? _historyImport;
     Window? _wizardWindow;
     // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
     // it over so the main surface opens in place rather than in a second window.
@@ -292,7 +291,6 @@ public partial class App : Application {
             // error window here would both lie and outlive the quit.
             _wizardWindow = null;
             _wizardAuth = null;
-            _wizardImport = null;
         } catch (Exception ex) {
             // BEFORE any await: a shutdown request can arrive while cleanup below is still
             // awaiting (or if the helper itself throws), and the deferred path reads this.
@@ -343,7 +341,8 @@ public partial class App : Application {
             _home = null;
             _rail = null;
             _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
-            _wizardImport = null; // same — any in-flight run already settled through the wizard's own close path
+            if (_historyImport is { } history) await history.CancelActiveRunAsync();
+            _historyImport = null;
             _wizardWindow = null;
         }
     }
@@ -919,7 +918,7 @@ public partial class App : Application {
             ShutdownToken: _shutdown.Token));
 
         _wizardAuth = graph.Auth;
-        _wizardImport = graph.Import;
+        _historyImport = graph.History;
         var window = ShowWizardWindow(desktop, graph.ViewModel, _appState);
         _wizardWindow = window;
 
@@ -931,11 +930,9 @@ public partial class App : Application {
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
         var quiesced = await HandoffAfterWizardAsync(
-            graph.Auth, () => lane.QuiescedAsync(CancellationToken.None), QuiesceShutdownCap, channel, _time,
-            graph.Import);
+            graph.Auth, () => lane.QuiescedAsync(CancellationToken.None), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
-        _wizardImport = null;
         _wizardWindow = null;
         // A finished onboarding leaves its window up for the main surface to take over; a window the
         // user closed is gone, and the main surface builds its own.
@@ -1024,12 +1021,12 @@ public partial class App : Application {
         }
     }
 
-    /// <summary>Close boundary: settle sign-in, cancel any import, quiesce the lane under the cap, then transfer the channel.</summary>
+    /// <summary>Close boundary: settle sign-in, quiesce the lane under the cap, then transfer the
+    /// channel. A history import keeps running into the main window.</summary>
     internal static async Task<bool> HandoffAfterWizardAsync(
             WizardAuthService? auth, Func<Task> laneQuiescedAsync, TimeSpan cap, OutcomeChannel channel,
-            TimeProvider time, ImportStepViewModel? import = null) {
+            TimeProvider time) {
         await CancelAndAwaitAuthAsync(auth).ConfigureAwait(false);
-        if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
         var quiesced = await AwaitQuiescedAsync(laneQuiescedAsync, cap, time).ConfigureAwait(false);
         channel.TransferConsumer();
 
@@ -1747,8 +1744,8 @@ public partial class App : Application {
 
         // An in-flight sign-in always settles, mutations get a bounded chance
         // to — both while the UI is still up, before teardown.
-        if (_wizardAuth is not null || _wizardImport is not null || _lifecycle is not null || _lane is not null)
-            await QuiesceAppAsync(_wizardAuth, _wizardImport, _lifecycle, _lane, QuiesceShutdownCap, _time)
+        if (_wizardAuth is not null || _historyImport is not null || _lifecycle is not null || _lane is not null)
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _lifecycle, _lane, QuiesceShutdownCap, _time)
                 .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -1803,7 +1800,7 @@ public partial class App : Application {
 
     /// <summary>Quiesces shutdown in two phases: sign-in and import finish uncapped so an in-progress commit isn't torn down, then lifecycle/lane quiesce under the cap.</summary>
     internal static async Task QuiesceAppAsync(
-            WizardAuthService? auth, ImportStepViewModel? import,
+            WizardAuthService? auth, HistoryStepViewModel? import,
             DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time) {
         var authTerminal = CancelAndAwaitAuthAsync(auth);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);

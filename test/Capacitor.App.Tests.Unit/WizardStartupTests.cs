@@ -553,52 +553,44 @@ public class WizardStartupTests {
     }
 
     // The close contract (KillTree + await exit) must run from the close boundary, not only CanLeaveAsync.
+    static ImportDiscoveryReport OneRepo() =>
+        new([new ImportDiscoveryRepo("acme", "web", 3, DateTimeOffset.UnixEpoch, [])], 0, []);
+
+    static async Task<HistoryStepViewModel> ImportingAsync(FakeKcapCli cli) {
+        cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(OneRepo());
+        var history = new HistoryStepViewModel(cli, () => [HarnessId.Claude], action => action(), "test-mac", TimeProvider.System);
+        await history.OnEnterAsync(CancellationToken.None);
+        await history.Discovery;
+        await history.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+        return history;
+    }
+
+    /// The import outlives onboarding: closing the wizard settles sign-in and hands the channel on,
+    /// and leaves the run to finish in the main window.
     [Test]
-    public async Task Handoff_cancels_an_in_flight_import_and_awaits_it_before_transferring() {
+    public async Task Handoff_leaves_a_running_history_import_alone() {
         await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            var cli = new FakeKcapCli();
             var entered = new TaskCompletionSource();
-            var cancelObserved = new TaskCompletionSource();
-            var release = new TaskCompletionSource();
-            harness.Cli.ImportBehavior = async (_, _, ct) => {
+            var cancelled = false;
+            cli.ImportBehavior = async (_, _, ct) => {
                 entered.TrySetResult();
-                await using var reg = ct.Register(() => cancelObserved.TrySetResult());
-                await cancelObserved.Task.ConfigureAwait(false);
-                // Mirrors ProcessRunner.RunStreamingAsync: the killed tree's pumps drain
-                // to EOF before the streaming call itself returns/throws.
-                await release.Task.ConfigureAwait(false);
-                throw new OperationCanceledException(ct);
+                await using var reg = ct.Register(() => cancelled = true);
+                await Task.Delay(Timeout.Infinite, ct);
+                return new StreamingResult(0, false, []);
             };
 
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var import = graph.Import;
-            import.Vendors[0].IsSelected = true; // RunCoreAsync no-ops with nothing selected
-            _ = import.RunAsync();
+            var history = await ImportingAsync(cli);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await Assert.That(import.Busy).IsTrue();
 
-            var channel = new OutcomeChannel();
-            using var wizardCts = new CancellationTokenSource();
-            var wizardConsumer = Task.Run(() => AppUnderTest.ConsumeMutationOutcomesAsync(
-                channel, new FakeLifecycleSurface(), WizardFixtures.NeverRunMutation,
-                WizardFixtures.FixedTerminalPath("/usr/bin"), () => null, wizardCts.Token));
+            await AppUnderTest.HandoffAfterWizardAsync(auth: null, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System)
+                .WaitAsync(TimeSpan.FromSeconds(5));
 
-            var handoff = AppUnderTest.HandoffAfterWizardAsync(
-                auth: null, () => Task.CompletedTask, Cap, channel, TimeProvider.System, import);
-            await cancelObserved.Task.WaitAsync(TimeSpan.FromSeconds(5)); // CancelActiveRunAsync reached the CLI's own ct
-            await Task.Delay(50);
+            await Assert.That(cancelled).IsFalse();
+            await Assert.That(history.Run!.Running).IsTrue();
 
-            await Assert.That(handoff.IsCompleted).IsFalse(); // still draining the killed import
-            Assert.Throws<InvalidOperationException>(() => { _ = channel.ConsumeAsync(CancellationToken.None); });
-
-            release.SetResult();
-            await handoff.WaitAsync(TimeSpan.FromSeconds(5));
-
-            await Assert.That(import.Busy).IsFalse(); // the run fully finished before the handoff returned
-            _ = channel.ConsumeAsync(CancellationToken.None); // transferred only now
-
-            await wizardCts.CancelAsync();
-            await wizardConsumer.WaitAsync(TimeSpan.FromSeconds(5));
+            await history.CancelActiveRunAsync();
 
             return true;
         });
@@ -607,26 +599,21 @@ public class WizardStartupTests {
     [Test]
     public async Task Shutdown_quiesce_cancels_an_in_flight_import_and_awaits_it() {
         await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            var cli = new FakeKcapCli();
             var entered = new TaskCompletionSource();
-            var cancelObserved = new TaskCompletionSource();
-            harness.Cli.ImportBehavior = async (_, _, ct) => {
+            cli.ImportBehavior = async (_, _, ct) => {
                 entered.TrySetResult();
-                await using var reg = ct.Register(() => cancelObserved.TrySetResult());
-                await cancelObserved.Task.ConfigureAwait(false);
-                throw new OperationCanceledException(ct);
+                await Task.Delay(Timeout.Infinite, ct);
+                return new StreamingResult(0, false, []);
             };
 
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var import = graph.Import;
-            import.Vendors[0].IsSelected = true;
-            _ = import.RunAsync();
+            var history = await ImportingAsync(cli);
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-            await AppUnderTest.QuiesceAppAsync(auth: null, import, lifecycle: null, lane: null, Cap, TimeProvider.System)
+            await AppUnderTest.QuiesceAppAsync(auth: null, history, lifecycle: null, lane: null, Cap, TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
-            await Assert.That(import.Busy).IsFalse();
+            await Assert.That(history.Run!.State).IsEqualTo(ImportRunState.Cancelled);
 
             return true;
         });
@@ -679,21 +666,24 @@ public class WizardStartupTests {
         });
     }
 
+    /// History reads exactly the harnesses the Harnesses page left recording.
     [Test]
-    public async Task The_same_detection_feed_is_shared_by_the_harnesses_and_import_steps() {
+    public async Task History_discovers_for_the_harnesses_left_recording() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            harness.Detected = VendorDetection.Build("claude", "cursor");
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var agents = graph.Steps.OfType<HarnessesStepViewModel>().Single();
-            var import = graph.Steps.OfType<ImportStepViewModel>().Single();
+            var harnesses = graph.Steps.OfType<HarnessesStepViewModel>().Single();
 
-            await agents.OnEnterAsync(CancellationToken.None);
-            await import.OnEnterAsync(CancellationToken.None);
+            await harnesses.OnEnterAsync(CancellationToken.None);
+            harnesses.Rows.Single(r => r.Label == "Cursor").Record = false;
+            await harnesses.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            await graph.History.OnEnterAsync(CancellationToken.None);
+            await graph.History.Discovery;
 
-            // ONE feed instance exists (the factory ran once) and BOTH steps went through it.
+            await Assert.That(harness.Cli.DiscoverCalls.Single()).IsEquivalentTo(["--claude"]);
             await Assert.That(harness.DetectionFactoryCalls).IsEqualTo(1);
-            await Assert.That(harness.DetectCalls).IsEqualTo(2);
 
             return true;
         });

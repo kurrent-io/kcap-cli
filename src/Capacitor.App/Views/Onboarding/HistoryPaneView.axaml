@@ -1,0 +1,164 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             x:Class="Capacitor.App.Views.Onboarding.HistoryPaneView"
+             x:DataType="vm:HistoryStepViewModel">
+    <StackPanel Spacing="14">
+        <Border Classes="frCard">
+            <StackPanel Spacing="12">
+                <!-- Discovery reads every harness's history off disk; it can take a few seconds. -->
+                <StackPanel Spacing="14" IsVisible="{Binding Looking}">
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                        <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource FrAccentWashBrush}">
+                            <Panel Classes="frSpinner">
+                                <Ellipse />
+                                <Path Classes.kcapSpinning="{Binding Looking}" />
+                            </Panel>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Classes="frLabel" FontSize="15" Text="Looking for history" />
+                            <TextBlock Classes="frBody" FontSize="13">
+                                <Run Text="on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}" /><Run Text=" — usually a few seconds" />
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
+                                Background="#1C2427" Classes="pulsing" />
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
+                                Background="#1C2427" Classes="pulsing" />
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
+                                Background="#1C2427" Classes="pulsing" />
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock x:Name="HistoryEmptyText" Classes="frBody" Text="{Binding EmptyMessage}"
+                           IsVisible="{Binding EmptyMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                <StackPanel IsVisible="{Binding HasRepos}">
+                    <!-- From: informational, not a control. -->
+                    <Border Classes="frRowRule" Padding="0,0,0,9">
+                        <StackPanel Orientation="Horizontal" Spacing="14">
+                            <TextBlock Classes="frMicro" Text="FROM" VerticalAlignment="Center" />
+                            <ItemsControl ItemsSource="{Binding FromLabels}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" ItemSpacing="14" LineSpacing="4" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <TextBlock FontFamily="{StaticResource FrMonoFont}" FontSize="10.5">
+                                            <Run Text="✓ " Foreground="{StaticResource KcapSuccessBrush}" /><Run Text="{Binding}" Foreground="{StaticResource KcapTextBrush}" />
+                                        </TextBlock>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Header: the legend sits over the tracks, each label on its own stop. -->
+                    <Border Classes="frRowRule" Padding="0,9,0,8">
+                        <Grid ColumnDefinitions="*,228" ColumnSpacing="10">
+                            <TextBlock Classes="frMicro" VerticalAlignment="Bottom">
+                                <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource KcapTextBrush}" />
+                            </TextBlock>
+                            <Grid Grid.Column="1" ColumnDefinitions="*,*,*">
+                                <TextBlock Classes="frMicro" Text="SKIP" HorizontalAlignment="Left" />
+                                <TextBlock Grid.Column="1" Classes="frMicro" Text="ONLY ME" HorizontalAlignment="Center" />
+                                <TextBlock Grid.Column="2" Classes="frMicro" Text="SHARED" HorizontalAlignment="Right" />
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <ItemsControl x:Name="OwnerGroups" ItemsSource="{Binding Groups}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HistoryOwnerGroup">
+                                <Border Classes="frRowRule">
+                                    <StackPanel>
+                                        <Grid ColumnDefinitions="*,228" ColumnSpacing="10" Margin="2,9">
+                                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                <TextBlock x:Name="OwnerText" Classes="frLabel" FontSize="13" Text="{Binding Owner}" />
+                                                <TextBlock Classes="frSignal" Text="{Binding SignalLine}" />
+                                            </StackPanel>
+                                            <views:ImportTrack Grid.Column="1" x:Name="OwnerTrack" VerticalAlignment="Center"
+                                                               Stop="{Binding Stop, Mode=TwoWay}" />
+                                        </Grid>
+                                        <ItemsControl ItemsSource="{Binding Repos}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:HistoryRepoRow">
+                                                    <Grid ColumnDefinitions="*,228" ColumnSpacing="10" Margin="16,9,2,9">
+                                                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                            <TextBlock x:Name="RepoText" Classes="frLabel" FontSize="13" Text="{Binding Name}"
+                                                                       TextWrapping="Wrap" />
+                                                            <TextBlock Classes="frSignal" Text="{Binding SignalLine}" />
+                                                        </StackPanel>
+                                                        <views:ImportTrack Grid.Column="1" x:Name="RepoTrack" VerticalAlignment="Center"
+                                                                           Stop="{Binding Stop, Mode=TwoWay}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Classes="frNote" Text="{Binding UnmatchedNote}" Margin="0,10,0,0"
+                               IsVisible="{Binding UnmatchedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <!-- How far back. -->
+                <StackPanel Spacing="8" IsVisible="{Binding HasRepos}" Margin="0,4,0,0">
+                    <TextBlock Classes="frMicro" Text="HOW MUCH HISTORY" />
+                    <ItemsControl x:Name="WindowOptions" ItemsSource="{Binding Windows}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <UniformGrid Rows="1" ColumnSpacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HistoryWindowOption">
+                                <RadioButton Classes="frSegment" GroupName="HistoryWindow" IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Classes="frLabel" FontSize="12.5" Text="{Binding Label}" />
+                                        <TextBlock Classes="frSignal" Text="{Binding CountLabel}"
+                                                   IsVisible="{Binding CountLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                </RadioButton>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+
+                <!-- Titling runs the user's own agent, on their quota: theirs to turn off. -->
+                <Border Classes="frCallout" IsVisible="{Binding TitlingOffered}" Margin="0,4,0,0">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                        <CheckBox x:Name="TitleLocallyCheckBox" Classes="frCheck" VerticalAlignment="Top" Margin="0,2,0,0"
+                                  IsChecked="{Binding TitleLocally, Mode=TwoWay}" />
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Classes="frLabel" FontSize="13" Text="Name these sessions as they import" />
+                            <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
+                                       Text="This uses your own agent and quota. Untitled sessions stay searchable; titles just make them easier to recognise." />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Import is all this page decides; which repositories record from now on is a setting. -->
+                <TextBlock Classes="frNote" IsVisible="{Binding HasRepos}">
+                    <Run Text="To record only some repositories from now on, set " /><Run Text="allowed_repos" FontFamily="{StaticResource FrMonoFont}"
+                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=" or " /><Run Text="excluded_repos" FontFamily="{StaticResource FrMonoFont}"
+                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=" in your configuration." />
+                </TextBlock>
+                <Button x:Name="RepoSettingsDocsButton" Classes="frLink" HorizontalAlignment="Left" Content="REPOSITORY SETTINGS IN THE DOCS →"
+                        Click="OnDocsClick" IsVisible="{Binding HasRepos}" Margin="0,-6,0,0" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="frNote" IsVisible="{Binding DeclineVisible}">
+            <Run Text="Not now means Capacitor starts its history from today. Nothing is deleted either way, and you can widen the window later with " /><Run Text="kcap import" FontFamily="{StaticResource FrMonoFont}" Foreground="{StaticResource FrMutedBrush}" /><Run Text="." />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

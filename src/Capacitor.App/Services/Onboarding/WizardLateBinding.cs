@@ -60,6 +60,9 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
     public Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) =>
         bind().DetachedStartAsync(bootAttemptId, ct);
 
+    public Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) =>
+        bind().ImportDiscoverAsync(vendorFlags, ct);
+
     public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) =>
         bind().PluginInstallAsync(vendorFlag, ct, options);
 
