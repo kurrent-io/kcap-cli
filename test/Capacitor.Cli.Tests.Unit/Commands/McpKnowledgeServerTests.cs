@@ -153,6 +153,18 @@ public class McpKnowledgeServerTests {
             await Assert.That(property.Items).IsNotNull();
     }
 
+    [Test]
+    public async Task A_facts_sources_pass_through_and_the_fact_tools_describe_them() {
+        const string body = """{"items":[{"fact_hash":"h","sources":{"source_kinds":["session_eval","work_item_eval"],"work_items":[{"work_item_id":"w","key":"AI-1"}]}}],"next_cursor":null}""";
+
+        var response = JsonNode.Parse(await CallAsync(new RecordingHandler(body: body), "list_facts", "{}"))!;
+
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        await Assert.That(JsonNode.DeepEquals(JsonNode.Parse(text), JsonNode.Parse(body))).IsTrue();
+        foreach (var tool in McpKnowledgeServer.BuildToolsList().Where(t => t.Name is "list_facts" or "search_facts"))
+            await Assert.That(tool.Description).Contains("sources");
+    }
+
     sealed class RecordingHandler(HttpStatusCode status = HttpStatusCode.OK, string body = """{"ok":true}""") : HttpMessageHandler {
         public List<(HttpMethod Method, string Path)> Calls { get; } = [];
 
