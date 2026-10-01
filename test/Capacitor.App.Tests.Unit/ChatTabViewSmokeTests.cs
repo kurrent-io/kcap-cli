@@ -1601,8 +1601,11 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
             var queued = host.View.FindControl<Border>("QueuedMessagesBanner")!;
-            var note = host.View.FindControl<StackPanel>("ChatActivityNote")!;
+            var note = host.View.FindControl<TextBlock>("ChatActivityNote")!;
             var composer = host.View.FindControl<Border>("ComposerCard")!;
+            var band = host.View.FindControl<Border>("ComposerBand")!;
+            foreach (Control part in new Control[] { banner, queued, note, composer })
+                await Assert.That(part.GetVisualAncestors().Contains(band)).IsTrue().Because($"{part.Name} belongs in the composer band");
             await Assert.That(banner.IsVisible).IsFalse();
             await Assert.That(Grid.GetRow(banner)).IsLessThan(Grid.GetRow(queued));
             await Assert.That(Grid.GetRow(queued)).IsLessThan(Grid.GetRow(note));
