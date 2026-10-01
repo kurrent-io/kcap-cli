@@ -38,230 +38,30 @@ public class AgentDetectionFeedTests {
         // Same probe, two different crafted PATHs: the outcome must track the probe, not
         // whatever the real process PATH happens to contain on this machine.
         var probe = new FakeLoginShellProbe { TerminalPathBehavior = _ => Task.FromResult<string?>(emptyDir) };
-        var withoutClaude = await AgentsStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
+        var withoutClaude = await HarnessesStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
 
         probe.TerminalPathBehavior = _ => Task.FromResult<string?>(claudeDir);
-        var withClaude = await AgentsStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
+        var withClaude = await HarnessesStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
 
-        await Assert.That(withoutClaude.Contains(HarnessId.Claude)).IsFalse();
-        await Assert.That(withClaude.Contains(HarnessId.Claude)).IsTrue();
+        await Assert.That(withoutClaude.ContainsKey(HarnessId.Claude)).IsFalse();
+        await Assert.That(withClaude[HarnessId.Claude].BinaryFound).IsTrue();
     }
 
     [Test]
     public async Task Falls_back_to_the_process_PATH_when_the_probe_is_inconclusive() {
         var probe = new FakeLoginShellProbe { TerminalPathBehavior = _ => Task.FromResult<string?>(null) };
 
-        var actual = await AgentsStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
+        var actual = await HarnessesStepViewModel.BuildDetectionFeed(probe, Home)(CancellationToken.None);
 
         // Pins the process-PATH fallback, so expected must come from the same resolution
         // BuildDetectionFeed falls back to, not a hermetic registry.
         var harnesses = HarnessRegistry.FromEnvironment(Home);
         var expected  = harnesses.Where(h => harnesses.Detected(h.Id)).Select(h => h.Id);
 
-        await Assert.That(actual).IsEquivalentTo(expected);
+        await Assert.That(actual.Keys).IsEquivalentTo(expected);
     }
 }
 
-/// Owns ReactiveCommands (per-row Retry + Install), so every test runs through the real headless
-/// session like ShimStepViewModel/SignInStepViewModel.
-public class AgentsStepViewModelTests {
-    sealed class Harness {
-        public readonly FakeKcapCli Cli = new();
-        public readonly IReadOnlySet<HarnessId> Detected;
-        public int DetectCallCount;
-        public readonly AgentsStepViewModel Vm;
-
-        public Harness(IReadOnlySet<HarnessId>? detected = null) {
-            Detected = detected ?? VendorDetection.Build();
-            Vm = new AgentsStepViewModel(Cli, ct => {
-                DetectCallCount++;
-                return Task.FromResult(Detected);
-            });
-        }
-
-        public AgentVendorRow Row(string label) => Vm.Rows.First(r => r.Label == label);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task OnEnterAsync_pre_checks_detected_vendors_only() {
-        var (claude, codex, cursor) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(VendorDetection.Build("claude", "cursor"));
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-
-            return (h.Row("Claude Code").IsSelected, h.Row("Codex").IsSelected, h.Row("Cursor").IsSelected);
-        });
-
-        await Assert.That(claude).IsTrue();
-        await Assert.That(codex).IsFalse();
-        await Assert.That(cursor).IsTrue();
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task OnEnterAsync_detects_once_and_caches_across_repeated_entries() {
-        var calls = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-
-            return h.DetectCallCount;
-        });
-
-        await Assert.That(calls).IsEqualTo(1);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Install_runs_selected_vendors_sequentially_Claude_first_then_flag_order() {
-        var calls = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            // Selection order is deliberately scrambled — the RUN order must follow the vendor
-            // list (Claude first), not click order.
-            h.Row("Cursor").IsSelected      = true;
-            h.Row("Claude Code").IsSelected = true;
-            h.Row("Gemini").IsSelected      = true;
-
-            await h.Vm.InstallCommand.Execute().ToTask();
-
-            return h.Cli.PluginInstallCalls.ToList();
-        });
-
-        await Assert.That(calls).IsEquivalentTo([null, "--cursor", "--gemini"], CollectionOrdering.Matching);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_failed_vendor_does_not_block_the_next_one_successes_stand() {
-        var (codexStatus, cursorStatus, callCount) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            h.Row("Codex").IsSelected  = true;
-            h.Row("Cursor").IsSelected = true;
-            h.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
-                flag == "--codex" ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
-
-            await h.Vm.InstallCommand.Execute().ToTask();
-
-            return (h.Row("Codex").Status, h.Row("Cursor").Status, h.Cli.PluginInstallCallCount);
-        });
-
-        await Assert.That(codexStatus).IsEqualTo(AgentInstallStatus.Failed);
-        await Assert.That(cursorStatus).IsEqualTo(AgentInstallStatus.Succeeded);
-        await Assert.That(callCount).IsEqualTo(2);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task An_exception_during_install_marks_the_row_failed_with_the_message() {
-        var (status, message) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            h.Row("Kiro").IsSelected = true;
-            h.Cli.PluginInstallBehavior = (_, _) => throw new InvalidOperationException("spawn failed");
-
-            await h.Vm.InstallCommand.Execute().ToTask();
-
-            return (h.Row("Kiro").Status, h.Row("Kiro").Message);
-        });
-
-        await Assert.That(status).IsEqualTo(AgentInstallStatus.Failed);
-        await Assert.That(message).IsEqualTo("spawn failed");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Retry_only_reinstalls_the_one_row_the_other_success_stands() {
-        var (codexStatus, cursorStatus, callCount, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            h.Row("Codex").IsSelected  = true;
-            h.Row("Cursor").IsSelected = true;
-            h.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
-                flag == "--codex" ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
-            await h.Vm.InstallCommand.Execute().ToTask();
-
-            h.Cli.PluginInstallBehavior = (_, _) => Task.FromResult(new ProcessResult(0, "", "", false));
-            await h.Row("Codex").RetryCommand.Execute().ToTask();
-
-            return (h.Row("Codex").Status, h.Row("Cursor").Status, h.Cli.PluginInstallCallCount, h.Vm.Satisfied);
-        });
-
-        await Assert.That(codexStatus).IsEqualTo(AgentInstallStatus.Succeeded);
-        await Assert.That(cursorStatus).IsEqualTo(AgentInstallStatus.Succeeded);
-        await Assert.That(callCount).IsEqualTo(3); // 2 initial + 1 retry
-        await Assert.That(satisfied).IsTrue(); // the retried row flipping green makes every selected row green
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Satisfied_requires_every_selected_vendor_to_succeed_and_at_least_one_selected() {
-        var (noneSelected, oneFails, allSucceed) = await AvaloniaSession.DispatchAsync(async () => {
-            var h1 = new Harness();
-            await h1.Vm.InstallCommand.Execute().ToTask();
-
-            var h2 = new Harness();
-            h2.Row("Codex").IsSelected  = true;
-            h2.Row("Cursor").IsSelected = true;
-            h2.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
-                flag == "--codex" ? new ProcessResult(1, "", "", false) : new ProcessResult(0, "", "", false));
-            await h2.Vm.InstallCommand.Execute().ToTask();
-
-            var h3 = new Harness();
-            h3.Row("Codex").IsSelected  = true;
-            h3.Row("Cursor").IsSelected = true;
-            await h3.Vm.InstallCommand.Execute().ToTask();
-
-            return (h1.Vm.Satisfied, h2.Vm.Satisfied, h3.Vm.Satisfied);
-        });
-
-        await Assert.That(noneSelected).IsFalse();
-        await Assert.That(oneFails).IsFalse();
-        await Assert.That(allSucceed).IsTrue();
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task No_CLI_shows_the_message_and_never_calls_install() {
-        var (message, cliAvailable, callCount) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            h.Cli.CliPath = null;
-            h.Row("Claude Code").IsSelected = true;
-
-            await h.Vm.RunInstallAsync();
-
-            return (h.Vm.Message, h.Vm.CliAvailable, h.Cli.PluginInstallCallCount);
-        });
-
-        await Assert.That(message).IsEqualTo("kcap CLI not found");
-        await Assert.That(cliAvailable).IsFalse();
-        await Assert.That(callCount).IsEqualTo(0);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task CanLeaveAsync_awaits_an_in_flight_install_and_never_vetoes() {
-        var (held, canLeave, status) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness();
-            h.Row("Claude Code").IsSelected = true;
-            var gate = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            h.Cli.PluginInstallBehavior = (_, _) => gate.Task;
-
-            var install = h.Vm.RunInstallAsync();
-            var leaving = h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            var held    = !leaving.IsCompleted; // proves it is genuinely waiting, not a fire-and-forget kill
-
-            gate.SetResult(new ProcessResult(0, "", "", false));
-            var canLeave = await leaving;
-            await install;
-
-            return (held, canLeave, h.Row("Claude Code").Status);
-        });
-
-        await Assert.That(held).IsTrue();
-        await Assert.That(canLeave).IsTrue();
-        await Assert.That(status).IsEqualTo(AgentInstallStatus.Succeeded);
-    }
-}
-
-/// Owns ReactiveCommands too, so also runs through the real headless session.
 public class ImportStepViewModelTests {
     sealed class Harness {
         public readonly FakeKcapCli Cli = new();
@@ -609,29 +409,22 @@ public class ImportStepViewModelTests {
 
 /// Template smoke coverage, mirroring WizardSimpleStepsTests: named controls per template, wired
 /// through the real window and a real navigation from Agents into Import.
-public class AgentsImportTemplateTests {
+public class ImportTemplateTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_window_selects_a_template_for_Agents_and_Import_steps() {
+    public async Task The_window_selects_a_template_for_the_Import_step() {
         var result = await AvaloniaSession.DispatchAsync(async () => {
             var cli    = new FakeKcapCli();
             var detect = new Func<CancellationToken, Task<IReadOnlySet<HarnessId>>>(_ => Task.FromResult(VendorDetection.Build("claude")));
 
-            var agents = new AgentsStepViewModel(cli, detect);
             var import = new ImportStepViewModel(cli, detect, action => action());
             var done   = new DoneStepViewModel(() => []);
 
-            var vm = new OnboardingViewModel([agents, import, done]);
+            var vm = new OnboardingViewModel([import, done]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var installButton   = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "InstallAgentsButton");
-            var agentCheckBoxes = window.GetVisualDescendants().OfType<CheckBox>().Where(c => c.Name == "AgentCheckBox").ToList();
-
-            await vm.NextCommand.Execute().ToTask(); // Agents -> Import
             Dispatcher.UIThread.RunJobs();
 
             var runButton        = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "RunImportButton");
@@ -650,12 +443,10 @@ public class AgentsImportTemplateTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (installButton, AgentRows: agentCheckBoxes.Count, runButton, everythingChoice, everythingWasChecked,
+            return (runButton, everythingChoice, everythingWasChecked,
                 ImportRows: vendorCheckBoxes.Count, stepScroll, orgHidden, orgShown);
         });
 
-        await Assert.That(result.installButton).IsNotNull();
-        await Assert.That(result.AgentRows).IsEqualTo(9);
         await Assert.That(result.runButton).IsNotNull();
         await Assert.That(result.everythingChoice).IsNotNull();
         await Assert.That(result.everythingWasChecked).IsTrue();
@@ -663,43 +454,5 @@ public class AgentsImportTemplateTests {
         await Assert.That(result.stepScroll).IsNotNull();
         await Assert.That(result.orgHidden).IsFalse();
         await Assert.That(result.orgShown).IsTrue();
-    }
-
-    /// Plugin stderr on a failed row can be arbitrarily long. Retry must stay inside the
-    /// 220-DIP wrap-panel slot rather than being pushed past it.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_long_agent_failure_keeps_retry_inside_the_item() {
-        var (retryVisible, retryRight, itemWidth) = await AvaloniaSession.DispatchAsync(async () => {
-            var cli = new FakeKcapCli {
-                PluginInstallBehavior = (_, _) => Task.FromResult(
-                    new ProcessResult(1, "", new string('x', 400), false)),
-            };
-            var detect = new Func<CancellationToken, Task<IReadOnlySet<HarnessId>>>(
-                _ => Task.FromResult(VendorDetection.Build()));
-            var agents = new AgentsStepViewModel(cli, detect);
-            agents.Rows.First(r => r.Label == "Codex").IsSelected = true;
-            await agents.InstallCommand.Execute().ToTask();
-
-            var vm = new OnboardingViewModel([agents, new DoneStepViewModel(() => [])]);
-            await vm.PendingEnterForTesting;
-
-            var window = new MainWindow { Onboarding = vm };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var retry = window.GetVisualDescendants().OfType<Button>()
-                .First(b => b.Name == "AgentRetryButton" && b.IsVisible);
-            var item = (Grid)retry.Parent!;
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            return (retry.IsVisible, retry.Bounds.Right, item.Bounds.Width);
-        });
-
-        await Assert.That(retryVisible).IsTrue();
-        await Assert.That(itemWidth).IsLessThanOrEqualTo(220);
-        await Assert.That(retryRight).IsLessThanOrEqualTo(itemWidth);
     }
 }

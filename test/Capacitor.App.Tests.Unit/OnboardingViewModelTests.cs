@@ -43,7 +43,7 @@ public class OnboardingViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Steps_excludes_non_applicable_entries_and_starts_on_the_first_applicable_one() {
         var (stepIds, currentId) = await AvaloniaSession.DispatchAsync(async () => {
-            var shim = new FakeWizardStep(WizardStepId.Shim) { Applicable = false };
+            var shim = new FakeWizardStep(WizardStepId.Defaults) { Applicable = false };
             var connect = new FakeWizardStep(WizardStepId.Welcome);
             var done = new FakeWizardStep(WizardStepId.Done);
             var vm = new OnboardingViewModel([shim, connect, done]);
@@ -421,11 +421,11 @@ public class OnboardingViewModelTests {
     public async Task TryGoTo_refuses_a_step_that_is_not_part_of_this_run() {
         var accepted = await AvaloniaSession.DispatchAsync(async () => {
             var connect = new FakeWizardStep(WizardStepId.Welcome);
-            var shim = new FakeWizardStep(WizardStepId.Shim) { Applicable = false };
+            var shim = new FakeWizardStep(WizardStepId.Defaults) { Applicable = false };
             var vm = new OnboardingViewModel([shim, connect]);
             await vm.PendingEnterForTesting;
 
-            return vm.TryGoTo(WizardStepId.Shim);
+            return vm.TryGoTo(WizardStepId.Defaults);
         });
 
         await Assert.That(accepted).IsFalse();

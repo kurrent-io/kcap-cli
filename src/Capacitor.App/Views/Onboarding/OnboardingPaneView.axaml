@@ -65,105 +65,23 @@
             <views:SignInPaneView />
         </DataTemplate>
 
-        <DataTemplate DataType="vm:ShimStepViewModel">
-            <StackPanel Spacing="14">
-                <Button x:Name="InstallShimButton" Classes="kcapPrimary" Content="Install" Command="{Binding InstallCommand}"
-                        IsEnabled="{Binding Idle}" HorizontalAlignment="Left" />
-
-                <TextBlock x:Name="ShimSuccessText" Classes="kcapHint" Text="kcap is now on your terminal PATH."
-                           IsVisible="{Binding Satisfied}" />
-
-                <TextBlock x:Name="ShimMessageText" Text="{Binding Message}" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
-                           IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-            </StackPanel>
-        </DataTemplate>
-
         <DataTemplate DataType="vm:DefaultsStepViewModel">
             <StackPanel Spacing="14">
                 <Border Classes="frCard">
-                    <StackPanel Spacing="20">
-                        <StackPanel Spacing="8">
-                            <TextBlock Classes="kcapLabel" Text="Who can see new sessions" />
-                            <ComboBox x:Name="VisibilityCombo" Classes="kcapField"
-                                      ItemsSource="{x:Static vm:DefaultsStepViewModel.VisibilityOptions}"
-                                      SelectedValueBinding="{Binding Value}" SelectedValue="{Binding Visibility, Mode=TwoWay}"
-                                      HorizontalAlignment="Stretch" MaxDropDownHeight="280">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock x:Name="VisibilityLabelText" Text="{Binding Label}"
-                                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center"
-                                                   Foreground="{StaticResource KcapTextBrush}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                            </ComboBox>
-                            <Border x:Name="PublicNoticeBanner" IsVisible="{Binding PublicSelected}"
-                                    Background="{StaticResource KcapWarningDimBrush}"
-                                    BorderBrush="{StaticResource KcapWarningBrush}" BorderThickness="1"
-                                    CornerRadius="8" Padding="12,10">
-                                <TextBlock x:Name="PublicNoticeText"
-                                           Text="{x:Static vm:DefaultsStepViewModel.PublicNotice}"
-                                           TextWrapping="Wrap" FontSize="12" LineHeight="18" LetterSpacing="0.2"
-                                           Foreground="{StaticResource KcapWarningBrush}" />
-                            </Border>
-                        </StackPanel>
-
-                        <StackPanel Spacing="8">
-                            <TextBlock Classes="kcapLabel" Text="Name" />
-                            <TextBlock Classes="kcapHint" Text="How this machine identifies itself to the server."
-                                       TextWrapping="Wrap" />
-                            <TextBox x:Name="DaemonNameBox" Classes="kcapField" Text="{Binding DaemonName, Mode=TwoWay}" />
-                        </StackPanel>
+                    <StackPanel Spacing="8">
+                        <TextBlock Classes="frMicro" Text="NAME" />
+                        <TextBlock Classes="frDetail" Text="How this machine identifies itself to the server." />
+                        <TextBox x:Name="DaemonNameBox" Classes="frField" Text="{Binding DaemonName, Mode=TwoWay}" />
                     </StackPanel>
                 </Border>
 
-                <TextBlock x:Name="DefaultsMessageText" Text="{Binding Message}" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
+                <TextBlock x:Name="DefaultsMessageText" Classes="frError" Text="{Binding Message}"
                            IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
         </DataTemplate>
 
-        <DataTemplate DataType="vm:AgentsStepViewModel">
-            <StackPanel Spacing="14">
-                <TextBlock x:Name="AgentsMessageText" Text="{Binding Message}" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
-                           IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                <Border Classes="frCard">
-                    <StackPanel Spacing="8">
-                        <TextBlock Classes="kcapLabel" Text="Agents" />
-                        <ItemsControl x:Name="AgentsList" ItemsSource="{Binding Rows}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel ItemWidth="220" ItemSpacing="8" LineSpacing="8" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <CheckBox x:Name="AgentCheckBox" Content="{Binding Label}"
-                                                      IsChecked="{Binding IsSelected, Mode=TwoWay}" />
-                                            <TextBlock x:Name="AgentGlyphText" Text="{Binding Glyph}" FontWeight="Bold"
-                                                       VerticalAlignment="Center" Foreground="{StaticResource KcapMutedBrush}" />
-                                        </StackPanel>
-                                        <Button x:Name="AgentRetryButton" Grid.Column="1" Classes="kcapChip" Content="Retry"
-                                                Command="{Binding RetryCommand}" IsVisible="{Binding Failed}"
-                                                VerticalAlignment="Center" />
-                                        <TextBlock x:Name="AgentRowMessageText" Grid.Row="1" Grid.ColumnSpan="2"
-                                                   Classes="kcapHint" Text="{Binding Message}" TextWrapping="Wrap"
-                                                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
-
-                <Button x:Name="InstallAgentsButton" Classes="kcapPrimary" Content="Install" Command="{Binding InstallCommand}"
-                        HorizontalAlignment="Left" />
-            </StackPanel>
+        <DataTemplate DataType="vm:HarnessesStepViewModel">
+            <views:HarnessesPaneView />
         </DataTemplate>
 
         <DataTemplate DataType="vm:ImportStepViewModel">
