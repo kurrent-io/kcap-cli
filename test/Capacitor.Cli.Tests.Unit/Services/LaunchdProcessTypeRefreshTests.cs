@@ -35,7 +35,8 @@ public class LaunchdProcessTypeRefreshTests {
 
     /// <param name="bootstrapExits">Exit code of each successive bootstrap; the last repeats.</param>
     /// <param name="bootoutExit">A non-zero exit leaves the job loaded; zero unloads it.</param>
-    /// <param name="bootstrapTimesOut">Each bootstrap loads the job, then reports a timeout.</param>
+    /// <param name="bootstrapTimesOut">Each bootstrap reports a timeout; it loads the job unless it is
+    /// already loaded.</param>
     LaunchdServiceManager Manager(
             List<string[]> calls, string spawnType, bool running = true, int bootoutExit = 0,
             bool printFails = false, bool bootstrapTimesOut = false, params int[] bootstrapExits) {
@@ -52,14 +53,14 @@ public class LaunchdProcessTypeRefreshTests {
                     case "print":
                         return loaded ? (0, Print(spawnType, running), "", false) : (113, "", "Could not find service", false);
                     case "bootstrap" when bootstrapTimesOut:
-                        loaded = true;
+                        if (!loaded) (loaded, spawnType) = (true, "daemon (3)");
                         return (137, "", "", true);
                     case "bootout":
                         if (bootoutExit == 0) loaded = false;
                         return (bootoutExit, "", "", false);
                     case "bootstrap":
                         var exit = bootstrapExits.Length == 0 ? 0 : bootstrapExits[Math.Min(bootstraps++, bootstrapExits.Length - 1)];
-                        if (exit == 0) loaded = true;
+                        if (exit == 0) (loaded, spawnType) = (true, "daemon (3)");
                         return (exit, "", exit == 0 ? "" : "Bootstrap failed: 5: Input/output error", false);
                     default:
                         return (0, "", "", false);
@@ -273,5 +274,37 @@ public class LaunchdProcessTypeRefreshTests {
         await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Reloaded);
         await Assert.That(error).IsNull();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    /// <summary>A bootout that did not take leaves the old job loaded, so a timed-out bootstrap that then
+    /// finds the label loaded as Adaptive has not reloaded anything.</summary>
+    [Test]
+    public async Task Timed_out_bootstrap_over_the_old_adaptive_job_is_not_a_reload() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        Seed(AdaptivePlist());
+        var calls = new List<string[]>();
+
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (path, content, _) => File.WriteAllText(path, content),
+            runBounded: (_, args, _) => {
+                calls.Add(args);
+                return args[0] switch {
+                    "print"     => calls.Count(c => c[0] == "print") == 2
+                                       ? (5, "", "Input/output error", false)
+                                       : (0, Print("adaptive (6)"), "", false),
+                    "bootout"   => (0, "", "", true),
+                    "bootstrap" => (137, "", "", true),
+                    _           => (0, "", "", false),
+                };
+            });
+
+        var outcome = manager.RefreshProcessType("test", () => true, Plenty, out var error);
+
+        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
+        await Assert.That(error).Contains("restored and loaded");
+        // Six calls after the daemon is asked, the most ReloadBudget reserves for.
+        await Assert.That(calls.Select(c => c[0]).ToArray())
+            .IsEquivalentTo(["print", "bootout", "print", "bootstrap", "print", "bootstrap", "print"]);
     }
 }

@@ -114,8 +114,8 @@ sealed partial class LaunchdServiceManager(
     static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(7);
 
     /// <summary>The longest a reload can take once the daemon is asked: the idle-restart request, then
-    /// bootout, bootstrap and the rollback bootstrap, each with its follow-up probe. A reload is not
-    /// started with less than this left, because a kill between bootout and bootstrap leaves the job
+    /// bootout, bootstrap and the rollback bootstrap, each with at most one follow-up probe. A reload is
+    /// not started with less than this left, because a kill between bootout and bootstrap leaves the job
     /// unloaded.</summary>
     public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + 6 * RefreshCtlTimeout;
 
@@ -156,18 +156,22 @@ sealed partial class LaunchdServiceManager(
         // The accepted restart is already exiting the daemon. Booting out now unloads the job before
         // launchd can relaunch it from the definition it cached at load.
         var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
-        if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId) == LabelProbe.Loaded) {
+        if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
             error = "launchctl bootout did not unload the job, so it keeps running as Adaptive until the next update";
             return ProcessTypeRefresh.Failed;
         }
 
-        if (TryBootstrap(serviceId, path, out var bootstrapError)) return ProcessTypeRefresh.Reloaded;
+        var reload = Bootstrap(serviceId, path, acceptAdaptive: false);
+        if (reload.Error is null) return ProcessTypeRefresh.Reloaded;
 
         if (upgraded is not null) _writeUnit(path, original!, null);
-        if (TryBootstrap(serviceId, path, out var rollbackError)) {
+        var rollback = Bootstrap(serviceId, path, acceptAdaptive: true);
+        var (bootstrapError, rollbackError) = (reload.Error, rollback.Error);
+
+        if (rollbackError is null) {
             error = $"{bootstrapError}; the previous unit was restored and loaded";
         } else {
-            error = Probe(serviceId) == LabelProbe.Absent
+            error = (rollback.After ?? Probe(serviceId).Label) == LabelProbe.Absent
                 ? $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), so the daemon is not loaded — run `kcap daemon service start`"
                 : $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), and launchd's state for the job is unclear — check `kcap daemon service status`";
         }
@@ -175,20 +179,26 @@ sealed partial class LaunchdServiceManager(
         return ProcessTypeRefresh.Failed;
     }
 
-    LabelProbe Probe(string serviceId) {
+    (LabelProbe Label, string StdOut) Probe(string serviceId) {
         var (exit, stdout, stderr, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
-        return timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(exit, stdout, stderr);
+        return (timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(exit, stdout, stderr), stdout);
     }
 
-    /// <summary>A bootstrap that timed out may still have loaded the job, so a timeout counts as success
-    /// when a probe then finds the label loaded.</summary>
-    bool TryBootstrap(string serviceId, string plistPath, out string? error) {
+    /// <summary>
+    /// A bootstrap that timed out may still have loaded the job, so it counts as success when a probe then
+    /// finds the label loaded, and, unless <paramref name="acceptAdaptive"/>, loaded as something other
+    /// than Adaptive: a bootout that did not take leaves the old job loaded. <c>After</c> is that probe's
+    /// result, so the caller need not probe again.
+    /// </summary>
+    (string? Error, LabelProbe? After) Bootstrap(string serviceId, string plistPath, bool acceptAdaptive) {
         var (exit, _, err, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootstrapArgs(Uid(), plistPath));
-        error = timedOut && Probe(serviceId) != LabelProbe.Loaded ? "launchctl bootstrap timed out and was terminated"
-              : !timedOut && exit != 0 ? $"launchctl bootstrap failed (exit {exit}): {err.Trim()}"
-              : null;
+        if (!timedOut)
+            return (exit == 0 ? null : $"launchctl bootstrap failed (exit {exit}): {err.Trim()}", null);
 
-        return error is null;
+        var (label, stdout) = Probe(serviceId);
+        var loaded = label == LabelProbe.Loaded && (acceptAdaptive || !LaunchdUnit.LoadedAsAdaptive(stdout));
+
+        return (loaded ? null : "launchctl bootstrap timed out and was terminated", label);
     }
 
     /// <summary>
