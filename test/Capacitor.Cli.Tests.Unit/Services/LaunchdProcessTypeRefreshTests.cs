@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
@@ -7,11 +6,8 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// A job installed as Adaptive gets its plist rewritten to Standard, but is reloaded only when the
 /// daemon accepts an idle-only restart, because the reload kills whatever it hosts.
 /// </summary>
-public partial class LaunchdProcessTypeRefreshTests {
+public class LaunchdProcessTypeRefreshTests {
     [TempHome] public required TempHome Home { get; init; }
-
-    [LibraryImport("libc", EntryPoint = "getuid")]
-    private static partial uint getuid();
 
     const string Label = "io.kurrent.kcap.daemon.test";
 

@@ -14,6 +14,7 @@ enum ProcessTypeRefresh {
     /// <summary>The job was reloaded and now runs as Standard.</summary>
     Reloaded,
 
-    /// <summary>The reload failed; the original plist was restored and the job bootstrapped again.</summary>
+    /// <summary>The reload failed. The original plist is restored and bootstrapped again; the error says
+    /// whether that rollback loaded.</summary>
     Failed,
 }
