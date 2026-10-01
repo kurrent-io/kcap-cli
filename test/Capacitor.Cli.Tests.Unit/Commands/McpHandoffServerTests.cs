@@ -34,6 +34,7 @@ public class McpHandoffServerTests {
         await Assert.That(tools.Select(t => t.Name)).IsEquivalentTo(new[] { "continue_session" });
         await Assert.That(tools[0].InputSchema.Required).IsEquivalentTo(new[] { "session_id" });
         await Assert.That(tools[0].InputSchema.Properties.Keys).Contains("force");
+        await Assert.That(tools[0].InputSchema.Properties.Keys).Contains("current_session_id");
     }
 
     [Test]
@@ -71,6 +72,39 @@ public class McpHandoffServerTests {
 
         await Assert.That(IsError(response)).IsTrue();
         await Assert.That(Text(response)).Contains("CLAUDE_CODE_SESSION_ID");
+        await Assert.That(Text(response)).Contains("current_session_id");
+    }
+
+    static Answers EndedSession(List<JsonObject> posts) => new(req => {
+        if (req.Method == HttpMethod.Post) posts.Add(JsonNode.Parse(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!.AsObject());
+
+        return req.RequestUri!.AbsolutePath switch {
+            $"/api/sessions/{Previous}/summary"   => (200, """{"status":"ended"}"""),
+            $"/api/work-items/session/{Previous}" => (200, """[{"work_item_id":"w1","label":"W1"}]"""),
+            "/api/work-items/declare"             => (200, "{}"),
+            _                                     => (200, "[]"),
+        };
+    });
+
+    [Test]
+    public async Task An_explicit_current_session_is_used_when_the_harness_exposes_none() {
+        var posts = new List<JsonObject>();
+
+        var response = await Call($$"""{"session_id":"{{Previous}}","current_session_id":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"}""", EndedSession(posts), current: null);
+
+        await Assert.That(IsError(response)).IsFalse();
+        await Assert.That(posts.Single()["session_id"]!.GetValue<string>()).IsEqualTo("cccccccccccccccccccccccccccccccc");
+    }
+
+    [Test]
+    public async Task An_explicit_current_session_wins_over_the_harness_one() {
+        var posts = new List<JsonObject>();
+        const string Explicit = "cccccccccccccccccccccccccccccccc";
+
+        var response = await Call($$"""{"session_id":"{{Previous}}","current_session_id":"{{Explicit}}"}""", EndedSession(posts));
+
+        await Assert.That(IsError(response)).IsFalse();
+        await Assert.That(posts.Single()["session_id"]!.GetValue<string>()).IsEqualTo(Explicit);
     }
 
     [Test]

@@ -18,8 +18,10 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
         TelemetryStartup startup, TimeProvider time) {
     internal const string ToolName = "continue_session";
 
+    const string CurrentSessionArgument = "current_session_id";
+
     internal const string NoCurrentSessionMessage =
-        "Error: no current session. continue_session must run inside the harness session that takes over (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
+        "Error: no current session. Pass current_session_id with this session's id, or run continue_session inside the harness session that takes over (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
 
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
@@ -147,6 +149,9 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
         if (toolName != ToolName) return BuildToolResult(id, $"Error: Unknown tool: {toolName}", isError: true);
 
         try {
+            if (McpToolArguments.OptionalString(arguments, CurrentSessionArgument) is { } given)
+                currentSessionId = WorkContextIds.CanonicalSessionId(given) ?? given;
+
             if (currentSessionId is null) return BuildToolResult(id, NoCurrentSessionMessage, isError: true);
 
             var previous = McpToolArguments.RequireString(arguments, "session_id");
@@ -218,7 +223,10 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
           + "attached and skipped, and which plan is now current.",
             new("object", new() {
                 ["session_id"] = new("string", "The session whose work this session takes over."),
-                ["force"]      = new("boolean", "Take over even when that session looks live. Only after the user confirms.")
+                ["force"]      = new("boolean", "Take over even when that session looks live. Only after the user confirms."),
+                [CurrentSessionArgument] = new("string",
+                    "This session's id — the one taking over. Defaults to the harness session this server runs in; "
+                  + "pass it when the harness does not expose it."),
             }, ["session_id"]), McpToolAnnotations.Additive)
     ];
 }

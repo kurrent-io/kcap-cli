@@ -53,8 +53,9 @@ mcp sessions:
 mcp handoff:
   Exposes one tool, continue_session, which attaches the current session to
   another session's work items and unfinished plans. Refuses while that
-  session may still be running unless force is passed. Available on every
-  plan. Requires `kcap login`.
+  session may still be running unless force is passed. The taking-over
+  session defaults to the harness session; current_session_id overrides it.
+  Available on every plan. Requires `kcap login`.
 
 mcp flows:
   Exposes the review-flow and generic-flow tools for agents to start and
