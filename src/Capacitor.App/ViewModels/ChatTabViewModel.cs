@@ -467,9 +467,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var stage = ActivityNote.StartsWith("Starting ", StringComparison.Ordinal) ? ActivityNote : null;
         var answerExpected = Cards.PendingCards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
         AgentStatus = SessionStatusDots.Present(
-            _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards || _terminalDialog is not null,
+            _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
-            answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount);
+            answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount,
+            terminalDialog: _terminalDialog is not null);
         StatusText = AgentStatus.Label;
     }
 
