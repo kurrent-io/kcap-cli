@@ -106,6 +106,11 @@ sealed class DaemonServiceCommands(
         TimeSpan TimeLeft() => RefreshDeadline - time.GetElapsedTime(started);
 
         foreach (var serviceId in launchd.ListInstalled()) {
+            if (TimeLeft() < LaunchdServiceManager.RefreshCtlTimeout) {
+                await Console.Out.WriteLineAsync("Out of time; the remaining daemons are checked on the next update.");
+                break;
+            }
+
             var outcome = launchd.RefreshProcessType(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error);
 
             switch (outcome) {

@@ -111,7 +111,7 @@ sealed partial class LaunchdServiceManager(
 
     /// <summary>Per launchctl call, which normally answers in milliseconds. Refresh runs under the npm
     /// refresh wrapper's 60s kill.</summary>
-    static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(7);
+    public static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(7);
 
     /// <summary>The longest a reload can take once the daemon is asked: the idle-restart request, then
     /// bootout, bootstrap and the rollback bootstrap, each with at most one follow-up probe. A reload is
