@@ -202,6 +202,9 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
 > Run `kcap plugin install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Every per-vendor install also writes the agent skills to `~/.agents/skills/` (Kiro and Antigravity get their own copies under `~/.kiro/skills` and `~/.gemini/skills`), so `--skills` is only needed to install or refresh them on their own — for instance for an agent kcap has no integration for. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). If you only use the Codex desktop app, it never prompts — trust the kcap hooks under Settings → Hooks in the app. After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
 
+> **Want an agent's kcap tools without recording its sessions?**
+> Add `--tools-only` to `kcap plugin install --cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity`. It writes that agent's MCP servers, skills and steering instructions (the `--skip-<vendor>-mcp`, `--skip-<vendor>-skills` and `--skip-<vendor>-instructions` flags still apply) and nothing that records: no hooks, no Pi or OpenCode live-ingest file, no Antigravity capture plugin, no Kiro agent clone, default-agent switch or Kiro Crew hook, and no git hook. Only Pi's MCP bridge still needs `kcap` on `PATH`. Claude Code and Codex ship their tools with capture, so `--tools-only` is refused for them (exit code 1). The upgrade-time `--if-installed` refresh keeps a tools-only install tools-only: it refreshes the tools and never adds capture. `--tools-only --if-installed` refreshes only the tools of any install.
+
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
 > **Keep the daemon running:** `kcap daemon start -d` stops when the process dies (a crash, or an OS memory-pressure kill — macOS jetsam / Linux OOM). To auto-restart it and start it at login, install it as a per-user service: `kcap daemon service install`. See [Daemon](#daemon).
@@ -1582,6 +1585,7 @@ Cursor is detected by the presence of `~/.cursor/` — you don't need the `curso
 ```bash
 kcap plugin install --cursor                # writes ~/.cursor/hooks.json + agent skills + registers kcap MCP servers
 kcap plugin install --cursor --skip-cursor-mcp  # hooks only, skip ~/.cursor/mcp.json
+kcap plugin install --cursor --tools-only   # MCP servers + agent skills only, no hooks
 kcap plugin remove --cursor                 # remove Cursor hooks + kcap MCP servers
 ```
 
@@ -1642,6 +1646,7 @@ It further installs the **kcap skills** into `~/.kiro/skills` (as `kcap-<name>/S
 
 ```bash
 kcap plugin install --kiro                  # clone default agent + add hook, set as default
+kcap plugin install --kiro --tools-only     # MCP servers + skills only: no clone, default agent unchanged
 kcap plugin remove --kiro                   # restore previous default, delete kcap.json
 ```
 
@@ -1660,6 +1665,7 @@ Pi (`badlogic/pi-mono`) is detected via `~/.pi/agent/` or the `pi` binary on `PA
 ```bash
 kcap plugin install --pi                    # write kcap.ts + kcap-mcp.ts + AGENTS.md block + agent skills
 kcap plugin install --pi --skip-pi-mcp      # ingest + steering only, no MCP bridge
+kcap plugin install --pi --tools-only       # MCP bridge + steering + agent skills, no live-ingest extension
 kcap plugin remove --pi                     # delete both extensions + strip the AGENTS.md block
 ```
 
