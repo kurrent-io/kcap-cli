@@ -47,6 +47,14 @@ public class ServiceVerifyRetireTests {
         /// Loaded at this pid — a daemon that claimed the new name ahead of this install's own write.</summary>
         public int? NewLabelLoadedPid;
 
+        /// <summary>The new id already has a stopped-but-installed unit (another profile's service).</summary>
+        public bool NewUnitStopped;
+
+        /// <summary>The new id's stopped unit appears only once the old unit has been retired.</summary>
+        public bool NewUnitStoppedAfterRetire;
+
+        public bool NewProbeUnknown;
+
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [new GeneratedFile("/fake/new.plist", OwnPlistContent)];
 
         public ServiceQuery Query(string serviceId, TimeSpan timeout) {
@@ -55,6 +63,10 @@ public class ServiceVerifyRetireTests {
                 return OldUnitInstalled
                     ? new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", 1111)
                     : new ServiceQuery(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
+            if (NewProbeUnknown)
+                return new ServiceQuery(LabelProbe.Unknown, false, ServiceState.NotInstalled, null, null);
+            if (!Bootstrapped && (NewUnitStopped || (NewUnitStoppedAfterRetire && !OldUnitInstalled)))
+                return new ServiceQuery(LabelProbe.Absent, true, ServiceState.Installed, "/x/kcap-daemon", null);
             if (!Bootstrapped && NewLabelLoadedPid is not null)
                 return new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/x/kcap-daemon", NewLabelLoadedPid);
             return Bootstrapped
@@ -292,5 +304,55 @@ public class ServiceVerifyRetireTests {
         await Assert.That(manager.Calls).Contains($"uninstall:{OldId}");
         await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
         await Assert.That(ServiceTxnMarker.Exists(Daemons.Store, NewId)).IsFalse();
+    }
+
+    static async Task AssertRefusedUntouched(FakeServiceManager manager, ConsoleOutput err, int exit, string reason) {
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("uninstall:", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(manager.OldUnitInstalled).IsTrue();
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).IsEquivalentTo([$"retire_reason={reason}", "verify_retire_refused"]);
+    }
+
+    /// <summary>A stopped service has no live socket, so only the unit itself shows the name is taken.</summary>
+    [Test, NotInParallel]
+    public async Task A_stopped_unit_under_the_new_name_is_refused_before_anything_changes() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, NewUnitStopped = true };
+        var sut = Sut(manager, OldPlist("mine"));
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "target_occupied");
+        await Assert.That(manager.NewUnitStopped).IsTrue();
+    }
+
+    [Test, NotInParallel]
+    public async Task An_unknown_target_state_is_refused_before_anything_changes() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, NewProbeUnknown = true };
+        var sut = Sut(manager, OldPlist("mine"));
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "target_unknown");
+    }
+
+    /// <summary>A lock-unaware writer can install the new name while the old unit is retired; that unit
+    /// is still someone else's and is refused rather than cleared.</summary>
+    [Test, NotInParallel]
+    public async Task A_unit_that_appears_under_the_new_name_during_the_retire_is_not_cleared() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, NewUnitStoppedAfterRetire = true };
+        var sut = Sut(manager, OldPlist("mine"));
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).DoesNotContain($"uninstall:{NewId}");
+        await Assert.That(manager.Calls.Any(c => c.StartsWith("writeAndBootstrap:", StringComparison.Ordinal))).IsFalse();
+        var lines = err.GetCapturedError().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines).IsEquivalentTo(["retire_reason=target_claimed", "verify_retire_refused"]);
     }
 }
