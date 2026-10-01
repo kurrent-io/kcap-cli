@@ -69,14 +69,17 @@ internal sealed partial class AdmissionFence {
     }
 
     bool FencedLocked() {
-        if (_held is not null) return true;
-        if (_committedAt is not { } committedAt) return false;
-        if (_time.GetUtcNow() < committedAt + CommitLease) return true;
+        // The lease bounds a commit whether or not its connection is still open.
+        if (_committedAt is { } committedAt) {
+            if (_time.GetUtcNow() < committedAt + CommitLease) return true;
 
-        _committedAt = null;
-        DeleteMarker();
-        LogLeaseExpired();
-        return false;
+            _committedAt = null;
+            _held = null;
+            DeleteMarker();
+            LogLeaseExpired();
+            return false;
+        }
+        return _held is not null;
     }
 
     void Leave() {

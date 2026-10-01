@@ -180,4 +180,18 @@ public class AdmissionFenceTests {
 
         await Assert.That(fence.IsFenced).IsTrue();
     }
+
+    /// <summary>A CLI that stalls with its connection open must not hold the daemon closed past the lease.</summary>
+    [Test]
+    public async Task The_lease_ends_a_commit_whose_connection_is_still_open() {
+        var fence = NewFence();
+        var hold = Acquire(fence);
+        hold.Commit();
+
+        _time.Advance(AdmissionFence.CommitLease);
+
+        await Assert.That(fence.TryAdmit()).IsNotNull();
+        await Assert.That(File.Exists(MarkerPath)).IsFalse();
+        await Assert.That(hold.Commit()).IsFalse();
+    }
 }

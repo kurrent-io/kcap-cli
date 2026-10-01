@@ -1058,7 +1058,13 @@ sealed class ServiceVerify(
         }
 
         var (status, content) = _discriminatedPlistRead(manager.UnitPath(retireId));
-        if (status == LaunchdUnit.PlistRead.Absent) return (null, new RetireTicket(retireTxn, null, unitPresent: false));
+        if (status == LaunchdUnit.PlistRead.Absent) {
+            // launchd keeps a job loaded after its plist is removed; with no plist its profile is unknowable.
+            var orphan = manager.Query(retireId, TargetProbeWait);
+            if (orphan.Probe == LabelProbe.Unknown) return Refuse("fence_unavailable");
+            if (orphan.Probe == LabelProbe.Loaded) return Refuse("unit_unreadable");
+            return (null, new RetireTicket(retireTxn, null, unitPresent: false));
+        }
 
         string? retiredProfile = null;
         var readable = status == LaunchdUnit.PlistRead.Ok;

@@ -495,4 +495,19 @@ public class ServiceVerifyRetireTests {
         await Assert.That(fence.Calls).IsEmpty();
         await Assert.That(manager.Calls).Contains($"uninstall:{OldId}");
     }
+
+    /// <summary>launchd keeps a job loaded after its plist is gone; its profile cannot be verified, so it
+    /// must not be left running beside the renamed daemon or booted out unchecked.</summary>
+    [Test, NotInParallel]
+    public async Task A_loaded_old_label_without_its_plist_is_refused() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var fence = new FakeFence(manager);
+        var sut = Sut(manager, oldPlist: null, fence: fence);
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await AssertRefusedUntouched(manager, err, exit, "unit_unreadable");
+        await Assert.That(fence.Calls).IsEmpty();
+    }
 }
