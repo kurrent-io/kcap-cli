@@ -12,8 +12,8 @@ using static Capacitor.App.Tests.Unit.AvaloniaSession;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Pins terminal copy and paste. The control itself turns Ctrl+C into an interrupt and Ctrl+V
-/// into a control byte, so these gestures have to be claimed before it sees them.
+/// Pins terminal paste. Copy is left to the control: Ctrl+C stays an interrupt, and the platform
+/// paste chord is claimed while the terminal holds focus.
 [NotInParallel("AvaloniaSession")]
 public class TerminalClipboardTests {
     static (Window Window, TerminalControl Terminal, XtermTerminalSurface Surface, List<byte[]> Sent) Show() {
@@ -41,21 +41,16 @@ public class TerminalClipboardTests {
     static RawInputModifiers Platform(IReadOnlyList<KeyGesture> gestures) => (RawInputModifiers)gestures[0].KeyModifiers;
 
     [Test]
-    public async Task Ctrl_C_copies_a_selection_and_the_next_Ctrl_C_interrupts() {
+    public async Task Ctrl_C_leaves_the_clipboard_alone_and_interrupts() {
         await RunOnUiAsync(async () => {
             var (window, terminal, surface, sent) = Show();
             try {
+                var clipboard = window.Clipboard!;
+                await clipboard.SetTextAsync("kept");
                 surface.Feed("hello");
                 terminal.SelectAll();
-                var selected = terminal.SelectedText;
-                await Assert.That(selected).Contains("hello");
-
                 Press(window, PhysicalKey.C, RawInputModifiers.Control);
-                await Assert.That(await window.Clipboard!.TryGetTextAsync()).IsEqualTo(selected);
-                await Assert.That(sent).IsEmpty();
-                await Assert.That(terminal.HasSelection).IsFalse();
-
-                Press(window, PhysicalKey.C, RawInputModifiers.Control);
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo("kept");
                 await Assert.That(sent).Count().IsEqualTo(1);
                 await Assert.That(sent[0]).IsEquivalentTo(new byte[] { 0x03 });
             } finally { window.Close(); }
@@ -63,12 +58,13 @@ public class TerminalClipboardTests {
     }
 
     [Test]
-    public async Task Ctrl_V_pastes_a_bracketed_block_and_does_not_submit_it() {
+    public async Task The_platform_paste_gesture_pastes_a_bracketed_block_and_does_not_submit_it() {
         await RunOnUiAsync(async () => {
             var (window, _, _, sent) = Show();
             try {
+                var paste = Application.Current!.PlatformSettings!.HotkeyConfiguration.Paste;
                 await window.Clipboard!.SetTextAsync("a\r\nb\n");
-                Press(window, PhysicalKey.V, RawInputModifiers.Control);
+                Press(window, PhysicalKey.V, Platform(paste));
                 await Assert.That(sent).Count().IsEqualTo(1);
                 await Assert.That(sent[0]).IsEquivalentTo(TerminalInputEncoder.Paste("a\r\nb\n"));
             } finally { window.Close(); }
@@ -76,24 +72,17 @@ public class TerminalClipboardTests {
     }
 
     [Test]
-    public async Task The_platform_copy_and_paste_gestures_do_the_same() {
+    public async Task The_platform_copy_gesture_leaves_the_clipboard_alone() {
         await RunOnUiAsync(async () => {
-            var (window, terminal, surface, sent) = Show();
+            var (window, terminal, surface, _) = Show();
             try {
-                var hotkeys = Application.Current!.PlatformSettings!.HotkeyConfiguration;
                 var clipboard = window.Clipboard!;
+                await clipboard.SetTextAsync("kept");
                 surface.Feed("hello");
                 terminal.SelectAll();
-                var selected = terminal.SelectedText;
-
-                Press(window, PhysicalKey.C, Platform(hotkeys.Copy));
-                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(selected);
-                await Assert.That(sent).IsEmpty();
-
-                await clipboard.SetTextAsync("pasted");
-                Press(window, PhysicalKey.V, Platform(hotkeys.Paste));
-                await Assert.That(sent).Count().IsEqualTo(1);
-                await Assert.That(sent[0]).IsEquivalentTo(TerminalInputEncoder.Paste("pasted"));
+                var copy = Application.Current!.PlatformSettings!.HotkeyConfiguration.Copy;
+                Press(window, PhysicalKey.C, Platform(copy));
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo("kept");
             } finally { window.Close(); }
         });
     }
@@ -114,18 +103,21 @@ public class TerminalClipboardTests {
                 var composer = window.GetVisualDescendants().OfType<TextBox>().Single(c => c.Name == "ComposerInput");
                 composer.Focus();
                 await window.Clipboard!.SetTextAsync("composer only");
-                Press(window, PhysicalKey.V, RawInputModifiers.Control);
-                Press(window, PhysicalKey.V, Platform(Application.Current!.PlatformSettings!.HotkeyConfiguration.Paste));
+                var paste = Application.Current!.PlatformSettings!.HotkeyConfiguration.Paste;
+                Press(window, PhysicalKey.V, Platform(paste));
                 await Assert.That(sent).IsEmpty();
             } finally { window.Close(); }
         });
     }
 
     [Test]
-    public async Task Both_terminal_views_copy_a_selection() {
+    public async Task Both_terminal_views_paste() {
         await RunOnUiAsync(async () => {
+            var paste = Application.Current!.PlatformSettings!.HotkeyConfiguration.Paste;
             foreach (var view in new Control[] { new WorkspaceView(), new RemoteSessionView() }) {
                 var surface = new XtermTerminalSurface(80, 24);
+                var sent = new List<byte[]>();
+                surface.InputProduced += sent.Add;
                 var window = new Window { Content = view, Width = 900, Height = 600 };
                 window.Show();
                 Dispatcher.UIThread.RunJobs();
@@ -133,12 +125,10 @@ public class TerminalClipboardTests {
                     var terminal = window.GetVisualDescendants().OfType<TerminalControl>().Single(c => c.Name == "TerminalHost");
                     terminal.Model = surface.Model;
                     terminal.Focus();
-                    surface.Feed("hello");
-                    terminal.SelectAll();
-                    var selected = terminal.SelectedText;
-                    await Assert.That(selected).Contains("hello");
-                    Press(window, PhysicalKey.C, RawInputModifiers.Control);
-                    await Assert.That(await window.Clipboard!.TryGetTextAsync()).IsEqualTo(selected);
+                    await window.Clipboard!.SetTextAsync("pasted");
+                    Press(window, PhysicalKey.V, Platform(paste));
+                    await Assert.That(sent).Count().IsEqualTo(1);
+                    await Assert.That(sent[0]).IsEquivalentTo(TerminalInputEncoder.Paste("pasted"));
                 } finally { window.Close(); }
             }
         });
