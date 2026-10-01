@@ -898,9 +898,7 @@ sealed class SetupCommand(
                     .ShowDefaultValue());
         }
 
-        var localMachineId = (await AppConfig.LoadProfileConfig(config)).MachineId;
-
-        while (await FindDaemonNameHolderAsync(serverUrl, daemonName, localMachineId) is { } holder) {
+        while (await FindDaemonNameHolderAsync(serverUrl, daemonName) is { } holder) {
             AnsiConsole.MarkupLine(
                 $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
               + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
@@ -1526,12 +1524,12 @@ sealed class SetupCommand(
     }
 
     async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
-            string serverUrl, string daemonName, string? localMachineId) {
+            string serverUrl, string daemonName) {
         try {
             await using var scoped = HttpForChosenServer(serverUrl);
             using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
 
-            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, localMachineId);
+            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, config);
         } catch (Exception) {
             return null;
         }

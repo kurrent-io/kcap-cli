@@ -1,14 +1,18 @@
 using System.Text.Json;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Commands;
 
 /// <summary>A daemon already connected under a name from another machine on this account. The server
 /// refuses a second daemon with that name, so setup checks before saving it. Best-effort: an
-/// unreachable server or an unreadable answer finds nothing.</summary>
+/// unreachable server or an unreadable answer finds nothing.
+/// The local id is the one the daemon reports, from <see cref="MachineId"/>, not the profile's memory-tagging id.</summary>
 static class DaemonNameHolder {
     public static async Task<(string Platform, string? Version)?> FindElsewhereAsync(
-            HttpClient http, string serverUrl, string name, string? localMachineId, CancellationToken ct = default) {
+            HttpClient http, string serverUrl, string name, ConfigRoot config, CancellationToken ct = default) {
         try {
+            var localMachineId = new MachineId(config).ReadPersisted();
+
             using var resp = await http.GetAsync($"{serverUrl.TrimEnd('/')}/api/daemons", ct);
             if (!resp.IsSuccessStatusCode) return null;
 
