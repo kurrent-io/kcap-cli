@@ -153,6 +153,16 @@ public class McpKnowledgeServerTests {
             await Assert.That(property.Items).IsNotNull();
     }
 
+    [Test]
+    [Arguments("list_facts", "{}", """{"items":[{"fact_hash":"h","sources":{"source_kinds":["session_eval","work_item_eval"],"work_items":[{"work_item_id":"w","key":"#12"}]}}],"next_cursor":null}""")]
+    [Arguments("search_facts", """{"query":"locks"}""", """{"hits":[{"fact":{"fact_hash":"h","sources":{"source_kinds":["work_item_eval"],"work_items":[{"work_item_id":"w","key":null}]}},"similarity":0.9}]}""")]
+    public async Task A_facts_sources_pass_through_and_the_fact_tool_describes_them(string tool, string args, string body) {
+        var response = JsonNode.Parse(await CallAsync(new RecordingHandler(body: body), tool, args))!;
+
+        await Assert.That(response["result"]!["content"]![0]!["text"]!.GetValue<string>()).IsEqualTo(body);
+        await Assert.That(McpKnowledgeServer.BuildToolsList().Single(t => t.Name == tool).Description).Contains("sources");
+    }
+
     sealed class RecordingHandler(HttpStatusCode status = HttpStatusCode.OK, string body = """{"ok":true}""") : HttpMessageHandler {
         public List<(HttpMethod Method, string Path)> Calls { get; } = [];
 
