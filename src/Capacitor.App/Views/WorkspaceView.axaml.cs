@@ -21,6 +21,7 @@ public partial class WorkspaceView : UserControl {
 
     public WorkspaceView() {
         InitializeComponent();
+        TerminalClipboard.Attach(this, TerminalHost);
         // The control draws its caret and takes keystrokes only while focused; a Model assignment
         // is the "terminal became live" moment — but only the Terminal tab may take focus, or a
         // reattach under the Chat tab would steal it from the composer.
