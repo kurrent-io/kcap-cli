@@ -1072,6 +1072,7 @@ kcap daemon service stop                   # stop the running service (stays ins
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
+kcap daemon service refresh                # bring installed macOS units up to this version; reloads only an idle daemon (runs after `kcap update`)
 kcap daemon service uninstall              # stop and remove the service
 ```
 

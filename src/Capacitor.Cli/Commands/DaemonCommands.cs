@@ -601,21 +601,15 @@ public sealed class DaemonCommands(
     }
 
     async Task<int> RestartOne(string name, string mode) {
-        var socketPath = store.SocketPath(name);
-
-        using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        LocalFrame? reply;
 
         try {
-            await sock.ConnectAsync(new UnixDomainSocketEndPoint(socketPath));
+            reply = await DaemonRestartClient.RequestAsync(store, name, mode, default);
         } catch (Exception ex) when (ex is SocketException or IOException) {
             await Console.Error.WriteLineAsync($"Daemon '{name}': not reachable ({ex.Message}).");
 
             return 1;
         }
-
-        await using var stream = new NetworkStream(sock, ownsSocket: false);
-        await FrameCodec.WriteAsync(stream, LocalFrame.Restart(mode), default);
-        var reply = await FrameCodec.ReadAsync(stream, default);
 
         switch (reply?.Type) {
             case FrameType.RestartAck:

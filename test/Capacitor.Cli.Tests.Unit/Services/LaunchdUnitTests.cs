@@ -30,6 +30,14 @@ public class LaunchdUnitTests {
         await Assert.That(plist).Contains("<key>SuccessfulExit</key>");
     }
 
+    /// <summary>An Adaptive job runs at background priority, where the heartbeat starves under load.</summary>
+    [Test]
+    public async Task Plist_runs_the_daemon_as_a_standard_process() {
+        var dict = XDocument.Parse(LaunchdUnit.Plist(Spec())).Root!.Element("dict")!;
+        var key  = dict.Elements("key").Single(k => k.Value == "ProcessType");
+        await Assert.That(key.ElementsAfterSelf().First().Value).IsEqualTo("Standard");
+    }
+
     [Test]
     public async Task Plist_escapes_metacharacters_in_values() {
         var spec  = Spec() with { DaemonBinaryPath = "/opt/a&b/kcap-daemon" };
