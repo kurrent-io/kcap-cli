@@ -2,6 +2,7 @@
 # The app must ship the exact CLI and daemon bytes npm published for this version. Downloads the
 # platform package from the registry (or takes --tarball for tests) and compares both hashes.
 # Usage: verify-npm-trio.sh <version> <kcap.sha256-file> <daemon.sha256-file> [--tarball <path>]
+# KCAP_NPM_PLATFORM names the platform package (default darwin-arm64); a win-* one carries .exe binaries.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hash.sh
@@ -12,17 +13,20 @@ cli_digest="$(tr -d '[:space:]' < "${2:?kcap.sha256 file}")"
 daemon_digest="$(tr -d '[:space:]' < "${3:?daemon.sha256 file}")"
 tarball="${5:-}"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+platform="${KCAP_NPM_PLATFORM:-darwin-arm64}"
+pkg="@kurrent/kcap-$platform"
+exe=""; [[ "$platform" == win-* ]] && exe=".exe"
 
 if [ "${4:-}" != "--tarball" ]; then
-  NPM_WAIT_TIMEOUT="${NPM_WAIT_TIMEOUT:-600}" bash "$here/wait-npm-available.sh" "$version" @kurrent/kcap-darwin-arm64
-  (cd "$tmp" && npm pack "@kurrent/kcap-darwin-arm64@$version" --prefer-online --registry https://registry.npmjs.org --pack-destination "$tmp" >/dev/null)
+  NPM_WAIT_TIMEOUT="${NPM_WAIT_TIMEOUT:-600}" bash "$here/wait-npm-available.sh" "$version" "$pkg"
+  (cd "$tmp" && npm pack "$pkg@$version" --prefer-online --registry https://registry.npmjs.org --pack-destination "$tmp" >/dev/null)
   tarball="$(ls "$tmp"/*.tgz | head -1)"
 fi
-[ -f "$tarball" ] || { echo "no tarball for @kurrent/kcap-darwin-arm64@$version" >&2; exit 1; }
+[ -f "$tarball" ] || { echo "no tarball for $pkg@$version" >&2; exit 1; }
 
 mkdir -p "$tmp/x" && tar -xzf "$tarball" -C "$tmp/x"
-actual_cli="$(sha256_of "$tmp/x/package/bin/kcap")"
-actual_daemon="$(sha256_of "$tmp/x/package/bin/kcap-daemon")"
+actual_cli="$(sha256_of "$tmp/x/package/bin/kcap$exe")"
+actual_daemon="$(sha256_of "$tmp/x/package/bin/kcap-daemon$exe")"
 [ "$actual_cli" = "$cli_digest" ] || { echo "npm kcap hashes to $actual_cli, artifact recorded $cli_digest" >&2; exit 1; }
 [ "$actual_daemon" = "$daemon_digest" ] || { echo "npm kcap-daemon hashes to $actual_daemon, artifact recorded $daemon_digest" >&2; exit 1; }
-echo "npm @kurrent/kcap-darwin-arm64@$version carries the artifact's kcap and kcap-daemon"
+echo "npm $pkg@$version carries the artifact's kcap and kcap-daemon"

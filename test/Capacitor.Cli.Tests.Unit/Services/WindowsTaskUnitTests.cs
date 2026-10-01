@@ -36,6 +36,25 @@ public class WindowsTaskUnitTests {
         await Assert.That(bin).IsEqualTo(@"C:\kcap\kcap-daemon.exe");
     }
 
+    /// A windowless console shows stderr to nobody, so the wrapper appends it beside the daemon log
+    /// and the binary is still the exec line's first quoted token.
+    [Test]
+    public async Task Wrapper_keeps_the_daemons_stderr_beside_its_log() {
+        var cmd = WindowsTaskUnit.Wrapper(Spec());
+
+        await Assert.That(cmd).Contains(@"""8"" 2>>""C:\Users\u\.config\kcap\daemon-laptop.stderr.log""");
+        await Assert.That(WindowsTaskUnit.BinaryFromWrapper(cmd)).IsEqualTo(@"C:\kcap\kcap-daemon.exe");
+    }
+
+    [Test]
+    public async Task EnvFromWrapper_reads_back_what_the_wrapper_sets() {
+        var spec = Spec() with { Environment = new Dictionary<string, string> { ["KCAP_PROFILE"] = "work", ["X"] = "50%done" } };
+
+        var env = WindowsTaskUnit.EnvFromWrapper(WindowsTaskUnit.Wrapper(spec));
+
+        await Assert.That(env).IsEquivalentTo(new Dictionary<string, string> { ["KCAP_PROFILE"] = "work", ["X"] = "50%done" });
+    }
+
     [Test]
     public async Task BinaryFromWrapper_unescapes_doubled_percent() {
         var spec = Spec() with { DaemonBinaryPath = @"C:\dir%x\kcap-daemon.exe" };
@@ -44,12 +63,50 @@ public class WindowsTaskUnitTests {
     }
 
     [Test]
-    public async Task TaskXml_is_well_formed_and_runs_cmd_wrapper() {
+    public async Task TaskXml_is_well_formed_and_runs_the_wrapper_in_a_windowless_console() {
         var xml = WindowsTaskUnit.TaskXml(Spec(), @"C:\Users\u\.config\kcap\daemon-service-laptop.cmd");
         XDocument.Parse(xml); // throws if malformed
-        await Assert.That(xml).Contains("<Command>cmd.exe</Command>");
-        await Assert.That(xml).Contains("/c");
+        await Assert.That(xml).Contains("<Command>conhost.exe</Command>");
+        await Assert.That(xml).Contains("<Arguments>--headless cmd.exe /d /s /v:off /c");
         await Assert.That(xml).Contains("daemon-service-laptop.cmd");
-        await Assert.That(xml).Contains("<LogonTrigger>");
+    }
+
+    /// A logon trigger without a UserId means "any user" and needs an elevated token to register, so an
+    /// ordinary `kcap daemon service install` was refused with "Access is denied".
+    [Test]
+    public async Task TaskXml_scopes_the_trigger_and_principal_to_the_installing_user() {
+        var xml = XDocument.Parse(WindowsTaskUnit.TaskXml(Spec(), @"C:\k\daemon-service-laptop.cmd", @"CORP\a&b"));
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+        await Assert.That(xml.Descendants(ns + "LogonTrigger").Single().Element(ns + "UserId")!.Value).IsEqualTo(@"CORP\a&b");
+        var principal = xml.Descendants(ns + "Principal").Single();
+        await Assert.That(principal.Element(ns + "UserId")!.Value).IsEqualTo(@"CORP\a&b");
+        await Assert.That(principal.Element(ns + "LogonType")!.Value).IsEqualTo("InteractiveToken");
+        await Assert.That(principal.Element(ns + "RunLevel")!.Value).IsEqualTo("LeastPrivilege");
+    }
+
+    [Test]
+    public async Task TaskXml_defaults_to_the_current_user() {
+        var xml = WindowsTaskUnit.TaskXml(Spec(), @"C:\k\daemon-service-laptop.cmd");
+
+        await Assert.That(xml).Contains($"<UserId>{Environment.UserDomainName}\\{Environment.UserName}</UserId>");
+    }
+
+    /// Task Scheduler never restarts a running action, so the wrapper restarts the daemon on any non-zero
+    /// exit — negative crash codes included, which `if errorlevel 1` alone misses — and stops on exit 0.
+    [Test]
+    public async Task Wrapper_restarts_the_daemon_on_any_non_zero_exit() {
+        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n");
+        var exec = Array.FindIndex(lines, l => l.StartsWith("\"C:\\kcap\\kcap-daemon.exe\"", StringComparison.Ordinal));
+
+        await Assert.That(lines[exec - 1]).IsEqualTo(":run");
+        await Assert.That(lines[(exec + 1)..(exec + 7)]).IsEquivalentTo(new[] {
+            "if not errorlevel 0 goto restart",
+            "if errorlevel 1 goto restart",
+            "exit /b 0",
+            ":restart",
+            "ping -n 6 127.0.0.1 >nul",
+            "goto run",
+        }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 }

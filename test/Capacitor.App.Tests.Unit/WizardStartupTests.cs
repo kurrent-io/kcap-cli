@@ -864,12 +864,12 @@ public class WizardStartupTests {
     // ── the shim step's pre-probe (latency the shipping default must not pay) ─
 
     [Test]
-    [Arguments(false, "/opt/kcap/bin/kcap")] // not macOS: the answer can't change the outcome
+    [Arguments(false, "/opt/kcap/bin/kcap")] // no installer for this OS: the answer cannot change the outcome
     [Arguments(true, null)]                  // no linkable target: same
-    public async Task The_path_probe_is_skipped_when_it_cannot_change_the_shim_decision(bool isMacOs, string? target) {
+    public async Task The_path_probe_is_skipped_when_it_cannot_change_the_shim_decision(bool hasInstaller, string? target) {
         var probes = 0;
 
-        var applicable = await AppUnderTest.ResolveShimApplicableAsync(isMacOs, target, _ => {
+        var applicable = await AppUnderTest.ResolveShimApplicableAsync(hasInstaller, target, _ => {
             probes++;
             return Task.FromResult<bool?>(false);
         }, CancellationToken.None);

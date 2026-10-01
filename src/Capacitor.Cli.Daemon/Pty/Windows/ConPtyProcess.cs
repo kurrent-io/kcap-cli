@@ -162,20 +162,7 @@ public sealed class ConPtyProcess : IPtyProcess {
             ushort                      cols     = 120,
             ushort                      rows     = 40
         ) {
-        var (resolvedCommand, isCmd) = ResolveCommand(command);
-
-        var cmdLine = new StringBuilder();
-
-        if (isCmd) {
-            cmdLine.Append("cmd.exe /c ");
-        }
-
-        cmdLine.Append(QuoteArg(resolvedCommand));
-
-        foreach (var arg in args) {
-            cmdLine.Append(' ');
-            cmdLine.Append(QuoteArg(arg));
-        }
+        var cmdLine = BuildCommandLine(command, args, ResolveCommand, NpmCmdShim.TryRead);
 
         var pipeSa = new ConPtyInterop.SECURITY_ATTRIBUTES {
             nLength        = Marshal.SizeOf<ConPtyInterop.SECURITY_ATTRIBUTES>(),
@@ -588,7 +575,42 @@ public sealed class ConPtyProcess : IPtyProcess {
         _cts.Dispose();
     }
 
-    static string QuoteArg(string arg) {
+    /// An npm `.cmd` shim is started as its own target (`node.exe script.js`, or a native `.exe`), never
+    /// through `cmd.exe /c`: cmd ends the line at the first newline, so a multi-line prompt would
+    /// arrive truncated. A `.cmd` that is not a readable npm shim keeps the cmd.exe wrapper, and then a
+    /// multi-line argument is refused rather than silently cut.
+    internal static StringBuilder BuildCommandLine(
+            string command, string[] args, Func<string, (string command, bool isCmd)> resolve,
+            Func<string, NpmCmdShim.Target?> readShim) {
+        var (resolvedCommand, isCmd) = resolve(command);
+        var cmdLine = new StringBuilder();
+
+        if (isCmd && readShim(resolvedCommand) is { } shim) {
+            cmdLine.Append(QuoteArg(shim.Program == "node" ? resolve("node").command : shim.Program));
+            if (shim.Script is not null) {
+                cmdLine.Append(' ');
+                cmdLine.Append(QuoteArg(shim.Script));
+            }
+        } else {
+            if (isCmd) {
+                if (args.Any(a => a.AsSpan().ContainsAny('\r', '\n')))
+                    throw new InvalidOperationException(
+                        $"{resolvedCommand} is not an npm shim kcap can start directly, and cmd.exe cannot carry a multi-line argument.");
+                cmdLine.Append("cmd.exe /c ");
+            }
+
+            cmdLine.Append(QuoteArg(resolvedCommand));
+        }
+
+        foreach (var arg in args) {
+            cmdLine.Append(' ');
+            cmdLine.Append(QuoteArg(arg));
+        }
+
+        return cmdLine;
+    }
+
+    internal static string QuoteArg(string arg) {
         if (arg.Length > 0 && !arg.AsSpan().ContainsAny(' ', '\t', '"')) {
             return arg;
         }

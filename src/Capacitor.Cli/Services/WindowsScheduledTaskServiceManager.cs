@@ -1,10 +1,13 @@
+using System.Diagnostics;
 using System.Text;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Services;
 
-sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWriter? writeUnit = null) : IServiceManager {
+sealed class WindowsScheduledTaskServiceManager(
+        ConfigRoot config, UnitFileWriter? writeUnit = null, Func<string, int?>? daemonPid = null) : IServiceManager {
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly Func<string, int?> _daemonPid = daemonPid ?? (id => DaemonPidProbe.ValidatedPid(DaemonStore.FromEnvironment(), id));
 
     public string Describe() => "Windows Scheduled Task";
 
@@ -44,8 +47,23 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         var state = WindowsTaskUnit.StatusFromQuery(code, stdout);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
-        return new ServiceQuery(probe, File.Exists(wrapper), state, bin, null);
+        var jobPid = state == ServiceState.Running && OperatingSystem.IsWindows()
+            ? TaskOwnedPid(_daemonPid(serviceId), WindowsProcessTable.Snapshot())
+            : null;
+        return new ServiceQuery(probe, File.Exists(wrapper), state, bin, jobPid);
     }
+
+    /// The task's job pid, launchd's sense: the running daemon, when the task is what started it. The
+    /// action is `conhost --headless cmd /c wrapper`, so a daemon the task runs is a child of a live
+    /// cmd.exe that is itself a child of conhost.exe. A daemon started by hand has neither above it.
+    internal static int? TaskOwnedPid(int? daemonPid, IReadOnlyDictionary<int, WindowsProcessEntry> table) {
+        if (daemonPid is not { } pid || !table.TryGetValue(pid, out var daemon)) return null;
+        if (!table.TryGetValue(daemon.ParentPid, out var wrapper) || !IsImage(wrapper, "cmd.exe")) return null;
+        if (!table.TryGetValue(wrapper.ParentPid, out var host) || !IsImage(host, "conhost.exe")) return null;
+        return pid;
+    }
+
+    static bool IsImage(WindowsProcessEntry entry, string exe) => string.Equals(entry.ExeName, exe, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking schtasks.</summary>
@@ -70,7 +88,11 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
     /// <summary>No distinct verify path for scheduled tasks yet — delegate mechanically to <see cref="Install"/>.</summary>
     public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, startNow: true);
 
+    // Deleting a task leaves its running instance alone, so the wrapper and daemon are ended first — the
+    // same "removed means stopped" launchd and systemd give.
     public bool Uninstall(string serviceId, out string? error) {
+        ServiceProcess.Run("schtasks", WindowsTaskUnit.EndArgs(serviceId));
+        KillDaemon(serviceId);
         ServiceProcess.Run("schtasks", WindowsTaskUnit.DeleteArgs(serviceId));
         var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
         if (File.Exists(wrapper)) File.Delete(wrapper);
@@ -84,9 +106,27 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
         return true;
     }
 
+    /// `schtasks /End` ends the wrapper, which is what stops the restart loop, but it does not reliably take
+    /// the daemon with it: a daemon the wrapper restarted outlives its console host. So the daemon is stopped
+    /// by its validated pid once the loop that would restart it is gone.
     public bool Stop(string serviceId, out string? error) {
         ServiceProcess.Check("schtasks", WindowsTaskUnit.EndArgs(serviceId));
-        error = null;
-        return true;
+        error = KillDaemon(serviceId);
+        return error is null;
+    }
+
+    string? KillDaemon(string serviceId) {
+        if (_daemonPid(serviceId) is not { } pid || pid == Environment.ProcessId) return null;
+        try {
+            using var process = Process.GetProcessById(pid);
+            process.Kill(entireProcessTree: true);
+            return null;
+        } catch (ArgumentException) {
+            return null; // already gone
+        } catch (InvalidOperationException ex) {
+            return $"the daemon (PID {pid}) survived the task's end and could not be stopped: {ex.Message}";
+        } catch (System.ComponentModel.Win32Exception ex) {
+            return $"the daemon (PID {pid}) survived the task's end and could not be stopped: {ex.Message}";
+        }
     }
 }
