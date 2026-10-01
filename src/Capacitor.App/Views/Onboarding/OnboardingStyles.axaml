@@ -362,4 +362,50 @@
     <Style Selector="RadioButton.frSegment:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
+    <!-- A list of choices drawn as option rows: accent border and wash on the chosen one. -->
+    <Style Selector="ListBox.frList">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox.frList ListBoxItem">
+        <Setter Property="Padding" Value="12,10" />
+        <Setter Property="Margin" Value="0,0,0,4" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrPanelBorderBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="ListBox.frList ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrPanelBorderBrush}" />
+        <Setter Property="CornerRadius" Value="4" />
+    </Style>
+    <Style Selector="ListBox.frList ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentHoverBrush}" />
+    </Style>
+    <Style Selector="ListBox.frList ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter,
+                     ListBox.frList ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     ListBox.frList ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource FrAccentWashBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+
+    <!-- The 20px ring the page turns while it waits on something it cannot measure. -->
+    <Style Selector="Panel.frSpinner">
+        <Setter Property="Width" Value="20" />
+        <Setter Property="Height" Value="20" />
+    </Style>
+    <Style Selector="Panel.frSpinner > Ellipse">
+        <Setter Property="Stroke" Value="{StaticResource FrControlBorderBrush}" />
+        <Setter Property="StrokeThickness" Value="2.5" />
+    </Style>
+    <Style Selector="Panel.frSpinner > Path">
+        <Setter Property="Stroke" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="StrokeThickness" Value="2.5" />
+        <Setter Property="StrokeLineCap" Value="Round" />
+        <Setter Property="Data" Value="M10,1.25 A8.75,8.75 0 0 1 18.75,10" />
+        <Setter Property="RenderTransformOrigin" Value="50%,50%" />
+    </Style>
 </Styles>

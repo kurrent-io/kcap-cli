@@ -16,6 +16,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
+using TUnit.Assertions.Enums;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.Time.Testing;
@@ -473,7 +474,7 @@ public class WizardStartupTests {
             };
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var attempt = graph.Auth.Begin(new ConnectIntent.Create());
+            var attempt = graph.Auth.Begin(new ConnectIntent.Discover(ForceDevice: true));
             await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
             await AppUnderTest.QuiesceAppAsync(graph.Auth, import: null, lifecycle: null, lane: null, Cap, TimeProvider.System)
@@ -640,9 +641,9 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
-                WizardStepId.Shim, WizardStepId.Connect, WizardStepId.SignIn, WizardStepId.Defaults,
+                WizardStepId.Welcome, WizardStepId.SignIn, WizardStepId.Shim, WizardStepId.Defaults,
                 WizardStepId.Agents, WizardStepId.Import, WizardStepId.Daemon, WizardStepId.Done,
-            ]);
+            ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
             await Assert.That(harness.Lane.Requests).IsEmpty();
             await Assert.That(harness.Ops.GetCalls).IsEqualTo(0);
@@ -728,7 +729,7 @@ public class WizardStartupTests {
 
             var graph = WizardComposition.BuildGraph(harness.Options());
             var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
+            var connect = graph.Connect;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
 
             await daemon.RefreshAsync(CancellationToken.None);
@@ -815,7 +816,7 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
             var summary = graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
 
-            await Assert.That(summary.Count).IsEqualTo(7); // every step but Done itself
+            await Assert.That(summary.Count).IsEqualTo(6); // every step but Welcome and Done
             foreach (var title in new[] { "Use kcap in the terminal", "Install agent hooks", "Import past sessions", "Enable the daemon" })
                 await Assert.That(summary.Single(e => e.Title == title).Note).IsEqualTo(WizardComposition.CliMissingNote);
 
@@ -842,20 +843,17 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task A_chosen_workspace_names_how_sign_in_will_run() {
+    public async Task A_sign_in_that_never_ran_reads_as_skipped_in_the_summary() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
             var done = graph.Steps.OfType<DoneStepViewModel>().Single();
 
-            connect.Choice = ConnectChoice.Create; // Satisfied without any input
-
-            var entry = done.Summary.Single(e => e.Title == "Choose a workspace");
-            await Assert.That(entry.Satisfied).IsTrue();
-            await Assert.That(entry.Note).IsEqualTo("Create a new workspace");
-            await Assert.That(entry.Detail).IsEqualTo("Create a new workspace");
+            var entry = done.Summary.Single(e => e.Title == "Sign in");
+            await Assert.That(entry.Satisfied).IsFalse();
+            await Assert.That(entry.Detail).IsEqualTo("Skipped");
+            await Assert.That(done.Summary.Any(e => e.Title == new WelcomeStepViewModel().Title)).IsFalse();
 
             return true;
         });
@@ -912,13 +910,12 @@ public class WizardStartupTests {
     // ── the sign-in step's retarget answer ────────────────────────────────────
 
     [Test]
-    public async Task A_retarget_prefills_the_connect_step_and_navigates_back_to_it() {
+    public async Task A_retarget_prefills_the_workspace_url_and_stays_on_sign_in() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(new AuthResult.Retarget("acme"));
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await graph.ViewModel.PendingEnterForTesting;
 
@@ -927,11 +924,11 @@ public class WizardStartupTests {
                 () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
 
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            await WizardFixtures.WaitUntilAsync(
-                () => graph.ViewModel.Current.Id == WizardStepId.Connect, what: "the retarget navigation");
 
-            await Assert.That(connect.ServerInputText).IsEqualTo("acme");
-            await Assert.That(connect.Choice).IsEqualTo(ConnectChoice.Paste);
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.SignIn);
+            await Assert.That(graph.Connect.ServerInputText).IsEqualTo("acme");
+            await Assert.That(graph.Connect.Choice).IsEqualTo(ConnectChoice.Paste);
+            await Assert.That(signIn.UrlPanelVisible).IsTrue();
 
             return true;
         }).WaitAsync(TimeSpan.FromSeconds(30));
@@ -968,7 +965,7 @@ public class WizardStartupTests {
 
             time.Advance(TimeSpan.FromSeconds(5));
             await WizardFixtures.WaitUntilAsync(
-                () => graph.ViewModel.Current.Id == WizardStepId.Defaults, what: "the move past the sign-in step");
+                () => graph.ViewModel.Current.Id != WizardStepId.SignIn, what: "the move past the sign-in step");
 
             return true;
         }).WaitAsync(TimeSpan.FromSeconds(30));
@@ -977,7 +974,7 @@ public class WizardStartupTests {
     /// A user who navigated during the hold stays where they went — including back on Sign in
     /// itself, where the step id alone would let the stale hold through.
     [Test]
-    [Arguments(false, WizardStepId.Connect)]
+    [Arguments(false, WizardStepId.Welcome)]
     [Arguments(true, WizardStepId.SignIn)]
     public async Task A_committed_sign_in_never_pulls_the_user_off_a_step_they_chose(bool returned, WizardStepId expected) {
         await AvaloniaSession.DispatchAsync(async () => {
@@ -1057,7 +1054,7 @@ public class WizardStartupTests {
     static (OnboardingViewModel Wizard, WizardLifecycleSurface Surface) NewShell() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
         var wizard = new OnboardingViewModel(
-            [new StubStep(WizardStepId.Connect, "Connect to Capacitor")], CancellationToken.None, surface);
+            [new StubStep(WizardStepId.Welcome, "Connect to Capacitor")], CancellationToken.None, surface);
 
         return (wizard, surface);
     }
@@ -1502,7 +1499,7 @@ public class WizardStartupResolutionTests {
         var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
         using var handler = new StubAuthHandler { Status = HttpStatusCode.ServiceUnavailable };
         ConnectIntent intent = intentName == "create"
-            ? new ConnectIntent.Create()
+            ? new ConnectIntent.Discover(ForceDevice: true)
             : new ConnectIntent.Discover();
 
         WizardFacadeSpec? spec = null;

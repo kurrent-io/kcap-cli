@@ -17,7 +17,7 @@ namespace Capacitor.App.Tests.Unit;
 /// The PATH shim, the visibility/daemon-name defaults, and the closing
 /// summary. Shim owns a ReactiveCommand (WhenAnyValue in its ctor), so it runs through the real
 /// headless session like SignInStepViewModel; Defaults and Done own no commands and run directly,
-/// like ConnectStepViewModel.
+/// like ConnectChoiceViewModel.
 public class WizardSimpleStepsTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -489,7 +489,7 @@ public class DefaultsStepViewModelTests {
 }
 
 /// Closing recap. Owns no commands and no Rx subscriptions — runs without the headless session,
-/// like ConnectStepViewModelTests.
+/// like ConnectChoiceViewModelTests.
 public class DoneStepViewModelTests {
     [Test]
     public async Task Summary_reflects_the_providers_current_output_including_why_skipped_notes() {

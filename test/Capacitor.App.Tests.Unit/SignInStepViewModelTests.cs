@@ -28,6 +28,11 @@ public class SignInStepViewModelTests {
         return value;
     }
 
+    static async Task ChooseCreateAsync(Harness h) {
+        await WaitUntil(() => h.Vm.ModeChoiceVisible, "the workspace mode choice");
+        await h.Vm.CreateWorkspaceCommand.Execute().ToTask();
+    }
+
     static async Task WaitUntil(Func<bool> condition, string what) {
         var deadline = DateTime.UtcNow + Bounded;
 
@@ -62,7 +67,7 @@ public class SignInStepViewModelTests {
 
     sealed class Harness : IDisposable {
         readonly TempConfigRoot                 _config = new();
-        public readonly ConnectStepViewModel    Connect = new();
+        public readonly ConnectChoiceViewModel    Connect = new();
         public readonly WizardTenantPicker      Picker;
         public readonly ScriptedSignupHandler   Signup  = new();
         public readonly RecordingOpener         Opener  = new();
@@ -139,7 +144,7 @@ public class SignInStepViewModelTests {
         var (committed, cancelled, failed) = await AvaloniaSession.DispatchAsync(async () => {
             async Task<int> CompletionsFor(AuthResult result) {
                 using var h = new Harness();
-                h.Connect.Choice = ConnectChoice.Create;
+                h.Connect.Choice = ConnectChoice.Discover;
                 h.Operation = (_, _) => Task.FromResult(result);
                 var raised = 0;
                 h.Vm.Completed += () => raised++;
@@ -189,7 +194,7 @@ public class SignInStepViewModelTests {
     public async Task Re_entry_after_a_commit_still_shows_the_step_satisfied() {
         var (satisfied, status, runs) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
 
             await h.SignIn();
             await h.Vm.OnEnterAsync(CancellationToken.None); // Back then forward again
@@ -229,7 +234,7 @@ public class SignInStepViewModelTests {
     public async Task Cancelling_is_not_a_failure_and_leaves_the_step_retryable() {
         var (satisfied, status, isError, detail) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = (_, _) => Task.FromResult<AuthResult>(new AuthResult.Cancelled());
 
             await h.SignIn();
@@ -250,9 +255,9 @@ public class SignInStepViewModelTests {
     public async Task A_provisioning_timeout_headlines_the_pending_workspace_and_is_not_an_error() {
         var (status, isError, detail, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = (_, _) => {
-                h.Progress.Notice("Still provisioning — finish later by joining 'acme' from the Connect step.");
+                h.Progress.Notice("Still provisioning — finish later by signing in to 'acme' with \"I have a workspace URL\".");
 
                 return Task.FromResult<AuthResult>(new AuthResult.Failed(
                     "'acme' is still being created.", AuthFailureReason.ProvisioningInProgress));
@@ -268,7 +273,7 @@ public class SignInStepViewModelTests {
                     .IsFalse()
                     .Because("nothing failed — the poll outran its window while the workspace was "
                            + "still being created");
-        await Assert.That(detail).IsEqualTo("Still provisioning — finish later by joining 'acme' from the Connect step.");
+        await Assert.That(detail).IsEqualTo("Still provisioning — finish later by signing in to 'acme' with \"I have a workspace URL\".");
         // Still not signed in to anything, so the step cannot be satisfied.
         await Assert.That(satisfied).IsFalse();
     }
@@ -278,7 +283,7 @@ public class SignInStepViewModelTests {
     public async Task A_failure_shows_one_generic_headline_and_never_re_logs_the_facade_message() {
         var (status, isError, detail, log, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = (_, _) => {
                 h.Progress.Error("Error: the auth service is unreachable.");
 
@@ -302,7 +307,7 @@ public class SignInStepViewModelTests {
     public async Task An_unexpected_operation_throw_lands_as_a_failure_not_a_crash() {
         var (status, isError) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = (_, _) => throw new InvalidOperationException("claim_arm_failed");
 
             await h.SignIn();
@@ -448,15 +453,17 @@ public class SignInStepViewModelTests {
 
     // ── create sub-flow ──────────────────────────────────────────────────────
 
+    /// The form asks the name and the address together: the address follows the name, and the
+    /// provisioner's own address prompt is answered from the form rather than shown again.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_create_intent_skips_the_mode_menu_and_walks_the_provisioner_prompts() {
-        var (modeShows, slugSuggestion, confirmText, satisfied, status) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task The_create_form_answers_the_name_and_address_in_one_submit() {
+        var (slugShows, derived, confirmText, satisfied, status) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Signup.Respond = (request, _) => request.RequestUri!.AbsolutePath == "/api/signup/availability"
                 ? (HttpStatusCode.OK, """{"available":true}""")
-                : (HttpStatusCode.OK, """{"slug":"acme","state":"active","workosOrgId":"org_1","url":"https://acme.kcap.ai"}""");
+                : (HttpStatusCode.OK, """{"slug":"acme-robotics","state":"active","workosOrgId":"org_1","url":"https://acme-robotics.kcap.ai"}""");
 
             h.Operation = async (_, ct) => {
                 var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
@@ -468,18 +475,16 @@ public class SignInStepViewModelTests {
 
             var shows = 0;
             h.Vm.PropertyChanged += (_, e) => {
-                if (e.PropertyName == nameof(SignInStepViewModel.ModeChoiceVisible) && h.Vm.ModeChoiceVisible) shows++;
+                if (e.PropertyName == nameof(SignInStepViewModel.SlugPromptVisible) && h.Vm.SlugPromptVisible) shows++;
             };
 
             var exec = h.SignIn();
 
-            await WaitUntil(() => h.Vm.OrgNamePromptVisible, "the organization-name prompt");
-            h.Vm.OrgName = "Acme";
-            await h.Vm.SubmitOrgNameCommand.Execute().ToTask();
-
-            await WaitUntil(() => h.Vm.SlugPromptVisible, "the slug prompt");
-            var suggestion = h.Vm.Slug;
-            await h.Vm.SubmitSlugCommand.Execute().ToTask();
+            await ChooseCreateAsync(h);
+            await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
+            h.Vm.OrgName = "Acme Robotics";
+            var slug = h.Vm.Slug;
+            await h.Vm.SubmitCreateFormCommand.Execute().ToTask();
 
             await WaitUntil(() => h.Vm.ConfirmVisible, "the create confirmation");
             var confirm = h.Vm.ConfirmText;
@@ -487,14 +492,104 @@ public class SignInStepViewModelTests {
 
             await exec;
 
-            return (shows, suggestion, confirm, h.Vm.Satisfied, h.Vm.Status);
+            return (shows, slug, confirm, h.Vm.Satisfied, h.Vm.Status);
         });
 
-        await Assert.That(modeShows).IsEqualTo(0); // the Connect intent IS the mode
-        await Assert.That(slugSuggestion).IsEqualTo("acme");
-        await Assert.That(confirmText).Contains("https://acme.kcap.ai");
+        await Assert.That(slugShows).IsEqualTo(0);
+        await Assert.That(derived).IsEqualTo("acme-robotics");
+        await Assert.That(confirmText).IsEqualTo("Create Acme Robotics at acme-robotics.kcap.ai?");
         await Assert.That(satisfied).IsTrue();
         await Assert.That(status).IsEqualTo("Signed in as sam");
+    }
+
+    /// The page's headline follows the operation: one workspace list, one "none yet" choice, one form.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_headline_follows_the_sign_in_phase() {
+        var (start, picker, none, create) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var startTitle = h.Vm.Title;
+            var pick = new TaskCompletionSource<string>();
+            h.Operation = async (_, ct) => {
+                var picking = h.Picker.PickAsync([new DiscoveredTenant { Origin = "https://acme.kcap.ai" }, new DiscoveredTenant { Origin = "https://beta.kcap.ai" }],
+                    TenantPickContext.None, ct);
+                await WaitUntil(() => h.Vm.TenantPickerVisible, "the picker");
+                pick.SetResult(h.Vm.Title);
+                h.Picker.Select(null);
+                await picking;
+                await h.Provisioner.OfferCreateAsync(Tokens(), ct);
+
+                return new AuthResult.Cancelled();
+            };
+
+            var exec = h.SignIn();
+            var pickerTitle = await pick.Task.WaitAsync(Bounded);
+            await WaitUntil(() => h.Vm.ModeChoiceVisible, "the workspace mode choice");
+            var noneTitle = h.Vm.Title;
+            await h.Vm.CreateWorkspaceCommand.Execute().ToTask();
+            await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
+            var createTitle = h.Vm.Title;
+            await h.Vm.CancelCreateFormCommand.Execute().ToTask();
+            await exec;
+
+            return (startTitle, pickerTitle, noneTitle, createTitle);
+        });
+
+        await Assert.That(start).IsEqualTo("Sign in to Capacitor");
+        await Assert.That(picker).IsEqualTo("Choose a workspace");
+        await Assert.That(none).IsEqualTo("No Capacitor workspace yet");
+        await Assert.That(create).IsEqualTo("Create your workspace");
+    }
+
+    /// The address is checked as it is typed, with the token the offer runs under.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_create_form_reports_whether_the_address_is_free() {
+        var (hint, available, asked) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Signup.Respond = (request, _) => (HttpStatusCode.OK,
+                request.RequestUri!.Query.Contains("slug=taken") ? """{"available":false,"reason":"taken"}""" : """{"available":true}""");
+            h.Operation = async (_, ct) => {
+                await h.Provisioner.OfferCreateAsync(Tokens(), ct);
+
+                return new AuthResult.Cancelled();
+            };
+
+            var exec = h.SignIn();
+            await ChooseCreateAsync(h);
+            await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
+            h.Vm.Slug = "taken";
+            await WaitUntil(() => h.Vm.SlugHint is not null, "the availability answer");
+            var result = (h.Vm.SlugHint, h.Vm.SlugAvailable, h.Signup.Requests.Count(r => r.Contains("availability")));
+            await h.Vm.CancelCreateFormCommand.Execute().ToTask();
+            await exec;
+
+            return result;
+        });
+
+        await Assert.That(hint).IsEqualTo("taken");
+        await Assert.That(available).IsFalse();
+        await Assert.That(asked).IsEqualTo(1);
+    }
+
+    /// An address typed by hand stops following the name.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_edited_address_stops_following_the_name() {
+        var (afterName, afterEdit, afterRename) = await AvaloniaSession.DispatchAsync(() => {
+            using var h = new Harness();
+            h.Vm.OrgName = "Acme";
+            var first = h.Vm.Slug;
+            h.Vm.Slug = "acme-hq";
+            var edited = h.Vm.Slug;
+            h.Vm.OrgName = "Acme Robotics";
+
+            return Task.FromResult((first, edited, h.Vm.Slug));
+        });
+
+        await Assert.That(afterName).IsEqualTo("acme");
+        await Assert.That(afterEdit).IsEqualTo("acme-hq");
+        await Assert.That(afterRename).IsEqualTo("acme-hq");
     }
 
     [Test]
@@ -502,7 +597,7 @@ public class SignInStepViewModelTests {
     public async Task Declining_the_create_confirmation_explains_itself_instead_of_a_bare_failure() {
         var (status, detail, log) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Signup.Respond = (_, _) => (HttpStatusCode.OK, """{"available":true}""");
             h.Operation = async (_, ct) => {
                 var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
@@ -514,6 +609,7 @@ public class SignInStepViewModelTests {
 
             var exec = h.SignIn();
 
+            await ChooseCreateAsync(h);
             await WaitUntil(() => h.Vm.OrgNamePromptVisible, "the organization-name prompt");
             h.Vm.OrgName = "Acme";
             await h.Vm.SubmitOrgNameCommand.Execute().ToTask();
@@ -565,8 +661,8 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_zero_tenant_discovery_offers_the_three_way_choice_and_retargets_to_connect() {
-        var (retargets, choice, prefilled, status, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task A_zero_tenant_discovery_offers_the_choice_and_retargets_in_place() {
+        var (urlPanel, choice, prefilled, status, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = async (_, ct) => {
@@ -577,9 +673,6 @@ public class SignInStepViewModelTests {
                     : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
             };
 
-            var raised = new List<string>();
-            h.Vm.RetargetRequested += target => raised.Add(target);
-
             var exec = h.SignIn();
             await WaitUntil(() => h.Vm.ModeChoiceVisible, "the workspace mode choice");
 
@@ -587,13 +680,13 @@ public class SignInStepViewModelTests {
             await h.Vm.UseExistingWorkspaceCommand.Execute().ToTask();
             await exec;
 
-            return (raised, h.Connect.Choice, h.Connect.ServerInputText, h.Vm.Status, h.Vm.Satisfied);
+            return (h.Vm.UrlPanelVisible, h.Connect.Choice, h.Connect.ServerInputText, h.Vm.Status, h.Vm.Satisfied);
         });
 
-        await Assert.That(retargets).IsEquivalentTo(["acme"]);
+        await Assert.That(urlPanel).IsTrue();
         await Assert.That(choice).IsEqualTo(ConnectChoice.Paste);
         await Assert.That(prefilled).IsEqualTo("acme");
-        await Assert.That(status).Contains("Connect step");
+        await Assert.That(status).IsEqualTo("Sign in to acme");
         await Assert.That(satisfied).IsFalse();
     }
 
@@ -667,7 +760,7 @@ public class SignInStepViewModelTests {
     public async Task Leaving_while_a_create_prompt_is_parked_releases_it_and_cancels() {
         var (canLeave, promptVisible, status, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = async (_, ct) => {
                 var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
 
@@ -677,6 +770,7 @@ public class SignInStepViewModelTests {
             };
 
             var exec = h.SignIn();
+            await ChooseCreateAsync(h);
             await WaitUntil(() => h.Vm.OrgNamePromptVisible, "the organization-name prompt");
 
             var allowed = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
@@ -725,19 +819,20 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Signing_in_without_a_staged_intent_starts_nothing_and_says_where_to_choose() {
-        var (runs, status) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task Signing_in_without_a_staged_intent_starts_nothing_and_opens_the_url_field() {
+        var (runs, panel, error) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Connect.Choice = ConnectChoice.Paste; // nothing typed — no valid intent
 
             await h.Vm.OnEnterAsync(CancellationToken.None);
             await h.SignIn();
 
-            return (h.Runs, h.Vm.Status);
+            return (h.Runs, h.Vm.UrlPanelVisible, h.Connect.InputError);
         });
 
         await Assert.That(runs).IsEqualTo(0);
-        await Assert.That(status).Contains("Connect");
+        await Assert.That(panel).IsTrue();
+        await Assert.That(error).IsEqualTo(ConnectChoiceViewModel.InvalidServerMessage);
     }
 
     // ── quarantine notice ────────────────────────────────────────────────────
@@ -747,7 +842,7 @@ public class SignInStepViewModelTests {
     public async Task A_quarantined_claims_file_surfaces_one_dismissible_notice_and_the_ack_persists() {
         var (notice, afterAck, acked, updates) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             await File.WriteAllTextAsync(h.ClaimsPath, "{ this is not json");
 
             await h.SignIn();
@@ -772,7 +867,7 @@ public class SignInStepViewModelTests {
     public async Task A_quarantine_notice_holds_completion_until_it_is_acknowledged() {
         var (whileShown, afterAck) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             await File.WriteAllTextAsync(h.ClaimsPath, "{ this is not json");
             var raised = 0;
             h.Vm.Completed += () => raised++;
@@ -794,7 +889,7 @@ public class SignInStepViewModelTests {
     public async Task An_already_acknowledged_quarantine_is_never_surfaced_again() {
         var notice = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
             h.AppState.State = h.AppState.State with { ConsentQuarantineAcked = true };
             await File.WriteAllTextAsync(h.ClaimsPath, "{ this is not json");
 
@@ -810,39 +905,36 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_window_selects_a_template_per_step_view_model() {
-        var (connectBox, signInButton, signInStatus, ctaGap) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task The_pane_renders_sign_in_with_the_work_account_first() {
+        var (workAccount, urlBox, urlBoxShown, statusShown) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            var vm = new OnboardingViewModel([h.Connect, h.Vm]);
+            var vm = new OnboardingViewModel([new WelcomeStepViewModel(), h.Vm]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var box = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "ServerInputBox");
-
-            await vm.NextCommand.Execute().ToTask(); // Connect -> Sign in
+            await vm.NextCommand.Execute().ToTask(); // Welcome -> Sign in
             Dispatcher.UIThread.RunJobs();
 
-            var button = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "SignInButton");
-            var status = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "SignInStatusText")?.Text;
-            var ctaGap = button?.Parent is StackPanel { Parent: StackPanel host }
-                ? host.Spacing
-                : -1;
+            var button = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "WorkAccountButton");
+            var box = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "ServerInputBox");
+            var status = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "SignInStatusText");
+            var shown = box?.IsEffectivelyVisible;
+            var statusVisible = status?.IsEffectivelyVisible;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (box, button, status, ctaGap);
+            return (button, box, shown, statusVisible);
         });
 
-        await Assert.That(connectBox).IsNotNull();
-        await Assert.That(connectBox!.Classes.Contains("kcapField")).IsTrue();
-        await Assert.That(signInButton).IsNotNull();
-        await Assert.That(signInStatus).IsEqualTo("Find your workspaces with single sign-on");
-        await Assert.That(ctaGap).IsEqualTo(14);
+        await Assert.That(workAccount).IsNotNull();
+        await Assert.That(urlBox).IsNotNull();
+        await Assert.That(urlBox!.Classes.Contains("frField")).IsTrue();
+        await Assert.That(urlBoxShown).IsFalse(); // behind "I have a workspace URL"
+        await Assert.That(statusShown).IsFalse(); // the ready line only restates the button
     }
 
     [Test]
@@ -850,7 +942,7 @@ public class SignInStepViewModelTests {
     public async Task A_healthy_claims_store_surfaces_no_notice() {
         var notice = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Create;
+            h.Connect.Choice = ConnectChoice.Discover;
 
             await h.SignIn();
 
