@@ -898,7 +898,12 @@ sealed class SetupCommand(
                     .ShowDefaultValue());
         }
 
-        while (await FindDaemonNameHolderAsync(serverUrl, daemonName) is { } holder) {
+        // Built from the profile login stored the token under: discovery may have switched it after startup.
+        var snapshot   = await AppConfig.LoadProfileConfig(config);
+        var loggedInto   = new ProfileContext(
+            new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
+
+        while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
             AnsiConsole.MarkupLine(
                 $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
               + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
@@ -1524,9 +1529,9 @@ sealed class SetupCommand(
     }
 
     async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
-            string serverUrl, string daemonName) {
+            string serverUrl, ProfileContext loggedInto, string daemonName) {
         try {
-            await using var scoped = HttpForChosenServer(serverUrl);
+            await using var scoped = HttpForChosenServer(serverUrl, loggedInto);
             using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
 
             return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, config);
