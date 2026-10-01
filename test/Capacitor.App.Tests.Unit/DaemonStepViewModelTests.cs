@@ -6,7 +6,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Time.Testing;
@@ -909,7 +909,7 @@ public class DaemonStepTemplateTests {
             var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -947,7 +947,7 @@ public class DaemonStepTemplateTests {
             var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 

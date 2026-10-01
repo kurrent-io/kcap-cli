@@ -10,7 +10,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -1066,7 +1066,7 @@ public class WizardStartupTests {
     public async Task The_wizard_window_renders_the_surfaces_status_line() {
         var rendered = await AvaloniaSession.DispatchAsync(() => {
             var (wizard, surface) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
+            var window = new MainWindow { Onboarding = wizard };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -1089,7 +1089,7 @@ public class WizardStartupTests {
     public async Task The_wizard_window_renders_the_surfaces_attention_line() {
         var rendered = await AvaloniaSession.DispatchAsync(() => {
             var (wizard, surface) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
+            var window = new MainWindow { Onboarding = wizard };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -1112,7 +1112,7 @@ public class WizardStartupTests {
     public async Task A_lifecycle_prompt_opens_a_dialog_owned_by_the_wizard_window() {
         var (owned, settled) = await AvaloniaSession.DispatchAsync(() => {
             var (wizard, _) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
+            var window = new MainWindow { Onboarding = wizard };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -1166,8 +1166,8 @@ public class WizardStartupTests {
     public async Task Closing_the_wizard_window_ends_the_close_wait() {
         await AvaloniaSession.DispatchAsync(async () => {
             var (wizard, _) = NewShell();
-            var window = new OnboardingWindow { DataContext = wizard };
-            window.Show();
+            var (desktop, _) = FakeClassicDesktopLifetime.Create();
+            var window = AppUnderTest.ShowWizardWindow(desktop, wizard);
             Dispatcher.UIThread.RunJobs();
 
             var wait = AppUnderTest.WaitForWizardCloseAsync(wizard, CancellationToken.None);

@@ -74,6 +74,7 @@ public sealed class ImportStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Import;
     public string       Title      => "Import past sessions";
     public bool         Applicable => true;
+    public string Lede => "Bring existing agent sessions into Capacitor. Skip if you want to start fresh.";
 
     public IReadOnlyList<ImportVendorRow> Vendors { get; }
 

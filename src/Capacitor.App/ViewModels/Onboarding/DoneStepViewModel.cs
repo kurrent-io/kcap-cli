@@ -21,6 +21,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Done;
     public string       Title      => "You're all set";
     public bool         Applicable => true;
+    public string Lede => "Here's what this machine is set up for. Change any of this later in Settings.";
     public bool         Satisfied  => true; // a summary step is never itself incomplete
 
     public IReadOnlyList<DoneSummaryEntry> Summary =>

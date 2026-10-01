@@ -1,18 +1,12 @@
-<rxui:ReactiveWindow xmlns="https://github.com/avaloniaui"
-                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                     xmlns:rxui="clr-namespace:ReactiveUI.Avalonia;assembly=ReactiveUI.Avalonia"
-                     xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
-                     xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
-                     x:Class="Capacitor.App.Views.Onboarding.OnboardingWindow"
-                     x:TypeArguments="vm:OnboardingViewModel"
-                     x:DataType="vm:OnboardingViewModel"
-                     Title="Kurrent Capacitor — Setup"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
-                     Width="640" Height="580"
-                     MinWidth="560" MinHeight="480"
-                     CanResize="True"
-                     Background="{StaticResource KcapCanvasBrush}">
-    <Window.Styles>
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:app="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.OnboardingPaneView"
+             x:DataType="vm:OnboardingViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <UserControl.Styles>
         <Style Selector="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="FontSize" Value="13.5" />
@@ -39,18 +33,13 @@
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
-    </Window.Styles>
+    </UserControl.Styles>
     <!-- Per-step templates, selected by ViewModel type; the ContentControl below deliberately
          sets no ContentTemplate, which would win over every one of these. -->
-    <Window.DataTemplates>
+    <UserControl.DataTemplates>
         <DataTemplate DataType="vm:ConnectStepViewModel">
             <StackPanel Spacing="14">
-                <TextBlock Classes="kcapSubtitle"
-                           Text="You'll sign in on the next step. Choose how to reach a workspace."
-                           TextWrapping="Wrap" />
-
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="16,12">
+                <Border Classes="frCard">
                     <StackPanel Spacing="8">
                         <RadioButton x:Name="DiscoverChoice" GroupName="Connect" Content="Find workspaces for my account"
                                      IsChecked="{Binding DiscoverSelected, Mode=TwoWay}" />
@@ -96,12 +85,7 @@
 
         <DataTemplate DataType="vm:DefaultsStepViewModel">
             <StackPanel Spacing="14">
-                <TextBlock Classes="kcapSubtitle"
-                           Text="Who can see sessions you start here, and what this machine is called."
-                           TextWrapping="Wrap" />
-
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="20">
+                <Border Classes="frCard">
                     <StackPanel Spacing="20">
                         <StackPanel Spacing="8">
                             <TextBlock Classes="kcapLabel" Text="Who can see new sessions" />
@@ -146,15 +130,11 @@
 
         <DataTemplate DataType="vm:AgentsStepViewModel">
             <StackPanel Spacing="14">
-                <TextBlock Classes="kcapSubtitle" Text="Install kcap's hooks into the agents you use. You can skip any you don't want."
-                           TextWrapping="Wrap" />
-
                 <TextBlock x:Name="AgentsMessageText" Text="{Binding Message}" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
                            IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="16,12">
+                <Border Classes="frCard">
                     <StackPanel Spacing="8">
                         <TextBlock Classes="kcapLabel" Text="Agents" />
                         <ItemsControl x:Name="AgentsList" ItemsSource="{Binding Rows}">
@@ -192,16 +172,11 @@
 
         <DataTemplate DataType="vm:ImportStepViewModel">
             <StackPanel Spacing="14">
-                <TextBlock Classes="kcapSubtitle"
-                           Text="Bring existing agent sessions into Capacitor. Skip if you want to start fresh."
-                           TextWrapping="Wrap" />
-
                 <TextBlock x:Name="ImportMessageText" Text="{Binding Message}" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
                            IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="16,12">
+                <Border Classes="frCard">
                     <StackPanel Spacing="8">
                         <TextBlock Classes="kcapLabel" Text="Agents" />
                         <ItemsControl x:Name="ImportVendorsList" ItemsSource="{Binding Vendors}">
@@ -220,8 +195,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="16,12">
+                <Border Classes="frCard">
                     <StackPanel Spacing="8">
                         <TextBlock Classes="kcapLabel" Text="What to import" />
                         <RadioButton x:Name="EverythingChoice" GroupName="ImportScope" Content="All sessions from those agents"
@@ -259,12 +233,7 @@
 
         <DataTemplate DataType="vm:DaemonStepViewModel">
             <StackPanel Spacing="14">
-                <TextBlock Classes="kcapSubtitle"
-                           Text="Runs hosted agents and reviews in the background. Starts again after a reboot."
-                           TextWrapping="Wrap" />
-
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="20">
+                <Border Classes="frCard">
                     <StackPanel Spacing="14">
                         <TextBlock x:Name="DaemonMessageText" Text="{Binding Message}" TextWrapping="Wrap"
                                    FontSize="13.5" LineHeight="21" Foreground="{StaticResource KcapTextBrush}"
@@ -287,12 +256,7 @@
 
         <DataTemplate DataType="vm:DoneStepViewModel">
             <StackPanel Spacing="14">
-                <TextBlock Classes="kcapSubtitle"
-                           Text="Here's what this machine is set up for. Change any of this later in Settings."
-                           TextWrapping="Wrap" />
-
-                <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="12" Padding="8">
+                <Border Classes="frCard">
                     <ItemsControl x:Name="SummaryList" ItemsSource="{Binding Summary}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -331,38 +295,53 @@
                 </Border>
             </StackPanel>
         </DataTemplate>
-    </Window.DataTemplates>
+    </UserControl.DataTemplates>
 
-    <Grid Margin="28,24" RowDefinitions="Auto,*,Auto">
-        <!-- Fallback presenter: always shows the current step's title, template or not. -->
-        <TextBlock Grid.Row="0" x:Name="StepTitleText" Classes="kcapTitle" Text="{Binding Current.Title}"
-                   LetterSpacing="-0.3" Margin="0,0,0,16" />
 
-        <ScrollViewer Grid.Row="1" x:Name="StepScroll" VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
-            <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
+    <Panel>
+        <!-- The setup page's bloom: behind the column, never under the pointer. -->
+        <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Fill="{StaticResource FrBloomBrush}" IsHitTestVisible="False" />
+
+        <ScrollViewer x:Name="StepScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Width="620" HorizontalAlignment="Center" Margin="32,72,32,56" Spacing="26">
+                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
+                    <Path Data="{x:Static views:OnboardingPaneView.Wordmark}" Fill="{StaticResource KcapTextBrush}"
+                          Height="18" Stretch="Uniform" HorizontalAlignment="Left" />
+                </Grid>
+
+                <StackPanel Spacing="14">
+                    <TextBlock x:Name="StepEyebrowText" Classes="frEyebrow" Text="{Binding Eyebrow}" />
+                    <!-- Fallback presenter: always shows the current step's title, template or not. -->
+                    <TextBlock x:Name="StepTitleText" Classes="frHeadline" Text="{Binding Current.Title}" />
+                    <TextBlock x:Name="StepLedeText" Classes="frLede" Text="{Binding Current.Lede}"
+                               IsVisible="{Binding Current.Lede, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
+
+                <StackPanel Spacing="10">
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="12">
+                        <Button x:Name="NextButton" Classes="frPrimary" Command="{Binding NextCommand}"
+                                Content="{Binding NextLabel, Converter={x:Static views:UpperCase.Instance}}" />
+                        <Button Grid.Column="1" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
+                                Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
+                                IsVisible="{Binding SkipVisible}" />
+                        <Button Grid.Column="3" x:Name="BackButton" Classes="frQuiet" Content="BACK"
+                                Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
+                    </Grid>
+
+                    <!-- The outcome consumer's lines: wizard-first mode has no tray and no rail, so this
+                         is where a lane outcome actually becomes visible. -->
+                    <TextBlock x:Name="LifecycleStatusText" Classes="frNote" Text="{Binding Surface.StatusText}"
+                               IsVisible="{Binding Surface.StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="LifecycleAttentionText" Classes="frError" Text="{Binding Surface.AttentionText}"
+                               IsVisible="{Binding Surface.AttentionText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </StackPanel>
         </ScrollViewer>
 
-        <!-- Left of the buttons: the outcome consumer's lines. Wizard-first mode has no tray and
-             no main window, so this footer is where a lane outcome actually becomes visible. -->
-        <Grid Grid.Row="2" ColumnDefinitions="Auto,*,Auto" Margin="0,16,0,0">
-            <Button x:Name="BackButton" Classes="kcapChip" Content="Back" Command="{Binding BackCommand}"
-                    VerticalAlignment="Center" />
-
-            <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center" Margin="12,0">
-                <TextBlock x:Name="LifecycleStatusText" Classes="kcapHint" Text="{Binding Surface.StatusText}" TextWrapping="Wrap"
-                           IsVisible="{Binding Surface.StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                <TextBlock x:Name="LifecycleAttentionText" Text="{Binding Surface.AttentionText}" TextWrapping="Wrap"
-                           Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
-                           IsVisible="{Binding Surface.AttentionText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-            </StackPanel>
-
-            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8"
-                        VerticalAlignment="Center">
-                <Button x:Name="SkipButton" Classes="kcapChip" Content="Skip" Command="{Binding SkipCommand}"
-                        IsVisible="{Binding SkipVisible}" />
-                <Button x:Name="NextButton" Classes="kcapPrimary" Content="{Binding NextLabel}" Command="{Binding NextCommand}" />
-            </StackPanel>
-        </Grid>
-    </Grid>
-</rxui:ReactiveWindow>
+        <!-- The pane covers the window's own drag strip. -->
+        <Border Height="40" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+    </Panel>
+</UserControl>

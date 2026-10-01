@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
 using Capacitor.App.Services.Onboarding;
@@ -19,18 +21,28 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     int _index;
 
-    IWizardStep _current;
+    IWizardStep _current = null!;
     public IWizardStep Current {
         get => _current;
         private set {
+            if (_current is INotifyPropertyChanged leaving) leaving.PropertyChanged -= OnCurrentChanged;
             this.RaiseAndSetIfChanged(ref _current, value);
+            if (_current is INotifyPropertyChanged entering) entering.PropertyChanged += OnCurrentChanged;
+            this.RaisePropertyChanged(nameof(Eyebrow));
             this.RaisePropertyChanged(nameof(NextLabel));
+            this.RaisePropertyChanged(nameof(SkipLabel));
             this.RaisePropertyChanged(nameof(SkipVisible));
+            this.RaisePropertyChanged(nameof(BackVisible));
         }
     }
 
-    public string NextLabel => _index == Steps.Count - 1 ? "Get started" : "Next";
+    public string Eyebrow =>
+        $"STEP {_index + 1} OF {Steps.Count} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+
+    public string NextLabel => Current.NextLabel ?? (_index == Steps.Count - 1 ? "Get started" : "Next");
+    public string SkipLabel => Current.SkipLabel;
     public bool SkipVisible => _index < Steps.Count - 1;
+    public bool BackVisible => _index > 0;
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     internal bool Navigating {
@@ -56,7 +68,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         Steps = steps.Where(s => s.Applicable).ToList();
         if (Steps.Count == 0) throw new ArgumentException("at least one applicable step is required", nameof(steps));
 
-        _current = Steps[0];
+        Current = Steps[0];
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
         var idle = this.WhenAnyValue(x => x.Navigating).Select(busy => !busy);
@@ -68,6 +80,11 @@ public sealed class OnboardingViewModel : ReactiveObject {
         NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next), idle);
 
         PendingEnterForTesting = SafeEnterAsync(Current);
+    }
+
+    void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
+        if (e.PropertyName is nameof(IWizardStep.NextLabel)) this.RaisePropertyChanged(nameof(NextLabel));
+        else if (e.PropertyName is nameof(IWizardStep.SkipLabel)) this.RaisePropertyChanged(nameof(SkipLabel));
     }
 
     /// Idempotent — a Done-finish close and the window's own Closing event both route here.

@@ -38,6 +38,7 @@ public sealed class ShimStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Shim;
     public string       Title      => "Command-line tool";
     public bool         Applicable { get; }
+    public string Lede => "Puts kcap on your PATH so it works from any terminal. Installing prompts once for your admin password.";
 
     public bool Satisfied {
         get => _satisfied;
