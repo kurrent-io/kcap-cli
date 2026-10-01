@@ -927,10 +927,12 @@ public class AcpHostedAgentRuntimeTests {
         await h.Runtime.StartAsync("/abs/worktree", "p", h.Cts.Token).WaitAsync(HangGuard);
         h.Fake.EmitAgentText("marker-a"); h.Fake.EmitAgentText("marker-b"); // capacity 1: earlier envelopes are evicted from the live channel
         // A prompt that ends flushes the open run, so the chunks may already be in the journal
-        // rather than still buffered. Either place means the read loop has them.
+        // rather than still buffered. Either place means the read loop has them. The sighting is asserted, not
+        // re-read: a flush between two reads leaves the chunks in the journal writer's queue, in neither place.
         var deadline = DateTime.UtcNow + HangGuard;
-        while (DateTime.UtcNow < deadline && !ChunksLanded(h, journal.Path)) await Task.Delay(10);
-        await Assert.That(ChunksLanded(h, journal.Path)).IsTrue();
+        var landed   = false;
+        while (DateTime.UtcNow < deadline && !(landed = ChunksLanded(h, journal.Path))) await Task.Delay(10);
+        await Assert.That(landed).IsTrue();
         await h.Runtime.DisposeAsync();  // flushes whatever is still open, then completes the channel
         h.Fake.EmitAgentText("marker-late");
         await journal.CompleteAsync();
