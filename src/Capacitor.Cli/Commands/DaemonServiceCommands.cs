@@ -91,6 +91,9 @@ sealed class DaemonServiceCommands(
         return ["--max-agents", maxAgents.ToString()];
     }
 
+    /// <summary>Short of the npm refresh wrapper's 60s kill, so the last reload it starts can finish.</summary>
+    static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(55);
+
     /// <summary>
     /// Brings every installed launchd job up to the unit this version writes. It runs after each
     /// update, unattended, so a daemon hosting agents is never restarted: it is left for a later run.
@@ -98,10 +101,12 @@ sealed class DaemonServiceCommands(
     internal async Task<int> Refresh() {
         if (manager is not LaunchdServiceManager launchd) return 0;
 
-        var failed = 0;
+        var failed  = 0;
+        var started = time.GetTimestamp();
+        TimeSpan TimeLeft() => RefreshDeadline - time.GetElapsedTime(started);
 
         foreach (var serviceId in launchd.ListInstalled()) {
-            var outcome = launchd.RefreshProcessType(serviceId, () => RequestIdleRestart(serviceId), out var error);
+            var outcome = launchd.RefreshProcessType(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error);
 
             switch (outcome) {
                 case ProcessTypeRefresh.Reloaded:

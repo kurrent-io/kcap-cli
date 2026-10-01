@@ -109,18 +109,24 @@ sealed partial class LaunchdServiceManager(
             throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {err.Trim()}");
     }
 
-    /// <summary>Per launchctl call. Refresh runs under the npm refresh wrapper's 60s kill, and a full
-    /// reload with its rollback is four calls.</summary>
+    /// <summary>Per launchctl call. Refresh runs under the npm refresh wrapper's 60s kill.</summary>
     static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>The longest a reload can take from asking the daemon to its rollback bootstrap: the
+    /// idle-restart request, then bootout, a probe, bootstrap and the rollback. A reload is not started
+    /// with less than this left, because a kill between bootout and bootstrap leaves the job unloaded.</summary>
+    public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + 4 * RefreshCtlTimeout;
 
     /// <summary>
     /// Moves an installed job off the Adaptive process type. The plist is rewritten whenever it carries
     /// the Adaptive line, but launchd reads the type only when the job loads, and the reload kills
     /// whatever the daemon hosts. So a running Adaptive job is reloaded only once
     /// <paramref name="requestIdleRestart"/> reports that the daemon accepted an idle-only restart. A
-    /// busy daemon refuses that restart, and the reload waits for a later refresh.
+    /// busy daemon refuses that restart, and the reload waits for a later refresh, as it does when
+    /// <paramref name="timeLeft"/> is under <see cref="ReloadBudget"/>.
     /// </summary>
-    public ProcessTypeRefresh RefreshProcessType(string serviceId, Func<bool> requestIdleRestart, out string? error) {
+    public ProcessTypeRefresh RefreshProcessType(
+            string serviceId, Func<bool> requestIdleRestart, Func<TimeSpan> timeLeft, out string? error) {
         error = null;
         var path = LaunchdUnit.PlistPath(home, serviceId);
 
@@ -139,6 +145,7 @@ sealed partial class LaunchdServiceManager(
         if (upgraded is null && !stale) return ProcessTypeRefresh.Unchanged;
         if (upgraded is not null) _writeUnit(path, upgraded, null);
         if (!stale) return ProcessTypeRefresh.Rewritten;
+        if (timeLeft() < ReloadBudget) return ProcessTypeRefresh.Deferred;
 
         // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
         var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
@@ -146,15 +153,29 @@ sealed partial class LaunchdServiceManager(
 
         // The accepted restart is already exiting the daemon. Booting out now unloads the job before
         // launchd can relaunch it from the definition it cached at load.
-        RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+        var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+        if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId) == LabelProbe.Loaded) {
+            error = "launchctl bootout did not unload the job, so it keeps running as Adaptive until the next update";
+            return ProcessTypeRefresh.Failed;
+        }
+
         if (TryBootstrap(path, out var bootstrapError)) return ProcessTypeRefresh.Reloaded;
 
         if (upgraded is not null) _writeUnit(path, original!, null);
-        error = TryBootstrap(path, out var rollbackError)
-            ? $"{bootstrapError}; the previous unit was restored and loaded"
-            : $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), so the daemon is not loaded — run `kcap daemon service start`";
+        if (TryBootstrap(path, out var rollbackError)) {
+            error = $"{bootstrapError}; the previous unit was restored and loaded";
+        } else {
+            error = Probe(serviceId) == LabelProbe.Absent
+                ? $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), so the daemon is not loaded — run `kcap daemon service start`"
+                : $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), and launchd's state for the job is unclear — check `kcap daemon service status`";
+        }
 
         return ProcessTypeRefresh.Failed;
+    }
+
+    LabelProbe Probe(string serviceId) {
+        var (exit, stdout, stderr, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
+        return timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(exit, stdout, stderr);
     }
 
     bool TryBootstrap(string plistPath, out string? error) {
