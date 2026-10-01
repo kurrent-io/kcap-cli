@@ -10,6 +10,25 @@ static class LaunchdUnit {
 
     public static string Label(string id) => LabelPrefix + id;
 
+    // Adaptive lets macOS hold the job at background priority 4, and under load that starves the hub
+    // heartbeat into a reconnect storm. Plists written before Standard still carry the Adaptive line
+    // byte for byte, and UpgradeProcessType matches it exactly.
+    const string AdaptiveProcessTypeLine = "  <key>ProcessType</key><string>Adaptive</string>\n";
+    const string StandardProcessTypeLine = "  <key>ProcessType</key><string>Standard</string>\n";
+
+    /// <summary>The plist with this writer's Adaptive line switched to Standard, or null when it has no
+    /// such line — already current, or not shaped the way this writer writes it.</summary>
+    public static string? UpgradeProcessType(string plistXml) =>
+        plistXml.Contains(AdaptiveProcessTypeLine, StringComparison.Ordinal)
+            ? plistXml.Replace(AdaptiveProcessTypeLine, StandardProcessTypeLine, StringComparison.Ordinal)
+            : null;
+
+    /// <summary>True when <c>launchctl print</c> shows the loaded job running as Adaptive. launchd reads
+    /// <c>ProcessType</c> only when the job loads, so a rewritten plist leaves this true until a reload.</summary>
+    public static bool LoadedAsAdaptive(string printStdout) =>
+        printStdout.Split('\n').Any(static line =>
+            line.Trim().StartsWith("spawn type = adaptive", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The Library/LaunchAgents directory under the given home.</summary>
     public static string AgentsDir(UserHome home) =>
         Path.Combine(home.Path, "Library", "LaunchAgents");
@@ -50,7 +69,7 @@ static class LaunchdUnit {
 
         sb.Append("  <key>RunAtLoad</key><true/>\n");
         sb.Append("  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n");
-        sb.Append("  <key>ProcessType</key><string>Adaptive</string>\n");
+        sb.Append(StandardProcessTypeLine);
         var outLog = Guarded("the daemon log path", OutLogPath(spec));
         sb.Append($"  <key>StandardOutPath</key><string>{outLog}</string>\n");
         sb.Append($"  <key>StandardErrorPath</key><string>{outLog}</string>\n");

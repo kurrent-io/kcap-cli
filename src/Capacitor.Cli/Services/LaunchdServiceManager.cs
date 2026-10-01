@@ -110,6 +110,43 @@ sealed partial class LaunchdServiceManager(
     }
 
     /// <summary>
+    /// Moves an installed job off the Adaptive process type. The plist is rewritten whenever it carries
+    /// the Adaptive line, but launchd reads the type only when the job loads, and the reload kills
+    /// whatever the daemon hosts. So a loaded Adaptive job is reloaded only once
+    /// <paramref name="requestIdleRestart"/> reports that the daemon accepted an idle-only restart. A
+    /// busy daemon refuses that restart, and the reload waits for a later refresh.
+    /// </summary>
+    public ProcessTypeRefresh RefreshProcessType(string serviceId, Func<bool> requestIdleRestart, out string? error) {
+        error = null;
+        var path = LaunchdUnit.PlistPath(home, serviceId);
+
+        if (LaunchdUnit.TryReadPlist(path, out var original) != LaunchdUnit.PlistRead.Ok)
+            return ProcessTypeRefresh.Unchanged;
+
+        var upgraded = LaunchdUnit.UpgradeProcessType(original!);
+        var (printExit, printOut, printErr, _) = RunCtl(null, LaunchdUnit.PrintArgs(Uid(), serviceId));
+        var loaded = LaunchdUnit.ClassifyPrint(printExit, printOut, printErr) == LabelProbe.Loaded;
+        var stale  = loaded && LaunchdUnit.LoadedAsAdaptive(printOut);
+
+        if (upgraded is null && !stale) return ProcessTypeRefresh.Unchanged;
+        if (upgraded is not null) _writeUnit(path, upgraded, null);
+        if (!stale) return ProcessTypeRefresh.Rewritten;
+        if (!requestIdleRestart()) return ProcessTypeRefresh.Deferred;
+
+        // The accepted restart is already exiting the daemon. Booting out now unloads the job before
+        // launchd can relaunch it from the definition it cached at load.
+        RunCtl(null, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+        var (bootstrapExit, _, bootstrapErr, _) = RunCtl(null, LaunchdUnit.BootstrapArgs(Uid(), path));
+        if (bootstrapExit == 0) return ProcessTypeRefresh.Reloaded;
+
+        error = $"launchctl bootstrap failed (exit {bootstrapExit}): {bootstrapErr.Trim()}";
+        if (upgraded is not null) _writeUnit(path, original!, null);
+        RunCtl(null, LaunchdUnit.BootstrapArgs(Uid(), path));
+
+        return ProcessTypeRefresh.Failed;
+    }
+
+    /// <summary>
     /// A non-zero <c>bootout</c> is not automatically a failure: the label may already be unloaded. Re-query
     /// with <c>launchctl print</c> to tell that benign case apart from a bootout that actually failed to
     /// unload a live job — only <see cref="LabelProbe.Absent"/> is success; <see cref="LabelProbe.Loaded"/>
