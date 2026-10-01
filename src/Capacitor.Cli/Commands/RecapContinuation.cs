@@ -44,6 +44,7 @@ sealed class RecapContinuation(ConfigRoot config, ProfileContext profiles, Token
         switch (result) {
             case TakeoverResult.Completed c:
                 await Console.Out.WriteLineAsync(TakeoverReport.Render(c.Outcome));
+                if (c.CredentialRejected) await Console.Error.WriteLineAsync(await UnauthorizedNoticeAsync(baseUrl));
                 return c.Unsuccessful ? 1 : 0;
             case TakeoverResult.Refused r:
                 await Console.Error.WriteLineAsync(r.Reason);
@@ -52,8 +53,10 @@ sealed class RecapContinuation(ConfigRoot config, ProfileContext profiles, Token
                 await Console.Error.WriteLineAsync(f.Reason);
                 return 1;
             default:
-                await Console.Error.WriteLineAsync(await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time));
+                await Console.Error.WriteLineAsync(await UnauthorizedNoticeAsync(baseUrl));
                 return 1;
         }
     }
+
+    Task<string> UnauthorizedNoticeAsync(string baseUrl) => AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time);
 }

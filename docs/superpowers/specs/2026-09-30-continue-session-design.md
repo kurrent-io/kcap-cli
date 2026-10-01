@@ -130,7 +130,8 @@ Steps:
      "skipped_plans": [{ "plan_id": "…", "reason": "finished | no_open_task | not_adoptable" }],
      "plans_error": "HTTP 500",
      "plans_truncated": true,
-     "current_plan_id": "…"
+     "current_plan_id": "…",
+     "unauthorized": true
    }
    ```
 
@@ -139,7 +140,11 @@ Steps:
    takeover fails when any attempted write failed or any read (work items or plans) failed, so a
    caller never mistakes a partial takeover for a whole one; `not_in_plan` is not a failure, and X
    having nothing to attach is still a success. `current_plan_id` is the last plan
-   attached successfully, omitted when none. A 401 surfaces the existing not-logged-in message.
+   attached successfully, omitted when none. A 401 on a read surfaces the existing not-logged-in
+   message with nothing written. A 401 on a write keeps the partial outcome, sets
+   `unauthorized: true` and fails the takeover: `kcap recap` prints the report, then the
+   not-logged-in message on stderr, and exits 1; `continue_session` returns the outcome JSON
+   followed by that message as a tool error.
 
 ### 3. `kcap recap <X> --continue [--force]`
 
@@ -213,7 +218,8 @@ top of it: merge #1236 first, or fold its text in here.
 - `Exited` proceeds even when the server says active and recent.
 - A 403 `work_items_not_in_plan` reports work items as `not_in_plan` and still adopts the plans.
 - A failed write is reported on its entry and fails the takeover; so does a failed or malformed
-  read. A 401 on a follow-up read is `Unauthorized` with nothing written.
+  read. A 401 on a follow-up read is `Unauthorized` with nothing written; a 401 on a write keeps
+  the outcome and marks it `unauthorized`.
 - A partial task is passed over; a plan whose open tasks are all partial or user-set is
   `not_adoptable`. A full page of plans sets `plans_truncated`.
 - X's primary work item is declared last.

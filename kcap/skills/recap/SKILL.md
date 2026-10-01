@@ -34,7 +34,7 @@ kcap recap <X> --continue
 It attaches this session to X's work items and unfinished plans, prints what it attached, then prints the recap. `continue_session(session_id: X)` in the `kcap-handoff` MCP server does the same takeover without the recap.
 
 - **Exit 2 means it refused** — X may still be running, was not found, is this session itself, is not a session id, or no current session could be identified. Read the message and tell the user. Only when it says X may still be running, ask whether X is gone, and retry with `--force` (`force: true`) only when they confirm. Never pass it on your own judgement. When `continue_session` says there is no current session and you know this session's id, pass it as `current_session_id`.
-- **Exit 1 means nothing, or not everything, was linked** — a server read or write failed (the report names which). Tell the user; do not carry on as if the work was taken over.
+- **Exit 1 means nothing, or not everything, was linked** — a server read or write failed (the report names which). Tell the user; do not carry on as if the work was taken over. When it also says the server rejected the login, ask the user to run `kcap login`, then retry.
 - **More than one plan adopted?** Only the one reported as the current plan (`current_plan_id`) is implied; pass `plan_id` on every plan call for any other.
 - **Before resuming a plan task, verify it** as the `plans` skill's "Verify before continuing" says: a task left `in_progress` may be half-written.
 - Tell the user which work items and which plan task you took over. Work items reported as not available on this plan are expected on the Free plan.

@@ -75,7 +75,9 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
         var readFailed = Str(outcome["work_items"]?["status"]) == "failed" || outcome["plans_error"] is not null;
 
-        return new TakeoverResult.Completed(outcome, Unsuccessful: writes.Failed > 0 || readFailed);
+        if (writes.Unauthorized) outcome["unauthorized"] = true;
+
+        return new TakeoverResult.Completed(outcome, Unsuccessful: writes.Failed > 0 || readFailed, writes.Unauthorized);
     }
 
     (string Liveness, string? Refusal) Judge(string previous, SessionLiveness here, JsonObject? summary, bool force) {
@@ -227,6 +229,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
             }
 
             entry["error"] = $"HTTP {(int)response.StatusCode}";
+            if (response.StatusCode == HttpStatusCode.Unauthorized) writes.Unauthorized = true;
         } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested) {
             entry["error"] = ex.Message;
         }
@@ -265,5 +268,6 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
     sealed class WriteCount {
         public int Attempted;
         public int Failed;
+        public bool Unauthorized;
     }
 }

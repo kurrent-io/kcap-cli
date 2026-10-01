@@ -48,6 +48,23 @@ public class RecapContinuationTests {
         await Assert.That(error.GetCapturedError()).Contains("inside the session that takes over");
     }
 
+    [Test]
+    public async Task A_401_on_a_write_prints_the_report_then_the_login_notice_and_exits_one() {
+        using var console = ConsoleOutput.StartFullCapture();
+        using var client  = Serving(path => path switch {
+            $"/api/sessions/{Previous}/summary"   => (200, """{"status":"ended"}"""),
+            $"/api/work-items/session/{Previous}" => (200, """[{"work_item_id":"w1","label":"W1"}]"""),
+            "/api/work-items/declare"             => (401, ""),
+            _                                     => (200, "[]"),
+        });
+
+        var code = await Command().RunWithAsync(client, "http://x", Previous, Current, force: false);
+
+        await Assert.That(code).IsEqualTo(1);
+        await Assert.That(console.GetCapturedOutput()).Contains($"## Continued from session {Previous}");
+        await Assert.That(console.GetCapturedError()).Contains("kcap login");
+    }
+
     sealed class Answers(Func<string, (int Status, string Body)> byPath) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var (status, body) = byPath(request.RequestUri!.AbsolutePath);

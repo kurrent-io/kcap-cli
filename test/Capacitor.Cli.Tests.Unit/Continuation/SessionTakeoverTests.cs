@@ -394,6 +394,22 @@ public class SessionTakeoverTests {
         var item = r.Outcome["work_items"]!["items"]!.AsArray()[0]!;
         await Assert.That(item["attached"]!.GetValue<bool>()).IsFalse();
         await Assert.That(item["error"]!.GetValue<string>()).Contains("500");
+        await Assert.That(r.CredentialRejected).IsFalse();
+        await Assert.That(r.Outcome.ContainsKey("unauthorized")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_401_on_a_write_keeps_the_partial_outcome_and_marks_it_unauthorized() {
+        var routes = Server(Ended(), items: """[{"work_item_id":"w1","label":"One"}]""", plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "pending")}]")}]");
+        routes.Post("/api/work-items/declare", 401, "");
+        routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
+
+        var r = (TakeoverResult.Completed)await Run(routes);
+
+        await Assert.That(r.Unsuccessful).IsTrue();
+        await Assert.That(r.CredentialRejected).IsTrue();
+        await Assert.That(r.Outcome["unauthorized"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(r.Outcome["current_plan_id"]!.GetValue<string>()).IsEqualTo("p1");
     }
 
     [Test]

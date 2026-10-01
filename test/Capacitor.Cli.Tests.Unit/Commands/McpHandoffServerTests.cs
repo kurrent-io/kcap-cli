@@ -146,6 +146,23 @@ public class McpHandoffServerTests {
     }
 
     [Test]
+    public async Task A_401_on_a_write_returns_the_outcome_then_the_login_notice_as_an_error() {
+        var handler = new Answers(req => req.RequestUri!.AbsolutePath switch {
+            $"/api/sessions/{Previous}/summary"   => (200, """{"status":"ended"}"""),
+            $"/api/work-items/session/{Previous}" => (200, """[{"work_item_id":"w1","label":"W1"}]"""),
+            "/api/work-items/declare"             => (401, ""),
+            _                                     => (200, "[]"),
+        });
+
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", handler);
+        var parts    = Text(response).Split("\n\n", 2);
+
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(JsonNode.Parse(parts[0])!["unauthorized"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(parts[1]).Contains("kcap login");
+    }
+
+    [Test]
     public async Task A_missing_session_id_is_a_tool_error() {
         var response = await Call("{}", new Answers(_ => (200, "{}")));
 

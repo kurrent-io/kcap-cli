@@ -161,10 +161,12 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
                 .RunAsync(client, baseUrl, previous, currentSessionId, force);
 
             return result switch {
+                TakeoverResult.Completed { CredentialRejected: true } c
+                                              => BuildToolResult(id, $"{c.Outcome.ToJsonString()}\n\n{await UnauthorizedNoticeAsync(baseUrl)}", isError: true),
                 TakeoverResult.Completed c    => BuildToolResult(id, c.Outcome.ToJsonString(), isError: c.Unsuccessful),
                 TakeoverResult.Refused r      => BuildToolResult(id, $"Error: {r.Reason}", isError: true),
                 TakeoverResult.Failed f       => BuildToolResult(id, $"Error: {f.Reason}", isError: true),
-                TakeoverResult.Unauthorized   => BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true),
+                TakeoverResult.Unauthorized   => BuildToolResult(id, await UnauthorizedNoticeAsync(baseUrl), isError: true),
                 _                             => throw new InvalidOperationException(result.GetType().Name),
             };
         } catch (ArgumentException ex) {
@@ -173,6 +175,8 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         }
     }
+
+    Task<string> UnauthorizedNoticeAsync(string baseUrl) => AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time);
 
     static bool OptionalBool(JsonObject? args, string name) =>
         args?[name] switch {
