@@ -19,8 +19,15 @@ Write:
 **Key decisions:** Design choices, trade-offs, or alternatives that were considered
 and rejected. Only include decisions where the reasoning matters for future work.
 
-**Unfinished:** Work that remains to be done — one bullet per item, phrased as the action
-left (what to do, not what happened). Omit this section entirely when nothing remains.
+**Unfinished:** Work handed off beyond this session that the session's owner still has to do —
+one bullet per item, phrased as the action left (what to do, not what happened). Each bullet
+must stand on its own: name its subject (the issue, PR, file or feature) so it reads correctly
+to someone who never saw this session. Leave out:
+- steps the session itself was about to take (running tests, committing, pushing, opening the PR)
+- risks, caveats and accepted non-goals — those belong under Risks
+- work owned by or assigned to someone else
+- anything already done
+Omit this section entirely when nothing remains.
 
 **Risks:** Anything flagged as risky or uncertain about what was done. Omit when none.
 
@@ -29,6 +36,7 @@ Rules:
 - Don't list files or code changes — those are already recorded.
 - Don't describe process (retries, debugging, tool calls).
 - If a previous summary exists in the transcript, build on it — don't repeat it.
+- Do not invent work that is not evidenced in the transcript.
 
 Transcript:
 
