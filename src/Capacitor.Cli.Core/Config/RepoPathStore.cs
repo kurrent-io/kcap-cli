@@ -40,7 +40,8 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
                 var json = File.ReadAllText(StorePath);
                 RepoEntry[] parsed;
                 try {
-                    parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? [];
+                    // A literal `null` is not a list either.
+                    parsed = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? throw new JsonException("not a list");
                 } catch (JsonException) {
                     return new(ReadStatus.Corrupt, null);
                 }

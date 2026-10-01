@@ -401,9 +401,9 @@ public class RepoPathStoreTests {
         var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(DateTimeOffset.UtcNow);
         var repos = new RepoPathStore(Config.Root, time);
 
-        await File.WriteAllTextAsync(ReposJsonPath, "first {{{");
+        Config.CreateFile("repos.json", "first {{{");
         await repos.AddAsync(await RepoDir("a"));
-        await File.WriteAllTextAsync(ReposJsonPath, "second {{{");
+        Config.CreateFile("repos.json", "second {{{");
         await repos.AddAsync(await RepoDir("b"));
 
         var aside = Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*")
@@ -415,7 +415,7 @@ public class RepoPathStoreTests {
     /// corrupt — empty to readers, kept aside by a writer — rather than throwing out of a read.</summary>
     [Test]
     public async Task An_entry_without_a_path_reads_as_corrupt() {
-        await File.WriteAllTextAsync(ReposJsonPath, """[{"path":null,"last_used":"2026-01-01T00:00:00Z"}]""");
+        Config.CreateFile("repos.json", """[{"path":null,"last_used":"2026-01-01T00:00:00Z"}]""");
 
         await Assert.That(await Repos.LoadAsync()).IsEmpty();
 
@@ -423,5 +423,16 @@ public class RepoPathStoreTests {
         await Repos.AddAsync(d);
         await Assert.That(Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*").Length).IsEqualTo(1);
         await Assert.That((await Repos.LoadAsync()).Single().Path).IsEqualTo(d);
+    }
+
+    [Test]
+    public async Task A_null_store_is_kept_aside_rather_than_overwritten() {
+        Config.CreateFile("repos.json", "null");
+
+        await Repos.AddAsync(await RepoDir("d"));
+
+        var aside = Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*");
+        await Assert.That(aside.Length).IsEqualTo(1);
+        await Assert.That(await File.ReadAllTextAsync(aside[0])).IsEqualTo("null");
     }
 }
