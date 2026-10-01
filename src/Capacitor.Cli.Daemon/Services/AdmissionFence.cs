@@ -96,6 +96,8 @@ internal sealed partial class AdmissionFence {
 
     bool CommitLocked(Hold hold) {
         if (!ReferenceEquals(_held, hold)) return false;
+        // A repeated commit keeps the first timestamp, so it cannot extend the lease.
+        if (_committedAt is not null) return true;
         var now = _time.GetUtcNow();
         if (!WriteMarker(now)) return false;
         _committedAt = now;

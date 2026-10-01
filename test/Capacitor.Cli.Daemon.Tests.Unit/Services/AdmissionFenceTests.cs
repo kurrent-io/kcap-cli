@@ -238,4 +238,17 @@ public class AdmissionFenceTests {
             File.SetUnixFileMode(stateDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
+
+    [Test]
+    public async Task A_repeated_commit_does_not_extend_the_lease() {
+        var fence = NewFence();
+        var hold = Acquire(fence);
+        hold.Commit();
+
+        _time.Advance(AdmissionFence.CommitLease - TimeSpan.FromSeconds(1));
+        await Assert.That(hold.Commit()).IsTrue();
+        _time.Advance(TimeSpan.FromSeconds(1));
+
+        await Assert.That(fence.TryAdmit()).IsNotNull();
+    }
 }
