@@ -63,7 +63,7 @@ internal sealed record WizardGraphOptions(
     PathShimInstaller                                                            ShimInstaller,
     IUrlOpener                                                                   UrlOpener,
     ILoginShellProbe                                                             Probe,
-    Func<ILoginShellProbe, Func<CancellationToken, Task<IReadOnlySet<HarnessId>>>> DetectionFeed,
+    Func<ILoginShellProbe, Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>>> DetectionFeed,
     string?                                                                      CliPath,
     bool                                                                         ShimApplicable,
     string?                                                                      ShimTarget,
@@ -117,14 +117,25 @@ internal static class WizardComposition {
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time);
-        var shim     = new ShimStepViewModel(options.ShimApplicable, options.ShimInstaller, options.AppState, options.ShimTarget);
+        var pathFix  = options.ShimApplicable
+            ? new PathFixViewModel(options.ShimInstaller, options.AppState, options.ShimTarget)
+            : null;
         // Defaults persists to the same fresh identity the daemon step gates on, falling back to ActiveProfile.
         var defaults = new DefaultsStepViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
         // ONE detection feed for both vendor steps: two would probe the login shell twice for the
         // same answer, and the two steps' vendor lists could then disagree.
         var detect = options.DetectionFeed(options.Probe);
-        var agents = new AgentsStepViewModel(cli, detect);
-        var import = new ImportStepViewModel(cli, detect, options.Bridges.Post);
+        var offers = new HarnessOfferStore(options.Root, options.Time);
+        var harnesses = new HarnessesStepViewModel(
+            cli, detect,
+            declined: () => AgentVendors.All.Where(v => offers.Load().Entry(v.Id)?.Declined == true).Select(v => v.Id).ToHashSet(),
+            stampOffered: ids => offers.StampOffered(ids, options.Time.GetUtcNow()),
+            options.Root, pathFix,
+            ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
+            MachineLabel(Environment.MachineName),
+            () => options.ResolveIdentity()?.Profile);
+        var import = new ImportStepViewModel(
+            cli, async ct => (await detect(ct).ConfigureAwait(false)).Keys.ToHashSet(), options.Bridges.Post);
         var daemon = new DaemonStepViewModel(
             cli, options.RunMutation,
             // Gated on a committed sign-in and resolved fresh per call, never the startup-cached profile.
@@ -137,7 +148,7 @@ internal static class WizardComposition {
             claims,
             options.ResolveConsentFlipIdentity, options.Surface, options.Probe.TerminalPathAsync, options.Time);
 
-        IWizardStep[] configured = [welcome, signIn, shim, defaults, agents, import, daemon];
+        IWizardStep[] configured = [welcome, signIn, defaults, harnesses, import, daemon];
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => Summarize(configured, cli.CliPath is not null));
         IWizardStep[] steps = [.. configured, done];
@@ -170,37 +181,30 @@ internal static class WizardComposition {
             .ToList();
 
     static string SummaryTitle(IWizardStep step) => step switch {
-        ShimStepViewModel     => "Use kcap in the terminal",
-        SignInStepViewModel   => "Sign in",
-        DefaultsStepViewModel => "Sessions from this machine",
-        AgentsStepViewModel   => "Install agent hooks",
-        _                    => step.Title,
+        SignInStepViewModel    => "Sign in",
+        DefaultsStepViewModel  => "This machine",
+        HarnessesStepViewModel => "Connect your harnesses",
+        _                      => step.Title,
     };
 
     static string? SuccessNote(IWizardStep step) => step switch {
-        ShimStepViewModel              => "kcap works from any terminal",
-        SignInStepViewModel signIn     => signIn.Status,
-        DefaultsStepViewModel defaults => DefaultsNote(defaults),
-        AgentsStepViewModel agents     => AgentsNote(agents),
-        _                              => null,
+        SignInStepViewModel signIn       => signIn.Status,
+        DefaultsStepViewModel defaults   => $"Machine name {defaults.DaemonName}.",
+        HarnessesStepViewModel harnesses => HarnessesNote(harnesses),
+        _                                => null,
     };
 
-    static string DefaultsNote(DefaultsStepViewModel step) {
-        var visibility = step.Visibility switch {
-            "private"    => "Only you can see sessions from here",
-            "project"    => "Project-repo sessions visible to project members",
-            "org_public" => "Org-repo sessions visible in the workspace",
-            "public"     => "Everyone in the workspace can see sessions from here",
-            _            => "Session visibility saved",
-        };
-
-        return $"{visibility}. Machine name {step.DaemonName}.";
-    }
-
-    static string? AgentsNote(AgentsStepViewModel step) {
+    static string? HarnessesNote(HarnessesStepViewModel step) {
         var names = step.Rows.Where(r => r.Succeeded).Select(r => r.Label).ToList();
 
-        return names.Count == 0 ? null : "Installed for " + string.Join(", ", names);
+        return names.Count == 0 ? null : "Turned on for " + string.Join(", ", names);
+    }
+
+    /// The machine's own name as a person would say it: no ".local", lower case.
+    internal static string MachineLabel(string machineName) {
+        var name = machineName.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ? machineName[..^6] : machineName;
+
+        return name.ToLowerInvariant();
     }
 
     // A missing CLI dominates: every step that shells out is unreachable for that one reason.
@@ -210,11 +214,10 @@ internal static class WizardComposition {
         return step switch {
             DaemonStepViewModel { Row: DaemonRow.RequiresSignIn } => RequiresSignInNote,
             DaemonStepViewModel daemonStep                        => daemonStep.Message,
-            ShimStepViewModel shimStep                            => shimStep.Message,
             _                                                     => null,
         };
     }
 
     static bool NeedsCli(WizardStepId id) =>
-        id is WizardStepId.Shim or WizardStepId.Agents or WizardStepId.Import or WizardStepId.Daemon;
+        id is WizardStepId.Harnesses or WizardStepId.Import or WizardStepId.Daemon;
 }

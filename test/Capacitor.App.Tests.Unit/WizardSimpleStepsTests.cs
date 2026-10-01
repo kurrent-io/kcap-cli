@@ -30,7 +30,7 @@ public class WizardSimpleStepsTests {
     [Arguments(true, "/opt/kcap/kcap", null, false)]     // probe inconclusive — fail quiet
     [Arguments(true, "/opt/kcap/kcap", false, true)]     // macOS + CLI + positively absent
     public async Task ComputeApplicable_matches_the_spec_decision(bool isMacOs, string? target, bool? onPath, bool expected) {
-        await Assert.That(ShimStepViewModel.ComputeApplicable(isMacOs, target, onPath)).IsEqualTo(expected);
+        await Assert.That(PathFixViewModel.ComputeApplicable(isMacOs, target, onPath)).IsEqualTo(expected);
     }
 
     // ── Shim: install / claim / outcome mapping ─────────────────────────────
@@ -69,13 +69,13 @@ public class WizardSimpleStepsTests {
         public readonly PathShimInstaller  Installer;
         public readonly string             Destination;
         public readonly string             Target;
-        public readonly ShimStepViewModel  Vm;
+        public readonly PathFixViewModel   Vm;
 
         public ShimHarness() {
             Destination = Path.Combine(TempDir, "kcap");
             Target      = Path.Combine(TempDir, "target-cli");
             Installer   = new PathShimInstaller(Runner, Probe);
-            Vm          = new ShimStepViewModel(true, Installer, Store, Target, Destination);
+            Vm          = new PathFixViewModel(Installer, Store, Target, Destination);
         }
 
         // InstallCommand's IsExecuting/CanExecute/End notifications ride the dispatcher scheduler;
@@ -120,7 +120,7 @@ public class WizardSimpleStepsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Installed_outcome_satisfies_the_step_with_no_message() {
+    public async Task Installed_outcome_fixes_the_path_with_no_message() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
             h.Runner.Enqueue(new ProcessResult(0, "", "", false));
@@ -128,7 +128,7 @@ public class WizardSimpleStepsTests {
 
             await h.Install();
 
-            return (h.Vm.Satisfied, h.Vm.Message);
+            return (h.Vm.Fixed, h.Vm.Message);
         });
 
         await Assert.That(satisfied).IsTrue();
@@ -137,7 +137,7 @@ public class WizardSimpleStepsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task InstalledButNotOnPath_outcome_is_unsatisfied_with_the_installer_detail() {
+    public async Task InstalledButNotOnPath_outcome_is_not_fixed_and_carries_the_installer_detail() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
             h.Runner.Enqueue(new ProcessResult(0, "", "", false));
@@ -145,7 +145,7 @@ public class WizardSimpleStepsTests {
 
             await h.Install();
 
-            return (h.Vm.Satisfied, h.Vm.Message);
+            return (h.Vm.Fixed, h.Vm.Message);
         });
 
         await Assert.That(satisfied).IsFalse();
@@ -155,35 +155,35 @@ public class WizardSimpleStepsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Cancelled_outcome_is_unsatisfied_with_no_message() {
+    public async Task Cancelled_outcome_is_not_fixed_and_says_nothing_changed() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
             h.Runner.Enqueue(new ProcessResult(1, "", "User canceled. (-128)", false));
 
             await h.Install();
 
-            return (h.Vm.Satisfied, h.Vm.Message);
+            return (h.Vm.Fixed, h.Vm.Message);
         });
 
         await Assert.That(satisfied).IsFalse();
-        await Assert.That(message).IsNull();
+        await Assert.That(message).IsEqualTo("You dismissed the password prompt, so nothing changed.");
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Failed_outcome_is_unsatisfied_with_detail_and_the_sudo_fallback() {
+    public async Task Failed_outcome_is_not_fixed_and_names_the_sudo_fallback() {
         var (satisfied, message) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
             h.Runner.Enqueue(new ProcessResult(1, "", "Permission denied", false));
 
             await h.Install();
 
-            return (h.Vm.Satisfied, h.Vm.Message);
+            return (h.Vm.Fixed, h.Vm.Message);
         });
 
         await Assert.That(satisfied).IsFalse();
         await Assert.That(message).IsNotNull();
-        await Assert.That(message).Contains("Permission denied");
+        await Assert.That(message).StartsWith("That did not work, and nothing changed.");
         await Assert.That(message).Contains("sudo mkdir -p /usr/local/bin");
     }
 
@@ -192,16 +192,16 @@ public class WizardSimpleStepsTests {
     public async Task Null_target_reports_kcap_not_found_and_claims_nothing() {
         var (satisfied, message, updates) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            var vm = new ShimStepViewModel(true, h.Installer, h.Store, null, h.Destination);
+            var vm = new PathFixViewModel(h.Installer, h.Store, null, h.Destination);
 
             await vm.InstallCommand.Execute().ToTask();
             Dispatcher.UIThread.RunJobs(); // drain the command's dispatcher-scheduled notifications, as ShimHarness.Install does
 
-            return (vm.Satisfied, vm.Message, h.Store.Updates);
+            return (vm.Fixed, vm.Message, h.Store.Updates);
         });
 
         await Assert.That(satisfied).IsFalse();
-        await Assert.That(message).IsEqualTo("kcap CLI not found");
+        await Assert.That(message).IsEqualTo("This machine could not find its own kcap, so nothing changed.");
         await Assert.That(updates).IsEqualTo(0);
     }
 
@@ -211,33 +211,15 @@ public class WizardSimpleStepsTests {
     [NotInParallel("AvaloniaSession")]
     public async Task The_window_selects_a_template_for_each_simple_step() {
         var result = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new ShimHarness();
             var defaults = new DefaultsStepViewModel(Config.Root);
-            var done = new DoneStepViewModel(() => [("Use kcap in the terminal", false, "kcap isn't on this machine")]);
-            var vm = new OnboardingViewModel([h.Vm, defaults, done]);
+            var done = new DoneStepViewModel(() => [("Connect your harnesses", false, "kcap isn't on this machine")]);
+            var vm = new OnboardingViewModel([defaults, done]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            // Run the install and observe the button/success-text react — a broken Idle/Satisfied binding would leave Avalonia's own base defaults instead of tracking the VM.
-            var installButton = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "InstallShimButton");
-            var shimCtaGap = installButton?.Parent is StackPanel shimHost ? shimHost.Spacing : -1;
-            var successBefore = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "ShimSuccessText")?.IsVisible;
-
-            h.Runner.Enqueue(new ProcessResult(0, "", "", false));
-            h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(true);
-            await h.Install(); // Install() already drains the dispatcher
-
-            var successAfter = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "ShimSuccessText")?.IsVisible;
-            var installEnabledAfter = installButton?.IsEnabled;
-
-            await vm.NextCommand.Execute().ToTask(); // Shim -> Defaults
-            Dispatcher.UIThread.RunJobs();
-
-            var visibilityCombo = window.GetVisualDescendants().OfType<ComboBox>().FirstOrDefault(c => c.Name == "VisibilityCombo");
-            var selectedVisibility = visibilityCombo?.SelectedValue as string;
             var daemonNameText = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "DaemonNameBox")?.Text;
 
             await vm.SkipCommand.Execute().ToTask(); // Defaults -> Done (Skip never persists — no real config write here)
@@ -251,24 +233,13 @@ public class WizardSimpleStepsTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (
-                installButton, shimCtaGap, successBefore, successAfter, installEnabledAfter,
-                visibilityCombo, selectedVisibility, daemonNameText,
-                summaryList, summaryTitle, summaryNote, summaryGlyph);
+            return (daemonNameText, summaryList, summaryTitle, summaryNote, summaryGlyph);
         });
 
-        await Assert.That(result.installButton).IsNotNull();
-        await Assert.That(result.shimCtaGap).IsEqualTo(14);
-        await Assert.That(result.successBefore).IsFalse(); // Satisfied starts false — a broken binding would leave Avalonia's IsVisible default (true)
-        await Assert.That(result.successAfter).IsTrue();   // Satisfied flips true once Installed lands
-        await Assert.That(result.installEnabledAfter).IsTrue();
-
-        await Assert.That(result.visibilityCombo).IsNotNull();
-        await Assert.That(result.selectedVisibility).IsEqualTo("org_public");
         await Assert.That(result.daemonNameText).IsEqualTo(Environment.UserName.ToLowerInvariant());
 
         await Assert.That(result.summaryList).IsNotNull();
-        await Assert.That(result.summaryTitle).IsEqualTo("Use kcap in the terminal");
+        await Assert.That(result.summaryTitle).IsEqualTo("Connect your harnesses");
         await Assert.That(result.summaryNote).IsEqualTo("kcap isn't on this machine");
         await Assert.That(result.summaryGlyph).IsEqualTo("—");
     }
@@ -281,59 +252,17 @@ public class DefaultsStepViewModelTests {
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 
     [Test]
-    public async Task Defaults_are_org_public_and_the_lowercased_username() {
+    public async Task The_default_name_is_the_lowercased_username() {
         var vm = new DefaultsStepViewModel(Config.Root);
 
-        await Assert.That(vm.Visibility).IsEqualTo("org_public");
         await Assert.That(vm.Title).IsEqualTo("This machine");
         await Assert.That(vm.DaemonName).IsEqualTo(Environment.UserName.ToLowerInvariant());
         await Assert.That(vm.Applicable).IsTrue();
         await Assert.That(vm.Satisfied).IsFalse();
-        await Assert.That(vm.PublicSelected).IsFalse();
     }
 
     [Test]
-    public async Task VisibilityOptions_cover_every_valid_visibility_in_order() {
-        await Assert.That(DefaultsStepViewModel.VisibilityOptions.Select(o => o.Value))
-            .IsEquivalentTo(AppConfig.ValidVisibilities, CollectionOrdering.Matching);
-    }
-
-    [Test]
-    public async Task Public_visibility_is_the_only_choice_that_raises_the_privacy_notice() {
-        var vm = new DefaultsStepViewModel(Config.Root);
-        await Assert.That(vm.PublicSelected).IsFalse();
-
-        foreach (var option in DefaultsStepViewModel.VisibilityOptions) {
-            vm.Visibility = option.Value;
-            await Assert.That(vm.PublicSelected).IsEqualTo(option.Value == "public");
-        }
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public Task The_privacy_notice_is_hidden_until_all_public_is_selected() => AvaloniaSession.RunOnUiAsync(async () => {
-        var defaults = new DefaultsStepViewModel(Config.Root);
-        var vm = new OnboardingViewModel([defaults, new DoneStepViewModel(() => [])]);
-        await vm.PendingEnterForTesting;
-        var window = new MainWindow { Onboarding = vm };
-        try {
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-            var banner = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "PublicNoticeBanner");
-            await Assert.That(banner.IsVisible).IsFalse();
-            defaults.Visibility = "public";
-            Dispatcher.UIThread.RunJobs();
-            await Assert.That(banner.IsVisible).IsTrue();
-            await Assert.That(window.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "PublicNoticeText").Text)
-                .IsEqualTo(DefaultsStepViewModel.PublicNotice);
-            defaults.Visibility = "org_public";
-            Dispatcher.UIThread.RunJobs();
-            await Assert.That(banner.IsVisible).IsFalse();
-        } finally { window.Close(); }
-    });
-
-    [Test]
-    public async Task Next_persists_both_fields_and_preserves_unrelated_config() {
+    public async Task Next_persists_the_name_and_preserves_unrelated_config() {
         var existing = new ProfileConfig {
             ActiveProfile = "acme",
             Profiles = new() {
@@ -348,7 +277,7 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root) { Visibility = "public", DaemonName = "acme-daemon" };
+        var vm = new DefaultsStepViewModel(Config.Root) { DaemonName = "acme-daemon" };
 
         var canLeave = await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -358,7 +287,7 @@ public class DefaultsStepViewModelTests {
         var saved   = ConfigMutator.LoadPure(ConfigPath);
         var profile = saved.Profiles["acme"];
 
-        await Assert.That(profile.DefaultVisibility).IsEqualTo("public");
+        await Assert.That(profile.DefaultVisibility).IsEqualTo("org_public");
         await Assert.That(profile.Daemon!.Name).IsEqualTo("acme-daemon");
         await Assert.That(profile.Daemon!.MaxAgents).IsEqualTo(9);
         await Assert.That(profile.Daemon!.ClaudePath).IsEqualTo("/usr/bin/claude");
@@ -380,8 +309,7 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => "work")
-            { Visibility = "public", DaemonName = "work-daemon" };
+        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => "work") { DaemonName = "work-daemon" };
 
         var canLeave = await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -390,10 +318,8 @@ public class DefaultsStepViewModelTests {
 
         var saved = ConfigMutator.LoadPure(ConfigPath);
 
-        await Assert.That(saved.Profiles["work"].DefaultVisibility).IsEqualTo("public");
         await Assert.That(saved.Profiles["work"].Daemon!.Name).IsEqualTo("work-daemon");
         // The active profile (acme) is untouched — the mutation targeted the RESOLVED name.
-        await Assert.That(saved.Profiles["acme"].DefaultVisibility).IsEqualTo("org_public");
         await Assert.That(saved.Profiles["acme"].Daemon).IsNull();
     }
 
@@ -405,8 +331,7 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => "ghost")
-            { Visibility = "public", DaemonName = "acme-daemon" };
+        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => "ghost") { DaemonName = "acme-daemon" };
 
         await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -424,8 +349,7 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => null)
-            { Visibility = "public", DaemonName = "acme-daemon" };
+        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => null) { DaemonName = "acme-daemon" };
 
         await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
@@ -436,7 +360,7 @@ public class DefaultsStepViewModelTests {
 
     [Test]
     public async Task Skip_and_back_do_not_persist_and_leave_the_step_unsatisfied() {
-        var vm = new DefaultsStepViewModel(Config.Root) { Visibility = "public", DaemonName = "acme-daemon" };
+        var vm = new DefaultsStepViewModel(Config.Root) { DaemonName = "acme-daemon" };
 
         await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None)).IsTrue();
         await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None)).IsTrue();
@@ -452,7 +376,7 @@ public class DefaultsStepViewModelTests {
         Skip.When(OperatingSystem.IsWindows(), "chmod-based read-only config dir is POSIX-only.");
 
         var dir = Path.GetDirectoryName(ConfigPath)!;
-        var vm  = new DefaultsStepViewModel(Config.Root) { Visibility = "public", DaemonName = "acme-daemon" };
+        var vm  = new DefaultsStepViewModel(Config.Root) { DaemonName = "acme-daemon" };
 
         File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         try {

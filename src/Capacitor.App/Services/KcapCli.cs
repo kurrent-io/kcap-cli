@@ -56,8 +56,9 @@ public interface IKcapCli {
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
     Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct);
 
-    /// `plugin install` (+ vendorFlag, when non-null); null = the flagless Claude default.
-    Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct);
+    /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
+    /// flagless Claude default.
+    Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
 
     /// `import` with scope/vendor flags, streamed live via onLine — unbounded internal timeout
     /// (imports are long; ct cancellation is the only bound).
@@ -187,11 +188,12 @@ public sealed class KcapCli : IKcapCli {
 
     // Neither this nor ImportAsync overlays MutationEnv — non-daemon shelling keeps lenient
     // classification; the vendor flag itself is the caller's exclusive-flag choice.
-    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) {
+    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) {
         if (CliPath is not { } cliPath) return NoCliResult();
 
         List<string> args = ["plugin", "install"];
         if (vendorFlag is not null) args.Add(vendorFlag);
+        if (options is not null) args.AddRange(options);
 
         return Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env(), Timeout: MutationTimeout), ct);
     }
