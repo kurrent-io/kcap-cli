@@ -927,7 +927,7 @@ public partial class App : Application {
             ShimInstaller: shimInstaller,
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
-            DetectionFeed: probe => AgentsStepViewModel.BuildDetectionFeed(probe, _userHome),
+            DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome),
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,
@@ -964,14 +964,12 @@ public partial class App : Application {
         return quiesced;
     }
 
-    /// The shim step's applicability, without paying for an answer that cannot matter: the probe
-    /// costs a login-shell spawn, and on every machine with no installer for its OS (and every machine with
-    /// no resolved absolute CLI) <see cref="ShimStepViewModel.ComputeApplicable"/> is already false.
+    // Avoid a shell spawn when no PATH installer or absolute CLI path is available.
     internal static async Task<bool> ResolveShimApplicableAsync(
             bool hasInstaller, string? shimTarget, Func<CancellationToken, Task<bool?>> probeKcapOnPath, CancellationToken ct) {
         if (!hasInstaller || shimTarget is null) return false;
 
-        return ShimStepViewModel.ComputeApplicable(
+        return PathFixViewModel.ComputeApplicable(
             hasInstaller, shimTarget, await ProbeKcapOnPathSafelyAsync(probeKcapOnPath, ct).ConfigureAwait(true));
     }
 
@@ -984,7 +982,7 @@ public partial class App : Application {
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: PATH probe failed — skipping the command-line tool step: {ex.Message}");
+            Console.Error.WriteLine($"kcap: PATH probe failed — not offering the PATH fix: {ex.Message}");
             return null;
         }
     }

@@ -4,31 +4,12 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// One entry in the visibility picker. A dedicated record rather than a
-/// ValueTuple — Avalonia's reflection-based bindings need real CLR properties, not a tuple's
-/// compiler-only element-name aliases.
-public sealed record VisibilityOption(string Value, string Label);
-
-/// Visibility picker + daemon-name field, written to the active profile through ConfigMutator on
-/// Next only. No claim maintenance — claims key on {profile, server} and resolve the daemon name
+/// The daemon-name field, written to the active profile through ConfigMutator on Next only. No claim maintenance — claims key on {profile, server} and resolve the daemon name
 /// at application time, so a rename here needs no second-store write.
 public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
-    /// The SAME four labels SetupCommand's interactive visibility prompt uses (Step 3/6), over
-    /// the SAME value set as <see cref="AppConfig.ValidVisibilities"/>.
-    public static readonly IReadOnlyList<VisibilityOption> VisibilityOptions = [
-        new("private",    "All private — only you can see your sessions"),
-        new("project",    "Project repos public to fellow project members, others private"),
-        new("org_public", "Org repos public, others private (default)"),
-        new("public",     "All public — others can see all your sessions"),
-    ];
-
-    public const string PublicNotice =
-        "Everyone in this workspace can see every session you start on this machine, including private repos.";
-
     readonly ConfigRoot     _config;
     readonly Func<string?>? _resolveProfileName;
 
-    string  _visibility = "org_public";
     string  _daemonName;
     bool    _satisfied;
     string? _message;
@@ -50,22 +31,12 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
     public WizardStepId Id         => WizardStepId.Defaults;
     public string       Title      => "This machine";
     public bool         Applicable => true;
-    public string Lede => "Who can see sessions you start here, and what this machine is called.";
+    public string Lede => "What this machine is called when you start agents on it from elsewhere.";
 
     public bool Satisfied {
         get => _satisfied;
         private set => this.RaiseAndSetIfChanged(ref _satisfied, value);
     }
-
-    public string Visibility {
-        get => _visibility;
-        set {
-            this.RaiseAndSetIfChanged(ref _visibility, value);
-            this.RaisePropertyChanged(nameof(PublicSelected));
-        }
-    }
-
-    public bool PublicSelected => Visibility == "public";
 
     public string DaemonName {
         get => _daemonName;
@@ -96,8 +67,7 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
                 var profile    = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
                 profile = profile with {
-                    DefaultVisibility = Visibility,
-                    Daemon            = (profile.Daemon ?? new DaemonSettings()) with { Name = DaemonName }
+                    Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = DaemonName }
                 };
 
                 return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [activeName] = profile } };

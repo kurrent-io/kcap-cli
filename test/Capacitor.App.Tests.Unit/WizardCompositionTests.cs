@@ -100,13 +100,13 @@ public class WizardCompositionHappyPathTests {
             await Assert.That(harness.Claims.Pending().Select(c => c.Profile).ToList()).IsEquivalentTo([ProfileName]);
 
             await graph.ViewModel.NextCommand.Execute().ToTask(); // Sign-in -> Defaults
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Defaults -> Agents (persists via ConfigMutator)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Defaults -> Harnesses (persists via ConfigMutator)
 
             var defaults = graph.Steps.OfType<DefaultsStepViewModel>().Single();
             await Assert.That(defaults.Satisfied).IsTrue();
             await Assert.That(defaults.Message).IsNull();
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Agents -> Import (no CLI, nothing installable)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> Import (no CLI, nothing installable)
             await graph.ViewModel.NextCommand.Execute().ToTask(); // Import -> Daemon (no CLI, nothing runnable)
 
             var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
@@ -120,16 +120,13 @@ public class WizardCompositionHappyPathTests {
 
         var byTitle = summary.ToDictionary(e => e.Title);
 
-        await Assert.That(summary.Count).IsEqualTo(6); // every configured step but Welcome and Done
-        await Assert.That(byTitle["Use kcap in the terminal"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Use kcap in the terminal"].Note).IsEqualTo(WizardComposition.CliMissingNote);
+        await Assert.That(summary.Count).IsEqualTo(5); // every configured step but Welcome and Done
         await Assert.That(byTitle["Sign in"].Satisfied).IsTrue();
         await Assert.That(byTitle["Sign in"].Note).IsEqualTo("No sign-in required for this server.");
-        await Assert.That(byTitle["Sessions from this machine"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Sessions from this machine"].Note)
-            .IsEqualTo("Org-repo sessions visible in the workspace. Machine name daemon-a.");
-        await Assert.That(byTitle["Install agent hooks"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Install agent hooks"].Note).IsEqualTo(WizardComposition.CliMissingNote);
+        await Assert.That(byTitle["This machine"].Satisfied).IsTrue();
+        await Assert.That(byTitle["This machine"].Note).IsEqualTo("Machine name daemon-a.");
+        await Assert.That(byTitle["Connect your harnesses"].Satisfied).IsFalse();
+        await Assert.That(byTitle["Connect your harnesses"].Note).IsEqualTo(WizardComposition.CliMissingNote);
         await Assert.That(byTitle["Import past sessions"].Satisfied).IsFalse();
         await Assert.That(byTitle["Import past sessions"].Note).IsEqualTo(WizardComposition.CliMissingNote);
         await Assert.That(byTitle["Enable the daemon"].Satisfied).IsFalse();

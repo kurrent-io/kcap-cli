@@ -188,7 +188,8 @@ static class WizardFixtures {
                 DetectionFactoryCalls++;
                 return _ => {
                     Interlocked.Increment(ref DetectCalls);
-                    return Task.FromResult(Detected);
+                    return Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(
+                        Detected.ToDictionary(id => id, _ => new DetectedAgent(true, false)));
                 };
             },
             CliPath: CliPath,
@@ -641,8 +642,8 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
-                WizardStepId.Welcome, WizardStepId.SignIn, WizardStepId.Shim, WizardStepId.Defaults,
-                WizardStepId.Agents, WizardStepId.Import, WizardStepId.Daemon, WizardStepId.Done,
+                WizardStepId.Welcome, WizardStepId.SignIn, WizardStepId.Defaults,
+                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Daemon, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
             await Assert.That(harness.Lane.Requests).IsEmpty();
@@ -661,27 +662,30 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task An_inapplicable_shim_step_is_dropped_from_the_wizard_but_kept_in_the_summary() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task The_path_fix_is_offered_on_the_harnesses_page_only_when_applicable(bool applicable) {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
-            harness.ShimApplicable = false;
+            harness.ShimApplicable = applicable;
 
             var graph = WizardComposition.BuildGraph(harness.Options());
+            var harnesses = graph.Steps.OfType<HarnessesStepViewModel>().Single();
 
-            await Assert.That(graph.ViewModel.Steps.Any(s => s.Id == WizardStepId.Shim)).IsFalse();
-            await Assert.That(graph.Steps.Any(s => s.Id == WizardStepId.Shim)).IsTrue();
+            await Assert.That(harnesses.PathFix is not null).IsEqualTo(applicable);
+            await Assert.That(harnesses.PathHazard).IsEqualTo(applicable);
 
             return true;
         });
     }
 
     [Test]
-    public async Task The_same_detection_feed_is_shared_by_the_agents_and_import_steps() {
+    public async Task The_same_detection_feed_is_shared_by_the_harnesses_and_import_steps() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var agents = graph.Steps.OfType<AgentsStepViewModel>().Single();
+            var agents = graph.Steps.OfType<HarnessesStepViewModel>().Single();
             var import = graph.Steps.OfType<ImportStepViewModel>().Single();
 
             await agents.OnEnterAsync(CancellationToken.None);
@@ -816,8 +820,8 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
             var summary = graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
 
-            await Assert.That(summary.Count).IsEqualTo(6); // every step but Welcome and Done
-            foreach (var title in new[] { "Use kcap in the terminal", "Install agent hooks", "Import past sessions", "Enable the daemon" })
+            await Assert.That(summary.Count).IsEqualTo(5); // every step but Welcome and Done
+            foreach (var title in new[] { "Connect your harnesses", "Import past sessions", "Enable the daemon" })
                 await Assert.That(summary.Single(e => e.Title == title).Note).IsEqualTo(WizardComposition.CliMissingNote);
 
             return true;
