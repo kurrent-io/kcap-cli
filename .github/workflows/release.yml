@@ -988,24 +988,7 @@ jobs:
         run: bash scripts/verify-npm-trio.sh "${{ steps.version.outputs.VERSION }}" releases/kcap.sha256 releases/daemon.sha256
 
       - name: Verify immutable objects
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > fetch.sh <<'EOF'
-          #!/usr/bin/env bash
-          ERR="$(aws s3 cp $R2 "$DEST/$1" "$2" 2>&1 >/dev/null)"
-          rc=$?
-          if [ "$rc" -eq 0 ]; then
-            exit 0
-          elif echo "$ERR" | grep -qiE '404|Not Found'; then
-            exit 44
-          else
-            echo "$ERR" >&2
-            exit 1
-          fi
-          EOF
-          chmod +x fetch.sh
-          bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" bash scripts/r2-fetch.sh
+        run: bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" scripts/r2-fetch.sh
 
       - name: Upload the feed and packages
         run: >
