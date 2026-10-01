@@ -1132,6 +1132,29 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsFalse();
     }
 
+    /// <summary>A subagent that ends on a tool call (SubagentHandback) has no final text, so Claude
+    /// omits the key; the server requires it and would reject the stop.</summary>
+    [Test]
+    public async Task subagent_stop_without_last_assistant_message_posts_an_empty_one() {
+        using var fx = new Fixture(Config.Root);
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+
+        var posted = JsonNode.Parse(PostedBody(fx, "/hooks/subagent-stop"))!;
+        await Assert.That(posted["last_assistant_message"]?.GetValue<string>()).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task subagent_stop_keeps_the_last_assistant_message_it_was_given() {
+        using var fx = new Fixture(Config.Root);
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp","last_assistant_message":"done"}""");
+
+        var posted = JsonNode.Parse(PostedBody(fx, "/hooks/subagent-stop"))!;
+        await Assert.That(posted["last_assistant_message"]?.GetValue<string>()).IsEqualTo("done");
+    }
+
+    static string PostedBody(Fixture fx, string path) =>
+        fx.Sent.Single(s => s.StartsWith(path + "|", StringComparison.Ordinal))[(path.Length + 1)..];
+
     [Test]
     public async Task subagent_stop_without_agent_id_is_not_spooled() {
         // No agent_id → no SubagentCompleted to deliver → unchanged shared-path behavior (no spool).
@@ -1178,6 +1201,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(files.Count).IsEqualTo(1);
         var content = await File.ReadAllTextAsync(files[0]);
         await Assert.That(content).Contains("\"route\":\"subagent-stop\"");
+        await Assert.That(content).Contains("last_assistant_message");
     }
 
     [Test]
