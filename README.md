@@ -2100,7 +2100,7 @@ kcap repos add ~/dev/project  # add a specific path
 kcap repos remove ~/dev/old   # remove a path
 ```
 
-Known repos are persisted to `~/.config/kcap/repos.json` and reported to the server when the daemon connects, so the launch dialog always shows previously-used repos even after restarts. A running daemon watches the file and re-reports within a few seconds of an `add` or `remove`, so no restart is needed for the launch dialog to pick up the change.
+Known repos are persisted to `~/.config/kcap/repos.json` and reported to the server when the daemon connects, so the launch dialog always shows previously-used repos even after restarts. A running daemon watches the file and re-reports within a few seconds of an `add` or `remove`, so no restart is needed for the launch dialog to pick up the change. If `repos.json` exists but cannot be read, `add` and `remove` exit 1 and leave it untouched rather than overwrite the saved list; a file that reads but is not a valid list is kept beside it as `repos.json.corrupt-<timestamp>-<id>` and a fresh list is started.
 
 ### Projects
 
