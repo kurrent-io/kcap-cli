@@ -10,16 +10,19 @@ public static class SessionStatusDots {
     public static bool WaitsOnUser(AgentStatusDto dto) =>
         dto.AwaitingInput == true && !AgentActionService.IsProtectedKind(dto.Kind);
 
-    /// Failed, waiting on the user, or a usage-limit question. A pending permission is the other source.
+    /// Failed, waiting on the user, a usage-limit question, or a terminal dialog. A pending
+    /// permission is the other source.
     public static bool NeedsAttention(AgentStatusDto dto) =>
-        dto.Status == "Failed" || WaitsOnUser(dto) || UsageLimitNoticeDto.IsQuestion(dto.UsageLimit);
+        dto.Status == "Failed" || WaitsOnUser(dto) || UsageLimitNoticeDto.IsQuestion(dto.UsageLimit)
+     || dto.TerminalDialog is not null;
 
     /// The merged-row twins of the two rules above, for rail rows from either lane.
     public static bool WaitsOnUser(AgentRow row) =>
         row.AwaitingInput == true && !AgentActionService.IsProtectedKind(row.Kind);
 
     public static bool NeedsAttention(AgentRow row) =>
-        row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);
+        row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit)
+     || row.TerminalDialog is not null;
 
     /// Running, and either mid-turn or with subagents the daemon still counts. A parent that is
     /// also waiting still counts as working; the wait is a line on the status tip.
@@ -29,7 +32,8 @@ public static class SessionStatusDots {
     /// The short word every session surface shows. Detail lives on <see cref="Present"/>.
     public static string Label(AgentStatusDto dto) =>
         Present(dto.Status, dto.AwaitingInput, WaitsOnUser(dto), dto.LiveSubagents,
-            pending: false, UsageLimitSummary(dto.UsageLimit), launchStage: null, elapsed: null, sessionId: null).Label;
+            pending: false, UsageLimitSummary(dto.UsageLimit), launchStage: null, elapsed: null, sessionId: null,
+            terminalDialog: dto.TerminalDialog is not null).Label;
 
     public static string Label(AgentRow row) => ForRow(row, pending: false).Label;
 
@@ -40,6 +44,7 @@ public static class SessionStatusDots {
             row.Origin == AgentOrigin.Pending ? LaunchStages.Label(row.LaunchStage) : null,
             elapsed: null, sessionId: row.SessionId ?? row.Id,
             requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
+            terminalDialog: row.TerminalDialog is not null,
             model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null);
 
     /// First match wins, so two surfaces cannot draw different marks for the same facts.
@@ -48,11 +53,11 @@ public static class SessionStatusDots {
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
             string? usageLimitSummary, string? launchStage, string? elapsed, string? sessionId,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
-            string? model = null) {
+            string? model = null, bool terminalDialog = false) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
-            : pending || usageLimitSummary is not null ? AgentStatusKind.NeedsYou
+            : pending || usageLimitSummary is not null || terminalDialog ? AgentStatusKind.NeedsYou
             : status == "Starting" ? AgentStatusKind.Starting
             : IsWorking(status, awaitingInput, liveSubagents) ? AgentStatusKind.Working
             : waitsOnUser ? AgentStatusKind.Idle
@@ -80,6 +85,7 @@ public static class SessionStatusDots {
         var facts = new List<AgentStatusFact> { new(sentence, "Status") };
         Add(facts, model, "Model");
         Add(facts, usageLimitSummary, "Usage limit");
+        if (terminalDialog) Add(facts, "Waiting for you in Terminal");
         if (pending && kind != AgentStatusKind.Answer) Add(facts, "Pending response");
         if (waitsOnUser && kind is not AgentStatusKind.Idle and not AgentStatusKind.Answer)
             Add(facts, "Waiting for input.");

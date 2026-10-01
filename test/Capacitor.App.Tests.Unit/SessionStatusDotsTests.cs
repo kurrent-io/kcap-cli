@@ -1,5 +1,6 @@
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
@@ -37,6 +38,24 @@ public class SessionStatusDotsTests {
             new(id, "agent", "claude", "/repo", status, null, null, null, DateTime.UtcNow, null, null,
                 Title: title, AwaitingInput: awaiting, LiveSubagents: subagents),
             Repo);
+
+    /// A dialog on the terminal blocks the agent whatever the turn verdict says, so a row reads
+    /// Needs you even mid-turn, and the worktree counts it.
+    [Test]
+    public async Task A_terminal_dialog_makes_a_working_row_need_you() {
+        var dialog = new TerminalDialogDto("Trust this MCP server?", "", ["Yes", "No"], 0, "");
+        var row = AgentRow.FromLocal(
+            new("a", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null,
+                AwaitingInput: false, TerminalDialog: dialog),
+            Repo);
+
+        var status = SessionStatusDots.ForRow(row, pending: false);
+        await Assert.That(status.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+        await Assert.That(status.Tip).Contains("Waiting for you in Terminal");
+        await Assert.That(status.Tip).DoesNotContain("Pending response");
+        await Assert.That(SessionStatusDots.NeedsAttention(row)).IsTrue();
+        await Assert.That(SessionStatusDots.NeedsAttention(row with { TerminalDialog = null })).IsFalse();
+    }
 
     [Test]
     public async Task One_verdict_ranks_failed_then_needs_you_then_working_then_idle() {
