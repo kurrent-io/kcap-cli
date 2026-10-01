@@ -49,11 +49,14 @@ sealed class WindowsScheduledTaskServiceManager(ConfigRoot config, UnitFileWrite
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking schtasks.</summary>
+    internal static readonly Encoding WrapperEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     internal IReadOnlyList<GeneratedFile> WriteUnitFiles(ServiceSpec spec) {
         var files = GenerateFiles(spec);
         foreach (var f in files) {
-            // schtasks /XML wants UTF-16; the .cmd wrapper is fine as UTF-8.
-            var encoding = f.Path.EndsWith(".task.xml", StringComparison.Ordinal) ? Encoding.Unicode : Encoding.UTF8;
+            // schtasks /XML wants UTF-16. The .cmd wrapper is UTF-8 without a BOM: cmd.exe reads a BOM as part
+            // of the first command, so `@echo off` would fail and the console would echo every line.
+            var encoding = f.Path.EndsWith(".task.xml", StringComparison.Ordinal) ? Encoding.Unicode : WrapperEncoding;
             _writeUnit(f.Path, f.Content, encoding);
         }
         return files;

@@ -61,6 +61,9 @@ static class WindowsTaskUnit {
     public static string Wrapper(ServiceSpec spec) {
         var sb = new StringBuilder();
         sb.Append("@echo off\r\n");
+        // cmd.exe decodes a batch file in the console code page, line by line; switching to UTF-8 before the
+        // first non-ASCII line keeps a path such as C:\Users\José intact. Both lines above it are ASCII.
+        sb.Append("chcp 65001 >nul\r\n");
         // The execution MODE is part of the artifact, not inherited from the machine. Delayed expansion is
         // off by default but can be turned on for every cmd session through the Command Processor registry
         // key, and `!NAME!` expands INSIDE double quotes — so a value like `!PAYLOAD!` survives quoting and

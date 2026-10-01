@@ -322,7 +322,21 @@ public partial class ServiceFilesTests {
 
         await Assert.That(seen.Count).IsEqualTo(2);
         await Assert.That(seen.Any(f => f.Path.EndsWith(".task.xml", StringComparison.Ordinal) && Equals(f.Encoding, Encoding.Unicode))).IsTrue();
-        await Assert.That(seen.Any(f => f.Path.EndsWith(".cmd", StringComparison.Ordinal) && Equals(f.Encoding, Encoding.UTF8))).IsTrue();
+        var wrapper = seen.Single(f => f.Path.EndsWith(".cmd", StringComparison.Ordinal));
+        await Assert.That(wrapper.Encoding is UTF8Encoding).IsTrue();
+        await Assert.That(wrapper.Encoding!.GetPreamble()).IsEmpty();
+    }
+
+    /// <summary>cmd.exe reads a byte-order mark as part of the first command, so the wrapper on disk must
+    /// begin with `@echo off` itself.</summary>
+    [Test]
+    public async Task The_windows_wrapper_on_disk_starts_with_its_first_command() {
+        var mgr = new WindowsScheduledTaskServiceManager(Config.Root);
+
+        var wrapper = mgr.WriteUnitFiles(Spec()).Single(f => f.Path.EndsWith(".cmd", StringComparison.Ordinal));
+
+        var bytes = await File.ReadAllBytesAsync(wrapper.Path);
+        await Assert.That(Encoding.ASCII.GetString(bytes, 0, 9)).IsEqualTo("@echo off");
     }
 
     static ServiceSpec Spec() => new(
