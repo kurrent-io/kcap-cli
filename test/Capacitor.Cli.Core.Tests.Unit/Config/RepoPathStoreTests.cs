@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Capacitor.Cli.Core.Config;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Config;
@@ -330,5 +331,72 @@ public class RepoPathStoreTests {
         File.SetLastWriteTimeUtc(ReposJsonPath, DateTime.UtcNow.AddMinutes(1));
 
         await Assert.That(Repos.Fingerprint()).IsEqualTo(before);
+    }
+
+    // ── Writes never trust an unreadable store ───────────────────────────────
+
+    Task<string> RepoDir(string name) {
+        var dir = Config.PathTo("repos", name);
+        Directory.CreateDirectory(dir);
+        return Task.FromResult(dir);
+    }
+
+    /// <summary>A read that keeps failing — as a Windows sharing violation would — must not let the next
+    /// add replace every saved repository with the one being added.</summary>
+    [Test]
+    [ExcludeOn(TUnit.Core.Enums.OS.Windows)] // file mode
+    [UnsupportedOSPlatform("windows")]
+    public async Task Add_over_an_unreadable_store_refuses_and_leaves_it_intact() {
+        foreach (var name in new[] { "a", "b", "c" }) await Repos.AddAsync(await RepoDir(name));
+        File.SetUnixFileMode(ReposJsonPath, UnixFileMode.None);
+        try {
+            await Assert.ThrowsAsync<IOException>(async () => await Repos.AddAsync(await RepoDir("d")));
+        } finally {
+            File.SetUnixFileMode(ReposJsonPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        await Assert.That((await Repos.LoadAsync()).Length).IsEqualTo(3);
+    }
+
+    [Test]
+    [ExcludeOn(TUnit.Core.Enums.OS.Windows)] // file mode
+    [UnsupportedOSPlatform("windows")]
+    public async Task Remove_over_an_unreadable_store_refuses_and_leaves_it_intact() {
+        var a = await RepoDir("a");
+        await Repos.AddAsync(a);
+        await Repos.AddAsync(await RepoDir("b"));
+        File.SetUnixFileMode(ReposJsonPath, UnixFileMode.None);
+        try {
+            await Assert.ThrowsAsync<IOException>(async () => await Repos.RemoveAsync(a));
+        } finally {
+            File.SetUnixFileMode(ReposJsonPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+
+        await Assert.That((await Repos.LoadAsync()).Length).IsEqualTo(2);
+    }
+
+    /// <summary>Contents that read but do not parse cannot be merged into; they are kept beside the
+    /// store rather than overwritten, and the add starts a fresh list.</summary>
+    [Test]
+    public async Task Add_over_a_corrupt_store_keeps_its_contents_aside() {
+        await File.WriteAllBytesAsync(ReposJsonPath, new byte[64]);
+        var d = await RepoDir("d");
+
+        await Repos.AddAsync(d);
+
+        var aside = Directory.GetFiles(Path.GetDirectoryName(ReposJsonPath)!, "repos.json.corrupt-*");
+        await Assert.That(aside.Length).IsEqualTo(1);
+        await Assert.That(await File.ReadAllBytesAsync(aside[0])).IsEquivalentTo(new byte[64]);
+        await Assert.That((await Repos.LoadAsync()).Single().Path).IsEqualTo(d);
+    }
+
+    [Test]
+    public async Task Concurrent_adds_from_separate_stores_keep_every_repository() {
+        var dirs = new List<string>();
+        for (var i = 0; i < 12; i++) dirs.Add(await RepoDir($"r{i}"));
+
+        await Task.WhenAll(dirs.Select(d => new RepoPathStore(Config.Root, TimeProvider.System).AddAsync(d)));
+
+        await Assert.That((await Repos.LoadAsync()).Length).IsEqualTo(12);
     }
 }

@@ -5,12 +5,12 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core.Config;
 
 /// <summary>The persisted list of repo paths (<c>repos.json</c>) under the <see cref="ConfigRoot"/>
-/// it is handed. Writes are atomic (temp + rename) so a reader never observes a partial file.</summary>
+/// it is handed. Writes are atomic (temp + rename) so a reader never observes a partial file, and are
+/// serialised across processes.</summary>
 public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
-    string StorePath { get; } = config.Path("repos.json");
+    const string StoreFileName = "repos.json";
 
-    // Static: serialises the read-modify-write for the whole process however many instances exist.
-    static readonly SemaphoreSlim Lock = new(1, 1);
+    string StorePath { get; } = config.Path(StoreFileName);
 
     public static readonly StringComparison PathComparison =
         RuntimeInformation.IsOSPlatform(OSPlatform.Linux)
@@ -20,15 +20,49 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
     static string NormalizePath(string path) =>
         Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
-    public async Task<RepoEntry[]> LoadAsync() {
-        if (!File.Exists(StorePath))
-            return [];
+    /// <summary>The saved repositories; empty when there is no file, or when it cannot be read or parsed.
+    /// Writers never act on that empty answer — see <see cref="ReadForWrite"/>.</summary>
+    public Task<RepoEntry[]> LoadAsync() => Task.Run(() => Read() is { Entries: { } entries } ? entries : []);
 
-        try {
-            var json = await File.ReadAllTextAsync(StorePath);
-            return Collapse(JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? []);
-        } catch {
-            return [];
+    enum ReadStatus { Missing, Ok, Corrupt, Unreadable }
+
+    sealed record ReadResult(ReadStatus Status, RepoEntry[]? Entries);
+
+    // Windows fails a read while another process renames over the file; that clears in milliseconds.
+    const int ReadAttempts = 25;
+    static readonly TimeSpan ReadRetryDelay = TimeSpan.FromMilliseconds(20);
+
+    ReadResult Read() {
+        for (var attempt = 1; ; attempt++) {
+            if (!File.Exists(StorePath)) return new(ReadStatus.Missing, []);
+            try {
+                var json = File.ReadAllText(StorePath);
+                try {
+                    return new(ReadStatus.Ok, Collapse(JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.RepoEntryArray) ?? []));
+                } catch (JsonException) {
+                    return new(ReadStatus.Corrupt, null);
+                }
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                if (attempt == ReadAttempts) return new(ReadStatus.Unreadable, null);
+                Thread.Sleep(ReadRetryDelay);
+            }
+        }
+    }
+
+    /// <summary>The list a write starts from. A file that exists but cannot be read is never treated as
+    /// empty — writing over it would replace every saved repository with the one being added. A file
+    /// that reads but does not parse is moved aside, so its contents stay recoverable, and the write
+    /// starts fresh.</summary>
+    List<RepoEntry> ReadForWrite() {
+        var read = Read();
+        switch (read.Status) {
+            case ReadStatus.Ok or ReadStatus.Missing:
+                return [..read.Entries!];
+            case ReadStatus.Corrupt:
+                File.Move(StorePath, $"{StorePath}.corrupt-{time.GetUtcNow():yyyyMMddHHmmss}", overwrite: true);
+                return [];
+            default:
+                throw new IOException($"Could not read {StorePath}; leaving it unchanged rather than overwriting the saved repositories.");
         }
     }
 
@@ -51,16 +85,13 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
         return [..byRepo.Values];
     }
 
-    public async Task AddAsync(string path) {
+    public Task AddAsync(string path) {
         // A linked worktree registers as its main repository: user-facing repo lists show actual
         // repositories, and review flows launching into a requester's worktree must not mint a
         // "known repo" out of it (GH #655).
         var normalized = NormalizePath(GitRepository.ResolveMainRepoRoot(path));
 
-        await Lock.WaitAsync();
-
-        try {
-            var entries  = (await LoadAsync()).ToList();
+        return WriteLocked(entries => {
             var existing = entries.FindIndex(e => string.Equals(e.Path, normalized, PathComparison));
 
             if (existing >= 0) {
@@ -69,37 +100,51 @@ public sealed class RepoPathStore(ConfigRoot config, TimeProvider time) {
                 entries.Add(new RepoEntry { Path = normalized, LastUsed = time.GetUtcNow() });
             }
 
-            await SaveAsync(entries);
-        } finally {
-            Lock.Release();
-        }
+            return true;
+        });
     }
 
-    public async Task<bool> RemoveAsync(string path) {
+    public Task<bool> RemoveAsync(string path) {
         var normalized = NormalizePath(path);
 
-        await Lock.WaitAsync();
-
-        try {
-            var entries = (await LoadAsync()).ToList();
-            var removed = entries.RemoveAll(e => string.Equals(e.Path, normalized, PathComparison));
-
-            if (removed == 0) return false;
-
-            await SaveAsync(entries);
-            return true;
-        } finally {
-            Lock.Release();
-        }
+        return WriteLocked(entries => entries.RemoveAll(e => string.Equals(e.Path, normalized, PathComparison)) > 0);
     }
 
-    async Task SaveAsync(List<RepoEntry> entries) {
+    /// <summary>Read, change and save under the root's cross-process lock, so the daemon, the CLI and a
+    /// second daemon sharing this root never interleave. The lock is a thread-affine mutex, so the whole
+    /// body runs synchronously on one thread.</summary>
+    Task<bool> WriteLocked(Func<List<RepoEntry>, bool> change) => Task.Run(() => {
+        using (config.AcquireLock(StoreFileName)) {
+            var entries = ReadForWrite();
+            if (!change(entries)) return false;
+            Save(entries);
+            return true;
+        }
+    });
+
+    void Save(List<RepoEntry> entries) {
         var dir = Path.GetDirectoryName(StorePath)!;
         Directory.CreateDirectory(dir);
         var tempPath = Path.Combine(dir, $"repos.{Environment.ProcessId}.tmp");
         var sorted   = entries.OrderByDescending(e => e.LastUsed).ToArray();
-        await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(sorted, CapacitorJsonContext.Default.RepoEntryArray));
-        File.Move(tempPath, StorePath, overwrite: true);
+
+        // Flushed to disk before the rename: NTFS can otherwise leave the renamed file empty or
+        // zero-filled after a power loss.
+        using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write)) {
+            stream.Write(JsonSerializer.SerializeToUtf8Bytes(sorted, CapacitorJsonContext.Default.RepoEntryArray));
+            stream.Flush(flushToDisk: true);
+        }
+
+        // Windows denies the replace while a reader holds the file without FILE_SHARE_DELETE; readers
+        // are short-lived, so retry briefly before surfacing.
+        for (var attempt = 1; ; attempt++) {
+            try {
+                File.Move(tempPath, StorePath, overwrite: true);
+                return;
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException && attempt < ReadAttempts) {
+                Thread.Sleep(ReadRetryDelay);
+            }
+        }
     }
 
     /// <summary>
