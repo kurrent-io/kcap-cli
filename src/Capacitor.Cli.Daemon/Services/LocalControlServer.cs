@@ -45,7 +45,7 @@ internal sealed partial class LocalControlServer(
             switch (first.Type) {
                 case FrameType.Spawn:  await orchestrator.HandleLocalSpawnAsync(first, stream, ct); break;
                 case FrameType.Attach: await orchestrator.HandleLocalAttachAsync(first.Text, stream, ct); break;
-                case FrameType.List:   await orchestrator.HandleLocalListAsync(stream, ct); break;
+                case FrameType.List:   await orchestrator.HandleLocalListAsync(first.Text == LocalFrame.ListTitleColumn, stream, ct); break;
                 case FrameType.Stop:   await orchestrator.HandleLocalStopAsync(first.Text, stream, ct); break;
                 case FrameType.StopV2: {
                     (bool force, string id) stop;

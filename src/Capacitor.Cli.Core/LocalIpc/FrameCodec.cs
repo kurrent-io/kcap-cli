@@ -45,9 +45,9 @@ public static class FrameCodec {
     static byte[] Encode(LocalFrame f) => f.Type switch {
         FrameType.Stdin or FrameType.Stdout => f.Bytes,
         FrameType.Resize                    => Dims(f.Cols, f.Rows),
-        FrameType.Detach or FrameType.List or FrameType.StatusSubscribe => [],
+        FrameType.Detach or FrameType.StatusSubscribe => [],
         FrameType.Exited                    => BeInt(f.ExitCode),
-        FrameType.Error or FrameType.Attach or FrameType.AgentList
+        FrameType.Error or FrameType.Attach or FrameType.List or FrameType.AgentList
             or FrameType.Restart or FrameType.RestartAck
             or FrameType.Stop or FrameType.StopAck
             or FrameType.Hello or FrameType.HelloReply
@@ -70,9 +70,9 @@ public static class FrameCodec {
     static LocalFrame Decode(FrameType t, byte[] p) => t switch {
         FrameType.Stdin or FrameType.Stdout => new(t) { Bytes = p },
         FrameType.Resize  => new(t) { Cols = Be16(p, 0), Rows = Be16(p, 2) },
-        FrameType.Detach or FrameType.List or FrameType.StatusSubscribe => new(t),
+        FrameType.Detach or FrameType.StatusSubscribe => new(t),
         FrameType.Exited  => new(t) { ExitCode = BinaryPrimitives.ReadInt32BigEndian(p) },
-        FrameType.Error or FrameType.Attach or FrameType.AgentList
+        FrameType.Error or FrameType.Attach or FrameType.List or FrameType.AgentList
             or FrameType.Restart or FrameType.RestartAck
             or FrameType.Stop or FrameType.StopAck
             or FrameType.Hello or FrameType.HelloReply

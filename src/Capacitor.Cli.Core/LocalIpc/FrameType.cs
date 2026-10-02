@@ -9,7 +9,7 @@ public enum FrameType : byte {
     Stdin   = 3,
     Resize  = 4,
     Detach  = 5,
-    List    = 6,   // request the daemon's agent list (for `kcap agent ls`)
+    List    = 6,   // request the daemon's agent list (for `kcap agent ls`); Text = "title" asks for the title column
     Restart = 7,   // request restart-after-update (Text = "when-idle"|"now"|"force")
     Stop    = 8,   // stop an agent (Text = agent id; empty = every agent this daemon hosts)
     StopV2  = 10,  // stop with a force flag (see FrameCodec.StopV2); supersedes Stop
@@ -44,7 +44,7 @@ public enum FrameType : byte {
     Stdout    = 65,
     Exited    = 66,
     Error     = 67,
-    AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole` line per agent
+    AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole[\ttitle]` line per agent
     RestartAck = 69, // acknowledgement for Restart (Text = short status)
     StopAck    = 70, // Text = one `id\tstatus` line per agent: "stopped", "skipped", "failed", or "missing".
                     // StopV2 reports "missing" only when neither a live agent nor a PID record exists.
