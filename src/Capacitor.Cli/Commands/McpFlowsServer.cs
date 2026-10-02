@@ -32,6 +32,7 @@ class McpFlowsServer(
         // Prefer the `--driver` stamp from this server's own registration (deterministic for the JSON
         // harnesses); fall back to env inference for Claude/Codex, whose registrations are unstamped.
         var driverVendor = DriverVendor.Infer(driverArg);
+        var callerAgentId = HostedAgent.FromEnvironment().AgentId;
         var tools        = BuildToolsList();
 
         var repository = new CwdRepository(config, cwd, router, time);
@@ -84,7 +85,8 @@ class McpFlowsServer(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),
                     clock: new FlowRetryClock(time),
                     requestingSessionId: requester.SessionId, driverVendor: driverVendor,
-                    reviewerVendorPreference: () => LoadReviewerVendorPreferenceAsync());
+                    reviewerVendorPreference: () => LoadReviewerVendorPreferenceAsync(),
+                    callerAgentId: callerAgentId);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
@@ -181,7 +183,8 @@ class McpFlowsServer(
             Func<Task<SavedReviewerVendor>>? reviewerVendorPreference = null,
             // The driver harness, inferred once by RunAsync from the running harness's env, so the
             // reviewer-vendor lookup can echo driver_vendor without this handler reading the env.
-            string? driverVendor = null
+            string? driverVendor = null,
+            string? callerAgentId = null
         ) {
         clock                    ??= FlowRetryClock.System;
         backoff                  ??= SettlementBackoff.Default;
@@ -465,6 +468,25 @@ class McpFlowsServer(
                 return FormatFlowDefinitions(definitionsBody) is { } listing
                     ? BuildToolResult(id, listing)
                     : BuildToolResult(id, "Error: unreadable flow definition list from GET /api/flows/definitions.", isError: true);
+            }
+
+            if (toolName is StartAgentTool.Name) {
+                // Read, never minted: an id written by this call matches no daemon, since a daemon
+                // reports the id it read from the same file.
+                var start = StartAgentTool.BuildRequest(
+                    arguments, requestingSessionId, driverVendor, callerAgentId, new MachineId(config).ReadPersisted());
+
+                var (answer, how) = await StartAgentTool.PostAsync(client, apiRoot, start, clock);
+                if (answer is null) return BuildToolResult(id, StartAgentTool.Unanswered(how), isError: true);
+
+                using (answer) {
+                    if (answer.StatusCode == HttpStatusCode.Unauthorized)
+                        return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                    var (text, isError) = StartAgentTool.Render((int)answer.StatusCode, await answer.Content.ReadAsStringAsync());
+
+                    return BuildToolResult(id, text, isError);
+                }
             }
 
             using var httpResponse = toolName switch {
@@ -2540,7 +2562,8 @@ class McpFlowsServer(
             "A server_catching_up error means the catalog is temporarily unreadable — retry shortly rather than treating the list as empty; an empty list is authoritative.",
             new("object", new(), []),
             McpToolAnnotations.Read
-        )
+        ),
+        StartAgentTool.Describe()
     ];
 }
 

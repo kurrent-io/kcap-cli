@@ -80,6 +80,7 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-flows", "get_review_flow_status").Annotations.ReadOnlyHint).IsFalse();
         // A hosted agent acts on its own once launched.
         await Assert.That(Tool("kcap-flows", "start_review_flow").Annotations.OpenWorldHint).IsTrue();
+        await Assert.That(Tool("kcap-flows", "start_agent").Annotations).IsEqualTo(McpToolAnnotations.Launch);
     }
 
     [Test]
