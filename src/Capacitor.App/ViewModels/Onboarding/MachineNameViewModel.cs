@@ -4,9 +4,10 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// The daemon-name field, written to the active profile through ConfigMutator on Next only. No claim maintenance — claims key on {profile, server} and resolve the daemon name
-/// at application time, so a rename here needs no second-store write.
-public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
+/// The daemon page's name field, written to the active profile through ConfigMutator only when the
+/// daemon is enabled. No claim maintenance — claims key on {profile, server} and resolve the daemon
+/// name at application time, so a rename here needs no second-store write.
+public sealed class MachineNameViewModel : ReactiveObject {
     readonly ConfigRoot     _config;
     readonly Func<string?>? _resolveProfileName;
 
@@ -15,7 +16,7 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
     string? _message;
 
     /// <param name="resolveProfileName">Re-invoked per persist rather than captured; null or unresolved falls back to <c>c.ActiveProfile</c>.</param>
-    public DefaultsStepViewModel(
+    public MachineNameViewModel(
             ConfigRoot     config,
             string?        defaultDaemonName  = null,
             Func<string?>? resolveProfileName = null
@@ -28,12 +29,8 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
         _resolveProfileName = resolveProfileName;
     }
 
-    public WizardStepId Id         => WizardStepId.Defaults;
-    public string       Title      => "This machine";
-    public bool         Applicable => true;
-    public string Lede => "What this machine is called when you start agents on it from elsewhere.";
-
-    public bool Satisfied {
+    /// Saved at least once.
+    public bool Saved {
         get => _satisfied;
         private set => this.RaiseAndSetIfChanged(ref _satisfied, value);
     }
@@ -43,21 +40,14 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
         set => this.RaiseAndSetIfChanged(ref _daemonName, value);
     }
 
-    /// Set when a persist attempt fails, so the veto below is visible, not just logged.
+    /// Set when a save fails, so the refusal is visible, not just logged.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
-    public Task OnEnterAsync(CancellationToken ct) => Task.CompletedTask;
-
-    /// Persists on Next only — Back and Skip leave the active profile untouched, so re-entering
-    /// this step (or abandoning the wizard) never writes a value the user didn't confirm. A
-    /// persist failure vetoes (stays on the step) with a visible Message rather than the shell's
-    /// generic stderr-only catch.
-    public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
-        if (direction != WizardNavigation.Next) return true;
-
+    /// False, with <see cref="Message"/> set, when the profile could not be written.
+    public async Task<bool> SaveAsync(CancellationToken ct) {
         try {
             await ConfigMutator.MutateAsync(_config, c => {
                 var resolvedName = _resolveProfileName?.Invoke();
@@ -73,13 +63,13 @@ public sealed class DefaultsStepViewModel : ReactiveObject, IWizardStep {
                 return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [activeName] = profile } };
             }, ct).ConfigureAwait(false);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
-            Message = $"Could not save defaults: {ex.Message}";
+            Message = $"Could not save the machine name: {ex.Message}";
 
             return false;
         }
 
-        Message   = null;
-        Satisfied = true;
+        Message = null;
+        Saved   = true;
 
         return true;
     }

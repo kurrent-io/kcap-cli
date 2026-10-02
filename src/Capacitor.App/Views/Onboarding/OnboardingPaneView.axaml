@@ -6,34 +6,6 @@
              x:Class="Capacitor.App.Views.Onboarding.OnboardingPaneView"
              x:DataType="vm:OnboardingViewModel"
              Background="{StaticResource KcapCanvasBrush}">
-    <UserControl.Styles>
-        <Style Selector="RadioButton">
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="FontSize" Value="13.5" />
-            <Setter Property="Padding" Value="8,6" />
-        </Style>
-        <Style Selector="CheckBox">
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="FontSize" Value="13.5" />
-            <Setter Property="Padding" Value="8,4" />
-            <Setter Property="Margin" Value="0,2" />
-        </Style>
-        <Style Selector="ComboBoxItem">
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Padding" Value="10,6" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-        </Style>
-        <Style Selector="ComboBoxItem:selected /template/ ContentPresenter,
-                         ComboBoxItem:selected:pointerover /template/ ContentPresenter">
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
-        </Style>
-        <Style Selector="ComboBoxItem:pointerover /template/ ContentPresenter">
-            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-        </Style>
-    </UserControl.Styles>
     <!-- Per-step templates, selected by ViewModel type; the ContentControl below deliberately
          sets no ContentTemplate, which would win over every one of these. -->
     <UserControl.DataTemplates>
@@ -65,21 +37,6 @@
             <views:SignInPaneView />
         </DataTemplate>
 
-        <DataTemplate DataType="vm:DefaultsStepViewModel">
-            <StackPanel Spacing="14">
-                <Border Classes="frCard">
-                    <StackPanel Spacing="8">
-                        <TextBlock Classes="frMicro" Text="NAME" />
-                        <TextBlock Classes="frDetail" Text="How this machine identifies itself to the server." />
-                        <TextBox x:Name="DaemonNameBox" Classes="frField" Text="{Binding DaemonName, Mode=TwoWay}" />
-                    </StackPanel>
-                </Border>
-
-                <TextBlock x:Name="DefaultsMessageText" Classes="frError" Text="{Binding Message}"
-                           IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-            </StackPanel>
-        </DataTemplate>
-
         <DataTemplate DataType="vm:HarnessesStepViewModel">
             <views:HarnessesPaneView />
         </DataTemplate>
@@ -89,68 +46,11 @@
         </DataTemplate>
 
         <DataTemplate DataType="vm:DaemonStepViewModel">
-            <StackPanel Spacing="14">
-                <Border Classes="frCard">
-                    <StackPanel Spacing="14">
-                        <TextBlock x:Name="DaemonMessageText" Text="{Binding Message}" TextWrapping="Wrap"
-                                   FontSize="13.5" LineHeight="21" Foreground="{StaticResource KcapTextBrush}"
-                                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                        <Button x:Name="DaemonActionButton" Classes="kcapPrimary" Content="{Binding ActionLabel}"
-                                Command="{Binding ActionCommand}" HorizontalAlignment="Left"
-                                IsVisible="{Binding ActionLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-                        <Button x:Name="DaemonRefreshButton" Classes="kcapChip" Content="Check again"
-                                Command="{Binding RefreshCommand}" HorizontalAlignment="Left"
-                                IsVisible="{Binding RefreshVisible}" />
-
-                        <TextBlock x:Name="DaemonStatusText" Classes="kcapHint" Text="{Binding Status}" TextWrapping="Wrap"
-                                   IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    </StackPanel>
-                </Border>
-            </StackPanel>
+            <views:DaemonPaneView />
         </DataTemplate>
 
         <DataTemplate DataType="vm:DoneStepViewModel">
-            <StackPanel Spacing="14">
-                <Border Classes="frCard">
-                    <ItemsControl x:Name="SummaryList" ItemsSource="{Binding Summary}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Spacing="2" />
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" Margin="12,10">
-                                    <Grid Grid.Column="0" Width="22" Height="22" VerticalAlignment="Top" Margin="0,1,0,0">
-                                        <Border CornerRadius="11" Background="{StaticResource KcapSuccessDimBrush}"
-                                                IsVisible="{Binding Satisfied}" />
-                                        <Border CornerRadius="11" Background="{StaticResource KcapSurfaceRaisedBrush}"
-                                                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
-                                                IsVisible="{Binding Incomplete}" />
-                                        <TextBlock x:Name="SummaryGlyphText" Text="{Binding Glyph}" FontSize="11"
-                                                   FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   Foreground="{StaticResource KcapSuccessBrush}"
-                                                   IsVisible="{Binding Satisfied}" />
-                                        <TextBlock Text="–" FontSize="11" FontWeight="Bold"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   Foreground="{StaticResource KcapMutedBrush}"
-                                                   IsVisible="{Binding Incomplete}" />
-                                    </Grid>
-                                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock x:Name="SummaryTitleText" Classes="kcapLabel" Text="{Binding Title}"
-                                                   TextWrapping="Wrap" />
-                                        <TextBlock x:Name="SummaryNoteText" Classes="kcapHint" Text="{Binding Detail}"
-                                                   TextWrapping="Wrap"
-                                                   IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                    </StackPanel>
-                                </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </Border>
-            </StackPanel>
+            <views:DonePaneView />
         </DataTemplate>
     </UserControl.DataTemplates>
 
