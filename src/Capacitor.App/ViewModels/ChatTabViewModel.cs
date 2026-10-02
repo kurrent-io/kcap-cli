@@ -892,6 +892,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         _openShell = null;
                         fresh.Add(new AssistantTextItem(e.Text ?? ""));
                         break;
+                    case AcpEventKind.AssistantThinking when !string.IsNullOrWhiteSpace(e.Text):
+                        _openGroup = null;
+                        _openShell = null;
+                        fresh.Add(new AssistantThinkingItem(e.Text));
+                        break;
                     case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && _openShell is { HasOutput: false } shell:
                         _openGroup = null;
                         shell.Output = e.Text ?? "";

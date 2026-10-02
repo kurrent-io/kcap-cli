@@ -37,6 +37,7 @@ public class ChatTabViewSmokeTests {
     const string UserLine = """{"type":"user","message":{"role":"user","content":"hello"}}""";
     const string AssistantLinkLine = """{"type":"assistant","message":{"content":[{"type":"text","text":"See [docs](https://example.com/docs) now."}]}}""";
     const string ToolCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
+    const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
     const string ToolResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
     const string ToolErrorLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}""";
     static readonly TimeSpan CrDelay = TimeSpan.FromMilliseconds(150);
@@ -816,6 +817,24 @@ public class ChatTabViewSmokeTests {
             await Assert.That(glyph.Foreground).IsSameReferenceAs(Brush(isError: false));
             await Assert.That(host.View.GetVisualDescendants().OfType<Border>()
                 .Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(0);
+            await host.CloseAsync();
+        });
+    }
+
+    /// Reasoning is plain muted text under its own chip, not Markdown: it reads like the terminal's
+    /// bullet and costs no document layout.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_thinking_row_renders_its_text_under_a_thinking_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("think.jsonl", [ThinkingLine]));
+            await Assert.That(host.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(new[] { nameof(AssistantThinkingItem) });
+
+            var blocks = host.View.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).ToList();
+            await Assert.That(blocks.Select(t => t.Text)).Contains("Thinking");
+            var body = blocks.Single(t => t.Text == "weighing it");
+            await Assert.That(body.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await host.CloseAsync();
         });
     }
