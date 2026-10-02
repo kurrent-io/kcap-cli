@@ -18,17 +18,20 @@ public static class EvidenceCoverageMeasure {
         var available = scope.Sources.Where(s => s.IsAvailable && !ledger.SourcesRefused.Contains(s.SourceId)).ToList();
         var omissions = ScopeOmissions(scope);
 
-        Add(omissions, EvalOmissionKinds.TurnsNotFetched, OutlinedTurns(ledger).Count(t => t.Value.RangeState == "ok" && !Covered(ledger, t.Key.Source, t.Value.Start, t.Value.End)));
-        Add(omissions, EvalOmissionKinds.PagesNotFetched, ledger.Pages.Count(p => p.HasNext && !ledger.FollowedHandles.Contains(p.Handle)));
+        var unfetchedTurns = OutlinedTurns(ledger).Where(t => t.Value.RangeState == "ok" && !Covered(ledger, t.Key.Source, t.Value.Start, t.Value.End)).ToList();
+        var unfollowed     = ledger.Pages.Where(p => p.HasNext && !ledger.FollowedHandles.Contains(p.Handle)).ToList();
+        Add(omissions, EvalOmissionKinds.TurnsNotFetched, unfetchedTurns.Count);
+        Add(omissions, EvalOmissionKinds.PagesNotFetched, unfollowed.Count);
         Add(omissions, EvalOmissionKinds.BodiesNotFetched, UnopenedBodies(ledger).Count);
         Add(omissions, EvalOmissionKinds.SourcesNotConsulted, available.Count(s => !ledger.SourcesWithPage.Contains(s.SourceId)));
 
-        // An empty record claims every event was delivered, and events nobody outlined or paged leave none of the counts above.
-        if (!omissions.Any(o => Undelivered.Contains(o.Kind))) {
-            // a plan_ledger page consults a lane but delivers none of its entries
-            var partlyRead = available.Count(s => ledger.DeliveredEvents.Count(e => e.Source == s.SourceId) < s.RevisionCutoff - s.FirstRevision + 1);
-            if (partlyRead > 0) omissions.Add(new EvalEvidenceOmission { Kind = EvalOmissionKinds.PagesNotFetched, Count = partlyRead, Detail = "unread_ranges" });
-        }
+        // An empty record claims every event was delivered, but events nobody outlined or paged leave none of the counts
+        // above, and a plan_ledger page consults a lane without delivering its entries. A consulted source whose shortfall
+        // no other omission names is reported as unread, whatever is missing elsewhere.
+        var explained = unfetchedTurns.Select(t => t.Key.Source).Concat(unfollowed.Select(p => p.Source).OfType<string>()).ToHashSet(StringComparer.Ordinal);
+        var partlyRead = available.Count(s => ledger.SourcesWithPage.Contains(s.SourceId) && !explained.Contains(s.SourceId)
+                                            && ledger.DeliveredEvents.Count(e => e.Source == s.SourceId) < s.RevisionCutoff - s.FirstRevision + 1);
+        if (partlyRead > 0) omissions.Add(new EvalEvidenceOmission { Kind = EvalOmissionKinds.PagesNotFetched, Count = partlyRead, Detail = "unread_ranges" });
 
         // A moved scope ends the run before coverage is measured, so only a vocabulary stop is taken from the footer.
         var footerStop = ledger.StopReason is { } stop && EvalStopReasons.All.Contains(stop) ? stop : null;

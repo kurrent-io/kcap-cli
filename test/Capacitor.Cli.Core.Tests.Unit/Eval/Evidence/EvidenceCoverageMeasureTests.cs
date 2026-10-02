@@ -240,6 +240,24 @@ public class EvidenceCoverageMeasureTests {
         await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
     }
 
+    /// <summary>A lane read only through the plan ledger is still unread when another source was never opened: each
+    /// omission is reported on its own.</summary>
+    [Test]
+    public async Task A_ledger_only_lane_reports_its_unread_range_beside_a_source_never_consulted() {
+        string lane = PlanLane(1), unopened = PlanLane(2);
+        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4), LaneSource(unopened, 2));
+        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [LedgerPlan(1, lane, 2)], plansOmitted: 0, tasksOmitted: 0)]);
+
+        var c = EvidenceCoverageMeasure.ForRetrieval(scope, ledger, []);
+
+        await Assert.That(c.SourcesConsulted).IsEquivalentTo([Root, lane]);
+        await Assert.That(Count(c, EvalOmissionKinds.SourcesNotConsulted)).IsEqualTo(1);
+        var unread = c.Omissions.Single(o => o.Kind == EvalOmissionKinds.PagesNotFetched);
+        await Assert.That(unread.Detail).IsEqualTo("unread_ranges");
+        await Assert.That(unread.Count).IsEqualTo(1);
+        await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
+    }
+
     /// <summary>A ledger row shows only part of an entry, so a lane whose every ref the ledger printed is consulted but
     /// unread; the refs stay citable, and only an events page delivering the entries makes the record complete.</summary>
     [Test]
