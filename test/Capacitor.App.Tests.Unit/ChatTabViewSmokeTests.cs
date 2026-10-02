@@ -489,9 +489,11 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.IsVisible).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "queued follow-up")).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsFalse();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsTrue();
             host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Completed" });
             host.Settle();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
             await host.AppendLinesAndTickAsync(path, UserLine.Replace("hello", "queued follow-up"));
             await Assert.That(banner.IsVisible).IsFalse();
             await host.CloseAsync();

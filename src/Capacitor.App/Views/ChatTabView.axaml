@@ -274,6 +274,8 @@
                                             <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="13.5"
                                                        TextTrimming="CharacterEllipsis" MaxLines="1"
                                                        Foreground="{StaticResource KcapMutedBrush}" />
+                                            <TextBlock Text="{x:Static vm:QueuedChatMessage.AwaitingPickupNote}" IsVisible="{Binding IsAwaitingPickup}"
+                                                       FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                             <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
                                                        FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
                                             <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"

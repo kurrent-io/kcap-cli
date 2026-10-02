@@ -8,6 +8,8 @@ namespace Capacitor.App.ViewModels;
 /// alone does not mean the runtime has started consuming a prompt queued behind its current turn.
 /// Only the ids are held: the chips themselves live in the tray until a delivery clears them.
 public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset, IReadOnlyList<Guid> attachmentIds) : ReactiveObject {
+    public const string AwaitingPickupNote = "The agent reads it when its current step ends";
+
     public string Text { get; } = text;
     public IReadOnlyList<Guid> AttachmentIds { get; } = attachmentIds;
     internal int ComposerEdits { get; } = composerEdits;
@@ -17,7 +19,19 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal bool HasBaseline => _offset.HasValue;
 
     bool _isUnconfirmed;
-    public bool IsUnconfirmed { get => _isUnconfirmed; private set => this.RaiseAndSetIfChanged(ref _isUnconfirmed, value); }
+    public bool IsUnconfirmed {
+        get => _isUnconfirmed;
+        private set {
+            if (_isUnconfirmed == value) return;
+            _isUnconfirmed = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(IsAwaitingPickup));
+        }
+    }
+
+    /// An own send the channel accepted but the transcript has not echoed: the runtime reads a
+    /// prompt queued behind its current turn only when that turn's step ends.
+    public bool IsAwaitingPickup => !IsForeign && !IsUnconfirmed;
 
     internal void MarkUnconfirmed() => IsUnconfirmed = true;
 
