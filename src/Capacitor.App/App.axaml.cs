@@ -19,7 +19,6 @@ using Capacitor.App.Services.Update;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
-using Capacitor.App.Views.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
@@ -184,6 +183,9 @@ public partial class App : Application {
     WizardAuthService? _wizardAuth;
     ImportStepViewModel? _wizardImport;
     Window? _wizardWindow;
+    // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
+    // it over so the main surface opens in place rather than in a second window.
+    MainWindow? _adoptableWindow;
     // Steady-state re-auth dialog, one at a time — a second Sign in click focuses it. The settle
     // task is FinishSignInAsync for the most recent close; shutdown awaits it so a live attempt is
     // cancelled (or a commit past the boundary finishes) before the process exits — the dialog's
@@ -306,6 +308,7 @@ public partial class App : Application {
             // No orphan wizard beside the error window: it is a dead shell once startup has failed,
             // and its own close path (the handoff) is exactly what did not run.
             if (_wizardWindow is { IsVisible: true } wizard) wizard.Close();
+            if (TakeAdoptableWindow() is { } adoptable) adoptable.Close();
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
@@ -630,7 +633,7 @@ public partial class App : Application {
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback),
+                openFeedback: openFeedback, adopt: TakeAdoptableWindow()),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -917,7 +920,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _wizardImport = graph.Import;
-        var window = ShowWizardWindow(desktop, graph.ViewModel);
+        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState);
         _wizardWindow = window;
 
         // The SAME consumer function, over the wizard's own surface: outcome presentation stays
@@ -934,7 +937,12 @@ public partial class App : Application {
         _wizardAuth = null;
         _wizardImport = null;
         _wizardWindow = null;
-        if (window.IsVisible) window.Close(); // shutdown ended the wait with the window still up
+        // A finished onboarding leaves its window up for the main surface to take over; a window the
+        // user closed is gone, and the main surface builds its own.
+        if (window.IsVisible) {
+            if (_shutdown.IsCancellationRequested) window.Close();
+            else _adoptableWindow = window;
+        }
 
         return quiesced;
     }
@@ -975,12 +983,24 @@ public partial class App : Application {
             probe.TerminalPathAsync, canonicalServer: ServerIdentity.Canonicalize(server));
     }
 
-    // ShutdownMode is deliberately untouched (OnExplicitShutdown, pinned in
-    // OnFrameworkInitializationCompleted): closing the wizard hands over to the normal graph,
-    // it never exits the app.
-    internal static OnboardingWindow ShowWizardWindow(
-            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard) {
-        var window = new OnboardingWindow { DataContext = wizard };
+    // The main window, with the onboarding pane where the rail and launcher go. ShutdownMode is
+    // deliberately untouched (OnExplicitShutdown, pinned in OnFrameworkInitializationCompleted):
+    // closing the window mid-onboarding abandons it and hands over to the normal graph, it never
+    // exits the app.
+    internal static MainWindow ShowWizardWindow(
+            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null) {
+        var window = new MainWindow { Onboarding = wizard };
+        if (appState is not null) {
+            WindowSizeMemory.Restore(window, appState);
+            WindowSizeMemory.Attach(window, appState);
+        }
+
+        // Never cancelled — the window only notifies the flow. Detached once the flow has closed, so
+        // the main surface's own hide-on-close is the window's only close behaviour after handover.
+        void OnClosing(object? sender, WindowClosingEventArgs e) => wizard.RequestClose();
+        window.Closing += OnClosing;
+        wizard.CloseRequested += () => window.Closing -= OnClosing;
+
         desktop.MainWindow = window;
         window.Show();
 
@@ -1158,7 +1178,7 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
-            Action<FeedbackCategory>? openFeedback = null) {
+            Action<FeedbackCategory>? openFeedback = null, MainWindow? adopt = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1206,12 +1226,14 @@ public partial class App : Application {
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn);
-        var window = new MainWindow {
-            DataContext = vm,
-            Notifier = notifier,
-        };
-        WindowSizeMemory.Restore(window, appState);
-        WindowSizeMemory.Attach(window, appState);
+        var window = adopt ?? new MainWindow();
+        window.DataContext = vm;
+        window.Notifier = notifier;
+        window.Onboarding = null;
+        if (adopt is null) {
+            WindowSizeMemory.Restore(window, appState);
+            WindowSizeMemory.Attach(window, appState);
+        }
         window.Show();
         return window;
     }
@@ -1503,6 +1525,13 @@ public partial class App : Application {
 
     Task<bool> ConfirmLifecyclePromptAsync(LifecyclePrompt prompt, CancellationToken ct) =>
         Dispatcher.UIThread.InvokeAsync(() => ShowLifecyclePromptDialogAsync(DialogOwner(), prompt, ct));
+
+    // Once only: a later rebuild (after a real close) must not reach for a window that is gone.
+    MainWindow? TakeAdoptableWindow() {
+        var window = _adoptableWindow;
+        _adoptableWindow = null;
+        return window is { IsVisible: true } ? window : null;
+    }
 
     // The wizard owns dialogs while wizard-first mode is up — no main window exists yet.
     Window? DialogOwner() =>
