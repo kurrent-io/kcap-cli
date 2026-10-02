@@ -103,6 +103,26 @@ public class AntigravityActivityClockTests {
         process.ReleaseDisposal();
     }
 
+    /// <summary>The flag is cleared before the exit signal, so a clock callback that throws there
+    /// must still let every exit waiter resume.</summary>
+    [Test]
+    public async Task A_throwing_turn_ended_callback_still_signals_exit() {
+        var clock   = new AgentActivityClock(new FakeTimeProvider()) { OnTurnEnded = () => throw new InvalidOperationException("callback") };
+        var process = new HeldDisposalTurnProcess();
+
+        await using var rt = new AntigravityHostedAgentRuntime(
+            spawnTurn: (_, _, _) => Task.FromResult<IAgyTurnProcess>(process),
+            logger: NullLogger.Instance, timeProvider: TimeProvider.System);
+        rt.ActivityClock = clock;
+
+        await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
+        await rt.WaitForExitAsync().WaitAsync(HangGuard);
+
+        await Assert.That(clock.TurnInFlight).IsFalse();
+
+        process.ReleaseDisposal();
+    }
+
     /// <summary>A stop landing while a turn is genuinely in flight must clear it too — and, again,
     /// <c>EnterTerminal</c> must be the one that does it, because the worker's own <c>finally</c> runs
     /// only once the turn actually unwinds (and never at all, for a child that ignores cancellation).

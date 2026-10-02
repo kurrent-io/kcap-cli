@@ -1004,7 +1004,12 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // in-flight turn actually unwinds, which is AFTER TerminateAsync returns to its caller (and
         // never at all, if a turn's process ignores cancellation). Cleared BEFORE _terminalTcs
         // completes, so no exit waiter can resume into a stopped runtime that still holds a turn.
-        ActivityClock?.SetTurnInFlight(false);
+        // Its callbacks are contained: a throwing one must not leave Terminal entered but unsignalled.
+        try {
+            ActivityClock?.SetTurnInFlight(false);
+        } catch (Exception ex) {
+            _logger.LogWarning(ex, "Antigravity: activity-clock callback threw while entering Terminal (agentId={AgentId}).", _agentId);
+        }
 
         _terminalTcs.TrySetResult();
 
