@@ -1,7 +1,7 @@
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// Declaration order is display order.
-public enum WizardStepId { Shim, Connect, SignIn, Defaults, Agents, Import, Daemon, Done }
+public enum WizardStepId { Welcome, Shim, SignIn, Defaults, Agents, Import, Daemon, Done }
 
 public enum WizardNavigation { Back, Next, Skip }
 
@@ -26,6 +26,11 @@ public interface IWizardStep {
     string? NextLabel => null;
 
     string SkipLabel => "Skip";
+
+    bool Skippable => true;
+
+    /// The page carries its own primary action, so the shell shows neither Next nor Skip.
+    bool OwnsPrimaryAction => false;
 
     Task OnEnterAsync(CancellationToken ct);
 

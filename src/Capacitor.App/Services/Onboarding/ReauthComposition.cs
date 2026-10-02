@@ -20,8 +20,7 @@ internal sealed record ReauthGraph(SignInStepViewModel SignIn, WizardAuthService
 /// The re-auth half of the composition root: the wizard's sign-in step composed alone, with the
 /// intent pre-staged as a Paste of the profile's own server. Pasting the SAME origin is what keeps
 /// the "sign-in never repoints server_url" rule intact while reusing the wizard's commit boundary
-/// unchanged — and a Paste intent can never produce the Retarget answer, so the dialog needs no
-/// Connect step to come back to.
+/// unchanged — and a Paste intent can never produce the Retarget answer.
 /// </summary>
 internal static class ReauthComposition {
     internal static ReauthGraph Build(
@@ -34,7 +33,7 @@ internal static class ReauthComposition {
         var auth = new WizardAuthService(WizardComposition.BuildOperation(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges, claims, time, operation,
             precondition));
-        var connect = new ConnectStepViewModel();
+        var connect = new ConnectChoiceViewModel();
         connect.Prefill(serverUrl);
 
         // Only a sign-in to the profile the app runs on refreshes it; any other profile's dialog

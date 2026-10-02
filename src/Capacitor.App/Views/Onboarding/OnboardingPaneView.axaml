@@ -37,32 +37,32 @@
     <!-- Per-step templates, selected by ViewModel type; the ContentControl below deliberately
          sets no ContentTemplate, which would win over every one of these. -->
     <UserControl.DataTemplates>
-        <DataTemplate DataType="vm:ConnectStepViewModel">
-            <StackPanel Spacing="14">
-                <Border Classes="frCard">
-                    <StackPanel Spacing="8">
-                        <RadioButton x:Name="DiscoverChoice" GroupName="Connect" Content="Find workspaces for my account"
-                                     IsChecked="{Binding DiscoverSelected, Mode=TwoWay}" />
-
-                        <RadioButton x:Name="PasteChoice" GroupName="Connect" Content="Enter a workspace name or URL"
-                                     IsChecked="{Binding PasteSelected, Mode=TwoWay}" />
-                        <StackPanel Margin="28,0,0,4" Spacing="4" IsVisible="{Binding PasteSelected}">
-                            <TextBox x:Name="ServerInputBox" Classes="kcapField" PlaceholderText="acme  ·  https://acme.kcap.ai"
-                                     Text="{Binding ServerInputText, Mode=TwoWay}" />
-                            <TextBlock x:Name="ConnectErrorText" Text="{Binding InputError}" TextWrapping="Wrap"
-                                       Foreground="{StaticResource KcapDangerBrush}" FontSize="12" LetterSpacing="0.2"
-                                       IsVisible="{Binding InputError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        </StackPanel>
-
-                        <RadioButton x:Name="CreateChoice" GroupName="Connect" Content="Create a new workspace"
-                                     IsChecked="{Binding CreateSelected, Mode=TwoWay}" />
-                    </StackPanel>
-                </Border>
-            </StackPanel>
+        <DataTemplate DataType="vm:WelcomeStepViewModel">
+            <Border Classes="frCard">
+                <StackPanel Spacing="14">
+                    <TextBlock Classes="frMicro" Text="WHAT SETUP DOES ON THIS MACHINE" />
+                    <ItemsControl x:Name="WelcomeItems" ItemsSource="{x:Static vm:WelcomeStepViewModel.Items}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:WelcomeItem">
+                                <Border Classes="frRowRule" Padding="2,11">
+                                    <Grid ColumnDefinitions="180,*" ColumnSpacing="14">
+                                        <TextBlock Classes="frLabel" Text="{Binding Title}" />
+                                        <TextBlock Grid.Column="1" Classes="frDetail" FontSize="12.5" Text="{Binding Detail}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="frNote">
+                        <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
+                            Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Every choice can be changed later in Settings." />
+                    </TextBlock>
+                </StackPanel>
+            </Border>
         </DataTemplate>
 
         <DataTemplate DataType="vm:SignInStepViewModel">
-            <views:SignInStepView />
+            <views:SignInPaneView />
         </DataTemplate>
 
         <DataTemplate DataType="vm:ShimStepViewModel">
@@ -319,7 +319,8 @@
                 <StackPanel Spacing="10">
                     <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="12">
                         <Button x:Name="NextButton" Classes="frPrimary" Command="{Binding NextCommand}"
-                                Content="{Binding NextLabel, Converter={x:Static views:UpperCase.Instance}}" />
+                                Content="{Binding NextLabel, Converter={x:Static views:UpperCase.Instance}}"
+                                IsVisible="{Binding NextVisible}" />
                         <Button Grid.Column="1" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
                                 Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
                                 IsVisible="{Binding SkipVisible}" />

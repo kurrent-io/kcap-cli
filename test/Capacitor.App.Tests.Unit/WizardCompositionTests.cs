@@ -85,12 +85,12 @@ public class WizardCompositionHappyPathTests {
             var graph = WizardComposition.BuildGraph(options);
             await graph.ViewModel.PendingEnterForTesting;
 
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
+            var connect = graph.Connect;
             connect.Choice          = ConnectChoice.Paste;
             connect.ServerInputText = ServerUrl;
-            await Assert.That(connect.Satisfied).IsTrue(); // a valid intent is staged before Next
+            await Assert.That(connect.Validate()).IsTrue(); // a valid intent is staged before sign-in
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Connect -> Sign-in
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Welcome -> Sign-in
 
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -120,13 +120,11 @@ public class WizardCompositionHappyPathTests {
 
         var byTitle = summary.ToDictionary(e => e.Title);
 
-        await Assert.That(summary.Count).IsEqualTo(7); // every configured step but Done itself
+        await Assert.That(summary.Count).IsEqualTo(6); // every configured step but Welcome and Done
         await Assert.That(byTitle["Use kcap in the terminal"].Satisfied).IsFalse();
         await Assert.That(byTitle["Use kcap in the terminal"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Choose a workspace"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Choose a workspace"].Note).IsEqualTo(ServerUrl);
         await Assert.That(byTitle["Sign in"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Sign in"].Note).IsNull();
+        await Assert.That(byTitle["Sign in"].Note).IsEqualTo("No sign-in required for this server.");
         await Assert.That(byTitle["Sessions from this machine"].Satisfied).IsTrue();
         await Assert.That(byTitle["Sessions from this machine"].Note)
             .IsEqualTo("Org-repo sessions visible in the workspace. Machine name daemon-a.");
@@ -204,10 +202,10 @@ public class WizardCompositionAbandonTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
             await graph.ViewModel.PendingEnterForTesting;
 
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
+            var connect = graph.Connect;
             connect.Choice          = ConnectChoice.Paste;
             connect.ServerInputText = "https://acme.example";
-            await Assert.That(connect.Satisfied).IsTrue(); // a valid intent is staged — Begin is never called
+            await Assert.That(connect.Validate()).IsTrue(); // a valid intent is staged — Begin is never called
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(

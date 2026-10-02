@@ -34,7 +34,7 @@ internal sealed record WizardFacadeSpec(
 /// CanLeaveAsync alone does not cover since closing the window never navigates away from a step.
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
-    ImportStepViewModel Import);
+    ImportStepViewModel Import, ConnectChoiceViewModel Connect);
 
 /// <summary>Everything wizard-first mode is composed from; the daemon-facing entries are factories so a call never lands on a stale daemon.</summary>
 internal sealed record WizardGraphOptions(
@@ -113,8 +113,10 @@ internal static class WizardComposition {
         var auth   = new WizardAuthService(BuildOperation(options.Root, options.TokenStore, options.HttpFactory, options.Proxy,
         options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
-        var connect  = new ConnectStepViewModel();
-        var signIn   = new SignInStepViewModel(auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener);
+        var welcome  = new WelcomeStepViewModel();
+        var connect  = new ConnectChoiceViewModel();
+        var signIn   = new SignInStepViewModel(
+            auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time);
         var shim     = new ShimStepViewModel(options.ShimApplicable, options.ShimInstaller, options.AppState, options.ShimTarget);
         // Defaults persists to the same fresh identity the daemon step gates on, falling back to ActiveProfile.
         var defaults = new DefaultsStepViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
@@ -135,18 +137,15 @@ internal static class WizardComposition {
             claims,
             options.ResolveConsentFlipIdentity, options.Surface, options.Probe.TerminalPathAsync, options.Time);
 
-        IWizardStep[] configured = [shim, connect, signIn, defaults, agents, import, daemon];
+        IWizardStep[] configured = [welcome, signIn, shim, defaults, agents, import, daemon];
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => Summarize(configured, cli.CliPath is not null));
         IWizardStep[] steps = [.. configured, done];
 
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface);
-        // A WorkOS "I already have a workspace" prefills the Connect step; without the navigation
-        // the prefill would sit on a page the user is not looking at.
-        signIn.RetargetRequested += _ => wizard.TryGoTo(WizardStepId.Connect);
         signIn.Completed += () => _ = AdvanceAfterHoldAsync(wizard, wizard.Visit, options.Time, options.ShutdownToken);
 
-        return new WizardGraph(wizard, auth, steps, import);
+        return new WizardGraph(wizard, auth, steps, import, connect);
     }
 
     static async Task AdvanceAfterHoldAsync(
@@ -160,11 +159,10 @@ internal static class WizardComposition {
         wizard.TryAdvanceFrom(WizardStepId.SignIn, visit);
     }
 
-    /// The Done step's rows: outcome labels, not the in-wizard step titles. Connect picks a
-    /// workspace; Sign in authenticates — both appear because Skip can leave one done and the other not.
+    /// The Done step's rows: outcome labels, not the in-wizard step titles.
     internal static IReadOnlyList<(string Title, bool Satisfied, string? Note)> Summarize(
             IReadOnlyList<IWizardStep> steps, bool cliAvailable) =>
-        steps.Where(step => step.Id != WizardStepId.Done)
+        steps.Where(step => step.Id is not (WizardStepId.Done or WizardStepId.Welcome))
             .Select(step => (
                 SummaryTitle(step),
                 step.Satisfied,
@@ -173,7 +171,7 @@ internal static class WizardComposition {
 
     static string SummaryTitle(IWizardStep step) => step switch {
         ShimStepViewModel     => "Use kcap in the terminal",
-        ConnectStepViewModel  => "Choose a workspace",
+        SignInStepViewModel   => "Sign in",
         DefaultsStepViewModel => "Sessions from this machine",
         AgentsStepViewModel   => "Install agent hooks",
         _                    => step.Title,
@@ -181,17 +179,10 @@ internal static class WizardComposition {
 
     static string? SuccessNote(IWizardStep step) => step switch {
         ShimStepViewModel              => "kcap works from any terminal",
-        ConnectStepViewModel connect   => ConnectNote(connect),
+        SignInStepViewModel signIn     => signIn.Status,
         DefaultsStepViewModel defaults => DefaultsNote(defaults),
         AgentsStepViewModel agents     => AgentsNote(agents),
         _                              => null,
-    };
-
-    static string ConnectNote(ConnectStepViewModel step) => step.Intent switch {
-        ConnectIntent.Discover    => "Find workspaces with single sign-on",
-        ConnectIntent.Paste paste => paste.ServerInput,
-        ConnectIntent.Create      => "Create a new workspace",
-        _                         => "Workspace chosen",
     };
 
     static string DefaultsNote(DefaultsStepViewModel step) {
