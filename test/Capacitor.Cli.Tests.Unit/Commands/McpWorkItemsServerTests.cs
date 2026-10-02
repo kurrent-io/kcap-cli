@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -174,11 +175,13 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    public async Task A_settled_subject_tells_the_agent_to_check_the_remote() {
+    public async Task A_settled_subject_adds_a_guidance_field_and_stays_valid_json() {
         var text = McpWorkItemsServer.FormatDeclareLooseEndResult(
             """{"declaration_id":"d","created":true,"subject":"github:o/r#1","subject_state":"settled"}""");
 
-        await Assert.That(text).Contains("already closed");
+        using var doc = JsonDocument.Parse(text);
+        await Assert.That(doc.RootElement.GetProperty("declaration_id").GetString()).IsEqualTo("d");
+        await Assert.That(doc.RootElement.GetProperty("guidance").GetString()).Contains("already closed");
     }
 
     [Test]
@@ -188,6 +191,13 @@ public class McpWorkItemsServerTests {
 
         await Assert.That(McpWorkItemsServer.FormatDeclareLooseEndResult(open)).IsEqualTo(open);
         await Assert.That(McpWorkItemsServer.FormatDeclareLooseEndResult(none)).IsEqualTo(none);
+    }
+
+    [Test]
+    public async Task A_non_object_body_passes_through_unchanged() {
+        const string arrayBody = """[1,2,3]""";
+
+        await Assert.That(McpWorkItemsServer.FormatDeclareLooseEndResult(arrayBody)).IsEqualTo(arrayBody);
     }
 
     [Test]
@@ -289,6 +299,12 @@ public class McpWorkItemsServerTests {
     public async Task Loose_end_body_rejects_a_non_string_session_id_as_a_field_error() {
         await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":42,"text":"Add the retry test"}""")))
             .Throws<ArgumentException>().WithMessageContaining("session_id");
+    }
+
+    [Test]
+    public async Task Loose_end_body_rejects_a_non_string_subject_as_a_field_error() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Add the retry test","subject":123}""")))
+            .Throws<ArgumentException>().WithMessageContaining("subject");
     }
 
     [Test]

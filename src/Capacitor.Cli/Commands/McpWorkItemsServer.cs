@@ -810,25 +810,32 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) {
         var body = new JsonObject { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
 
-        if (args?["subject"]?.GetValue<string>() is { Length: > 0 } subject) body["subject"] = subject;
+        if (McpToolArguments.OptionalString(args, "subject") is { } subject) body["subject"] = subject;
 
         return body;
     }
 
-    /// <summary>The declare response's JSON is forwarded unchanged — callers that parse it (and
-    /// <c>declaration_id</c>) are unaffected — except that a subject already settled in the tracker
-    /// gets a trailing instruction appended, so the agent checks the remote rather than treating the
-    /// item as live.</summary>
+    /// <summary>The declare response is always valid JSON. When the server reports the subject
+    /// already settled in the tracker, a <c>guidance</c> string is added alongside
+    /// <c>declaration_id</c> so the agent checks the remote instead of treating the item as live; any
+    /// other <c>subject_state</c>, or a body that does not parse as a JSON object, passes through
+    /// unchanged.</summary>
     internal static string FormatDeclareLooseEndResult(string body) {
+        JsonNode? node;
         try {
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.Str("subject_state") != "settled") return body;
+            node = JsonNode.Parse(body);
         } catch (JsonException) {
             return body;
         }
 
-        return body + "\n\nThe subject issue is already closed in the tracker. Check the remote (fetch origin) "
+        if (node is not JsonObject obj) return body;
+        if (obj["subject_state"] is not JsonValue stateValue || !stateValue.TryGetValue<string>(out var state) || state != "settled")
+            return body;
+
+        obj["guidance"] = "The subject issue is already closed in the tracker. Check the remote (fetch origin) "
             + "before treating this as unfinished; if it is done, close the loose end with close_loose_end.";
+
+        return obj.ToJsonString();
     }
 
     /// <summary>The session is optional context for the server, so a close outside any harness session
