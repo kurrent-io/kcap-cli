@@ -34,9 +34,16 @@ through the `kcap-plans` MCP tools; nothing infers it. Three rules:
    While a plan's `is_complete` is `false`, never call `set_plan_tasks`
    on it for any reason — the list would be rebuilt from a view that is
    missing tasks.
-3. **Keep whatever ledger your own workflow asks for as well.** These tools
-   replace the harness's task list, not your notes or any file another
-   workflow tells you to maintain.
+3. **Keep whatever ledger your own workflow asks for as well, and move both
+   together.** These tools replace the harness's task list, not your notes or
+   any file another workflow tells you to maintain — a subagent-driven
+   development `progress.md`, an executing-plans checklist. Pair every write to
+   that ledger with an `update_plan_task` in the same turn: `in_progress` when
+   you start or dispatch a task, `completed` when it passes its review rather
+   than when the work first comes back. The user watches the Capacitor ledger,
+   and a task finished only in your own file still reads as `pending` there.
+   When subagents do the tasks, the coordinating session makes these calls — a
+   subagent's own session is not on the plan.
 
 ## Resuming a plan
 
