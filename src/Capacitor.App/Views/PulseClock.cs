@@ -49,7 +49,7 @@ public static class PulseClock {
 
     static void Start(Visual visual) {
         if (!Active.Add(visual)) return;
-        visual.Opacity = Opacity;
+        if (visual.IsEffectivelyVisible) visual.Opacity = Opacity;
         _timer ??= new DispatcherTimer(TickInterval, DispatcherPriority.Render, (_, _) => Tick());
         _timer.Start();
     }
@@ -61,8 +61,12 @@ public static class PulseClock {
         if (Active.Count == 0) _timer?.Stop();
     }
 
-    static void Tick() {
+    // A marker in a collapsed section stays attached and registered; painting it would be a render
+    // pass for nothing, so it is skipped until it shows again and the next tick catches it up.
+    internal static void Tick() {
         var opacity = Opacity;
-        foreach (var visual in Active) visual.Opacity = opacity;
+        foreach (var visual in Active) {
+            if (visual.IsEffectivelyVisible) visual.Opacity = opacity;
+        }
     }
 }

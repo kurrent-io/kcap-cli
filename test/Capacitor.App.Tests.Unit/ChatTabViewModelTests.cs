@@ -2071,22 +2071,28 @@ public class ChatTabViewModelTests {
             await chat.SendCommand.Execute();
             var own = chat.QueuedMessages.Single();
             await Assert.That(own.IsForeign).IsFalse();
+            await Assert.That(own.IsAwaitingPickup).IsTrue();
 
             var mine = Guid.NewGuid();
             var theirs = Guid.NewGuid();
             queue.OnNext([Item("do it", mine, sender: "u1"), Item("and this", theirs)]);
             await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
             await Assert.That(own.IsUnconfirmed).IsFalse();
+            await Assert.That(own.IsAwaitingPickup).IsTrue();
             var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
             await Assert.That(foreign.Text).IsEqualTo("and this");
+            await Assert.That(foreign.IsAwaitingPickup).IsFalse();
             await Assert.That(chat.QueueSummary).IsEqualTo("2 messages queued");
 
             queue.OnNext([Item("do it", mine, sender: "u1")]);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
 
-            // The own message leaves with the transcript's echo, never with the queue alone.
+            // The own message leaves with the transcript's echo, never with the queue alone — but a
+            // dispatch the server stopped listing was delivered or withdrawn, and only the echo can
+            // say which, so the row stops promising a pickup.
             queue.OnNext([]);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
+            await Assert.That(own.IsAwaitingPickup).IsFalse();
 
             // An item the server sent no id for is unkeyed: nothing here can retire it later, so
             // it is neither shown nor allowed to match a send of this pane's own.

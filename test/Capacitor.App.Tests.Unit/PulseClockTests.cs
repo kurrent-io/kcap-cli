@@ -46,6 +46,32 @@ public class PulseClockTests {
         await Assert.That(afterStop).IsEqualTo(1.0);
     }
 
+    /// A collapsed section keeps its rows attached with IsVisible false, so an active marker there
+    /// must not be painted on every tick: that is a render pass for something nobody can see.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_marker_in_a_collapsed_section_is_left_alone_until_the_section_shows() {
+        var (whileHidden, whenShown, clock) = await AvaloniaSession.DispatchAsync(() => {
+            var marker = new Border();
+            var section = new Panel { IsVisible = false, Children = { marker } };
+            var window = new Window { Content = section, Width = 100, Height = 100 };
+            window.Show();
+            PulseClock.SetIsActive(marker, true);
+            PulseClock.Tick();
+            var hidden = marker.Opacity;
+            section.IsVisible = true;
+            PulseClock.Tick();
+            var shown = marker.Opacity;
+            var now = PulseClock.Opacity;
+            PulseClock.SetIsActive(marker, false);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (hidden, shown, now);
+        });
+        await Assert.That(whileHidden).IsEqualTo(1.0);
+        await Assert.That(whenShown).IsEqualTo(clock).Within(0.05);
+    }
+
     static IEnumerable<Style> Animated(IEnumerable<IStyle> styles) {
         foreach (var style in styles) {
             switch (style) {
