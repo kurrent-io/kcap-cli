@@ -59,6 +59,13 @@ public sealed class PiPaths {
     /// </summary>
     public string AgentsMd => Path.Combine(AgentDir, "AGENTS.md");
 
+    /// <summary>Provider credentials Pi keeps after <c>/login</c>. The daemon stats it to notice a
+    /// model catalog change and never reads it.</summary>
+    public string AuthJson => Path.Combine(AgentDir, "auth.json");
+
+    /// <summary>Custom providers and models. Can carry API keys, so the same stat-only rule applies.</summary>
+    public string ModelsJson => Path.Combine(AgentDir, "models.json");
+
     /// <summary>Expand a leading <c>~</c>/<c>~/</c> against <paramref name="home"/>, matching
     /// Pi's <c>expandTildePath</c>.</summary>
     static string ExpandTilde(string path, string home) {

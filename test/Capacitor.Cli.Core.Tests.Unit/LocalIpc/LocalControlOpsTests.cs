@@ -226,6 +226,18 @@ public class LocalControlOpsTests {
     }
 
     [Test]
+    public async Task Stop_missing_agent_is_a_rejection() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await WithOpsAsync([StopAckThen("a1\tmissing")], async ops => {
+            var result = await ops.StopAgentAsync("a1", false, CancellationToken.None);
+            await Assert.That(result.Ok).IsFalse();
+            await Assert.That(result.Status).IsEqualTo("error");
+            await Assert.That(result.Error).IsEqualTo("no such agent a1");
+        });
+    }
+
+    [Test]
     public async Task Stop_missing_line() {
         if (OperatingSystem.IsWindows()) return;
 

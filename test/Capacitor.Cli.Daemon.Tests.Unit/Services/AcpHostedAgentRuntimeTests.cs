@@ -895,7 +895,7 @@ public class AcpHostedAgentRuntimeTests {
     [Test]
     public async Task Journal_receives_every_accepted_envelope_in_channel_order_including_the_initial_user_message() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, TimeSpan.FromSeconds(15));
         journal.Open("/abs/worktree", null);
         await using var h = new Harness(journal);
         h.StartFakeAgentLoop();
@@ -920,17 +920,19 @@ public class AcpHostedAgentRuntimeTests {
     [Test]
     public async Task Envelope_evicted_by_drop_oldest_is_still_in_the_journal_and_one_after_completion_is_not() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, TimeSpan.FromSeconds(15));
         journal.Open("/abs/worktree", null);
         await using var h = new Harness(journal, transcriptCapacity: 1);
         h.StartFakeAgentLoop();
         await h.Runtime.StartAsync("/abs/worktree", "p", h.Cts.Token).WaitAsync(HangGuard);
         h.Fake.EmitAgentText("marker-a"); h.Fake.EmitAgentText("marker-b"); // capacity 1: earlier envelopes are evicted from the live channel
         // A prompt that ends flushes the open run, so the chunks may already be in the journal
-        // rather than still buffered. Either place means the read loop has them.
+        // rather than still buffered. Either place means the read loop has them. Assert the
+        // observation, not a second read: mid-flush they are briefly in neither.
         var deadline = DateTime.UtcNow + HangGuard;
-        while (DateTime.UtcNow < deadline && !ChunksLanded(h, journal.Path)) await Task.Delay(10);
-        await Assert.That(ChunksLanded(h, journal.Path)).IsTrue();
+        var landed = false;
+        while (DateTime.UtcNow < deadline && !(landed = ChunksLanded(h, journal.Path))) await Task.Delay(10);
+        await Assert.That(landed).IsTrue();
         await h.Runtime.DisposeAsync();  // flushes whatever is still open, then completes the channel
         h.Fake.EmitAgentText("marker-late");
         await journal.CompleteAsync();

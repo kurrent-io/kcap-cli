@@ -20,49 +20,41 @@
             </Setter>
             <Style Selector="^:selected">
                 <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-                <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+                <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
             </Style>
             <Style Selector="^:pointerover"><Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" /></Style>
-            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" /></Style>
+            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" /></Style>
             <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
         </ControlTheme>
-        <ControlTheme x:Key="PullRequestReviewTabTheme" TargetType="TabStripItem" BasedOn="{StaticResource PullRequestTabTheme}">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Padding" Value="3,6" />
+        <!-- Second level reads as a segmented control, not another underline, so it never competes with the section tabs. -->
+        <ControlTheme x:Key="PullRequestReviewTabTheme" TargetType="TabStripItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border x:Name="FocusBorder" Background="{TemplateBinding Background}" BorderThickness="1" BorderBrush="Transparent"
+                            CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter Name="PART_ContentPresenter" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+            <Style Selector="^:pointerover">
+                <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            </Style>
+            <Style Selector="^:selected">
+                <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+                <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            </Style>
+            <Style Selector="^:focus-visible /template/ Border#FocusBorder"><Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" /></Style>
+            <Style Selector="^:disabled"><Setter Property="Opacity" Value="0.55" /></Style>
         </ControlTheme>
     </Styles.Resources>
-    <Style Selector="Button.prButton">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="BorderThickness" Value="0" />
-        <Setter Property="CornerRadius" Value="5" />
-        <Setter Property="FontSize" Value="12" />
-        <Setter Property="Padding" Value="8,5" />
-    </Style>
-    <Style Selector="Button.prButton:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.prButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
-        <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-    </Style>
-    <Style Selector="Button.prButton.prPrimary">
-        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
-        <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
-        <Setter Property="Padding" Value="11,6" />
-    </Style>
-    <Style Selector="Button.prButton.prPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.prButton.prPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
-        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-    </Style>
-    <Style Selector="Button.prButton:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="Transparent" />
-        <Setter Property="BorderBrush" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
-        <Setter Property="Opacity" Value="0.45" />
-    </Style>
-    <Style Selector="Button.prButton.prPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
-    </Style>
     <Style Selector="Button.prStatusRow">
         <!-- Stay inside sectionBody — a negative left margin is clipped by the hairline border.
              Icons share the content edge with lifecycle; right inset keeps the raised radius visible. -->
@@ -97,13 +89,17 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="Opacity" Value="0.45" />
     </Style>
-    <Style Selector="Button.prStatusButton">
-        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
-        <Setter Property="Margin" Value="0,0,8,6" />
+    <!-- Outcome dot on a section tab: hidden while the status is neutral, so only a verdict draws the eye. -->
+    <Style Selector="Ellipse.prTabDot">
+        <Setter Property="Width" Value="7" /><Setter Property="Height" Value="7" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="IsVisible" Value="False" />
+        <Setter Property="Fill" Value="{StaticResource KcapMutedBrush}" />
     </Style>
-    <Style Selector="Button.prStatusButton.danger"><Setter Property="Background" Value="{StaticResource KcapDangerDimBrush}" /></Style>
-    <Style Selector="Button.prStatusButton.warning"><Setter Property="Background" Value="{StaticResource KcapWarningDimBrush}" /></Style>
-    <Style Selector="Button.prStatusButton.success"><Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.success"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapSuccessBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.warning"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapWarningBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.danger"><Setter Property="IsVisible" Value="True" /><Setter Property="Fill" Value="{StaticResource KcapDangerBrush}" /></Style>
+    <Style Selector="Ellipse.prTabDot.pending"><Setter Property="IsVisible" Value="True" /></Style>
     <Style Selector="TextBlock.prMuted">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="FontSize" Value="13" />
@@ -113,21 +109,40 @@
         <Setter Property="FontSize" Value="13" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
-    <Style Selector="TextBlock.prSectionTitle">
-        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        <Setter Property="FontSize" Value="15.5" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-    </Style>
+    <!-- Every section's first text sits 12 below the content edge: rows and comments share
+         that top inset, and a comment's larger gap goes between comments only. -->
     <Style Selector="Border.prRow">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="0,0,0,1" />
-        <Setter Property="Padding" Value="0,11" />
+        <Setter Property="Padding" Value="0,12" />
     </Style>
     <Style Selector="Border.prDiscussion">
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
         <Setter Property="BorderThickness" Value="0,0,0,1" />
-        <Setter Property="Padding" Value="0,22" />
+        <Setter Property="Padding" Value="0,18" />
     </Style>
+    <Style Selector="ContentPresenter:nth-child(1) > Border.prDiscussion:not(.thread)">
+        <Setter Property="Padding" Value="0,12,0,18" />
+    </Style>
+    <!-- A section's loading or empty state: one slot as wide as the content, so the glyph centres on
+         the same width whatever the caption beneath it says, and loading gives way to empty in place. -->
+    <Style Selector="StackPanel.prSectionState">
+        <Setter Property="IsVisible" Value="False" />
+        <Setter Property="Spacing" Value="10" />
+        <Setter Property="Margin" Value="0,48,0,0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="StackPanel.prSectionState.shown"><Setter Property="IsVisible" Value="True" /></Style>
+    <Style Selector="StackPanel.prSectionState > TextBlock"><Setter Property="HorizontalAlignment" Value="Center" /></Style>
+    <Style Selector="Path.prStateGlyph">
+        <Setter Property="Width" Value="22" /><Setter Property="Height" Value="22" /><Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
+        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
+    </Style>
+    <!-- A quiet text action on a content edge: its padding is hit area, not indent. -->
+    <Style Selector="Button.kcapQuiet.prFlushLeft"><Setter Property="Margin" Value="-8,0,0,0" /></Style>
+    <Style Selector="Button.kcapQuiet.prFlushRight"><Setter Property="Margin" Value="0,0,-8,0" /></Style>
     <Style Selector="ContentPresenter:nth-last-child(1) > Border.prDiscussion:not(.thread)">
         <Setter Property="BorderThickness" Value="0" />
     </Style>

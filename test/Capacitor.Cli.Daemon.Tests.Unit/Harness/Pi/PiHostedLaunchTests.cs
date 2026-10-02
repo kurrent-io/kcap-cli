@@ -251,6 +251,7 @@ public class PiHostedLaunchTests {
 
         public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
         public Task TerminateAsync(TimeSpan? timeout = null)   => Task.CompletedTask;
+        public Task CloseInputAsync(TimeSpan timeout)          => Task.CompletedTask;
         public ValueTask DisposeAsync()                        => ValueTask.CompletedTask;
     }
 
@@ -306,6 +307,7 @@ public class PiHostedLaunchTests {
         public Task WriteLineAsync(string json, CancellationToken ct) => Task.CompletedTask;
         public Task WaitForExitAsync(TimeSpan? timeout = null)        => Task.CompletedTask;
         public Task TerminateAsync(TimeSpan? timeout = null)          => Task.CompletedTask;
+        public Task CloseInputAsync(TimeSpan timeout)                 => Task.CompletedTask;
 
         public ValueTask DisposeAsync() {
             Disposed = true;

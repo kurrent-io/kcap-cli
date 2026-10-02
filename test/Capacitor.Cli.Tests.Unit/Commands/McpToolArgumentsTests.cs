@@ -37,4 +37,31 @@ public class McpToolArgumentsTests {
         await Assert.That(() => McpToolArguments.TryReadInt(Args("""{"n":"3"}"""), "n", out _)).Throws<ArgumentException>();
         await Assert.That(() => McpToolArguments.TryReadInt(Args("""{"n":1.5}"""), "n", out _)).Throws<ArgumentException>();
     }
+
+    [Test]
+    public async Task Try_read_long_reads_wire_integers_and_canonical_integer_strings() {
+        await Assert.That(McpToolArguments.TryReadLong(Args("""{"n":9007199254740993}"""), "n", out var big)).IsTrue();
+        await Assert.That(big).IsEqualTo(9007199254740993L);
+        await Assert.That(McpToolArguments.TryReadLong(Args("""{"n":"42"}"""), "n", out var text)).IsTrue();
+        await Assert.That(text).IsEqualTo(42L);
+        await Assert.That(McpToolArguments.TryReadLong(Args("""{"n":"-0"}"""), "n", out var negativeZero)).IsTrue();
+        await Assert.That(negativeZero).IsEqualTo(0L);
+        await Assert.That(McpToolArguments.TryReadLong(new JsonObject { ["n"] = 7L }, "n", out var built)).IsTrue();
+        await Assert.That(built).IsEqualTo(7L);
+        await Assert.That(McpToolArguments.TryReadLong(Args("{}"), "n", out _)).IsFalse();
+        await Assert.That(McpToolArguments.TryReadLong(Args("""{"n":null}"""), "n", out _)).IsFalse();
+    }
+
+    [Test]
+    [Arguments("""{"n":1.5}""")]
+    [Arguments("""{"n":"007"}""")]
+    [Arguments("""{"n":"+1"}""")]
+    [Arguments("""{"n":" 1"}""")]
+    [Arguments("""{"n":""}""")]
+    [Arguments("""{"n":"99999999999999999999"}""")]
+    [Arguments("""{"n":true}""")]
+    [Arguments("""{"n":[1]}""")]
+    public async Task Try_read_long_rejects_every_other_present_shape(string json) {
+        await Assert.That(() => McpToolArguments.TryReadLong(Args(json), "n", out _)).Throws<ArgumentException>();
+    }
 }

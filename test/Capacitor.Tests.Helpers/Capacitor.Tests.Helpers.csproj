@@ -33,5 +33,6 @@
         <PackageReference Include="TUnit.Core" />
         <!-- AuthFixtures substitutes the façade's tenant picker. -->
         <PackageReference Include="NSubstitute" />
+        <PackageReference Include="WireMock.Net" />
     </ItemGroup>
 </Project>

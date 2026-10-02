@@ -294,14 +294,14 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     [Test]
-    public async Task Tools_list_returns_eight_flow_tools() {
+    public async Task Tools_list_returns_every_flow_tool() {
         using var proc = SpawnMcpServer();
         try {
             var response = await SendRequest(proc, ToolsListRequest(2));
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(9);
+            await Assert.That(tools!.Count).IsEqualTo(10);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("start_review_flow")).IsTrue();
@@ -313,6 +313,7 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(names.Contains("get_flow_status")).IsTrue();
             await Assert.That(names.Contains("close_flow")).IsTrue();
             await Assert.That(names.Contains("list_reviewer_vendors")).IsTrue();
+            await Assert.That(names.Contains("list_flow_definitions")).IsTrue();
         } finally {
             await ShutdownAsync(proc);
         }

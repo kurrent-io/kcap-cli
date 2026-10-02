@@ -1,9 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Core.Harness.Titles;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Core.Telemetry;
 
@@ -40,6 +43,11 @@ record TranscriptBatch {
     [JsonPropertyName("strict")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Strict { get; init; }
+
+    // Non-null, even empty, and the server reads no commits from the lines' shell commands.
+    [JsonPropertyName("observed_commits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ObservedCommit[]? ObservedCommits { get; init; }
 }
 
 public record ErrorEntry(
@@ -152,12 +160,32 @@ class WatchState {
     public string?            FirstAssistantText { get; set; }
     public int                EventCount         { get; set; }
 
+    // Non-null only for a top-level session watcher whose vendor keeps a title store the watcher polls.
+    public HarnessTitleTracker? TitleTracker                { get; set; }
+    public DateTimeOffset       LastHarnessTitleRead        { get; set; }
+    public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
+    public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
+    // A store read that outlasted its poll's budget; the next poll waits on it rather than start another.
+    public HarnessTitleRead?    HarnessTitleReadInFlight    { get; set; }
+
+    // LLM titling stops for good once a harness title is known to be recorded, since it always wins on the server:
+    // one the server took through /hooks/harness-title, or a transcript line every server records. A line only a
+    // server with harness titles records (InlineHarnessTitleSeen) stops it once that server is known to have them;
+    // an older server records neither it nor a store title sent through set-title, so it must still get a generated one.
+    public bool                 HarnessTitleSeen            { get; set; }
+    public bool                 InlineHarnessTitleSeen      { get; set; }
+    public bool?                ServerRecordsHarnessTitles  { get; set; }
+    public DateTimeOffset       LastHarnessTitleProbe       { get; set; }
+
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
     public List<string> BufferedLines       { get; } = [];
     public List<int>    BufferedLineNumbers { get; } = [];
     public int          LinesReadAhead      { get; set; } // file position while buffering
     public bool         ThresholdReached    { get; set; }
+
+    public CommitObservation Commits           { get; set; } = new CommitObservation.Uncovered();
+    public DateTimeOffset    LastCoverageCheck { get; set; }
 
     // Set by the shutdown final drain when it held back an unterminated/unparseable final line
     // rather than consuming it, so RunWatch can flag the session needs-import and never drop a
@@ -314,31 +342,35 @@ record RepoSessionOwnerDto(
     );
 
 record RepoSessionDto(
-        string               SessionId,
-        string?              Slug,
-        string?              Title,
-        RepoSessionOwnerDto? Owner,
-        string?              Vendor,
-        string               Status,
-        string               AccessLevel,
-        bool                 Stale,
-        DateTimeOffset       StartedAt,
-        DateTimeOffset?      EndedAt,
-        DateTimeOffset       LastActivityAt,
-        string?              PrimaryRepoHash,
-        bool                 IsPrimary,
-        string?              Branch,
-        string?              Cwd,
-        string?              LastPrompt,
-        string[]             WriteAttemptPaths,
-        int                  WriteAttemptCount
+        string                    SessionId,
+        string?                   Slug,
+        string?                   Title,
+        RepoSessionOwnerDto?      Owner,
+        string?                   Vendor,
+        string                    Status,
+        string                    AccessLevel,
+        bool                      Stale,
+        DateTimeOffset            StartedAt,
+        DateTimeOffset?           EndedAt,
+        DateTimeOffset            LastActivityAt,
+        string?                   PrimaryRepoHash,
+        bool                      IsPrimary,
+        string?                   Branch,
+        string?                   Cwd,
+        string?                   LastPrompt,
+        string[]                  WriteAttemptPaths,
+        int                       WriteAttemptCount,
+        RepoSessionRepositoryDto? Repo = null
     );
 
 record RepoSessionsResponse(
         List<RepoSessionDto> Items,
         int                  Total,
         int                  Limit,
-        int                  Offset
+        int                  Offset,
+        DateTimeOffset?      Since      = null,
+        DateTimeOffset?      Until      = null,
+        string?              NextCursor = null
     );
 
 // ── Eval command types — see DEV-1433 ─────────────────────────────────────
@@ -433,24 +465,27 @@ public record EvalQuestionDto {
     [JsonPropertyName("prompt")]
     public required string Prompt { get; init; }
 
-    // DEV-1486: server-owned flag that opts this question into tools-enabled
-    // judging. Defaults to false so older servers that don't send the field
-    // keep producing text-only judge runs.
+    // Server-owned opt-in to tools-enabled judging; false when an older server omits it, keeping those runs text-only.
     [JsonPropertyName("needs_tools")]
     public bool NeedsTools { get; init; }
 
-    // Phase 3 — the catalog prompt version this question's rendered prompt
-    // ran against. Null on the back-compat /api/eval/questions alias (which does
-    // not emit it) and on older servers; populated only by /api/eval/catalog.
+    // The catalog prompt version the rendered prompt ran against. Only /api/eval/catalog sends it; the
+    // /api/eval/questions alias and older servers leave it null.
     [JsonPropertyName("prompt_version")]
     public string? PromptVersion { get; init; }
 
-    // Phase 3 — RAW question text from the catalog, used by the tools path
-    // (the embedded tools template substitutes this into {QUESTION_TEXT}). Null on
-    // the alias / older servers. Distinct from Prompt, which on a reconciled
-    // text-path question holds the server-RENDERED prompt.
+    // The raw catalog question text the tools template substitutes into {QUESTION_TEXT}; null from the alias and older
+    // servers. On a reconciled text-path question Prompt holds the server-rendered prompt instead.
     [JsonPropertyName("raw_text")]
     public string? RawText { get; init; }
+
+    // The daemon wire carries only the strategy id; the version and the reporting mark come from the reconciled catalog.
+    [JsonPropertyName("strategy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Strategy { get; init; }
+
+    [JsonIgnore] public string? StrategyVersion    { get; init; }
+    [JsonIgnore] public bool    ReportsObligations { get; init; }
 }
 
 /// <summary>
@@ -472,6 +507,10 @@ public record EvalCatalogDto {
 
     [JsonPropertyName("questions")]
     public List<EvalCatalogQuestionDto> Questions { get; init; } = [];
+
+    // Present only when the server enables the CLI evidence route; absent on every older server and with the gate off.
+    [JsonPropertyName("evidence_retrieval")]
+    public Eval.Evidence.EvalEvidenceAdvertisementDto? EvidenceRetrieval { get; init; }
 }
 
 /// <summary>A single active question from <c>GET /api/eval/catalog</c>.</summary>
@@ -500,6 +539,12 @@ public record EvalCatalogQuestionDto {
     // members — a missing `needs_tools` throws JsonException. See the missing-field test.
     [JsonPropertyName("needs_tools")]
     public required bool NeedsTools { get; init; }
+
+    // Absent from a server without question strategies; an id this build does not know behaves as general.
+    [JsonPropertyName("strategy")]            public string? Strategy           { get; init; }
+    [JsonPropertyName("strategy_version")]    public string? StrategyVersion    { get; init; }
+    [JsonPropertyName("strategy_guidance")]   public string? StrategyGuidance   { get; init; }
+    [JsonPropertyName("reports_obligations")] public bool?   ReportsObligations { get; init; }
 }
 
 // Per-question verdict returned by each judge invocation. Matches the server
@@ -593,6 +638,11 @@ record JudgeFactPayload {
     [JsonPropertyName("applies_to_session_kinds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string[]? AppliesToSessionKinds { get; init; }
+
+    /// <summary>The scope token the fact was judged under; the server refuses the write once it no longer opens.</summary>
+    [JsonPropertyName("evidence_scope_token")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvidenceScopeToken { get; init; }
 }
 
 public record JudgeFact {
@@ -1019,6 +1069,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalCategoryAssessment))]
 [JsonSerializable(typeof(EvalEvidenceCoverage))]
 [JsonSerializable(typeof(EvalEvidenceCitation))]
+[JsonSerializable(typeof(EvalObligationResult))]
 [JsonSerializable(typeof(EvalEvidenceOmission))]
 [JsonSerializable(typeof(EvalQuestionFailure))]
 [JsonSerializable(typeof(List<EvalQuestionFailure>))]
@@ -1030,6 +1081,18 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.BaselineOutput))]
 [JsonSerializable(typeof(QuestionResultV2))]
 [JsonSerializable(typeof(FinalizeEvalV2Command))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeManifestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceReadErrorDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeHoldCreateRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeHoldRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsResponseDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceEventPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceTurnPageDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceBodyChunkDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvalTreatment))]
+[JsonSerializable(typeof(EvalTraceCoverage))]
 [JsonSerializable(typeof(List<ErrorEntry>))]
 [JsonSerializable(typeof(List<CliProjectSummary>))]
 [JsonSerializable(typeof(CliProjectDetail))]
@@ -1043,6 +1106,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]
 [JsonSerializable(typeof(SessionTitlePayload))]
+[JsonSerializable(typeof(HarnessTitleHook))]
 [JsonSerializable(typeof(WhatsDonePayload))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareRequest))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareResponse))]
@@ -2142,7 +2206,11 @@ public readonly record struct DaemonConnect(
         int                                         EvalProtocolVersion = 1,
         // Vendor tokens this daemon can host a single-pass PR review on. A daemon predating this
         // field sends nothing, which the server reads as Claude only.
-        string[]?                                   PrReviewVendors = null
+        string[]?                                   PrReviewVendors = null,
+        // Per-vendor launchable models probed from the installed CLI. Null from a daemon that
+        // predates the field; a missing key means no catalog for that vendor; an empty array
+        // means probed and nothing usable.
+        Dictionary<string, VendorModelOption[]>?    VendorModels = null
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2214,7 +2282,9 @@ public readonly record struct ReportAgentCommandsArgs(
         IReadOnlyList<HostedAgentCommand> Commands
     );
 
-public readonly record struct AgentUnregistered(string AgentId);
+/// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
+/// A server that predates it ignores the field.</param>
+public readonly record struct AgentUnregistered(string AgentId, string? StopReason = null);
 
 public readonly record struct LaunchFailed(
         string AgentId,
@@ -2226,7 +2296,7 @@ public readonly record struct TerminalOutput(
         string Base64Data
     );
 
-// ── Per-question eval dispatch (DEV-1463 PR 2) ────────────────────────────
+// ── Per-question eval dispatch ───────────────────────────────────────────────
 // Plain PascalCase records — no [JsonPropertyName] attrs — so they round-trip
 // via SignalR's default JSON protocol with the matching server-side records.
 // Inner DTOs (EvalQuestionDto, EvalQuestionVerdict) carry their own snake_case
@@ -2261,16 +2331,25 @@ public readonly record struct FinalizeEvalCommand(
 /// <summary>Server → daemon: discard any cached context for this run (e.g. dashboard aborted).</summary>
 public readonly record struct CancelEvalCommand(string EvalRunId);
 
-/// <summary>Daemon → server: prepare-phase result.</summary>
+/// <summary>Daemon → server: prepare-phase result. The trailing fields are set on the evidence route;
+/// Route is legacy, evidence_one_shot or evidence_retrieval.</summary>
 public readonly record struct PrepareResult(
-        bool    Success,
-        string? Error,
-        string? CanonicalSessionId,
-        int     TraceEntries,
-        int     TraceChars,
-        int     ToolResultsTotal,
-        int     ToolResultsTruncated,
-        long    BytesSaved
+        bool            Success,
+        string?         Error,
+        string?         CanonicalSessionId,
+        int             TraceEntries,
+        int             TraceChars,
+        int             ToolResultsTotal,
+        int             ToolResultsTruncated,
+        long            BytesSaved,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         EvidenceScopeVersion = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        string?         Route                = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        int?            SourceCount          = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+                        DateTimeOffset? ExpiresAt            = null
     );
 
 /// <summary>Daemon → server: per-question judge result.</summary>

@@ -37,7 +37,7 @@
                                                Foreground="{StaticResource KcapTextBrush}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
-                                    <Button Classes="kcapChip profileSignIn" Content="Sign in" IsVisible="{Binding CanSignIn}"
+                                    <Button Classes="kcapChip profileSignIn" Content="{Binding SignInLabel}" IsVisible="{Binding CanSignIn}"
                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).SignInCommand}"
                                             CommandParameter="{Binding}" />
                                     <Button Classes="kcapChip profileRemove" Content="Remove" IsVisible="{Binding CanRemove}"

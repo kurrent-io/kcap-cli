@@ -83,9 +83,9 @@ public class AgentIdResolutionTests {
     }
 
     [Test]
-    public async Task Row_without_the_title_column_has_an_empty_title() {
+    public async Task Row_without_the_title_column_has_no_title() {
         var row = AgentCommand.ParseAgentRow("ab12\tRunning\t/repo\treview-flow\tflow-7f3a\treviewer");
-        await Assert.That(row.Title).IsEqualTo("");
+        await Assert.That(row.Title).IsNull();
     }
 
     [Test]
@@ -95,10 +95,28 @@ public class AgentIdResolutionTests {
             new AgentRow("b2", "Running", "/longer/repo", "review-flow", "f", "reviewer", ""),
         ])];
 
-        var width = "/longer/repo  [reviewer]".Length;
+        var width = "/longer/repo  [flow f]  [reviewer]".Length;
         await Assert.That(lines[0]).EndsWith($" {"REPO".PadRight(width)} TITLE");
         await Assert.That(lines[1]).EndsWith($" {"/r".PadRight(width)} Fix the flaky test");
-        await Assert.That(lines[2]).EndsWith("/longer/repo  [reviewer]");
+        await Assert.That(lines[2]).EndsWith("/longer/repo  [flow f]  [reviewer]");
+    }
+
+    [Test]
+    public async Task Table_keeps_the_title_column_when_every_title_is_empty() {
+        string[] lines = [.. AgentCommand.FormatAgentTable([new AgentRow("a1", "Running", "/r", "agent", "", "", "")])];
+
+        await Assert.That(lines[0]).EndsWith("TITLE");
+    }
+
+    [Test]
+    public async Task Table_strips_control_characters_from_free_form_cells() {
+        string[] lines = [.. AgentCommand.FormatAgentTable([
+            new AgentRow("a1", "Running", "/r\u001b[2J", "agent", "", "", "\u001b]0;pwned\u0007Fix it"),
+        ])];
+
+        await Assert.That(lines[1]).DoesNotContain("\u001b");
+        await Assert.That(lines[1]).DoesNotContain("\u0007");
+        await Assert.That(lines[1]).EndsWith("]0;pwnedFix it");
     }
 
     [Test]

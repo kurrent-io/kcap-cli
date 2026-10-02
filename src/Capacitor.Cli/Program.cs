@@ -109,6 +109,9 @@ var config  = ConfigRoot.FromEnvironment();
 var home    = UserHome.FromEnvironment();
 var workdir = WorkingDirectory.FromProcess();
 
+// git runs this after every commit on the machine, so it resolves no server, profile or update.
+if (command == "git-hook") return await GitHook.RunAsync(GitHookInvocation.Current(args[1..], workdir), config, time);
+
 // Claude kills a SessionEnd hook after 1.5 s (ClaudeSessionEndHandoff), so the hand-off sits
 // ahead of ResolveServerUrl's git probes and the global spool drain, each of which can spend it.
 string? claudeHookBody = null;
@@ -276,6 +279,23 @@ switch (command) {
         var useRepo    = args.Contains("--repo");
         var usePerTurn = args.Contains("--per-turn");
         var useGetTurn = args.Contains("--get-turn");
+        var useContinue = args.Contains("--continue");
+        var continued   = 0;
+
+        if (useContinue) {
+            var previous = PositionalSessionId(args, valueFlags: ["--get-turn"]);
+
+            if (previous is null || useRepo) {
+                Console.Error.WriteLine("Usage: kcap recap <sessionId> --continue [--force] [--chain] [--full] [--per-turn] [--get-turn <N>]");
+                Console.Error.WriteLine("  --continue needs the id of the session to continue, and does not combine with --repo.");
+
+                return 1;
+            }
+
+            continued = await Run<RecapContinuation>().RunAsync(previous, args.Contains("--force"));
+
+            if (continued == RecapContinuation.Refused) return RecapContinuation.Refused;
+        }
 
         if (useRepo) {
             return await Run<RecapCommand>().HandleRepoRecap();
@@ -286,7 +306,7 @@ switch (command) {
         var recapSessionId = ResolveSessionId(args, valueFlags: ["--get-turn"]);
 
         if (recapSessionId is null) {
-            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [--per-turn] [--get-turn <N>] [sessionId]");
+            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [--per-turn] [--get-turn <N>] [--continue [--force]] [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
             Console.Error.WriteLine("  Use --per-turn for a per-turn index, or --get-turn <N> for one turn's transcript.");
@@ -294,11 +314,7 @@ switch (command) {
             return 1;
         }
 
-        if (usePerTurn) {
-            return await Run<RecapCommand>().HandlePerTurnRecap(recapSessionId);
-        }
-
-        if (useGetTurn) {
+        if (useGetTurn && !usePerTurn) {
             var getTurnIdx = args
                 .SkipWhile(a => a != "--get-turn")
                 .Skip(1)
@@ -310,10 +326,16 @@ switch (command) {
                 return 1;
             }
 
-            return await Run<RecapCommand>().HandleGetTurn(recapSessionId, turnIndex);
+            var turnCode = await Run<RecapCommand>().HandleGetTurn(recapSessionId, turnIndex);
+
+            return turnCode != 0 ? turnCode : continued;
         }
 
-        return await Run<RecapCommand>().HandleRecap(recapSessionId, useChain, useFull);
+        var recapCode = usePerTurn
+            ? await Run<RecapCommand>().HandlePerTurnRecap(recapSessionId)
+            : await Run<RecapCommand>().HandleRecap(recapSessionId, useChain, useFull);
+
+        return recapCode != 0 ? recapCode : continued;
     }
     case "sessions":
         return await Run<SessionsCommand>().HandleAsync(args);
@@ -443,7 +465,7 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts|knowledge …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
@@ -454,6 +476,7 @@ switch (command) {
             Console.Error.WriteLine("  kcap mcp plans");
             Console.Error.WriteLine("  kcap mcp analytics");
             Console.Error.WriteLine("  kcap mcp artefacts");
+            Console.Error.WriteLine("  kcap mcp knowledge");
 
             return 1;
         }
@@ -474,14 +497,15 @@ switch (command) {
             }
             case "judge": {
                 var session = GetArg(args, "--session");
+                var run     = GetArg(args, "--run");
 
                 if (string.IsNullOrWhiteSpace(session)) {
-                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId>");
+                    Console.Error.WriteLine("Usage: kcap mcp judge --session <sessionId> [--run <path>]");
 
                     return 1;
                 }
 
-                return await Run<McpJudgeServer>().RunAsync(session);
+                return await Run<McpJudgeServer>().RunAsync(session, string.IsNullOrWhiteSpace(run) ? null : run);
             }
             case "sessions":
                 return await Run<McpSessionsServer>().RunAsync();
@@ -495,10 +519,14 @@ switch (command) {
                 return await Run<McpWorkItemsServer>().RunAsync();
             case "plans":
                 return await Run<McpPlansServer>().RunAsync();
+            case "handoff":
+                return await Run<McpHandoffServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
             case "artefacts":
                 return await Run<McpArtefactsServer>().RunAsync();
+            case "knowledge":
+                return await Run<McpKnowledgeServer>().RunAsync();
             default:
                 Console.Error.WriteLine($"Unknown mcp subcommand: {args[1]}");
 
@@ -947,6 +975,9 @@ static string? GetArg(string[] arguments, string flag) {
 
 string? ResolveSessionId(string[] args, int skipCount = 1, string[]? valueFlags = null) =>
     ArgParsing.ResolveSessionId(args, skipCount, valueFlags);
+
+string? PositionalSessionId(string[] args, string[]? valueFlags = null) =>
+    ArgParsing.PositionalSessionId(args, valueFlags: valueFlags);
 
 async Task PrintUsage() {
     var text = EmbeddedResources.Load("help-usage.txt");

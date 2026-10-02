@@ -16,12 +16,14 @@ using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.OpenCode;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,6 +52,10 @@ partial class WatchCommand(
                     // outage must send whatever the credential is by then, not the one this watcher
                     // started with.
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
+                    options.HttpMessageHandlerFactory = inner =>
+                        new BearerRejectionReportHandler(time, report => Log(time, report)) { InnerHandler = inner };
+                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
+                        context.Uri, context.Options.AccessTokenProvider, time, report => Log(time, report), ct);
                 }
             )
             .WithAutomaticReconnect(new InfiniteRetryPolicy())
@@ -80,6 +86,19 @@ partial class WatchCommand(
         /// never silently skipped.</summary>
         ParentAlreadyDead
     }
+
+    /// <summary>Whether a watcher also watches for Kiro Crew finishing with its session: a Kiro session
+    /// watcher on a machine where Crew has run.</summary>
+    internal static bool WatchesCrewEnd(string vendor, string? agentId, bool crewPresent) =>
+        vendor == "kiro" && agentId is null && crewPresent;
+
+    /// <summary>The session-end reason the watcher posts for how it came to stop, or null when it posts none.</summary>
+    internal static string? DecideEndReason(bool parentExited, bool crewFinished, bool wedgedCeiling, bool idle) =>
+        parentExited  ? "parent_exited"
+      : crewFinished  ? "crew_finished"
+      : wedgedCeiling ? "parent_dead_ceiling"
+      : idle          ? "idle_timeout"
+      :                 null;
 
     /// <summary>
     /// Decides whether the parent-exit watchdog should run. Pure so the three
@@ -316,6 +335,8 @@ partial class WatchCommand(
         var parentExited = 0;
         // set by the staged parent-dead recovery loop when it ends a wedged watcher on the ceiling.
         var wedgedCeilingExit = 0;
+        // set when Kiro Crew is finished with a session its still-running kiro-cli process hosts.
+        var crewFinished = 0;
 
         // Handle SIGTERM/SIGINT for graceful shutdown.
         //
@@ -354,6 +375,9 @@ partial class WatchCommand(
         // task can read state.LastActivityAt as its no-progress clock.
         var state = new WatchState();
         state.LastActivityAt = time.GetUtcNow();
+
+        var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses);
+        if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
         // lifetime (its checkpoint/pending-range state is meant to persist poll-to-poll). Null
@@ -474,6 +498,7 @@ partial class WatchCommand(
                 break;
         }
 
+
         // Antigravity posts /hooks/session-start BEFORE the watcher spawns, so the session is
         // already committed server-side — the below-threshold buffering (which exists to avoid
         // junk sessions the server hasn't seen) doesn't apply. Treat it as past-threshold from
@@ -514,6 +539,9 @@ partial class WatchCommand(
             state.Repository        = await RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time);
             state.LastRepoDetection = time.GetUtcNow();
         }
+
+        state.Commits           = await GitHook.ObservationAsync(config, sessionId, agentId, cwd, time);
+        state.LastCoverageCheck = time.GetUtcNow();
 
         if (vendor == "claude" && agentId is null) {
             state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
@@ -655,6 +683,34 @@ partial class WatchCommand(
         Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
 
+        // Crew keeps one kiro-cli process for a whole chat and its in-process sub-agents, so the
+        // parent-pid watchdog alone would leave a finished sub-agent or a replaced chat session open.
+        // Armed only once connected: a cancel before then skips the final drain and end POST.
+        if (WatchesCrewEnd(vendor, agentId, harnesses.Of<KiroHarness>().Crew.IsPresent())) {
+            var crewEnd = new KiroCrewSessionEndWatch(harnesses.Of<KiroHarness>().Crew, harnesses.Of<KiroHarness>().Paths.SessionsDir, sessionId, time);
+
+            // Checks once at once, so the session's chat is learned before Crew can drop it.
+            _ = Task.Run(async () => {
+                for (var first = true; !cts.Token.IsCancellationRequested; first = false) {
+                    if (!first) {
+                        try {
+                            await Task.Delay(TimeSpan.FromSeconds(5), time, cts.Token);
+                        } catch (OperationCanceledException) {
+                            return;
+                        }
+                    }
+
+                    if (crewEnd.IsFinished()) {
+                        Log(time, "Kiro Crew is finished with this session; shutting down watcher");
+                        Interlocked.Exchange(ref crewFinished, 1);
+                        cts.Cancel();
+
+                        return;
+                    }
+                }
+            }, cts.Token);
+        }
+
         // seed the Cursor byte frontier to the TRUE byte
         // offset of the resumed line on this INITIAL registration too, not only on a later
         // reconnect rewind (ApplyReconnectRewindAsync already does this for reconnects, via the
@@ -755,14 +811,40 @@ partial class WatchCommand(
                     state.LastRepoDetection = time.GetUtcNow();
                 }
 
+                if (state.Commits is not CommitObservation.Uncovered && time.GetUtcNow() - state.LastCoverageCheck > TimeSpan.FromSeconds(60)) {
+                    state.Commits           = state.Commits.Rechecked(await GitHook.CoversAsync(config, sessionId, cwd, time));
+                    state.LastCoverageCheck = time.GetUtcNow();
+                }
+
                 if (state.SecondaryRoots is not null && time.GetUtcNow() - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
                     await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
                     state.LastSecondaryProbe = time.GetUtcNow();
                 }
 
+                // Before the first drain, so a transcript title line can be judged by the time LLM titling is due.
+                if (agentId is null && TranscriptTitleLines.MayNeedHarnessTitles(vendor) && state.ServerRecordsHarnessTitles is null
+                 && time.GetUtcNow() - state.LastHarnessTitleProbe >= HarnessTitleRetryGap) {
+                    state.LastHarnessTitleProbe      = time.GetUtcNow();
+                    state.ServerRecordsHarnessTitles = await ProbeHarnessTitlesAsync(cts.Token, TouchHeartbeat);
+                }
+
+                // Read once before the first drain, so a store title the server records latches HarnessTitleSeen
+                // before that drain can trigger LLM titling.
+                if (titleStore is not null && state.LastHarnessTitleRead == default) {
+                    state.LastHarnessTitleRead = time.GetUtcNow();
+                    await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token, TouchHeartbeat);
+                }
+
                 // gated so this can never interleave with a
                 // concurrently-running reconnect rewind (see cursorRewindGate's declaration above).
                 var drained = await DrainNewLinesGatedAsync(isFinalDrainLocal: false, cts.Token);
+
+                // Also polled on its own cadence: some stores (Cursor's meta.json, Antigravity's sqlite row) change
+                // while the transcript stays idle.
+                if (titleStore is not null && (drained.Count > 0 || time.GetUtcNow() - state.LastHarnessTitleRead >= HarnessTitleRetryGap)) {
+                    state.LastHarnessTitleRead = time.GetUtcNow();
+                    await PostHarnessTitleAsync(titleStore, sessionId, state, cts.Token, TouchHeartbeat);
+                }
 
                 // Live subagent discovery: only the parent (agentId == null) watcher scans;
                 // child subagent watchers (agentId != null) just stream their file. Gemini
@@ -857,6 +939,14 @@ partial class WatchCommand(
         // loop was in when the request arrived has already spent some of it.
         var shutdownStarted = Volatile.Read(ref shutdownRequestedAt) is var requestedAt and not 0 ? requestedAt : time.GetTimestamp();
 
+        // The Kiro hook posted session-start before this watcher spawned, so a session Crew finished
+        // below the buffering threshold still sends its lines and its end rather than staying open.
+        if (Volatile.Read(ref crewFinished) == 1 && !state.ThresholdReached) {
+            state.ThresholdReached = true;
+            state.BufferedLines.Clear();
+            state.BufferedLineNumbers.Clear();
+        }
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -900,13 +990,19 @@ partial class WatchCommand(
             // dedicated TranscriptSpool so the global drain (task 3) replays it after recovery,
             // instead of silently dropping it.
             await SpoolUndeliveredTranscriptTailAsync(
-                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, CancellationToken.None);
+                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
             // the watcher's final chance to link it.
             if (agentId is null && vendor == "antigravity") {
                 await ScanAntigravitySubagentLinks(sessionId, finalDrained, state.PostedSubagentLinks, CancellationToken.None);
+            }
+
+            // A store the transcript does not carry can change after the loop's last read; this is its last chance.
+            if (titleStore is not null) {
+                await PostHarnessTitleAsync(titleStore, sessionId, state, CancellationToken.None, TouchHeartbeat,
+                    FinalSecondaryProbeDeadline - time.GetElapsedTime(shutdownStarted));
             }
 
             // A PR is usually opened in the session's last turn, after the previous 60s probe.
@@ -951,10 +1047,11 @@ partial class WatchCommand(
         //     server may not have a meaningful session to end.
         // Runs after SignalR dispose so the server's StopAndDrainAsync skips the
         // 10s drain wait (no live watcher connection to signal).
-        var endReason = Volatile.Read(ref parentExited)      == 1 ? "parent_exited"
-                      : Volatile.Read(ref wedgedCeilingExit) == 1 ? "parent_dead_ceiling"
-                      : idleExit                                  ? "idle_timeout"
-                      :                                             null;
+        var endReason = DecideEndReason(
+            parentExited:  Volatile.Read(ref parentExited)      == 1,
+            crewFinished:  Volatile.Read(ref crewFinished)      == 1,
+            wedgedCeiling: Volatile.Read(ref wedgedCeilingExit) == 1,
+            idle:          idleExit);
 
         // Task 11 (D1): Cursor's idle-ceiling exit must NOT synthesize session-end here —
         // unlike Codex/Antigravity, end synthesis for Cursor has exactly one owner (the
@@ -1987,6 +2084,8 @@ partial class WatchCommand(
                 (reason, count) => Log(time, $"Capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
             var linesRead      = drainRead.NextPosition;
 
+            state.Commits = state.Commits.Collect();
+
             // Track Antigravity in-flight tool calls + the latest step timestamp from this
             // drain's transcript lines (BEFORE appending USAGE lines, which aren't transcript
             // steps). The created_at anchors USAGE recency; the pending-call count suppresses a
@@ -2137,15 +2236,14 @@ partial class WatchCommand(
                             Log(time, $"First assistant text captured ({state.FirstAssistantText.Length} chars)");
                         }
                     }
+
+                    if (!state.HarnessTitleSeen) ObserveTitleLine(state, vendor, sessionId, line);
                 }
             }
 
             // Generate LLM title after enough events have accumulated
             // (deferred until threshold is reached for session watchers)
-            if (state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true }
-             && agentId is null
-             && state.FirstUserText is not null
-             && state.EventCount >= 5) {
+            if (ShouldGenerateLlmTitle(state, agentId)) {
                 Log(time, $"Triggering LLM title generation (attempt {state.TitleAttempts + 1}/5, events: {state.EventCount})");
                 state.TitleInFlight = true;
                 state.TitleAttempts++;
@@ -2247,12 +2345,13 @@ partial class WatchCommand(
                 cursorGuard.Checkpoint(advancedByteOffset, trailingHash);
             }
 
-            if (newLines.Count == 0 && repoToSend is null) {
+            // A commit filed with no line after it, such as a subagent's under its parent, still goes now.
+            if (newLines.Count == 0 && repoToSend is null && state.Commits.Pending is not { Length: > 0 }) {
                 // advance the byte frontier together with the
                 // line frontier (see AdvanceCursorBlankByteFrontierInLockstep above).
                 AdvanceCursorBlankByteFrontierInLockstep();
 
-                // No content lines and no repo changes — safe to advance past blank/whitespace lines
+                // Nothing to send — safe to advance past blank/whitespace lines
                 state.LinesProcessed = linesRead;
 
                 return newLines;
@@ -2289,12 +2388,13 @@ partial class WatchCommand(
 
                 // SignalR dispatch binds by arity; the record payload keeps additive fields compatible.
                 var batch = new TranscriptBatch {
-                    SessionId   = sessionId,
-                    AgentId     = agentId,
-                    Lines       = newLines.ToArray(),
-                    LineNumbers = newLineNumbers.ToArray(),
-                    Repository  = repoToSend,
-                    Vendor      = vendor,
+                    SessionId       = sessionId,
+                    AgentId         = agentId,
+                    Lines           = newLines.ToArray(),
+                    LineNumbers     = newLineNumbers.ToArray(),
+                    Repository      = repoToSend,
+                    Vendor          = vendor,
+                    ObservedCommits = state.Commits.Pending,
                 };
 
                 int? cursorAckNextLine = null;
@@ -2332,6 +2432,7 @@ partial class WatchCommand(
                 // frontier, not the raw line count sent — a retry-blocked or persist-blocked
                 // line re-delivers next poll and an ignored (no-event) line still advances past.
                 state.LinesProcessed = cursorAckNextLine ?? linesRead;
+                state.Commits = state.Commits.Delivered(batch.ObservedCommits);
 
                 if (cursorAckNextLine is not null) {
                     // checkpoint only the bytes the ack actually covers.
@@ -2428,14 +2529,16 @@ partial class WatchCommand(
             string?               agentId,
             string                vendor,
             IReadOnlyList<string> lines,
-            IReadOnlyList<int>    lineNumbers
+            IReadOnlyList<int>    lineNumbers,
+            ObservedCommit[]?     observedCommits
         ) => JsonSerializer.Serialize(
             new TranscriptBatch {
-                SessionId   = sessionId,
-                AgentId     = agentId,
-                Lines       = lines.ToArray(),
-                LineNumbers = lineNumbers.ToArray(),
-                Vendor      = vendor,
+                SessionId       = sessionId,
+                AgentId         = agentId,
+                Lines           = lines.ToArray(),
+                LineNumbers     = lineNumbers.ToArray(),
+                Vendor          = vendor,
+                ObservedCommits = observedCommits,
             },
             CapacitorJsonContext.Default.TranscriptBatch);
 
@@ -2447,6 +2550,7 @@ partial class WatchCommand(
             string?           agentId,
             string            vendor,
             int               linesProcessed,
+            CommitObservation commits,
             CancellationToken ct
         ) {
         if (!File.Exists(transcriptPath)) return null;
@@ -2471,18 +2575,20 @@ partial class WatchCommand(
             return null;
         }
 
-        if (tail.Lines.Count == 0) return null;
+        commits = commits.Collect();
+
+        if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
         var redacted = TranscriptCapture.EncodeLines(tail.Lines,
             (reason, count) => Log(time, $"Shutdown capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
         var batch = new TranscriptBatch {
             SessionId = sessionId, AgentId = agentId, Vendor = vendor,
-            Lines = [..redacted], LineNumbers = [..tail.LineNumbers]
+            Lines = [..redacted], LineNumbers = [..tail.LineNumbers], ObservedCommits = commits.Pending
         };
         var result = TranscriptSpool.AppendResult.Appended;
         foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
             result = transcriptSpool.Append(sessionId,
-                BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!));
+                BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
             if (result != TranscriptSpool.AppendResult.Appended) break;
         }
 
@@ -3390,6 +3496,166 @@ partial class WatchCommand(
     // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
     // the PR probe share this much of it, leaving the rest for the drain-complete signal.
     static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
+
+    // A value the server has not settled is re-sent no sooner than this, however often the transcript drains.
+    internal static readonly TimeSpan HarnessTitleRetryGap = TimeSpan.FromSeconds(30);
+
+    /// <summary>A harness-native title the server is known to record suppresses LLM titling for good. A transcript
+    /// title only a server with harness titles records suppresses it only once the server is known to have them: an
+    /// unanswered probe must not cost an older server its only title, and on a newer one the harness title outranks
+    /// a generated title anyway.</summary>
+    internal static bool ShouldGenerateLlmTitle(WatchState state, string? agentId) =>
+        state is { TitleGenerated: false, TitleInFlight: false, TitleAttempts: < 5, ThresholdReached: true, HarnessTitleSeen: false, FirstUserText: not null, EventCount: >= 5 }
+     && agentId is null
+     && !(state.InlineHarnessTitleSeen && state.ServerRecordsHarnessTitles == true);
+
+    internal static void ObserveTitleLine(WatchState state, string vendor, string sessionId, string line) {
+        switch (TranscriptTitleLines.Classify(vendor, sessionId, line)) {
+            case TranscriptTitleLineKind.RecordedByEveryServer:     state.HarnessTitleSeen       = true; break;
+            case TranscriptTitleLineKind.RecordedWithHarnessTitles: state.InlineHarnessTitleSeen = true; break;
+        }
+    }
+
+    /// <summary>
+    /// Reads the store and sends what the tracker says is owed. Only a post the server took through
+    /// <c>/hooks/harness-title</c> latches <see cref="WatchState.HarnessTitleSeen"/>. A post the server answered —
+    /// recorded or refused on its merits — settles the value; anything else is re-sent after
+    /// <see cref="HarnessTitleRetryGap"/>. The post runs inline in the watch loop, so it is bounded by
+    /// <paramref name="budget"/> and <paramref name="beat"/> is called before it.
+    /// </summary>
+    internal static async Task PostHarnessTitleAsync(
+            IHarnessTitleStore                                                        store,
+            WatchState                                                                state,
+            Func<HarnessTitlePost, TimeSpan, CancellationToken, Task<HarnessTitleOutcome>> post,
+            TimeSpan                                                                  budget,
+            TimeProvider                                                              time,
+            Action                                                                    beat,
+            Action<string>                                                            log,
+            CancellationToken                                                         ct
+        ) {
+        var started = time.GetTimestamp();
+        var tookUp  = state.HarnessTitleReadInFlight is not null;
+
+        await PollHarnessTitleStoreAsync(store, state, post, budget, time, beat, log, ct);
+
+        // A read taken up from an earlier poll may predate a later change (the final poll before exit is the last
+        // chance to see one), so once it has been dealt with the store is read afresh while time remains.
+        if (!tookUp || state.HarnessTitleReadInFlight is not null) return;
+
+        await PollHarnessTitleStoreAsync(store, state, post, budget - time.GetElapsedTime(started), time, beat, log, ct);
+    }
+
+    static async Task PollHarnessTitleStoreAsync(
+            IHarnessTitleStore                                                        store,
+            WatchState                                                                state,
+            Func<HarnessTitlePost, TimeSpan, CancellationToken, Task<HarnessTitleOutcome>> post,
+            TimeSpan                                                                  budget,
+            TimeProvider                                                              time,
+            Action                                                                    beat,
+            Action<string>                                                            log,
+            CancellationToken                                                         ct
+        ) {
+        if (budget <= TimeSpan.Zero) return;
+
+        // The read can be a synchronous SQLite query on a database the agent holds, so it runs off the loop and
+        // spends the same budget as the post. One that outlasts the budget is left running and picked up by the next
+        // poll, so a stuck store never has more than one read in flight (the readers are not safe to run concurrently).
+        var started = time.GetTimestamp();
+        var reading = state.HarnessTitleReadInFlight ??= StartRead(store, time);
+        StoreTitle? read;
+        try {
+            read = await reading.Reading.WaitAsync(budget, time, ct);
+        } catch (TimeoutException) {
+            log("Harness title read did not finish within its budget");
+            return;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            state.HarnessTitleReadInFlight = null;
+            log($"Harness title read failed: {ex.Message}");
+            return;
+        }
+
+        state.HarnessTitleReadInFlight = null;
+
+        // Timed by the read's start, not its finish: a read carried over from an earlier poll must not date a later
+        // change after something that happened while it ran.
+        var now = time.GetUtcNow();
+        if (state.TitleTracker!.Observe(read, reading.StartedAt) is not { } owed) return;
+
+        if (ReferenceEquals(owed, state.LastHarnessTitleAttempted) && now - state.LastHarnessTitlePostAttempt < HarnessTitleRetryGap) return;
+
+        var remaining = budget - time.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero) return;
+
+        state.LastHarnessTitleAttempted   = owed;
+        state.LastHarnessTitlePostAttempt = now;
+        beat();
+
+        HarnessTitleOutcome outcome;
+        try {
+            outcome = await post(owed, remaining, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            state.TitleTracker.OutcomeUnknown();
+            throw;
+        } catch (Exception ex) {
+            state.TitleTracker.OutcomeUnknown();
+            log($"Harness title post failed: {ex.Message}");
+            return;
+        }
+
+        if (outcome is HarnessTitleOutcome.Posted) state.HarnessTitleSeen = true;
+        if (outcome is HarnessTitleOutcome.Posted or HarnessTitleOutcome.PostedToLegacyRoute or HarnessTitleOutcome.Refused)
+            state.TitleTracker.Settled(owed);
+        else if (outcome is HarnessTitleOutcome.Failed) state.TitleTracker.OutcomeUnknown();
+        if (outcome is not HarnessTitleOutcome.Posted) log($"Harness title not recorded: {outcome}");
+    }
+
+    // Observed from the start: a read no poll ever awaits again must not surface as an unobserved task exception.
+    static HarnessTitleRead StartRead(IHarnessTitleStore store, TimeProvider time) {
+        var startedAt = time.GetUtcNow();
+        var reading   = Task.Run(store.Read, CancellationToken.None);
+        reading.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return new HarnessTitleRead(reading, startedAt);
+    }
+
+    Task PostHarnessTitleAsync(IHarnessTitleStore store, string sessionId, WatchState state, CancellationToken ct, Action beat,
+            TimeSpan? budget = null) =>
+        PostHarnessTitleAsync(store, state,
+            async (owed, budget, token) => {
+                // Client acquisition can refresh a credential over the network, so it spends the same budget.
+                var       started  = time.GetTimestamp();
+                using var deadline = new CancellationTokenSource(budget, time);
+                using var linked   = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+                using var client   = await http.ForBackgroundAsync(linked.Token);
+
+                var remaining = budget - time.GetElapsedTime(started);
+                if (remaining <= TimeSpan.Zero) return HarnessTitleOutcome.Failed;
+
+                return await HarnessTitleClient.PostOrFallBackAsync(client, time, Url, sessionId, owed, token, remaining);
+            },
+            budget ?? SecondaryProbeBudget, time, beat, message => Log(time, message), ct);
+
+    async Task<bool?> ProbeHarnessTitlesAsync(CancellationToken ct, Action beat) {
+        beat();
+        try {
+            var       started  = time.GetTimestamp();
+            using var deadline = new CancellationTokenSource(SecondaryProbeBudget, time);
+            using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+            using var client   = await http.ForBackgroundAsync(linked.Token);
+
+            var remaining = SecondaryProbeBudget - time.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero) return null;
+
+            return await HarnessTitleClient.ServerRecordsHarnessTitlesAsync(client, time, Url, remaining, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            Log(time, $"Harness title probe failed: {ex.Message}");
+            return null;
+        }
+    }
 
     async Task<bool> PostLinkedPullRequestAsync(string sessionId, RepositoryPayload pr, CancellationToken ct) {
         try {

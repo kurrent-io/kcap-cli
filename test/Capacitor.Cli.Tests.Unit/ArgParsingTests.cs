@@ -2,6 +2,16 @@ namespace Capacitor.Cli.Tests.Unit;
 
 public class ArgParsingTests {
     [Test]
+    [NotInParallel]
+    public async Task PositionalSessionId_ignores_the_environment() {
+        using var env = EnvScope.Exclusive("KCAP_SESSION_ID", "cccccccccccccccccccccccccccccccc");
+
+        await Assert.That(ArgParsing.PositionalSessionId(["recap", "--continue"])).IsNull();
+        await Assert.That(ArgParsing.PositionalSessionId(["recap", "--continue", "abc"])).IsEqualTo("abc");
+        await Assert.That(ArgParsing.PositionalSessionId(["recap", "--get-turn", "3", "abc"], valueFlags: ["--get-turn"])).IsEqualTo("abc");
+    }
+
+    [Test]
     public async Task ResolveSessionId_returns_first_positional_when_no_flags() {
         var id = ArgParsing.ResolveSessionId(["eval", "sess-123"]);
 

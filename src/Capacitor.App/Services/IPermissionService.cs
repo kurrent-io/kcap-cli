@@ -31,6 +31,9 @@ public interface IPermissionService : IDisposable {
     /// The distinct agent ids in the cache; replays the current set on subscribe. A server-lane
     /// item whose session has no agent row yet carries no id and is left out.
     IObservable<IReadOnlySet<string>> AgentsWithPending { get; }
+    /// Agent ids with an unanswered question (AskUserQuestion or an ACP elicitation). A permission
+    /// prompt is not one of these. Replays the current set on subscribe.
+    IObservable<IReadOnlySet<string>> AgentsAwaitingAnswer { get; }
     /// One consistent pair per emission, from a single cache snapshot; replays on subscribe.
     IObservable<PendingSummary> Summary { get; }
     Task<PermissionResolveOutcome> ResolveAsync(PendingPermissionRequest target, PermissionAnswer answer, CancellationToken ct);

@@ -72,7 +72,16 @@ public partial class App : Application {
     /// holds, and why it holds only that, is <see cref="AppHttpServices.AddAppForeignHttp"/>.
     readonly ServiceProvider _foreignHttp;
 
-    public App() => _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
+    // The app's one store over app-state.json. Its lock is per instance, so a second store lets
+    // two read-modify-write cycles interleave and drop an update.
+    readonly AppStateStore _appState;
+
+    public App() {
+        _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
+#pragma warning disable RS0030 // the one store the ban points every other site at
+        _appState = new AppStateStore(_config.Path("app-state.json"));
+#pragma warning restore RS0030
+    }
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
     /// resolved server, and the app starts before a profile has named one. Process-lifetime for the
@@ -373,51 +382,11 @@ public partial class App : Application {
 
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit) {
         var where = kind switch {
-            InstallLocationKind.DmgVolume   => "It is running from the disk image.",
-            InstallLocationKind.Translocated => "It is running from a temporary location.",
-            _                                => "It is not in the Applications folder.",
+            InstallLocationKind.DmgVolume   => "Kurrent Capacitor is running from the disk image.",
+            InstallLocationKind.Translocated => "Kurrent Capacitor is running from a temporary location.",
+            _                                => "Kurrent Capacitor is not in your Applications folder.",
         };
-        var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.OrangeRed, IsVisible = false };
-        var moveButton = new Button { Content = "Move to Applications", IsDefault = true };
-        var quitButton = new Button { Content = "Quit", IsCancel = true };
-        moveButton.Click += async (_, _) => {
-            moveButton.IsEnabled = false;
-            try {
-                var outcome = await move();
-                if (!outcome.Moved) {
-                    error.Text = outcome.Error;
-                    error.IsVisible = true;
-                    moveButton.IsEnabled = true;
-                }
-            } catch (Exception ex) {
-                error.Text = ex.Message;
-                error.IsVisible = true;
-                moveButton.IsEnabled = true;
-            }
-        };
-        quitButton.Click += (_, _) => quit();
-
-        var window = new Window {
-            Title = "Kurrent Capacitor",
-            Icon = ProductIcon.WindowIcon,
-            Width = 460,
-            Height = 220,
-            CanResize = false,
-            Content = new StackPanel {
-                Margin = new Thickness(24),
-                Spacing = 12,
-                Children = {
-                    new TextBlock { Text = "Move Kurrent Capacitor to your Applications folder to continue.", FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap },
-                    new TextBlock { Text = $"{where} The command-line tool and the background service need a permanent location.", TextWrapping = TextWrapping.Wrap },
-                    error,
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { quitButton, moveButton } },
-                },
-            },
-        };
-        // The titlebar close / Cmd+W leaves no other path to shutdown — OnExplicitShutdown means
-        // Avalonia never ends the process on its own just because the last window closed.
-        window.Closed += (_, _) => quit();
-        return window;
+        return new InstallLocationWindow(where, move, quit);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the
@@ -644,11 +613,12 @@ public partial class App : Application {
 
         _coordinator = new MainWindowCoordinator(
             () => BuildAndShowMainWindow(
-                service, _config, actions, notifier, ticker,
+                service, _config, _appState, actions, notifier, ticker,
                 _shutdown.Token, activity, launch, _time, lifecycle.StartActionAsync,
                 lifecycleStatus, _navigation, _workspaceTeardown.Track, BuildWorkspace,
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
+                agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer,
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, pullRequestTones: pullRequestTones.Tones,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
@@ -836,7 +806,7 @@ public partial class App : Application {
                 action => Dispatcher.UIThread.Post(action),
                 _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time),
             new ConsentFlipClaims(_config),
-            new AppStateStore(_config.Path("app-state.json")),
+            _appState,
             new ShellUrlOpener(),
             _time,
             WizardComposition.NewOperation,
@@ -933,7 +903,7 @@ public partial class App : Application {
             ResolveConsentFlipIdentity: () => ResolveConsentFlipIdentity(_config),
             RunMutation: lane.RunAsync,
             Observation: new OneShotObservation(_daemonStore, _time, OneShotProbeTimeout),
-            AppState: new AppStateStore(_config.Path("app-state.json")),
+            AppState: _appState,
             ShimInstaller: new PathShimInstaller(runner, probe),
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
@@ -1169,7 +1139,7 @@ public partial class App : Application {
     // because startup awaits (the gate's config read, and in wizard-first mode the whole wizard).
     // Show() on an already-visible window is a no-op.
     internal static MainWindow BuildAndShowMainWindow(
-            IDaemonClientService service, ConfigRoot config,
+            IDaemonClientService service, ConfigRoot config, IAppStateStore appState,
             AgentActionService actions, IAppNotifier notifier, ITicker ticker,
             CancellationToken shutdownToken, ActivityViewModel activity, ILaunchClient launch,
             TimeProvider time,
@@ -1177,7 +1147,8 @@ public partial class App : Application {
             IObservable<string?>? lifecycleStatus = null,
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, string? tenantName = null,
-            IObservable<IReadOnlySet<string>>? agentsWithPending = null, Action? requestSignIn = null,
+            IObservable<IReadOnlySet<string>>? agentsWithPending = null,
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null, Action? requestSignIn = null,
             IObservable<string?>? lifecycleAttention = null,
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
@@ -1209,7 +1180,6 @@ public partial class App : Application {
             GitRepository.ResolveMainRepoRoot, localMachineId, appServerUrl: null, time);
 
         MainWindowViewModel? vm = null;
-        var appState = new AppStateStore(config.Path("app-state.json"));
         var home = new HomeViewModel(
             service, appState,
             launch, new RepoPathStore(config, time).GetSortedPathsAsync, time, shutdownToken,
@@ -1228,7 +1198,7 @@ public partial class App : Application {
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
             openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
-            pullRequestTones: pullRequestTones);
+            pullRequestTones: pullRequestTones, agentsAwaitingAnswer: agentsAwaitingAnswer);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
@@ -1246,7 +1216,7 @@ public partial class App : Application {
         return window;
     }
 
-    // Wires the CLI facade, PATH probe, and decline-memory store (a broken override is "no CLI"); also builds the shim/consent-flip coordinators, sharing rather than re-resolving them.
+    // Wires the CLI facade and PATH probe (a broken override is "no CLI"); also builds the shim/consent-flip coordinators, sharing rather than re-resolving them.
     (DaemonLifecycleController Lifecycle, ShimOfferCoordinator ShimOffer, ConsentFlipCoordinator ConsentFlip,
             ILifecycleSurface Surface, ILoginShellProbe Probe) BuildLifecycleController(
             DaemonClientService service, ILocalControlOps ops, bool autoActionsPermanentlyClosed,
@@ -1261,7 +1231,6 @@ public partial class App : Application {
         // must reflect the SAME probe outcome that the controller's preconditions/PathDegraded see.
         var cli     = new KcapCli(runner, cliPath, service.DaemonName, profile?.ProfileName ?? "default", probe.TerminalPathAsync,
             canonicalServer: canonicalServer);
-        var store   = new AppStateStore(_config.Path("app-state.json"));
         var surface = new LifecycleSurface(setLifecycleStatus, setLifecycleAttention, ConfirmLifecyclePromptAsync);
 
         var lifecycle = new DaemonLifecycleController(
@@ -1274,14 +1243,14 @@ public partial class App : Application {
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
-            lifecycle.PhaseClosed, probe, new PathShimInstaller(runner, probe), store, surface, shimTarget,
+            lifecycle.PhaseClosed, probe, new PathShimInstaller(runner, probe), _appState, surface, shimTarget,
             _shutdown.Token, autoActionsPermanentlyClosed);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config
         // lock this delegate then reads under.
         var consentFlip = new ConsentFlipCoordinator(
             service, ops, new ConsentFlipClaims(_config),
-            () => ResolveConsentFlipIdentity(_config), surface, store, _shutdown.Token);
+            () => ResolveConsentFlipIdentity(_config), surface, _appState, _shutdown.Token);
 
         return (lifecycle, shimOffer, consentFlip, surface, probe);
     }

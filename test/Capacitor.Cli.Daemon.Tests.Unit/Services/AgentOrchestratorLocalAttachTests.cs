@@ -746,7 +746,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -795,7 +795,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -820,13 +820,7 @@ public class AgentOrchestratorLocalAttachTests {
         }
     }
 
-    /// <summary>
-    /// Pins the one hop nothing else exercises: <see cref="LocalControlServer"/> decoding a raw
-    /// StopV2 frame off a real socket and forwarding its force flag to the orchestrator. The codec
-    /// round-trip (FrameCodecTests) and the handler (StopV2AndReadReply above) are each covered in
-    /// isolation; only a real connection proves the server's frame switch wires them together.
-    /// </summary>
-    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, bool force, string agentId) {
+    static async Task<LocalFrame?> StopV2OverRealSocketAsync(string daemonName, LocalFrame request) {
         using var daemons = new TempDaemonStore();
         using var cts = new CancellationTokenSource(WaitHarness.Bounded);
 
@@ -839,7 +833,7 @@ public class AgentOrchestratorLocalAttachTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Store = daemons.Store, Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath(daemonName);
@@ -851,7 +845,7 @@ public class AgentOrchestratorLocalAttachTests {
             await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
             await using var stream = new NetworkStream(sock, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopV2(force, agentId), cts.Token);
+            await FrameCodec.WriteAsync(stream, request, cts.Token);
 
             return await FrameCodec.ReadAsync(stream, cts.Token);
         } finally {
@@ -862,7 +856,7 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test, ExcludeOn(OS.Windows)] // Unix-domain socket path
     public async Task Local_socket_stopv2_without_force_refuses_a_protected_agent_end_to_end() {
-        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", force: false, "flow-1");
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-refuse", LocalFrame.StopV2(force: false, "flow-1"));
 
         await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
         await Assert.That(resp.Text).Contains("--force");
@@ -870,10 +864,19 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test, ExcludeOn(OS.Windows)] // Unix-domain socket path
     public async Task Local_socket_stopv2_with_force_stops_a_protected_agent_end_to_end() {
-        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", force: true, "flow-1");
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-force", LocalFrame.StopV2(force: true, "flow-1"));
 
         await Assert.That(resp!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(resp.Text).IsEqualTo("flow-1\tstopped");
+    }
+
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Local_socket_malformed_stopv2_returns_a_protocol_error() {
+        var resp = await StopV2OverRealSocketAsync("test-stopv2-invalid", new LocalFrame(FrameType.StopV2));
+
+        await Assert.That(resp).IsNotNull();
+        await Assert.That(resp!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(resp.Text).Contains("malformed StopV2");
     }
 
     [Test]
@@ -1055,7 +1058,7 @@ public class AgentOrchestratorLocalAttachTests {
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
-        public override Task AgentUnregisteredAsync(string agentId) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
+        public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }
         public override Task SendTerminalOutputAsync(string agentId, string base64Data, CancellationToken ct = default) { Calls.Add(nameof(SendTerminalOutputAsync)); return Task.CompletedTask; }
         public override Task AppendAgentRunEventAsync(string agentId, object evt) { Calls.Add(nameof(AppendAgentRunEventAsync)); RunEvents.Add(evt); return Task.CompletedTask; }
@@ -1183,16 +1186,20 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
-    public async Task Stopping_a_flow_participant_with_force_succeeds() {
+    [Arguments("agent_exited", "agent_stopped")]
+    [Arguments("reviewer_ttl_expired", "reviewer_ttl_expired")]
+    public async Task Stopping_a_flow_participant_with_force_preserves_end_attribution(string reason, string expected) {
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
+        orch.GetAgentForTest("flow-1")!.PendingEndReason = reason;
 
         var reply = await StopV2AndReadReply(orch, force: true, "flow-1");
 
         await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(reply.Text).IsEqualTo("flow-1\tstopped");
         await Assert.That(orch.GetAgentForTest("flow-1")!.Status).IsEqualTo("Completed");
+        await Assert.That(orch.GetAgentForTest("flow-1")!.PendingEndReason).IsEqualTo(expected);
     }
 
     [Test]
@@ -1216,7 +1223,7 @@ public class AgentOrchestratorLocalAttachTests {
     public async Task Stopping_a_prior_incarnation_flow_survivor_without_force_is_refused_before_reaping() {
         // Not in _agents — this daemon incarnation never saw it — but its persisted PID record
         // says it was a review-flow participant. The refusal must fire off the RECORD's Kind
-        // before TryStopByPidRecordAsync (and its live-process reap) ever runs.
+        // before StopByPidRecordAsync (and its live-process reap) ever runs.
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
         orch.WritePidRecordForTest(new AgentPidRecord(
@@ -1234,7 +1241,7 @@ public class AgentOrchestratorLocalAttachTests {
 
     [Test]
     public async Task Stopping_a_prior_incarnation_flow_survivor_with_force_bypasses_the_kind_gate() {
-        // --force must reach TryStopByPidRecordAsync itself (kept policy-free) rather than being
+        // --force must reach StopByPidRecordAsync itself (kept policy-free) rather than being
         // turned back by the new gate above it.
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
@@ -1253,6 +1260,82 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
         await Assert.That(reply.Text).IsEqualTo("ghost-flow-2\tstopped");
         await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ghost-flow-2")).IsFalse();
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_an_absent_agent_reports_missing(bool force) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopV2AndReadReply(orch, force, "finished-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("finished-agent\tmissing");
+    }
+
+    [Test]
+    public async Task Legacy_stop_of_an_absent_agent_keeps_its_error_response() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var reply = await StopAndReadReply(orch, "finished-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).IsEqualTo("no such agent finished-agent");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_an_agent_with_a_corrupt_record_reports_failed(bool quarantined) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var agentsDir = Path.Combine(orch.PidRecordRootForTest, "agents");
+        Directory.CreateDirectory(agentsDir);
+        var path = Path.Combine(agentsDir, AgentFileNames.For("corrupt-agent") + ".json");
+        File.WriteAllText(path, "{ broken record");
+        if (quarantined) orch.PidRecordsForTest();
+
+        var reply = await StopV2AndReadReply(orch, force: true, "corrupt-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("corrupt-agent\tfailed");
+        await Assert.That(File.Exists(path) || File.Exists(path + ".corrupt")).IsTrue();
+    }
+
+    [Test]
+    public async Task Stopping_an_agent_with_an_unreadable_record_directory_reports_failed() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        Directory.CreateDirectory(orch.PidRecordRootForTest);
+        File.WriteAllText(Path.Combine(orch.PidRecordRootForTest, "agents"), "obstructed directory");
+
+        var reply = await StopV2AndReadReply(orch, force: true, "unknown-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("unknown-agent\tfailed");
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Stopping_a_survivor_with_unconfirmed_identity_reports_failed_and_retains_its_record(bool force) {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        using var dummy = DummyProcess.StartSleep(30);
+        await Assert.That(ProcessIdentity.MatchesTri(dummy.Pid, "")).IsNull();
+        orch.WritePidRecordForTest(new AgentPidRecord(
+            "unconfirmed-agent", dummy.Pid, "", PidIdentityKind.IdentityUnavailable, "Default", "codex",
+            "", "", orch.DaemonIdForTest, orch.DaemonEpochForTest, DateTimeOffset.UtcNow));
+
+        var reply = await StopV2AndReadReply(orch, force, "unconfirmed-agent");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("unconfirmed-agent\tfailed");
+        await Assert.That(ProcessIdentity.IsAlive(dummy.Pid)).IsTrue();
+        await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "unconfirmed-agent")).IsTrue();
     }
 
     [Test]

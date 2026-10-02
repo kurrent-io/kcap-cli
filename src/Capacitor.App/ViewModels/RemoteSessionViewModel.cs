@@ -3,7 +3,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -53,12 +52,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     string _repoLabelText = "";
     public string RepoLabelText { get => _repoLabelText; private set => this.RaiseAndSetIfChanged(ref _repoLabelText, value); }
-
-    string _statusText = "";
-    public string StatusText { get => _statusText; private set => this.RaiseAndSetIfChanged(ref _statusText, value); }
-
-    IBrush _statusDot = SessionStatusDots.For("");
-    public IBrush StatusDot { get => _statusDot; private set => this.RaiseAndSetIfChanged(ref _statusDot, value); }
 
     RemoteTab _activeTab = RemoteTab.Chat;
     public RemoteTab ActiveTab {
@@ -229,8 +222,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
-        StatusText = SessionStatusDots.Label(row);
-        StatusDot = SessionStatusDots.For(row);
         if (SessionStatusDots.IsTerminal(row.Status)) {
             SessionEnded = true;
             PublishSession(ended: true);

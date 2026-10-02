@@ -10,7 +10,12 @@ static class ArgParsing {
     /// <paramref name="valueFlags"/> so their values aren't mistaken for the
     /// sessionId.
     /// </summary>
-    internal static string? ResolveSessionId(string[] args, int skipCount = 1, string[]? valueFlags = null) {
+    internal static string? ResolveSessionId(string[] args, int skipCount = 1, string[]? valueFlags = null) =>
+        PositionalSessionId(args, skipCount, valueFlags) ?? ResolveSessionIdFromEnv();
+
+    /// <summary>The positional session id alone, never the environment's: for a command where the
+    /// ambient session is the wrong default.</summary>
+    internal static string? PositionalSessionId(string[] args, int skipCount = 1, string[]? valueFlags = null) {
         var knownValueFlags = valueFlags is null or { Length: 0 }
             ? null
             : new HashSet<string>(valueFlags, StringComparer.Ordinal);
@@ -28,7 +33,7 @@ static class ArgParsing {
             return token;
         }
 
-        return ResolveSessionIdFromEnv();
+        return null;
     }
 
     /// <summary>

@@ -53,4 +53,6 @@ public sealed record LocalFrame(FrameType Type) {
     /// Constructs a DaemonSettingsPut or DaemonSettingsAck frame, whose payload is UTF-8 JSON
     /// (snake_case via SettingsIpcJsonContext) carried in Text — see SettingsIpc.cs.
     public static LocalFrame SettingsJson(FrameType type, string json) => new(type) { Text = json };
+
+    public static LocalFrame FenceJson(FrameType type, string json) => new(type) { Text = json };
 }

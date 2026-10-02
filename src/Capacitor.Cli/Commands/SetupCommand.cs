@@ -729,6 +729,7 @@ sealed class SetupCommand(
         var copilot  = harnesses.Of<CopilotHarness>().Paths;
         var pi       = harnesses.Of<PiHarness>().Paths;
         var kiro     = harnesses.Of<KiroHarness>().Paths;
+        var kiroCrew = harnesses.Of<KiroHarness>().Crew;
         var codex    = harnesses.Of<CodexHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
         var cursor   = harnesses.Of<CursorHarness>().Paths;
@@ -761,6 +762,8 @@ sealed class SetupCommand(
             OpenCodeInstructionsPath: opencode.AgentsMd,
             KiroMcpPath:          kiro.SettingsMcpJson,
             KiroSkillsDir:        kiro.SkillsDir,
+            KiroCrewHookScript:   kiroCrew.SpawnHookScript,
+            KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
             PiMcpExtensionPath:   pi.KcapMcpExtension,
             PiAgentsMdPath:       pi.AgentsMd);
 
@@ -794,6 +797,10 @@ sealed class SetupCommand(
             InstallOpenCodeInstructions: () => AgentInstructionsWriter.Write(
                 opencode.AgentsMd, KcapAgentInstructions.Body),
             RegisterKiroMcp:          () => HarnessMcpProjections.Kiro.Register(kiro.SettingsMcpJson, home),
+            InstallKiroCrewHook:      kiroCrew.IsPresent()
+                ? () => KiroCrewHookInstaller.Install(
+                    kiroCrew.SpawnHookScript, binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null)
+                : null,
             RegisterGeminiMcp:        () => HarnessMcpProjections.Gemini.Register(gemini.SettingsJson, home),
             InstallGeminiInstructions: () => AgentInstructionsWriter.Write(
                 gemini.GeminiMd, KcapAgentInstructions.Body),
@@ -809,6 +816,9 @@ sealed class SetupCommand(
 
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
+
+        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
+            WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -885,6 +895,29 @@ sealed class SetupCommand(
             daemonName = AnsiConsole.Prompt(
                 new TextPrompt<string>("Daemon name:")
                     .DefaultValue(defaultName)
+                    .ShowDefaultValue());
+        }
+
+        // Built from the profile login stored the token under: discovery may have switched it after startup.
+        var snapshot   = await AppConfig.LoadProfileConfig(config);
+        var loggedInto   = new ProfileContext(
+            new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
+
+        while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
+              + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
+              + "The server refuses a second daemon with the same name.[/]");
+
+            if (noPrompt) {
+                await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+
+                return 1;
+            }
+
+            daemonName = AnsiConsole.Prompt(
+                new TextPrompt<string>("Daemon name:")
+                    .DefaultValue($"{daemonName}-{MachineSlug()}")
                     .ShowDefaultValue());
         }
 
@@ -1495,6 +1528,25 @@ sealed class SetupCommand(
         }
     }
 
+    async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
+            string serverUrl, ProfileContext loggedInto, string daemonName) {
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl, loggedInto);
+            using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
+
+            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, config);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    static string MachineSlug() {
+        var slug = new string(Environment.MachineName.ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+
+        return slug.Length > 0 ? slug : "2";
+    }
+
     /// <inheritdoc cref="ChosenServerHttp.For"/>
     internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) =>
         chosenHttp.For(serverUrl, chosen);
@@ -1514,10 +1566,10 @@ sealed class SetupCommand(
         IReadOnlyList<IImportSource> all = [
             new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
             new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
-            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time),
+            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time, titlePaths: cursor),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
-            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, router, time),
+            new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, harnesses.Of<KiroHarness>().Crew, router, time),
             new PiImportSource(config, harnesses.Of<PiHarness>().Paths.SessionsDir, router, time),
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),

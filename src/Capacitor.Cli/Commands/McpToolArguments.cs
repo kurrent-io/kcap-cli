@@ -69,4 +69,43 @@ static class McpToolArguments {
 
         throw new ArgumentException($"'{key}' must be an integer.");
     }
+
+    /// <summary>Reads a numeric field as long, false only when absent or JSON null. Besides a JSON
+    /// integer it takes a canonical integer string (<c>^-?(0|[1-9]\d*)$</c>), the other shape the
+    /// server's int64 fields are declared with, so a token copied verbatim from a response round-trips.
+    /// Any other present shape throws.</summary>
+    internal static bool TryReadLong(JsonObject? args, string key, out long value) {
+        value = 0;
+        var node = args?[key];
+
+        if (node is null) return false;
+
+        if (node is JsonValue v) {
+            if (v.TryGetValue<JsonElement>(out var el)) {
+                if (el.IsNumber && el.TryGetInt64(out value)) return true;
+                if (el.IsString && TryParseCanonical(el.GetString(), out value)) return true;
+            } else if (v.TryGetValue(out value)) {
+                return true;
+            } else if (v.TryGetValue<int>(out var iv)) {
+                value = iv;
+                return true;
+            } else if (v.TryGetValue<string>(out var sv) && TryParseCanonical(sv, out value)) {
+                return true;
+            }
+        }
+
+        throw new ArgumentException($"'{key}' must be an integer.");
+    }
+
+    static bool TryParseCanonical(string? s, out long value) {
+        value = 0;
+        if (string.IsNullOrEmpty(s)) return false;
+
+        var digits = s[0] == '-' ? s.AsSpan(1) : s.AsSpan();
+        if (digits.IsEmpty || (digits[0] == '0' && digits.Length > 1)) return false;
+        foreach (var c in digits)
+            if (c is < '0' or > '9') return false;
+
+        return long.TryParse(s, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out value);
+    }
 }

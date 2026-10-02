@@ -109,6 +109,98 @@ sealed partial class LaunchdServiceManager(
             throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {err.Trim()}");
     }
 
+    /// <summary>Per launchctl call, which normally answers in milliseconds. Refresh runs under the npm
+    /// refresh wrapper's 60s kill.</summary>
+    public static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(7);
+
+    /// <summary>The longest a reload can take once the daemon is asked: the idle-restart request, then
+    /// bootout, bootstrap and the rollback bootstrap, each with at most one follow-up probe. A reload is
+    /// not started with less than this left, because a kill between bootout and bootstrap leaves the job
+    /// unloaded.</summary>
+    public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + 6 * RefreshCtlTimeout;
+
+    /// <summary>
+    /// Moves an installed job off the Adaptive process type. The plist is rewritten whenever it carries
+    /// the Adaptive line, but launchd reads the type only when the job loads, and the reload kills
+    /// whatever the daemon hosts. So a running Adaptive job is reloaded only once
+    /// <paramref name="requestIdleRestart"/> reports that the daemon accepted an idle-only restart. A
+    /// busy daemon refuses that restart, and the reload waits for a later refresh, as it does when
+    /// <paramref name="timeLeft"/> is under <see cref="ReloadBudget"/>.
+    /// </summary>
+    public ProcessTypeRefresh RefreshProcessType(
+            string serviceId, Func<bool> requestIdleRestart, Func<TimeSpan> timeLeft, out string? error) {
+        error = null;
+        var path = LaunchdUnit.PlistPath(home, serviceId);
+
+        if (LaunchdUnit.TryReadPlist(path, out var original) != LaunchdUnit.PlistRead.Ok)
+            return ProcessTypeRefresh.Unchanged;
+
+        var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
+        var probe    = printTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(printExit, printOut, printErr);
+        var stale    = probe == LabelProbe.Loaded && LaunchdUnit.LoadedAsAdaptive(printOut);
+        var upgraded = LaunchdUnit.UpgradeProcessType(original!);
+
+        // A plist this writer cannot upgrade would reload as Adaptive again.
+        if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return ProcessTypeRefresh.Unchanged;
+
+        // Rewriting the file is safe whatever launchd holds; only the reload depends on what it does.
+        if (upgraded is not null) _writeUnit(path, upgraded, null);
+        if (probe == LabelProbe.Unknown) return ProcessTypeRefresh.Unverified;
+        if (!stale) return upgraded is null ? ProcessTypeRefresh.Unchanged : ProcessTypeRefresh.Rewritten;
+        if (timeLeft() < ReloadBudget) return ProcessTypeRefresh.Deferred;
+
+        // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
+        var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
+        if (running && !requestIdleRestart()) return ProcessTypeRefresh.Deferred;
+
+        // The accepted restart is already exiting the daemon. Booting out now unloads the job before
+        // launchd can relaunch it from the definition it cached at load.
+        var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+        if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
+            error = "launchctl bootout did not unload the job, so it keeps running as Adaptive until the next update";
+            return ProcessTypeRefresh.Failed;
+        }
+
+        var reload = Bootstrap(serviceId, path, acceptAdaptive: false);
+        if (reload.Error is null) return ProcessTypeRefresh.Reloaded;
+
+        if (upgraded is not null) _writeUnit(path, original!, null);
+        var rollback = Bootstrap(serviceId, path, acceptAdaptive: true);
+        var (bootstrapError, rollbackError) = (reload.Error, rollback.Error);
+
+        if (rollbackError is null) {
+            error = $"{bootstrapError}; the previous unit was restored and loaded";
+        } else {
+            error = (rollback.After ?? Probe(serviceId).Label) == LabelProbe.Absent
+                ? $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), so the daemon is not loaded — run `kcap daemon service start`"
+                : $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), and launchd's state for the job is unclear — check `kcap daemon service status`";
+        }
+
+        return ProcessTypeRefresh.Failed;
+    }
+
+    (LabelProbe Label, string StdOut) Probe(string serviceId) {
+        var (exit, stdout, stderr, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
+        return (timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(exit, stdout, stderr), stdout);
+    }
+
+    /// <summary>
+    /// A bootstrap that timed out may still have loaded the job, so it counts as success when a probe then
+    /// finds the label loaded, and, unless <paramref name="acceptAdaptive"/>, loaded as something other
+    /// than Adaptive: a bootout that did not take leaves the old job loaded. <c>After</c> is that probe's
+    /// result, so the caller need not probe again.
+    /// </summary>
+    (string? Error, LabelProbe? After) Bootstrap(string serviceId, string plistPath, bool acceptAdaptive) {
+        var (exit, _, err, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootstrapArgs(Uid(), plistPath));
+        if (!timedOut)
+            return (exit == 0 ? null : $"launchctl bootstrap failed (exit {exit}): {err.Trim()}", null);
+
+        var (label, stdout) = Probe(serviceId);
+        var loaded = label == LabelProbe.Loaded && (acceptAdaptive || !LaunchdUnit.LoadedAsAdaptive(stdout));
+
+        return (loaded ? null : "launchctl bootstrap timed out and was terminated", label);
+    }
+
     /// <summary>
     /// A non-zero <c>bootout</c> is not automatically a failure: the label may already be unloaded. Re-query
     /// with <c>launchctl print</c> to tell that benign case apart from a bootout that actually failed to

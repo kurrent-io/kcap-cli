@@ -138,18 +138,26 @@ public class DaemonMutationLaneTests {
 
     [Test]
     [Arguments("unsupported")]
+    [Arguments("target_occupied")]
+    [Arguments("target_unknown")]
+    [Arguments("agents_active")]
+    [Arguments("fence_unsupported")]
+    [Arguments("fence_unavailable")]
     [Arguments("unconfirmed")]
     [Arguments("rollback")]
     [Arguments("skew")]
     [Arguments("repair")]
     [Arguments("refused")]
     [Arguments("fault")]
-    public async Task Rename_outcomes_require_a_fresh_graph_except_known_untouched_unsupported_CLI(string mode) {
+    public async Task Rename_outcomes_require_a_fresh_graph_except_refusals_that_changed_nothing(string mode) {
+        var untouched = mode is "unsupported" or "target_occupied" or "target_unknown" or "agents_active" or "fence_unsupported" or "fence_unavailable";
         var gate = new TaskCompletionSource<string?>();
         var cli = new FakeKcapCli { VersionBehavior = _ => gate.Task };
         var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
         MutationOutcome result = mode switch {
             "unsupported" => new MutationOutcome.Failed(30, "cli_unsupported", RecoverySurface.Attention),
+            "target_occupied" or "target_unknown" or "agents_active" or "fence_unsupported" or "fence_unavailable"
+                => new MutationOutcome.Failed(30, mode, RecoverySurface.Attention),
             "unconfirmed" => new MutationOutcome.UnconfirmedNoAttach(),
             "rollback" => new MutationOutcome.Failed(VerifyExitCodes.RollbackBudget, null, RecoverySurface.Attention),
             "skew" => new MutationOutcome.AttentionSkew("ownership_unknown"),
@@ -164,10 +172,10 @@ public class DaemonMutationLaneTests {
         gate.SetResult("9.9.9");
         await rename;
         var after = await queued;
-        await Assert.That(lane.IsRetired("daemon-a")).IsEqualTo(mode != "unsupported");
-        if (mode == "unsupported") await Assert.That(after).IsTypeOf<MutationOutcome.Succeeded>();
+        await Assert.That(lane.IsRetired("daemon-a")).IsEqualTo(!untouched);
+        if (untouched) await Assert.That(after).IsTypeOf<MutationOutcome.Succeeded>();
         else await Assert.That(after).IsEqualTo(new MutationOutcome.Refused("daemon_renamed_restart_app", RecoverySurface.Attention));
-        await Assert.That(factory.Calls.Count).IsEqualTo(mode == "unsupported" ? 2 : 1);
+        await Assert.That(factory.Calls.Count).IsEqualTo(untouched ? 2 : 1);
     }
 
     [Test]

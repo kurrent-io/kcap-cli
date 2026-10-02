@@ -23,4 +23,13 @@ public record SessionEvalCompletedPayloadV4 {
 
     [JsonPropertyName("coverage_policy_version")] public required string CoveragePolicyVersion { get; init; }
     [JsonPropertyName("evidence_scope_version")]  public string? EvidenceScopeVersion { get; init; }
+
+    /// <summary>The scope token the result was judged under, set only on the request that posts it — the server
+    /// refuses the write once the token no longer opens — never on an aggregate handed to a caller.</summary>
+    [JsonPropertyName("evidence_scope_token"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvidenceScopeToken { get; init; }
+
+    /// <summary>A run that judged nothing and recorded only coded failures. The server accepts empty
+    /// categories in this shape alone, and it is a failed run to every caller.</summary>
+    [JsonIgnore] public bool IsFailureOnly => Categories.Count == 0 && FailedQuestions.Count > 0;
 }

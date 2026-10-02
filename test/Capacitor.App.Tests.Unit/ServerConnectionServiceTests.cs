@@ -271,21 +271,21 @@ public class ServerConnectionServiceTests {
     public async Task ParkWhileARestartAwaitsTheRetiredLoopLeavesTheLaneSignedOut() {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnoseEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
         await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
-            return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
+            if (n <= 2) return Task.FromResult<string?>(null);
+            diagnoseEntered.TrySetResult();
+            return gate.Task;
         });
         using var attemptReset = lane.Status
             .Where(s => s.State == ServerLaneState.Connecting)
             .Subscribe(_ => Interlocked.Exchange(ref attemptCallIndex, 0));
         lane.Start();
 
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (Volatile.Read(ref attemptCallIndex) < 3) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("DiagnoseAsync's token read was never reached");
-            await Task.Delay(5);
-        }
+        // Connecting resets the counter after this read has started, so the count itself is not a signal.
+        await diagnoseEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
         var restart = lane.RestartAsync();
         await Task.Delay(100); // it cannot pass the retired loop until the gate below releases it
@@ -322,27 +322,26 @@ public class ServerConnectionServiceTests {
     // (negotiate + transport, resolved fast so hub.StartAsync completes normally), then
     // DiagnoseAsync's own third read, gated so the park below deterministically lands while that
     // continuation is still pending. The per-attempt counter resets on every Connecting so a
-    // retry (should one happen under load) re-fast-paths its own first two reads rather than
-    // inheriting a stale count from an earlier attempt.
+    // retry re-fast-paths its own first two reads. That reset also drops a count the test was
+    // polling, so the third read signals directly.
     [Test]
     public async Task ParkSignedOutDuringAnInFlightConnectDiscardsTheRacingConnectedPublish() {
         var attemptCallIndex = 0;
         var gate = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var diagnoseEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var host = await HubTestHost.StartAsync();
         await using var lane = new ServerConnectionService(TimeProvider.System, host.Url, () => {
             var n = Interlocked.Increment(ref attemptCallIndex);
-            return n <= 2 ? Task.FromResult<string?>(null) : gate.Task;
+            if (n <= 2) return Task.FromResult<string?>(null);
+            diagnoseEntered.TrySetResult();
+            return gate.Task;
         });
         using var attemptReset = lane.Status
             .Where(s => s.State == ServerLaneState.Connecting)
             .Subscribe(_ => Interlocked.Exchange(ref attemptCallIndex, 0));
         lane.Start();
 
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (Volatile.Read(ref attemptCallIndex) < 3) {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("DiagnoseAsync's token read was never reached");
-            await Task.Delay(5);
-        }
+        await diagnoseEntered.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
         lane.ParkSignedOut();
         gate.SetResult(null); // release DiagnoseAsync — its Connected publish must be discarded

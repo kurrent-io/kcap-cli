@@ -87,6 +87,11 @@
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
+        <!-- A Border is outside the accessibility tree unless it asks in, so the folded initial
+             asks and carries the name; the letter stays out, or each person is read twice. -->
+        <Style Selector="Border.avatar.folded">
+            <Setter Property="AutomationProperties.AccessibilityView" Value="Content" />
+        </Style>
         <Style Selector="Border.avatar > Panel > TextBlock">
             <Setter Property="FontSize" Value="12" />
             <Setter Property="LineHeight" Value="12" />
@@ -95,6 +100,7 @@
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="AutomationProperties.AccessibilityView" Value="Raw" />
         </Style>
         <!-- Stretch wrapper around a card: the card is the chrome, so the wrapper paints nothing in
              any state — Fluent's hover fill lands on the presenter at the button's own radius and
@@ -178,6 +184,10 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Opacity" Value="0.4" />
         </Style>
+        <!-- Disabled while its own refresh runs, but the spinner is the feedback and stays at full strength. -->
+        <Style Selector="Button.iconButton.refreshing:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
         <Style Selector="Border.card">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -187,6 +197,11 @@
         </Style>
         <Style Selector="Button.toggle:pointerover Border.card">
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <!-- Centred on the line box, the chevron sits 1.5px under the eyebrow and meta glyphs. The
+             lift goes on the box: a Shape's own RenderTransform is a local value. -->
+        <Style Selector="Panel.chevronBox">
+            <Setter Property="RenderTransform" Value="translateY(-1.5px)" />
         </Style>
         <Style Selector="Path.chevron">
             <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" />
@@ -274,6 +289,39 @@
                 </Panel>
             </Panel>
         </DataTemplate>
+        <DataTemplate x:Key="PlanTaskItem" x:DataType="vm:PlanTaskRow">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <!-- The pulse is the row's own: it stops when the session ends, and the
+                     ring stays so the task still reads as started. -->
+                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
+                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
+                </Panel>
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
+                               TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                    <TextBlock Text="{Binding Note}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Note}"
+                               IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+        <DataTemplate x:Key="SubagentItem" x:DataType="vm:SubagentRow">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
+                </Panel>
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                    <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
+                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
     </UserControl.Resources>
 
     <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1,0,0,0">
@@ -295,11 +343,23 @@
                             <Path Classes="prExternal" Width="14" Height="14" />
                         </Button>
                         <Button x:Name="RefreshButton" Command="{Binding RefreshCommand}" Classes="iconButton"
-                                VerticalAlignment="Center"
-                                ToolTip.Tip="{Binding RefreshTip}" ToolTip.ShowOnDisabled="True">
-                            <Path Width="14" Height="14" Stretch="Uniform"
-                                  Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
-                                  Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                                Classes.refreshing="{Binding IsRefreshing}" IsEnabled="{Binding !IsRefreshing}"
+                                VerticalAlignment="Center" ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Refresh this work">
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="2" MaxWidth="260">
+                                    <TextBlock Text="{Binding RefreshTip}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Static vm:WorkContextViewModel.RefreshShortcutCaption}" Classes="kcapTipCaption" />
+                                </StackPanel>
+                            </ToolTip.Tip>
+                            <!-- The arrow glyph is off-centre in its box and would orbit if turned; the ring spins in place. -->
+                            <Panel Width="14" Height="14">
+                                <Path Width="14" Height="14" Stretch="Uniform" IsVisible="{Binding !IsRefreshing}"
+                                      Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
+                                      Data="M11.5,6.5 A5,5 0 1 1 10,3 M10,0.5 L10,3 L7.5,3" />
+                                <Path Width="12" Height="12" Stretch="Uniform" IsVisible="{Binding IsRefreshing}" Classes.kcapSpinning="{Binding IsRefreshing}"
+                                      Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
+                                      Data="M11,2 A9,9 0 1 1 2,11" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Panel>
                         </Button>
                     </StackPanel>
                 </Grid>
@@ -357,7 +417,7 @@
                                         <TextBlock Text="PARTS" Classes="eyebrow" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding PartsHeader}" Classes="sectionMeta" />
-                                            <Panel Width="12" Height="12">
+                                            <Panel Classes="chevronBox" Width="12" Height="12">
                                                 <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PartsExpanded}" />
                                                 <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PartsExpanded}" />
                                             </Panel>
@@ -415,16 +475,15 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Who's on it: names stay visible; the chevron only appears when the list is longer than the cap. -->
+                <!-- Who's on it: folded to one initial per person, the header opens the names. -->
                 <StackPanel x:Name="WhoSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
-                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader"
-                            Classes.expandable="{Binding PeopleOverflows}">
+                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
                                            IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Width="12" Height="12" IsVisible="{Binding PeopleOverflows}">
+                                <Panel Classes="chevronBox" Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding PeopleExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !PeopleExpanded}" />
                                 </Panel>
@@ -433,41 +492,60 @@
                     </Button>
                     <Border Classes="sectionBody">
                         <Panel>
-                            <ItemsControl x:Name="ContributorList" ItemsSource="{Binding VisibleContributors}" IsVisible="{Binding HasContributors}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="8" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-                                            <Border Classes="avatar" VerticalAlignment="Center">
+                            <Panel IsVisible="{Binding HasContributors}">
+                                <ItemsControl x:Name="ContributorStack" ItemsSource="{Binding Contributors}" IsVisible="{Binding !PeopleExpanded}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel ItemSpacing="6" LineSpacing="6" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
+                                            <Border Classes="avatar folded" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
                                                 <Panel>
                                                     <TextBlock Text="{Binding Initial}" />
                                                 </Panel>
                                             </Border>
-                                            <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
-                                                    HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
-                                                <StackPanel>
-                                                    <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
-                                                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
-                                                               IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                                </StackPanel>
-                                            </Button>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <ItemsControl x:Name="ContributorList" ItemsSource="{Binding Contributors}" IsVisible="{Binding PeopleExpanded}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Spacing="8" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:WorkContextPersonViewModel">
+                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                                <Border Classes="avatar" VerticalAlignment="Center">
+                                                    <Panel>
+                                                        <TextBlock Text="{Binding Initial}" />
+                                                    </Panel>
+                                                </Border>
+                                                <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
+                                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
+                                                                   IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Panel>
                             <Grid x:Name="RequesterRow" ColumnDefinitions="Auto,*" ColumnSpacing="10" IsVisible="{Binding !HasContributors}">
-                                <Border Classes="avatar" VerticalAlignment="Center">
+                                <Border Classes="avatar" Classes.folded="{Binding !PeopleExpanded}" VerticalAlignment="Center"
+                                        ToolTip.Tip="{Binding Requester}" AutomationProperties.Name="{Binding Requester}">
                                     <Panel>
                                         <TextBlock Text="{Binding RequesterInitial}" />
                                     </Panel>
                                 </Border>
-                                <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
-                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}">
+                                <Button x:Name="RequesterName" Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
+                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}" IsVisible="{Binding PeopleExpanded}">
                                     <StackPanel>
                                         <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
@@ -524,7 +602,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="IssueKey" Text="{Binding IssueSectionMeta}" Classes="sectionMeta"
                                            IsVisible="{Binding IssueSectionMeta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
+                                <Panel Classes="chevronBox" Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IssuesExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IssuesExpanded}" />
                                 </Panel>
@@ -582,27 +660,31 @@
                                         </MultiBinding>
                                     </TextBlock.IsVisible>
                                 </TextBlock>
-                                <!-- The digits and marks are nudged toward each other as the subagent counts are. -->
-                                <StackPanel x:Name="PlanCounts" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center"
-                                            Background="Transparent" ToolTip.Tip="{Binding Plan.CountsTip}">
-                                    <StackPanel.IsVisible>
+                                <!-- The digits and marks are nudged toward each other as the subagent counts are,
+                                     and the nudge lifts the marks past the top an ItemsControl clips to. -->
+                                <ItemsControl x:Name="PlanCounts" ItemsSource="{Binding Plan.Counts}" VerticalAlignment="Center" ClipToBounds="False">
+                                    <ItemsControl.IsVisible>
                                         <MultiBinding Converter="{x:Static BoolConverters.And}">
                                             <Binding Path="!Plan.IsExpanded" />
                                             <Binding Path="Plan.HasTasks" />
                                         </MultiBinding>
-                                    </StackPanel.IsVisible>
-                                    <StackPanel Orientation="Horizontal" Spacing="5">
-                                        <ContentControl Content="{x:Static vm:PlanTaskState.Completed}" ContentTemplate="{StaticResource PlanMark}"
-                                                        VerticalAlignment="Center" RenderTransform="translateY(-1px)" />
-                                        <TextBlock x:Name="PlanDoneCount" Text="{Binding Plan.DoneCount}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
-                                    </StackPanel>
-                                    <StackPanel Orientation="Horizontal" Spacing="5">
-                                        <ContentControl Content="{x:Static vm:PlanTaskState.Pending}" ContentTemplate="{StaticResource PlanMark}"
-                                                        VerticalAlignment="Center" RenderTransform="translateY(-1px)" />
-                                        <TextBlock x:Name="PlanOpenCount" Text="{Binding Plan.OpenCount}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
-                                    </StackPanel>
-                                </StackPanel>
-                                <Panel Width="12" Height="12">
+                                    </ItemsControl.IsVisible>
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="10" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:PlanTaskCount">
+                                            <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
+                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center"
+                                                                RenderTransform="translateY(-1px)" />
+                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Panel Classes="chevronBox" Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding Plan.IsExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !Plan.IsExpanded}" />
                                 </Panel>
@@ -627,34 +709,31 @@
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <ItemsControl x:Name="PlanTaskList" ItemsSource="{Binding Plan.Tasks}" IsVisible="{Binding Plan.HasTasks}">
+                            <ItemsControl x:Name="PlanTaskList" ItemsSource="{Binding Plan.Tasks}" IsVisible="{Binding Plan.HasTasks}"
+                                          ItemTemplate="{StaticResource PlanTaskItem}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <StackPanel Spacing="10" />
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:PlanTaskRow">
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                            <!-- The pulse is the row's own: it stops when the session ends, and the
-                                                 ring stays so the task still reads as started. -->
-                                            <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
-                                                <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                                                        HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
-                                            </Panel>
-                                            <StackPanel Grid.Column="1" Spacing="2">
-                                                <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
-                                                           TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
-                                                <TextBlock Text="{Binding Note}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}"
-                                                           TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Note}"
-                                                           IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </StackPanel>
+                    </Border>
+                    <Border x:Name="PlanInProgressBody" Classes="sectionBody">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="!Plan.IsExpanded" />
+                                <Binding Path="Plan.HasInProgress" />
+                            </MultiBinding>
+                        </Border.IsVisible>
+                        <ItemsControl x:Name="PlanInProgressList" ItemsSource="{Binding Plan.InProgressTasks}"
+                                      ItemTemplate="{StaticResource PlanTaskItem}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="10" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
                     </Border>
                 </StackPanel>
 
@@ -686,7 +765,7 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <Panel Width="12" Height="12">
+                                <Panel Classes="chevronBox" Width="12" Height="12">
                                     <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SubagentsExpanded}" />
                                     <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SubagentsExpanded}" />
                                 </Panel>
@@ -694,29 +773,27 @@
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody" IsVisible="{Binding SubagentsExpanded}">
-                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}">
+                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}" ItemTemplate="{StaticResource SubagentItem}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Spacing="10" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:SubagentRow">
-                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                                        <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                                            <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
-                                        </Panel>
-                                        <StackPanel Grid.Column="1" Spacing="2">
-                                            <TextBlock Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                                            <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
-                                                       IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
-                                        </StackPanel>
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                    <Border x:Name="RunningSubagentsBody" Classes="sectionBody">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="!SubagentsExpanded" />
+                                <Binding Path="HasRunningSubagents" />
+                            </MultiBinding>
+                        </Border.IsVisible>
+                        <ItemsControl x:Name="RunningSubagentList" ItemsSource="{Binding RunningSubagents}" ItemTemplate="{StaticResource SubagentItem}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="10" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
                         </ItemsControl>
                     </Border>
                 </StackPanel>
@@ -726,7 +803,7 @@
                     <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />
-                            <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
+                            <Panel Classes="chevronBox" Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
                                 <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SessionExpanded}" />
                                 <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SessionExpanded}" />
                             </Panel>

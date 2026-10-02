@@ -99,6 +99,22 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => Task.CompletedTask;
 
+    /// <summary>When true, closing stdin ends the child with exit code 0, as real Pi does.</summary>
+    public bool ExitsOnInputClose { get; set; }
+    public int  InputCloseCalls   { get; private set; }
+
+    /// <summary>Lines the child writes to stdout as it exits on input close.</summary>
+    public IReadOnlyList<string> LinesOnInputClose { get; set; } = [];
+
+    public Task CloseInputAsync(TimeSpan timeout) {
+        InputCloseCalls++;
+        if (!ExitsOnInputClose) return Task.CompletedTask;
+
+        foreach (var line in LinesOnInputClose) Push(line);
+        EndOfStream(0);
+        return Task.CompletedTask;
+    }
+
     public Task TerminateAsync(TimeSpan? timeout = null) {
         TerminateCalls++;
         if (TerminateOverride is { } o) return o();
@@ -119,7 +135,7 @@ internal sealed class FakePiRpcProcess : IPiRpcProcess {
 /// <see cref="PiRpcHostedAgentRuntime"/>'s tests. Every literal here is a Pi JSONL-RPC frame in the
 /// pinned upstream shape — kept in ONE place so a protocol correction lands once.</summary>
 internal static class PiRpcRuntimeFakes {
-    public const string SessionId      = "pi-session-abc123";
+    public const string PiSessionId    = "pi-session-abc123";
     public const string StateModelId   = "anthropic/claude-sonnet-4";
     public const string RequestedModel = "requested-model";
 
@@ -128,7 +144,7 @@ internal static class PiRpcRuntimeFakes {
     /// fallback to the requested model.</summary>
     public static string GetStateResponse(
             string  id          = "init-state",
-            string? sessionId   = SessionId,
+            string? sessionId   = PiSessionId,
             string? modelId     = StateModelId,
             bool    isStreaming = false,
             bool    success     = true) {

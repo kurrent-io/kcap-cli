@@ -17,6 +17,8 @@ Subcommands:
                           list a session's work-item attachments and structure.
   plans                   Start the MCP plans server (stdio) — declare the plan
                           document and task list a session executes.
+  handoff                 Start the MCP handoff server (stdio) — continue a
+                          session whose agent is gone.
   analytics               Start the MCP analytics server (stdio) — governed
                           read-only SQL over the org's coding-agent analytics.
   artefacts               Start the MCP artefacts server (stdio) — publish a
@@ -38,12 +40,22 @@ Resolution order per tool call: tool `pr` arg → startup `--owner/--repo/--pr`
 
 Options for judge:
   --session <sessionId>   Bind the judge to a specific session
+  --run <path>            Serve the evidence tools for one prepared question
+                          (written by kcap eval and the daemon; not for manual use)
 
 mcp sessions:
-  Exposes four tools — search_sessions, get_session_summary,
-  get_session_transcript, get_turn — for agents to search and inspect past
+  Exposes eight tools — search_sessions, list_repo_sessions,
+  get_session_summary, list_turns, get_turn, get_session_transcript,
+  list_repo_plans, get_declared_plans — for agents to search and inspect past
   Kurrent Capacitor sessions. The active repo is resolved from cwd at startup;
   cd into your project before spawning. Requires `kcap login`.
+
+mcp handoff:
+  Exposes one tool, continue_session, which attaches the current session to
+  another session's work items and unfinished plans. Refuses while that
+  session may still be running unless force is passed. The taking-over
+  session defaults to the harness session; current_session_id overrides it.
+  Available on every plan. Requires `kcap login`.
 
 mcp flows:
   Exposes the review-flow and generic-flow tools for agents to start and
@@ -108,12 +120,14 @@ mcp memory:
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
 mcp workitems:
-  Exposes ten tools for agents to attach the current session (and its
+  Exposes fourteen tools for agents to attach the current session (and its
   continuation chain) to an SDLC work item, to DECLARE that work item's
   structure — its breakdown (parent -> parts) and dependencies (blocks /
-  blocked-by) — and to record the loose ends a session leaves unfinished.
-  Breakdown and relations are declared, never inferred, so an item whose
-  structure nobody declares has an empty topology. Requires `kcap login`.
+  blocked-by) — to record the loose ends a session leaves unfinished, to
+  read what the user should work on next, and to dismiss or restore
+  next-work suggestions. Breakdown and relations are declared, never
+  inferred, so an item whose structure nobody declares has an empty
+  topology. Requires `kcap login`.
 
     Tools:
       declare_work_item        Attach the current session to a work item by
@@ -121,6 +135,11 @@ mcp workitems:
                                 title (exactly one of the four).
       get_session_work_items   List the work items the current session is
                                 attached to.
+      get_next_work            What the user should work on next, ranked, each
+                                row with a because-clause, evidence, and a
+                                target_key for dismiss_next_work (repo_hash
+                                defaults to this checkout; limit default 5,
+                                max 20).
       declare_loose_end        Record one concrete piece of unfinished work
                                 (text) in the user's next-work ledger; the
                                 server refuses none-class text.
@@ -139,6 +158,31 @@ mcp workitems:
                                 survives (work_item_id, into_work_item_id).
       detach_work_item         Durably detach a session from a work item it
                                 was wrongly attached to.
+      dismiss_next_work        Record that the user turned down a presented
+                                next-work suggestion (target_key; repo_hash
+                                defaults to this checkout), so it stops being
+                                offered.
+      restore_next_work        Undo a dismissal so the suggestion can be
+                                offered again (repo_hash defaults to this
+                                checkout).
+      list_dismissed_next_work List the suggestions the user has dismissed,
+                                most recent first.
+      list_loose_ends          List the user's loose ends with their
+                                loose_end_id (status open or closed;
+                                repo_hash defaults to this checkout; pass
+                                next_cursor back as cursor).
+      close_loose_end          Mark a finished loose end done (loose_end_id);
+                                a later sighting reopens it.
+      reopen_loose_end         Undo a close (loose_end_id).
+      list_work_item_evals     List the evaluations of a work item you can
+                                read (work_item_id; pass next_cursor back as
+                                cursor).
+      get_work_item_eval       Read one evaluation run's results and
+                                retrospective (work_item_id, run_id).
+      request_work_item_eval   Queue an evaluation of a work item
+                                (work_item_id; mode process or root_cause).
+      cancel_work_item_eval    Cancel your own still-queued run
+                                (work_item_id, run_id).
 
   Registered for every supported harness by `kcap setup` / `kcap plugin
   install` (Claude Code reads it from the plugin's `.mcp.json`).
@@ -221,11 +265,30 @@ mcp artefacts:
   Reading, version history and takedown live in the web UI. Requires
   `kcap login` and a kcap-server with the /api/artefacts endpoints.
 
+mcp knowledge:
+  Exposes eight tools for agents to read retained facts and curated skills,
+  and to fine-tune skills.
+
+    list_skills           A repo's skills, most recently changed first.
+    get_skill             One skill with bodies, members, pins and doc_revision.
+    list_facts            Retained facts homed at a repo, project or org.
+    search_facts          Facts nearest a query by meaning.
+    edit_skill_body       Replace a pending draft body.
+    transition_skill      approve | reject | dismiss | revoke | restore.
+    adjust_skill_members  exclude | include draft members, or add | remove |
+                          clear assignment pins.
+    curate_fact_cluster   Curate a fact by its curation_key.
+
+  Arguments are the server's field names. Reads default to the current
+  repository. Skill writes take get_skill's doc_revision as
+  expected_doc_revision; refusals pass through with server codes.
+  Requires `kcap login` and a server with /api/knowledge endpoints.
+
 INSTALL
 
   `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`,
-  `kcap-flows`, `kcap-workitems`, `kcap-plans`, `kcap-analytics`, and
-  `kcap-artefacts`
+  `kcap-flows`, `kcap-workitems`, `kcap-plans`, `kcap-analytics`,
+  `kcap-artefacts`, and `kcap-knowledge`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap

@@ -29,9 +29,17 @@
       "command": "kcap",
       "args": ["mcp", "plans"]
     },
+    "kcap-handoff": {
+      "command": "kcap",
+      "args": ["mcp", "handoff"]
+    },
     "kcap-artefacts": {
       "command": "kcap",
       "args": ["mcp", "artefacts"]
+    },
+    "kcap-knowledge": {
+      "command": "kcap",
+      "args": ["mcp", "knowledge"]
     }
   }
 }

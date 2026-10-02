@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed partial class LocalControlServer(
         DaemonConfig config, AgentOrchestrator orchestrator,
         RestartCoordinator restart, LaunchConsentIpc consentIpc, PermissionIpc permissionIpc, DaemonStatusIpc statusIpc,
-        DaemonSettingsIpc settingsIpc,
+        DaemonSettingsIpc settingsIpc, AdmissionFenceIpc fenceIpc,
         ILogger<LocalControlServer> logger
     ) : BackgroundService {
     protected override async Task ExecuteAsync(CancellationToken ct) {
@@ -48,7 +48,16 @@ internal sealed partial class LocalControlServer(
                 case FrameType.List:   await orchestrator.HandleLocalListAsync(first.Text == LocalFrame.ListTitleColumn, stream, ct); break;
                 case FrameType.Stop:   await orchestrator.HandleLocalStopAsync(first.Text, stream, ct); break;
                 case FrameType.StopV2: {
-                    var (force, id) = FrameCodec.StopV2(first);
+                    (bool force, string id) stop;
+                    try {
+                        stop = FrameCodec.StopV2(first);
+                    } catch (InvalidDataException ex) {
+                        await FrameCodec.WriteAsync(stream, LocalFrame.Error($"malformed StopV2 request: {ex.Message}"), ct);
+
+                        break;
+                    }
+
+                    var (force, id) = stop;
                     await orchestrator.HandleLocalStopV2Async(force, id, stream, ct);
 
                     break;
@@ -68,7 +77,8 @@ internal sealed partial class LocalControlServer(
                 case FrameType.SendText: await orchestrator.HandleLocalSendTextAsync(first.Text, stream, ct); break;
                 case FrameType.SendTextWithAttachments: await orchestrator.HandleLocalSendTextWithAttachmentsAsync(first.Text, stream, ct); break;
                 case FrameType.DaemonSettingsPut: await settingsIpc.HandlePutAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut, got {first.Type}"), ct); break;
+                case FrameType.AdmissionFenceAcquire: await fenceIpc.HandleAcquireAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);

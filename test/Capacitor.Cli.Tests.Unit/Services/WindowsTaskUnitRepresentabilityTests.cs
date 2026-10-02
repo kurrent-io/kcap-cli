@@ -80,4 +80,16 @@ public class WindowsTaskUnitRepresentabilityTests {
 
         await Assert.That(wrapper).Contains("set \"GOOGLE_CLOUD_PROJECT=");
     }
+
+    /// <summary>cmd.exe decodes each batch line in the console code page, so the switch to UTF-8 must come
+    /// before the first line that can carry a non-ASCII value.</summary>
+    [Test]
+    public async Task The_wrapper_switches_to_utf8_before_any_value() {
+        var lines = WindowsTaskUnit.Wrapper(Spec("KCAP_CONFIG_DIR", @"C:\Users\José\.config\kcap")).Split("\r\n");
+
+        await Assert.That(lines[0]).IsEqualTo("@echo off");
+        await Assert.That(lines[1]).IsEqualTo("chcp 65001 >nul");
+        await Assert.That(lines.Take(2).All(l => l.All(char.IsAscii))).IsTrue();
+        await Assert.That(lines).Contains("set \"KCAP_CONFIG_DIR=C:\\Users\\José\\.config\\kcap\"");
+    }
 }

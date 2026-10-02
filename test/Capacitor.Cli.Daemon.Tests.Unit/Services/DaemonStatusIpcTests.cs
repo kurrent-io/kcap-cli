@@ -94,7 +94,7 @@ public class DaemonStatusIpcTests {
     /// mirrors <c>AgentStatusSnapshotTests.Build</c> — for the pure write-path exception test
     /// below, which drives <see cref="DaemonStatusIpc.HandleSubscribeAsync"/> directly against a
     /// fake stream instead of a real connection.</summary>
-    (AgentOrchestrator Orchestrator, DaemonStatusIpc StatusIpc, TempDaemonStore Daemons) BuildBareStatusIpc(string name) {
+    (AgentOrchestrator Orchestrator, DaemonStatusIpc StatusIpc, TempDaemonStore Daemons, DaemonConfig Config) BuildBareStatusIpc(string name) {
         var daemons   = new TempDaemonStore();
         var stateRoot = daemons.Store.StateDirectory(name);
         var store       = new LaunchConsentStore(stateRoot, NullLogger.Instance, TimeProvider.System);
@@ -130,7 +130,7 @@ public class DaemonStatusIpcTests {
             Debounce = TimeSpan.FromMilliseconds(1),
         };
 
-        return (orchestrator, statusIpc, daemons);
+        return (orchestrator, statusIpc, daemons, config);
     }
 
     sealed record Harness(
@@ -188,7 +188,7 @@ public class DaemonStatusIpcTests {
         var permissionIpc = new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy(), TimeProvider.System);
-        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
+        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, TestFences.Ipc(config, orchestrator), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(ct);
 
         var sockPath = daemons.Store.SocketPath(daemonName);
@@ -444,8 +444,24 @@ public class DaemonStatusIpcTests {
     /// escaped uncaught; after it, <c>HandleSubscribeAsync</c> returns cleanly.
     /// </summary>
     [Test]
+    public async Task Snapshot_carries_the_configured_vendor_models() {
+        var (orchestrator, statusIpc, daemons, config) = BuildBareStatusIpc("status-ipc-vendor-models");
+        try {
+            config.VendorModels = new(StringComparer.Ordinal) { ["pi"] = [new("p/a", "A · p")], ["kiro"] = [] };
+
+            var dto = JsonSerializer.Deserialize(statusIpc.Snapshot(), StatusIpcJsonContext.Default.DaemonStatusDto)!;
+
+            await Assert.That(dto.Daemon.VendorModels!["pi"].Single()).IsEqualTo(new VendorModelOption("p/a", "A · p"));
+            await Assert.That(dto.Daemon.VendorModels["kiro"]).IsEmpty();
+        } finally {
+            await orchestrator.DisposeAsync();
+            daemons.Dispose();
+        }
+    }
+
+    [Test]
     public async Task HandleSubscribeAsync_absorbs_a_write_side_disconnect_without_faulting() {
-        var (orchestrator, statusIpc, daemons) = BuildBareStatusIpc("status-ipc-throw-test");
+        var (orchestrator, statusIpc, daemons, _) = BuildBareStatusIpc("status-ipc-throw-test");
         try {
             var stream           = new VanishedSubscriberStream();
             var firstSnapshotSeen = false;

@@ -10,12 +10,16 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class TranscriptJournalTests {
     static readonly FakeTimeProvider Time = new(new DateTimeOffset(2026, 9, 9, 10, 0, 0, TimeSpan.Zero));
 
+    // CompleteGrace bounds a shutdown against a hung disk. These tests assert the writer finished,
+    // and a saturated pool can hold its continuation past that bound.
+    static readonly TimeSpan DrainGrace = TimeSpan.FromSeconds(15);
+
     static AcpEventEnvelope Text(string t) => new(Kind: AcpEventKind.AssistantText, Text: t);
 
     [Test]
     public async Task Open_writes_the_header_synchronously_and_reports_created() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, DrainGrace);
 
         await Assert.That(journal.Open("/w", "m1")).IsTrue();
 
@@ -35,13 +39,13 @@ public class TranscriptJournalTests {
     [Test]
     public async Task Second_open_of_the_same_agent_appends_a_header_and_keeps_every_byte() {
         using var tmp = new TempDir();
-        var first = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var first = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, DrainGrace);
         first.Open("/w", null);
         first.Record(Text("a"));
         await Assert.That(await first.CompleteAsync()).IsTrue();
         var before = JournalFiles.ReadLines(first.Path);
 
-        var second = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var second = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, DrainGrace);
         second.Open("/w", null);
         await Assert.That(second.CreatedFile).IsFalse();
         await second.CompleteAsync();
@@ -54,7 +58,7 @@ public class TranscriptJournalTests {
     [Test]
     public async Task Record_appends_in_order_skips_ephemerals_and_drains_on_complete() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, DrainGrace);
         journal.Open(null, null);
         journal.Record(Text("a"));
         journal.Record(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "live", Ephemeral: true));
@@ -69,7 +73,7 @@ public class TranscriptJournalTests {
     [Test]
     public async Task No_handle_is_held_between_writes() {
         using var tmp = new TempDir();
-        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System);
+        var journal = TranscriptJournal.ForAgent(tmp.Path, "agent-1", NullLogger.Instance, TimeProvider.System, DrainGrace);
         journal.Open(null, null);
         journal.Record(Text("a"));
         await journal.CompleteAsync();
@@ -148,7 +152,7 @@ public class TranscriptJournalTests {
         using var tmp = new TempDir();
         var sink = new GatedSink();
         var gate = WriterGate();
-        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 2, writerStartGate: gate.Task);
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 2, completeGrace: DrainGrace, writerStartGate: gate.Task);
         journal.Open(null, null);
         journal.Record(Text("a")); journal.Record(Text("b")); // fill the queue (the writer has not read yet)
         journal.Record(Text("lost-1")); journal.Record(Text("lost-2"));
@@ -173,7 +177,7 @@ public class TranscriptJournalTests {
         using var tmp = new TempDir();
         var sink = new GatedSink();
         var gate = WriterGate();
-        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 1, writerStartGate: gate.Task);
+        var journal = new TranscriptJournal(tmp.PathTo("j.jsonl"), NullLogger.Instance, Time, sink.Append, capacity: 1, completeGrace: DrainGrace, writerStartGate: gate.Task);
         journal.Open(null, null);
         journal.Record(Text("a")); journal.Record(Text("lost"));
         gate.SetResult();
@@ -287,7 +291,7 @@ public class TranscriptJournalTests {
         await Assert.That(second.IsOpen).IsFalse();
 
         sink.Release.Release(10);
-        await WaitUntil(() => Volatile.Read(ref sink.Appends) >= 1); // the abandoned append returned and freed the path lock
+        await WaitUntil(() => locks.LiveEntries == 0); // the abandoned append returned and freed the path lock
         var third = new TranscriptJournal(first.Path, NullLogger.Instance, Time, locks: locks, lockBound: TimeSpan.FromMilliseconds(100));
         await Assert.That(third.Open(null, null)).IsTrue();
         await third.CompleteAsync();

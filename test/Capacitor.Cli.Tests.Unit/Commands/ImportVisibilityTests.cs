@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
@@ -10,6 +11,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
@@ -643,6 +645,58 @@ public class ImportVisibilityTests : IDisposable {
         await Assert.That(outcome.AnythingFailed).IsTrue();
     }
 
+    const string CodexSessionId = "019e0322-05fc-7570-be65-75719c3ea861";
+
+    // A Codex rollout the server already holds in full, named in Codex's own session index.
+    async Task<List<string>> ImportLoadedNamedCodexSessionAsync(int visibilityStatus) {
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":99}"""));
+        StubAllHookEndpoints();
+        _server.Given(Request.Create().WithPath("/hooks/harness-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
+            .RespondWith(Response.Create().WithStatusCode(visibilityStatus));
+
+        var harnesses = TestHarnesses.Under(Home);
+        var codex     = harnesses.Of<CodexHarness>().Paths;
+        var dayDir    = Directory.CreateDirectory(Path.Combine(codex.Sessions, "2026", "05", "01")).FullName;
+        File.WriteAllLines(Path.Combine(dayDir, $"rollout-2026-05-01T10-00-00-{CodexSessionId}.jsonl"), [
+            $$$"""{"timestamp":"2026-05-01T10:00:00Z","type":"session_meta","payload":{"id":"{{{CodexSessionId}}}","cwd":"/tmp/vis-proj"}}""",
+            .. Enumerable.Range(0, 5).Select(i =>
+                $$$"""{"timestamp":"2026-05-01T10:00:0{{{i}}}Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"line-{{{i}}}"}]}}"""),
+        ]);
+        File.WriteAllText(Path.Combine(codex.Home, "session_index.jsonl"),
+            $$"""{"id":"{{CodexSessionId}}","thread_name":"Named in Codex","updated_at":"2026-05-01T10:20:30Z"}""" + "\n");
+
+        await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, harnesses, new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+            filterCwd: null,
+            minLines: 1,
+            sources: [new CodexImportSource(Config.Root, codex.Sessions, router: new GitProviderRouter(), time: TimeProvider.System)],
+            scope: new ImportScope.All(),
+            skipConfirmation: true,
+            forcePrivate: true,
+            skipTitle: true
+        );
+
+        return _server.LogEntries.Where(e => e.RequestMessage.Method == "POST").Select(e => e.RequestMessage.Path).ToList();
+    }
+
+    /// <summary>Positive control for the test below: once the session is private its Codex name is posted.</summary>
+    [Test]
+    public async Task HandleImport_forcePrivate_titles_a_loaded_codex_session_it_made_private() {
+        var posts = await ImportLoadedNamedCodexSessionAsync(visibilityStatus: 200);
+
+        await Assert.That(posts).Contains("/hooks/harness-title");
+    }
+
+    [Test]
+    public async Task HandleImport_forcePrivate_does_not_title_a_loaded_codex_session_it_could_not_make_private() {
+        var posts = await ImportLoadedNamedCodexSessionAsync(visibilityStatus: 500);
+
+        await Assert.That(posts).DoesNotContain("/hooks/harness-title")
+                    .Because("the session is still public and the user was told it was skipped");
+    }
+
     // Bare, not keyed: the error capture is process-global, so a concurrent writer would land in it.
     [Test, NotInParallel]
     public async Task HandleImport_forcePrivate_reports_a_session_it_had_to_skip() {
@@ -806,7 +860,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         var body = SessionStartBody("kiro");
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("org_public");
@@ -821,7 +875,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: false, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("kiro").ContainsKey("default_visibility")).IsFalse();
     }
@@ -835,7 +889,7 @@ public class ImportVisibilityTests : IDisposable {
 
         using var client = new HttpClient();
         var ctx = new ImportContext(client, _server.Url!, ForcePrivate: true, DefaultVisibility: "org_public");
-        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
+        await new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System).ImportSessionAsync(c, ctx, CancellationToken.None);
 
         await Assert.That(SessionStartBody("kiro")["default_visibility"]?.GetValue<string>())
             .IsEqualTo("private");
@@ -1183,7 +1237,7 @@ public class ImportVisibilityTests : IDisposable {
         new(HarnessId.Gemini, () => new GeminiImportSource(GeminiHarness.FromEnvironment(Home).Paths.TmpDir, TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase KiroCase() =>
-        new(HarnessId.Kiro, () => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
+        new(HarnessId.Kiro, () => new KiroImportSource(Config.Root, KiroHarness.FromEnvironment(Home).Paths.SessionsDir, KiroHarness.FromEnvironment(Home).Crew, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
 
     RoutedSourceCase PiCase() =>
         new(HarnessId.Pi, () => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System), p => new() { ["TranscriptPath"] = p });
