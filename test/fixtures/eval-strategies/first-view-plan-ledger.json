@@ -79,6 +79,7 @@
         "plans_omitted": 0,
         "tasks_omitted": 0,
         "plans_unavailable": [],
+        "plans_unavailable_omitted": 0,
         "budget_bytes": 65536,
         "over_budget": false
       }

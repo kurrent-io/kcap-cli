@@ -132,7 +132,7 @@ public class EvidencePageRendererTests {
 
     const string Lane = "PlanLane-0000000000000000000000000000f001-s1";
 
-    const string PlanLedgerBody = """{"scope_version":"v3","plans":[{"plan_id":"0000000000000000000000000000f001","sources":["PlanLane-0000000000000000000000000000f001-s1"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"PlanLane-0000000000000000000000000000f001-s1@1"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"Write","status":"completed","note":"merged","title_ref":"PlanLane-0000000000000000000000000000f001-s1@3","status_ref":"PlanLane-0000000000000000000000000000f001-s1@2"},{"task_id":"t2","ordinal":2,"title":"Wire","status":"not attributed","note":null,"title_ref":"PlanLane-0000000000000000000000000000f001-s1@3","status_ref":null}]}],"plans_total":3,"plans_omitted":1,"tasks_omitted":4,"plans_unavailable":[{"plan_id":"0000000000000000000000000000f009","sources":["PlanLane-0000000000000000000000000000f009-s1"]}],"budget_bytes":65536,"over_budget":false}""";
+    const string PlanLedgerBody = """{"scope_version":"v3","plans":[{"plan_id":"0000000000000000000000000000f001","sources":["PlanLane-0000000000000000000000000000f001-s1"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"PlanLane-0000000000000000000000000000f001-s1@1"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"Write","status":"completed","note":"merged","title_ref":"PlanLane-0000000000000000000000000000f001-s1@3","status_ref":"PlanLane-0000000000000000000000000000f001-s1@2"},{"task_id":"t2","ordinal":2,"title":"Wire","status":"not attributed","note":null,"title_ref":"PlanLane-0000000000000000000000000000f001-s1@3","status_ref":null}]}],"plans_total":3,"plans_omitted":1,"tasks_omitted":4,"plans_unavailable":[{"plan_id":"0000000000000000000000000000f009","sources":["PlanLane-0000000000000000000000000000f009-s1"]}],"plans_unavailable_omitted":2,"budget_bytes":65536,"over_budget":false}""";
 
     [Test]
     public async Task A_plan_ledger_page_cites_each_document_task_title_and_stated_status_and_delivers_none_of_them() {
@@ -144,6 +144,7 @@ public class EvidencePageRendererTests {
         await Assert.That(root.Bool("has_next")).IsFalse();
         await Assert.That(root.Num("tasks_omitted")).IsEqualTo(4);
         await Assert.That(root.Arr("plans_unavailable")!.Value.GetArrayLength()).IsEqualTo(1);
+        await Assert.That(root.Num("plans_unavailable_omitted")).IsEqualTo(2);
         var plan = root.Arr("plans")!.Value[0];
         await Assert.That(plan.Str("plan_id")).IsEqualTo("0000000000000000000000000000f001");
         await Assert.That(plan.Arr("documents")!.Value[0].Str("cite")).IsEqualTo("o4.1");

@@ -207,7 +207,7 @@ public class EvidenceCoverageMeasureTests {
 
     static JudgeLedgerPage PlanLedger(string handle, string[] plans, int plansOmitted, int tasksOmitted) =>
         EvidencePageRenderer.Render(++_seq, handle, EvidencePageRenderer.PlanLedgerTool, """{"section":"plan_ledger"}""",
-            $$"""{"scope_version":"v1","plans":[{{string.Join(",", plans)}}],"plans_total":{{plans.Length + plansOmitted}},"plans_omitted":{{plansOmitted}},"tasks_omitted":{{tasksOmitted}},"plans_unavailable":[],"budget_bytes":65536,"over_budget":false}""");
+            $$"""{"scope_version":"v1","plans":[{{string.Join(",", plans)}}],"plans_total":{{plans.Length + plansOmitted}},"plans_omitted":{{plansOmitted}},"tasks_omitted":{{tasksOmitted}},"plans_unavailable":[],"plans_unavailable_omitted":0,"budget_bytes":65536,"over_budget":false}""");
 
     /// <summary>Every lane of a plan the plan_ledger page served is consulted, the one whose tasks the cut shortened
     /// included; a lane of a plan the cut left out still needs reading.</summary>
