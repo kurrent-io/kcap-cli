@@ -125,6 +125,21 @@ public class EvidenceRetrospectiveInputsTests : IDisposable {
     }
 
     [Test]
+    [Arguments(404, "")]
+    [Arguments(500, "")]
+    [Arguments(200, "<html>not json</html>")]
+    public async Task An_unreadable_plan_body_leaves_the_fixed_line(int status, string body) {
+        var r = $"{Lane}@4";
+        PlanEvents(4, PlanEntry(4, "PlanDocumentDeclared", $",\"plan_content\":{{\"path\":\"plan.md\"}},\"text_body\":{EvidenceServerStub.Descriptor(r, "text", 20_000)}"));
+        _stub.Route("GET", "evidence-body", status, body);
+
+        var (trace, failed) = await Inputs().BuildTraceAsync(Scope(), [Assessment("q", "assessed", 1, r)], 200_000, null, CancellationToken.None);
+
+        await Assert.That(failed).IsNull();
+        await Assert.That(trace.Contains($"{r}: {EvidenceRetrospectiveInputs.NoLongerReadable}")).IsTrue();
+    }
+
+    [Test]
     public async Task A_moved_scope_while_reading_a_plan_body_is_run_fatal() {
         var r = $"{Lane}@3";
         PlanEvents(3, PlanEntry(3, "PlanDocumentDeclared", $",\"text_body\":{EvidenceServerStub.Descriptor(r, "text", 20_000)}"));

@@ -84,13 +84,15 @@ public sealed class EvidenceRetrospectiveInputs(EvidenceReadClient reader) {
                 if (e.Str("kind") != "plan_entry") { texts.Add(e.Str("text") ?? e.Str("output") ?? e.Str("event_type") ?? ""); continue; }
                 var (plan, failed) = await PlanExcerptAsync(token, e, ct);
                 if (failed is not null) return ("", failed);
+                if (plan is null) return (NoLongerReadable, null);
                 texts.Add(plan);
             }
         return (Cut(string.Join(" ", texts)), null);
     }
 
-    // A plan entry's substance is its plan_content and its document text, either of which may be a deferred body.
-    async Task<(string Excerpt, int? Failed)> PlanExcerptAsync(string token, JsonElement entry, CancellationToken ct) {
+    // A plan entry's substance is its plan_content and its document text, either of which may be a deferred body;
+    // a deferred body that cannot be read leaves the entry unreadable rather than reduced to its event name.
+    async Task<(string? Excerpt, int? Failed)> PlanExcerptAsync(string token, JsonElement entry, CancellationToken ct) {
         var parts = new List<string> { entry.Str("event_type") ?? "" };
         if (entry.Prop("plan_content") is { IsNull: false } content) parts.Add(Cut(content.GetRawText()));
         if (entry.Str("text") is { } text) parts.Add(Cut(text));
@@ -99,7 +101,8 @@ public sealed class EvidenceRetrospectiveInputs(EvidenceReadClient reader) {
             if (ordinal is { } o) query.Add(("ordinal", o.ToString(Inv)));
             var body = await reader.GetAsync("evidence-body", query, ct);
             if (body.Status == 409) return ("", 409);
-            if (body.IsSuccess && Content(body.Body) is { Length: > 0 } deferred) parts.Add(Cut(deferred));
+            if (!body.IsSuccess || Content(body.Body) is not { } deferred) return (null, null);
+            parts.Add(Cut(deferred));
         }
         return (string.Join(" ", parts.Where(p => p.Length > 0)), null);
     }
