@@ -37,6 +37,18 @@ static class McpToolArguments {
         return trimmed.Length == 0 ? null : trimmed;
     }
 
+    /// <summary>An optional boolean: absent or JSON null is null; a present non-boolean throws.</summary>
+    internal static bool? OptionalBool(JsonObject? args, string key) {
+        var node = args?[key];
+
+        if (node is null) return null;
+
+        if (node is not JsonValue jsonValue || !jsonValue.TryGetValue<bool>(out var value))
+            throw new ArgumentException($"'{key}' must be a boolean.");
+
+        return value;
+    }
+
     /// <summary>Reads a numeric field as int. Returns false ONLY when the key is absent or JSON null;
     /// any PRESENT non-integer shape (string, object, array, fractional or out-of-range number)
     /// throws, so a malformed selector fails instead of degrading into a differently-shaped

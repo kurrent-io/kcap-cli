@@ -811,6 +811,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         var body = new JsonObject { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
 
         if (McpToolArguments.OptionalString(args, "subject") is { } subject) body["subject"] = subject;
+        if (McpToolArguments.OptionalString(args, "work_item_id") is { } workItem) body["work_item_id"] = workItem;
+        if (McpToolArguments.OptionalBool(args, "standalone") is true) body["standalone"] = true;
 
         return body;
     }
@@ -988,7 +990,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "plain text; do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
             new("object", new() {
                 ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
-                ["subject"]    = new("string", "The issue this loose end is about (PROJ-123, #123, owner/repo#123 or a GitHub issue URL). Name it when the end is a specific issue."),
+                ["subject"]    = new("string", "The issue this loose end is about (PROJ-123, #123, owner/repo#123 or a GitHub issue URL). Name it when the end is a specific issue: the end then sits under that issue's work item, never this session's."),
+                ["work_item_id"] = new("string", "The work item this loose end belongs to, when it has no issue of its own. Overrides the subject's item."),
+                ["standalone"] = new("boolean", "True when the end belongs to none of this session's work items, such as an issue still to be filed. Not with work_item_id."),
                 ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
             }, ["text"]), McpToolAnnotations.Upsert),
 
