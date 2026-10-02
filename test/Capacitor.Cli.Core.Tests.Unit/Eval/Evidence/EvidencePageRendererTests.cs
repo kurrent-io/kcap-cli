@@ -159,6 +159,8 @@ public class EvidencePageRendererTests {
         await Assert.That(page.Cites["o4.4"]).IsEqualTo($"{Lane}@3");
         await Assert.That(page.Cites.Count).IsEqualTo(4);
         await Assert.That(page.Revisions).IsEquivalentTo([(Lane, 1L, 3L)]);
+        await Assert.That(page.Tool).IsEqualTo("");
+        await Assert.That(page.LedgerSources).IsEmpty();
         await Assert.That(page.Source).IsNull();
         await Assert.That(page.Bodies).IsEmpty();
         await Assert.That(page.HasNext).IsFalse();

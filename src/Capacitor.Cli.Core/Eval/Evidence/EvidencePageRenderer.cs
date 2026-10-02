@@ -20,8 +20,9 @@ public static class EvidencePageRenderer {
         ["list_authorizations"] = "authorizations[].authorization_ref"
     };
 
-    /// <summary>A first view's plan_ledger section. It is no judge tool, so it has no row path: each plan's documents and
-    /// tasks are cited inside it, a task once for its title_ref and again for a stated status_ref.</summary>
+    /// <summary>Selects the rendering of a first view's plan_ledger section. No judge tool reads or continues a plan ledger, so
+    /// the page it renders names no tool. Each plan's documents and tasks are cited inside it, a task once for its title_ref and
+    /// again for a stated status_ref.</summary>
     public const string PlanLedgerTool = "read_plan_ledger";
 
     public static JudgeLedgerPage Render(int seq, string handle, string tool, string argsJson, string body) {
@@ -42,6 +43,7 @@ public static class EvidencePageRenderer {
         var bodies    = new List<(string Ref, string Field, int? Ordinal)>();
         var detail    = new List<(string Source, long Revision, int Offset, int Length)>();
         var cited     = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+        var ledgered  = new List<string>();
         (int Offset, int Length)? contentSpan = null;
 
         string Cite(string reference) {
@@ -111,8 +113,16 @@ public static class EvidencePageRenderer {
         }
 
         var text = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
+        if (planLedger && root.Arr("plans") is { } plans) {
+            // a plan whose tasks the cut shortened, always the last one served, was not shown whole
+            var whole = (root.Num("tasks_omitted") ?? 0) > 0 ? plans.GetArrayLength() - 1 : plans.GetArrayLength();
+            foreach (var plan in plans.EnumerateArray().Take(whole))
+                if (plan.Arr("sources") is { } lanes) ledgered.AddRange(lanes.EnumerateArray().Select(l => l.GetString()).OfType<string>());
+        }
         var runs = planLedger ? [.. cited.SelectMany(c => Runs(c.Key, c.Value))] : source is null ? [] : Runs(source, revisions);
-        return new JudgeLedgerPage(seq, handle, tool, argsJson, isBody ? null : source, text, runs, turns, bodies, detail, cites, next is not null, next);
+        return new JudgeLedgerPage(seq, handle, planLedger ? "" : tool, argsJson, isBody ? null : source, text, runs, turns, bodies, detail, cites, next is not null, next) {
+            LedgerSources = ledgered
+        };
     }
 
     static void WritePlans(Utf8JsonWriter w, JsonProperty plans, Func<string, string> delivered) {

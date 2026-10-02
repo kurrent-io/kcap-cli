@@ -93,15 +93,30 @@ public class EvidenceWireMirrorTests {
     const string Lane = "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001";
 
     [Test]
-    public async Task A_plan_lane_ref_parses_as_an_event_or_range_and_never_as_a_turn() {
+    public async Task A_plan_lane_ref_parses_as_an_event_a_range_or_a_turn_as_the_server_grammar_does() {
         await Assert.That(EvidenceRefText.TryParse($"{Lane}@3", out var e)).IsTrue();
         await Assert.That((e.SourceId, e.Form, e.A)).IsEqualTo((Lane, EvidenceRefForm.Event, 3L));
         await Assert.That(EvidenceRefText.TryParse($"{Lane}@1-4", out var r)).IsTrue();
         await Assert.That((r.Form, r.A, r.B)).IsEqualTo((EvidenceRefForm.Range, 1L, 4L));
         await Assert.That(EvidenceRefText.TryDecodeSource(Lane, out _)).IsTrue();
+        await Assert.That(EvidenceRefText.TryParse($"{Lane}#g1t2", out var t)).IsTrue();
+        await Assert.That((t.Form, t.A, t.B)).IsEqualTo((EvidenceRefForm.Turn, 1L, 2L));
 
-        foreach (var bad in new[] { $"{Lane}#g1t2", "PlanLane-0000000000000000000000000000F001-s@1", "PlanLane-f001-s@1", "PlanLane-0000000000000000000000000000f001-@1", "PlanLane-0000000000000000000000000000f001@1" })
+        foreach (var bad in new[] { "PlanLane-0000000000000000000000000000F001-s@1", "PlanLane-f001-s@1", "PlanLane-0000000000000000000000000000f001-@1", "PlanLane-0000000000000000000000000000f001@1" })
             await Assert.That(EvidenceRefText.TryParse(bad, out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_scope_that_did_not_opt_into_plans_reads_with_no_plan_fields() {
+        const string manifest = """{"scope_version":"v","root_session_id":"r","complete":true,"incomplete_reasons":[],"sources":[{"source_id":"AgentSession-r","kind":"root","session_id":"r","chain_index":0,"depth":0,"revision_cutoff":9,"first_revision":0,"turn_count":3,"availability":"available","discovered_by":"root"}],"next_cursor":null,"token":"t"}""";
+        var page = JsonSerializer.Deserialize(manifest, CapacitorJsonContext.Default.EvidenceScopeManifestDto)!;
+        await Assert.That(page.Sources.Single().PlanId).IsNull();
+
+        const string summary = """{"scope_version":"v","index_state":"ready","totals":{"calls":0},"by_class":[],"authorizations":{"requests":0},"by_tool":[],"tools_truncated":false,"by_actor":[],"actors_truncated":false,"by_source":[],"sources_truncated":false,"unknown_tools":[],"unknown_tools_truncated":false,"repeated_candidates":[],"groups_truncated":false}""";
+        var rendered = EvidencePageRenderer.Render(1, "p1", "summarize_calls", "{}", summary);
+        using var doc = JsonDocument.Parse(rendered.Text);
+        await Assert.That(doc.RootElement.TryGetProperty("plan_sources", out _)).IsFalse();
+        await Assert.That(rendered.Cites).IsEmpty();
     }
 
     [Test]

@@ -67,7 +67,8 @@ public class EvidenceFirstViewReaderTests : IDisposable {
         await Assert.That(view!.StrategyVersion).IsEqualTo("completion-v2");
         var page = view.Pages.Single();
         await Assert.That(page.Handle).IsEqualTo("o2");
-        await Assert.That(page.Tool).IsEqualTo("read_plan_ledger");
+        await Assert.That(page.Tool).IsEqualTo("");
+        await Assert.That(page.LedgerSources).IsEquivalentTo([lane1, lane2]);
         await Assert.That(page.HasNext).IsFalse();
         await Assert.That(page.Cites.OrderBy(c => c.Key, StringComparer.Ordinal).Select(c => (c.Key, c.Value))).IsEquivalentTo([
             ("o2.1", $"{lane1}@1"), ("o2.2", $"{lane1}@3"), ("o2.3", $"{lane1}@2"), ("o2.4", $"{lane1}@3"), ("o2.5", $"{lane2}@0"), ("o2.6", $"{lane2}@0")

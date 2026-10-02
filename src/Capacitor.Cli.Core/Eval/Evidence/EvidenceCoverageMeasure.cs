@@ -25,7 +25,9 @@ public static class EvidenceCoverageMeasure {
 
         // An empty record claims every event was delivered, and events nobody outlined or paged leave none of the counts above.
         if (!omissions.Any(o => Undelivered.Contains(o.Kind))) {
-            var partlyRead = available.Count(s => ledger.DeliveredEvents.Count(e => e.Source == s.SourceId) < s.RevisionCutoff - s.FirstRevision + 1);
+            // a ledgered lane's attachments and superseded entries are folded away, never rendered as events
+            var partlyRead = available.Count(s => !ledger.LedgerSources.Contains(s.SourceId)
+                && ledger.DeliveredEvents.Count(e => e.Source == s.SourceId) < s.RevisionCutoff - s.FirstRevision + 1);
             if (partlyRead > 0) omissions.Add(new EvalEvidenceOmission { Kind = EvalOmissionKinds.PagesNotFetched, Count = partlyRead, Detail = "unread_ranges" });
         }
 

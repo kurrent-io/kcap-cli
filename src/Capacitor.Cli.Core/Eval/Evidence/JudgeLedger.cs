@@ -12,15 +12,17 @@ public sealed class JudgeLedger {
         var turns    = new HashSet<(string, int)>();
         var sources  = new HashSet<string>(StringComparer.Ordinal);
         var followed = new HashSet<string>(StringComparer.Ordinal);
+        var ledgered = new HashSet<string>(StringComparer.Ordinal);
         foreach (var p in pages) {
             foreach (var (h, r) in p.Cites) _cites[h] = r;
             foreach (var (s, from, to) in p.Revisions) for (var r = from; r <= to; r++) events.Add((s, r));
             foreach (var t in p.Turns) turns.Add(t);
+            foreach (var lane in p.LedgerSources) { sources.Add(lane); ledgered.Add(lane); }
             if (p.Source is { } source && p.Tool is "list_turns" or "read_events") sources.Add(source);
             using var args = JsonDocument.Parse(p.ArgsJson);
             if (args.RootElement.Bool("next") == true && args.RootElement.Str("page") is { } continued) followed.Add(continued);
         }
-        DeliveredEvents = events; DeliveredTurns = turns; SourcesWithPage = sources; FollowedHandles = followed;
+        DeliveredEvents = events; DeliveredTurns = turns; SourcesWithPage = sources; FollowedHandles = followed; LedgerSources = ledgered;
         SourcesRefused  = footer is null ? System.Collections.Frozen.FrozenSet<string>.Empty : footer.SourcesRefused.ToHashSet(StringComparer.Ordinal);
     }
 
@@ -35,6 +37,9 @@ public sealed class JudgeLedger {
     public IReadOnlySet<string>                       SourcesWithPage { get; }
     public IReadOnlySet<string>                       FollowedHandles { get; }
     public IReadOnlySet<string>                       SourcesRefused  { get; }
+
+    /// <summary>Plan lanes a plan_ledger page showed whole.</summary>
+    public IReadOnlySet<string>                       LedgerSources   { get; }
 
     public int    ToolCalls      => Footer?.ToolCalls ?? Calls.Count(c => c.Outcome != JudgeLedgerOutcomes.NotExecuted);
     public long   DeliveredBytes => Footer?.DeliveredBytes ?? Pages.Sum(p => (long)p.Bytes);

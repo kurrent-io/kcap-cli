@@ -15,10 +15,14 @@ public sealed record JudgeLedgerPage(
         bool HasNext, string? Next) {
     public int Bytes { get; } = Encoding.UTF8.GetByteCount(Text);
 
+    /// <summary>Plan lanes a plan_ledger page showed whole: consulted through their fold, never read event by event.</summary>
+    public IReadOnlyList<string> LedgerSources { get; init; } = [];
+
     public bool Equals(JudgeLedgerPage? other) =>
         other is not null && Seq == other.Seq && Handle == other.Handle && Tool == other.Tool && ArgsJson == other.ArgsJson && Source == other.Source
      && Text == other.Text && HasNext == other.HasNext && Next == other.Next
      && Revisions.SequenceEqual(other.Revisions) && Turns.SequenceEqual(other.Turns) && Bodies.SequenceEqual(other.Bodies) && Detail.SequenceEqual(other.Detail)
+     && LedgerSources.SequenceEqual(other.LedgerSources)
      && Cites.Count == other.Cites.Count && Cites.All(kv => other.Cites.TryGetValue(kv.Key, out var v) && v == kv.Value);
 
     public override int GetHashCode() => HashCode.Combine(Seq, Handle, Text);
