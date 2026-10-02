@@ -664,6 +664,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         foreach (var gone in _queuedMessages.Where(q => q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)).ToList())
             _queuedMessages.Remove(gone);
+        foreach (var own in _queuedMessages.Where(q => !q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)))
+            own.MarkUnlisted();
         RefreshQueue();
     }
 
@@ -891,6 +893,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         _openGroup = null;
                         _openShell = null;
                         fresh.Add(new AssistantTextItem(e.Text ?? ""));
+                        break;
+                    case AcpEventKind.AssistantThinking when !string.IsNullOrWhiteSpace(e.Text):
+                        _openGroup = null;
+                        _openShell = null;
+                        fresh.Add(new AssistantThinkingItem(e.Text));
                         break;
                     case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && _openShell is { HasOutput: false } shell:
                         _openGroup = null;

@@ -1,5 +1,6 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
+using System.Text;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
@@ -277,6 +278,55 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _surface, value);
     }
 
+    public static readonly TimeSpan HiddenFeedInterval = TimeSpan.FromSeconds(1);
+
+    bool _surfaceShown = true;
+    /// Whether the surface is on screen. The control re-lays out every row it draws on each feed,
+    /// so a hidden surface takes its output once a second as one piece, and the backlog first the
+    /// moment it is shown again. UI thread only, like the feeds it gates.
+    public bool SurfaceShown {
+        get => _surfaceShown;
+        set {
+            if (_surfaceShown == value) return;
+            _surfaceShown = value;
+            if (value) FeedHeld();
+        }
+    }
+
+    readonly StringBuilder _held = new();
+    ITerminalSurface? _heldSurface;
+    int _heldGeneration;
+    ITimer? _heldTimer;
+    bool _heldArmed;
+
+    void Deliver(int generation, ITerminalSurface surface, string text) {
+        if (_surfaceShown) {
+            surface.Feed(text);
+            return;
+        }
+        if (!ReferenceEquals(_heldSurface, surface)) {
+            _held.Clear();
+            _heldSurface = surface;
+            _heldGeneration = generation;
+        }
+        _held.Append(text);
+        if (_heldArmed) return;
+        _heldArmed = true;
+        // Off-thread in production, synchronous under a fake clock: the scheduler keeps the feed
+        // on the UI thread either way.
+        _heldTimer ??= _time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(FeedHeld), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        _heldTimer.Change(HiddenFeedInterval, Timeout.InfiniteTimeSpan);
+    }
+
+    void FeedHeld() {
+        _heldArmed = false;
+        if (_held.Length == 0) return;
+        var text = _held.ToString();
+        _held.Clear();
+        if (_heldSurface is not { } surface || Retired(_heldGeneration)) return;
+        surface.Feed(text);
+    }
+
     public ReactiveCommand<Unit, Unit> ReattachCommand { get; }
     public ReactiveCommand<Unit, Unit> DetachCommand { get; }
     public ReactiveCommand<Unit, Unit> RetryResolveCommand { get; }
@@ -549,7 +599,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         var text = decoder.Decode(snapshot);
         await Dispatcher.UIThread.InvokeAsync(() => {
             if (Retired(generation)) return;
-            surface.Feed(text);
+            Deliver(generation, surface, text);
             Publish(TerminalSessionState.Attached(reason), openingToken);
         }, DispatcherPriority.Default, ct);
     }
@@ -558,7 +608,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         var text = decoder.Decode(bytes);
         await Dispatcher.UIThread.InvokeAsync(() => {
             if (Retired(generation)) return;
-            surface.Feed(text);
+            Deliver(generation, surface, text);
         }, DispatcherPriority.Default, ct);
     }
 
@@ -639,6 +689,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         _agentsSub = null;
         _resolveTimer?.Dispose();
         _resolveTimer = null;
+        _heldTimer?.Dispose();
+        _heldTimer = null;
+        _held.Clear();
 
         Interlocked.Increment(ref _attemptGeneration);
 

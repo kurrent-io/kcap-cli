@@ -254,7 +254,8 @@
                     <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5" />
                     <!-- 5px in a 12px disc starts at 3.5px; rounding that snaps the dot off centre. -->
                     <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" />
+                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
+                            views:PulseClock.IsActive="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Running}}" />
                 </Panel>
                 <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Done}}">
                     <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" />
@@ -296,7 +297,8 @@
                 <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
                     <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}" />
+                            HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}"
+                            views:PulseClock.IsActive="{Binding IsActive}" />
                 </Panel>
                 <StackPanel Grid.Column="1" Spacing="2">
                     <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
