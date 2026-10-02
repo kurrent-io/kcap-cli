@@ -32,7 +32,7 @@ public static class KcapMcpServers {
         // A start or round call holds the tool call open while the reviewer works, bounded by the
         // flows server at under 5 minutes; the registration's timeout sits well above that bound.
         new("kcap-flows",    ["mcp", "flows"],    NeedsProjectCwd: true,
-            "Structured AI agent flows — launches a SEPARATE hosted participant agent; requires login + a running daemon.",
+            "Structured AI agent flows, and start_agent to hand a task to a SEPARATE hosted agent that runs on its own; requires login + a running daemon.",
             ToolTimeout: TimeSpan.FromMinutes(10)),
         new("kcap-memory",   ["mcp", "memory"],   NeedsProjectCwd: true,
             "Team memory — search, read, and save durable learnings."),

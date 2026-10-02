@@ -13,7 +13,8 @@ description: >-
   explicitly. Do NOT use this skill (and do NOT call the flows MCP tools) for
   an ordinary request such as "review my PR", "do X for me", or "check this
   over" where the user just wants you to do the work yourself — perform that
-  work directly instead.
+  work directly instead. To start a hosted agent that works on its own, use
+  `start-agents`.
 ---
 
 # Agent Flows
