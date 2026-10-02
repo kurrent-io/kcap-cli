@@ -93,6 +93,12 @@ Name the issue it is about with an optional `subject` (`PROJ-123`, `#123`, `owne
 or a GitHub issue URL). When the server fetches it and finds it already closed, the result
 says so and tells you to check the remote before treating the end as unfinished.
 
+The feed files an end under a work item. An end that names an issue goes under that
+issue's item, or stands alone when the issue has none. Otherwise it goes under this
+session's primary item. When that is wrong, say where it belongs: `work_item_id` for a
+known item with no issue of its own, or `standalone: true` when it belongs to none of
+this session's work, such as an issue still to be filed. Set at most one of the two.
+
 When you finish a listed or declared loose end, close it with `close_loose_end`, naming it by
 the `loose_end_id` that `get_next_work`'s evidence or `list_loose_ends` shows. A later sighting
 of the same work reopens it on its own; `reopen_loose_end` undoes a mistaken close.
@@ -132,7 +138,7 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `declare_work_item` | exactly one of `issue_key` \| `pr_number` \| `work_item_id` \| `new_title` | Attach the session to a work item (or create one). `session_id` defaults to the current session. |
 | `get_session_work_items` | — | List what the current session is attached to. |
 | `get_next_work` | — | What the user should work on next, ranked, with because-clauses and evidence. `repo_hash` defaults to the current repository; `limit` defaults to 5 (max 20). |
-| `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `subject` optionally names the issue it is about. `session_id` defaults to the current session. |
+| `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `subject` optionally names the issue it is about; `work_item_id` or `standalone` says which item it belongs under. `session_id` defaults to the current session. |
 | `list_loose_ends` | — | List loose ends with their `loose_end_id`: `status` open (default) or closed, `repo_hash` defaults to the current repository, `limit` 20 (max 50), `cursor` from `next_cursor`. |
 | `close_loose_end` | `loose_end_id` | Mark a finished loose end done. `session_id` defaults to the current session. |
 | `reopen_loose_end` | `loose_end_id` | Undo a close. |

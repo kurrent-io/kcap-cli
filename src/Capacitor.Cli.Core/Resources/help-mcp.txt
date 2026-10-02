@@ -144,7 +144,8 @@ mcp workitems:
                                 (text) in the user's next-work ledger, with an
                                 optional subject issue key; the server refuses
                                 none-class text and flags a subject already
-                                closed in the tracker.
+                                closed in the tracker. work_item_id or
+                                standalone says which item it belongs under.
       declare_work_breakdown   Declare that a work item is broken into parts
                                 (parent_id + part_ids); idempotent, one parent
                                 per part, every item visible to the caller.

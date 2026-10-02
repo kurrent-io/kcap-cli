@@ -175,6 +175,29 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
+    public async Task Loose_end_body_carries_an_optional_target() {
+        var item  = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","work_item_id":"wi-1"}"""));
+        var alone = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","standalone":true}"""));
+
+        await Assert.That(item["work_item_id"]!.GetValue<string>()).IsEqualTo("wi-1");
+        await Assert.That(alone["standalone"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task Loose_end_body_omits_a_false_standalone() {
+        var body = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","standalone":false}"""));
+
+        await Assert.That(body.ContainsKey("standalone")).IsFalse();
+    }
+
+    [Test]
+    public async Task Loose_end_body_rejects_a_non_boolean_standalone() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","standalone":"yes"}""")))
+            .Throws<ArgumentException>()
+            .WithMessageContaining("'standalone' must be a boolean");
+    }
+
+    [Test]
     public async Task A_settled_subject_adds_a_guidance_field_and_stays_valid_json() {
         var text = McpWorkItemsServer.FormatDeclareLooseEndResult(
             """{"declaration_id":"d","created":true,"subject":"github:o/r#1","subject_state":"settled"}""");
@@ -312,7 +335,7 @@ public class McpWorkItemsServerTests {
         var tool = McpWorkItemsServer.BuildToolsList().Single(t => t.Name == "declare_loose_end");
 
         await Assert.That(tool.InputSchema.Required).IsEquivalentTo(new[] { "text" });
-        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "subject", "session_id" });
+        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "subject", "work_item_id", "standalone", "session_id" });
     }
 
     [Test]
