@@ -84,6 +84,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(IsPullRequestActive));
             this.RaisePropertyChanged(nameof(ShowsTerminalBanners));
             PullRequests?.SetReaderVisible(value == WorkspaceTab.PullRequest);
+            Terminal.SurfaceShown = IsTerminalActive;
         }
     }
     public bool IsChatActive => ActiveTab == WorkspaceTab.Chat;
@@ -117,7 +118,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
             IPlanSource? plans = null) {
         AgentId = agentId;
-        Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time);
+        Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()
