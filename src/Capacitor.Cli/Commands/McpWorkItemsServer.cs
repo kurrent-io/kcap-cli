@@ -267,6 +267,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
+            if (toolName == "declare_loose_end") return BuildToolResult(id, FormatDeclareLooseEndResult(body));
+
             return BuildToolResult(id, body);
         } catch (OperationCanceledException) when (IsWorkItemEvalTool(toolName)) {
             return BuildToolResult(id, WorkItemEvalToolResults.DeadlineMessage, isError: true);
@@ -805,8 +807,36 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         new() { ["session_id"] = McpSessionId.Resolve(args) };
 
     // Text bounds and the none-class rule stay the server's, so its 400 names the real reason.
-    internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) =>
-        new() { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
+    internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) {
+        var body = new JsonObject { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
+
+        if (McpToolArguments.OptionalString(args, "subject") is { } subject) body["subject"] = subject;
+
+        return body;
+    }
+
+    /// <summary>The declare response is always valid JSON. When the server reports the subject
+    /// already settled in the tracker, a <c>guidance</c> string is added alongside
+    /// <c>declaration_id</c> so the agent checks the remote instead of treating the item as live; any
+    /// other <c>subject_state</c>, or a body that does not parse as a JSON object, passes through
+    /// unchanged.</summary>
+    internal static string FormatDeclareLooseEndResult(string body) {
+        JsonNode? node;
+        try {
+            node = JsonNode.Parse(body);
+        } catch (JsonException) {
+            return body;
+        }
+
+        if (node is not JsonObject obj) return body;
+        if (obj["subject_state"] is not JsonValue stateValue || !stateValue.TryGetValue<string>(out var state) || state != "settled")
+            return body;
+
+        obj["guidance"] = "The subject issue is already closed in the tracker. Check the remote (fetch origin) "
+            + "before treating this as unfinished; if it is done, close the loose end with close_loose_end.";
+
+        return obj.ToJsonString();
+    }
 
     /// <summary>The session is optional context for the server, so a close outside any harness session
     /// still goes through.</summary>
@@ -958,6 +988,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "plain text; do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
             new("object", new() {
                 ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
+                ["subject"]    = new("string", "The issue this loose end is about (PROJ-123, #123, owner/repo#123 or a GitHub issue URL). Name it when the end is a specific issue."),
                 ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
             }, ["text"]), McpToolAnnotations.Upsert),
 

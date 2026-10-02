@@ -89,6 +89,10 @@ end twice is a no-op (`created: false`). It refuses text shorter than 12 or long
 500 characters and "none"-style phrases — do not declare that there is nothing left.
 Loose ends are the user's; they are never converted into work items by this tool.
 
+Name the issue it is about with an optional `subject` (`PROJ-123`, `#123`, `owner/repo#123`,
+or a GitHub issue URL). When the server fetches it and finds it already closed, the result
+says so and tells you to check the remote before treating the end as unfinished.
+
 When you finish a listed or declared loose end, close it with `close_loose_end`, naming it by
 the `loose_end_id` that `get_next_work`'s evidence or `list_loose_ends` shows. A later sighting
 of the same work reopens it on its own; `reopen_loose_end` undoes a mistaken close.
@@ -128,7 +132,7 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `declare_work_item` | exactly one of `issue_key` \| `pr_number` \| `work_item_id` \| `new_title` | Attach the session to a work item (or create one). `session_id` defaults to the current session. |
 | `get_session_work_items` | — | List what the current session is attached to. |
 | `get_next_work` | — | What the user should work on next, ranked, with because-clauses and evidence. `repo_hash` defaults to the current repository; `limit` defaults to 5 (max 20). |
-| `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `session_id` defaults to the current session. |
+| `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `subject` optionally names the issue it is about. `session_id` defaults to the current session. |
 | `list_loose_ends` | — | List loose ends with their `loose_end_id`: `status` open (default) or closed, `repo_hash` defaults to the current repository, `limit` 20 (max 50), `cursor` from `next_cursor`. |
 | `close_loose_end` | `loose_end_id` | Mark a finished loose end done. `session_id` defaults to the current session. |
 | `reopen_loose_end` | `loose_end_id` | Undo a close. |
