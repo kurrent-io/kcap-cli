@@ -195,6 +195,44 @@ public class TokenServerBindingTests {
         await Assert.That(adopted?.AccessToken).IsEqualTo("peer-token");
     }
 
+    /// <summary>A peer wrote a different token that has itself expired since. Adopting it would resend
+    /// a credential the server is bound to refuse; it is the stored credential, so it is the one
+    /// refreshed — presenting the rejected one would spend nothing the store still holds.</summary>
+    [Test]
+    public async Task Force_refresh_refreshes_a_differing_stored_token_that_has_expired() {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default",
+            Tokens(serverUrl: Server, username: "peer", expiresIn: TimeSpan.FromMinutes(-3)) with { AccessToken = "peer-expired" });
+        var endpoint = new RefreshEndpointStub("fresh");
+
+        var result = await AuthFixtures.NewTokenStore(Config.Root, endpoint)
+            .ForceRefreshAsync(ProfileConfig.DefaultName, "stale-rejected-token", Server);
+
+        await Assert.That(result?.AccessToken).IsEqualTo("fresh");
+        await Assert.That(endpoint.Presented).IsEquivalentTo(["peer-expired"]);
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("default"))!.AccessToken).IsEqualTo("fresh");
+    }
+
+    /// <summary>When the lock cannot be taken, a differing token that has expired is not a peer's
+    /// fresh result, and neither the rotation nor the raw-read fallback may hand it back as one.</summary>
+    [Test]
+    public async Task A_contended_recovery_does_not_return_a_differing_expired_token() {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default",
+            Tokens(serverUrl: Server, username: "peer", expiresIn: TimeSpan.FromMinutes(-3)) with { AccessToken = "peer-expired" });
+        var endpoint = new RefreshEndpointStub("fresh");
+        var store    = AuthFixtures.NewTokenStore(Config.Root, endpoint, time: new LeapingClock(TimeSpan.FromHours(1)));
+
+        StoredTokens? forced, recovered;
+
+        using (new FileStream(Config.PathTo("tokens", "default.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            forced    = await store.ForceRefreshAsync(ProfileConfig.DefaultName, "stale-rejected-token", Server);
+            recovered = await store.RecoverForServerAsync(ProfileConfig.DefaultName, Server, "stale-rejected-token");
+        }
+
+        await Assert.That(forced).IsNull();
+        await Assert.That(recovered).IsNull();
+        await Assert.That(endpoint.Presented).IsEmpty();
+    }
+
     [Test]
     public async Task Accessor_rejects_a_token_swapped_to_another_server_after_the_first_read() {
         // Models a concurrent login/repoint landing between the accessor's snapshot read and its
@@ -272,6 +310,14 @@ public class TokenServerBindingTests {
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    // Each read lands past the last, so a lock wait reaches its deadline on its second poll.
+    sealed class LeapingClock(TimeSpan leap) : TimeProvider {
+        readonly DateTimeOffset _start = DateTimeOffset.UtcNow;
+        long                    _reads;
+
+        public override DateTimeOffset GetUtcNow() => _start + leap * Interlocked.Increment(ref _reads);
+    }
 
     static StoredTokens Tokens(string? serverUrl, string username = "alice", TimeSpan? expiresIn = null) => new() {
         AccessToken    = "access-token",

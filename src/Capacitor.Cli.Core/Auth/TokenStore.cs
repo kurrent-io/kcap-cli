@@ -431,10 +431,10 @@ public sealed class TokenStore(
     /// refresh-aware accessor, which would see the same expired token and refresh a second time,
     /// re-spending a WorkOS refresh token that is single-use.
     ///
-    /// The raw result is returned even when it equals the rejected token. Resending it is usually
-    /// futile, but it is the recovery that shipped (a server that rejected transiently — a rolling
-    /// restart, a node with stale key material — accepts the very next attempt), and the callers
-    /// retry at most once either way.
+    /// The raw result is returned even when it equals the rejected token: a server that rejected
+    /// transiently — a rolling restart, a node with stale key material — accepts the very next
+    /// attempt, and the callers retry at most once either way. A DIFFERENT token that has expired
+    /// is withheld, since rotation already declined to adopt it and the server can only refuse it.
     /// </summary>
     public async Task<StoredTokens?> RecoverForServerAsync(
             string profile, string targetBaseUrl, string rejectedAccessToken, CancellationToken ct = default) {
@@ -444,9 +444,11 @@ public sealed class TokenStore(
 
         var stored = await LoadWithLegacyFallbackAsync(profile, ct);
 
-        if (stored is null) return null;
+        if (stored is null || !BoundToTarget(stored, targetBaseUrl)) return null;
 
-        return BoundToTarget(stored, targetBaseUrl) ? stored : null;
+        var differs = !string.Equals(stored.AccessToken, rejectedAccessToken, StringComparison.Ordinal);
+
+        return differs && stored.IsExpiredAt(time.GetUtcNow()) ? null : stored;
     }
 
     /// <summary>
@@ -492,10 +494,10 @@ public sealed class TokenStore(
     /// The existing profile-scoped lock still serializes rotating credentials across processes.
     ///
     /// <paramref name="rejectedAccessToken"/> is the token the failing request actually sent.
-    /// Refreshing is conditional on the persisted token still BEING that one: if a peer process
-    /// rotated in between, its fresh token is adopted as-is. Refreshing unconditionally would
-    /// rotate a credential that was never rejected — and for WorkOS, whose refresh token is
-    /// single-use, that is a real cost, not just extra traffic.
+    /// Refreshing is conditional on the persisted token still BEING that one, or having expired:
+    /// if a peer process rotated in between, its token is adopted as-is while it is still valid.
+    /// Refreshing unconditionally would rotate a credential that was never rejected — and for
+    /// WorkOS, whose refresh token is single-use, that is a real cost, not just extra traffic.
     /// </summary>
     /// <param name="expectedServerUrl">
     /// The server the caller is about to retry against. The lock may hand back a token a PEER
@@ -527,7 +529,8 @@ public sealed class TokenStore(
             profile,
             tokens,
             refresh,
-            needsRefresh: t => string.Equals(t.AccessToken, rejectedAccessToken, StringComparison.Ordinal),
+            needsRefresh: t => string.Equals(t.AccessToken, rejectedAccessToken, StringComparison.Ordinal)
+                               || t.IsExpiredAt(time.GetUtcNow()),
             cancellationToken: ct);
 
         if (refreshed is null || expectedServerUrl is null) return refreshed;
