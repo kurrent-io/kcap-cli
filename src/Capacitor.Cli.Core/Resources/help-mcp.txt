@@ -141,8 +141,10 @@ mcp workitems:
                                 defaults to this checkout; limit default 5,
                                 max 20).
       declare_loose_end        Record one concrete piece of unfinished work
-                                (text) in the user's next-work ledger; the
-                                server refuses none-class text.
+                                (text) in the user's next-work ledger, with an
+                                optional subject issue key; the server refuses
+                                none-class text and flags a subject already
+                                closed in the tracker.
       declare_work_breakdown   Declare that a work item is broken into parts
                                 (parent_id + part_ids); idempotent, one parent
                                 per part, every item visible to the caller.
