@@ -175,6 +175,28 @@ public class McpFlowsServerStartAgentTests {
         await Assert.That(text).EndsWith(StartAgentTool.OutcomeUnknown);
     }
 
+    [Test]
+    public async Task The_options_list_the_daemons_on_this_machine_and_start_nothing() {
+        var machine = new MachineId(Config.Root).Get();
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/daemons").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""
+                [{"name":"mac-studio","connected":true,"machine_id":"{{machine}}","active_agents":0,"max_agents":4,"supported_vendors":["claude","codex"]},
+                 {"name":"laptop","connected":true,"machine_id":"elsewhere","active_agents":0,"max_agents":4,"supported_vendors":["gemini"]}]
+                """));
+        using var client = new HttpClient();
+
+        var (text, isError) = Result(await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, new JsonObject { ["params"] = new JsonObject { ["name"] = "list_start_agent_options" } },
+            client, server.Url!, cwd: "/elsewhere", repoRoot: null, repoInfo: null, driverVendor: "codex"));
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).StartsWith("harness running this session: codex\n");
+        await Assert.That(text).Contains("- mac-studio: 0 of 4 agent slots in use; harnesses: claude, codex");
+        await Assert.That(text).DoesNotContain("laptop");
+        await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Method).ToArray()).IsEquivalentTo(new[] { "GET" });
+    }
+
     sealed class HoldsUntilCancelled(VirtualFlowRetryClock clock) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             clock.Advance(TimeSpan.FromHours(1));

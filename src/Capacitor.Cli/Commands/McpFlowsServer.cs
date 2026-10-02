@@ -470,6 +470,22 @@ class McpFlowsServer(
                     : BuildToolResult(id, "Error: unreadable flow definition list from GET /api/flows/definitions.", isError: true);
             }
 
+            if (toolName is StartAgentOptionsTool.Name) {
+                var lookup = await GetBoundedAsync(client, apiRoot + StartAgentOptionsTool.Route, clock);
+                if (lookup.Response is null)
+                    return BuildToolResult(id, $"Error: listing daemons (GET {StartAgentOptionsTool.Route}) {lookup.How}. Nothing was started; retry the call.", isError: true);
+
+                using var daemonsResp = lookup.Response;
+
+                if (daemonsResp.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                var (text, isError) = StartAgentOptionsTool.Render(
+                    (int)daemonsResp.StatusCode, await daemonsResp.Content.ReadAsStringAsync(), new MachineId(config).ReadPersisted(), driverVendor);
+
+                return BuildToolResult(id, text, isError);
+            }
+
             if (toolName is StartAgentTool.Name) {
                 // Read, never minted: an id written by this call matches no daemon, since a daemon
                 // reports the id it read from the same file.
@@ -2563,6 +2579,7 @@ class McpFlowsServer(
             new("object", new(), []),
             McpToolAnnotations.Read
         ),
+        StartAgentOptionsTool.Describe(),
         StartAgentTool.Describe()
     ];
 }

@@ -53,6 +53,14 @@ public class StartAgentToolSchemaTests {
     }
 
     [Test]
+    public async Task The_description_sends_the_agent_to_the_options_first() {
+        var description = Tool().Description;
+
+        await Assert.That(description).Contains("Call list_start_agent_options first");
+        await Assert.That(description).Contains("ask which one before calling");
+    }
+
+    [Test]
     public async Task The_request_is_snake_case_and_leaves_absent_options_off_the_wire() {
         var json = JsonSerializer.Serialize(
             new StartAgentDto("s1", "/r/src", "/r", "Fix the retry.", "none", "claude"),
