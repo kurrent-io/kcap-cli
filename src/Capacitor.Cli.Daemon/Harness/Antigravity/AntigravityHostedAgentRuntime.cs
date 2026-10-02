@@ -999,14 +999,14 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _terminalExitCode = exitCode;
         }
 
-        _terminalTcs.TrySetResult();
-
         // Terminal is absorbing and no turn can run past it, so the reaper must never see a held turn
         // from here on. The turn worker's own finally clears this too — but it does so only once the
         // in-flight turn actually unwinds, which is AFTER TerminateAsync returns to its caller (and
-        // never at all, if a turn's process ignores cancellation). Clearing here is what makes "the
-        // runtime is stopped" and "the reviewer holds no turn" the same instant.
+        // never at all, if a turn's process ignores cancellation). Cleared BEFORE _terminalTcs
+        // completes, so no exit waiter can resume into a stopped runtime that still holds a turn.
         ActivityClock?.SetTurnInFlight(false);
+
+        _terminalTcs.TrySetResult();
 
         // Rule (e): unblock a factory parked in WaitForConversationIdAsync when a conversation id is
         // never going to arrive (e.g. turn 1's spawn itself failed) — never hang that caller forever.

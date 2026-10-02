@@ -92,11 +92,11 @@ public class AntigravityActivityClockTests {
         rt.ActivityClock = clock;
 
         await rt.SendUserInputAsync("hello").WaitAsync(HangGuard);
-        await rt.WaitForExitAsync(HangGuard);
 
-        // Proves Terminal was genuinely entered — WaitForExitAsync returns silently on timeout, so
-        // without this the clock assertion below could be read off a turn that never finished.
-        await Assert.That(rt.HasExited).IsTrue();
+        // Without a timeout argument WaitForExitAsync completes only on Terminal, and WaitAsync throws
+        // if that never happens. HasExited cannot prove it: while the turn is still Executing it
+        // reports this fake's own exit.
+        await rt.WaitForExitAsync().WaitAsync(HangGuard);
 
         await Assert.That(clock.TurnInFlight).IsFalse();
 
