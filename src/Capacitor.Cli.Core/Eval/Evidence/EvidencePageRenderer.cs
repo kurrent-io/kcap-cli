@@ -52,7 +52,9 @@ public static class EvidencePageRenderer {
             return cite;
         }
 
-        string Delivered(string reference) {
+        // a ledger row shows part of an entry (one task of a snapshot, a document without its text), so its ref may be
+        // cited but the entry is not delivered until an events page serves it
+        string Citable(string reference) {
             if (EvidenceRefText.TryParse(reference, out var r) && r.Form == EvidenceRefForm.Event) {
                 if (!cited.TryGetValue(r.SourceId, out var list)) cited[r.SourceId] = list = [];
                 list.Add(r.A);
@@ -71,7 +73,7 @@ public static class EvidencePageRenderer {
                 if (property.NameEquals("next_cursor")) continue;
 
                 if (planLedger && property.NameEquals("plans") && property.Value.IsArray) {
-                    WritePlans(w, property, Delivered);
+                    WritePlans(w, property, Citable);
                     continue;
                 }
 
@@ -117,20 +119,21 @@ public static class EvidencePageRenderer {
             foreach (var plan in plans.EnumerateArray())
                 if (plan.Arr("sources") is { } lanes) ledgered.AddRange(lanes.EnumerateArray().Select(l => l.GetString()).OfType<string>());
         }
-        var runs = planLedger ? [.. cited.SelectMany(c => Runs(c.Key, c.Value))] : source is null ? [] : Runs(source, revisions);
+        var runs = planLedger || source is null ? [] : Runs(source, revisions);
         return new JudgeLedgerPage(seq, handle, planLedger ? "" : tool, argsJson, isBody ? null : source, text, runs, turns, bodies, detail, cites, next is not null, next) {
-            LedgerSources = ledgered
+            LedgerSources = ledgered,
+            Citable       = [.. cited.SelectMany(c => Runs(c.Key, c.Value))]
         };
     }
 
-    static void WritePlans(Utf8JsonWriter w, JsonProperty plans, Func<string, string> delivered) {
+    static void WritePlans(Utf8JsonWriter w, JsonProperty plans, Func<string, string> citable) {
         w.WriteStartArray(plans.Name);
         foreach (var plan in plans.Value.EnumerateArray()) {
             if (!plan.IsObject) { plan.WriteTo(w); continue; }
             w.WriteStartObject();
             foreach (var field in plan.EnumerateObject()) {
-                if (field.NameEquals("documents") && field.Value.IsArray) WriteCitedRows(w, field, "ref", delivered);
-                else if (field.NameEquals("tasks") && field.Value.IsArray) WriteCitedRows(w, field, "title_ref", delivered);
+                if (field.NameEquals("documents") && field.Value.IsArray) WriteCitedRows(w, field, "ref", citable);
+                else if (field.NameEquals("tasks") && field.Value.IsArray) WriteCitedRows(w, field, "title_ref", citable);
                 else field.WriteTo(w);
             }
             w.WriteEndObject();

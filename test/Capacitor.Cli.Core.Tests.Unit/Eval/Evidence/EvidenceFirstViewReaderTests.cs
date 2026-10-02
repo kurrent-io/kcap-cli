@@ -73,7 +73,8 @@ public class EvidenceFirstViewReaderTests : IDisposable {
         await Assert.That(page.Cites.OrderBy(c => c.Key, StringComparer.Ordinal).Select(c => (c.Key, c.Value))).IsEquivalentTo([
             ("o2.1", $"{lane1}@1"), ("o2.2", $"{lane1}@3"), ("o2.3", $"{lane1}@2"), ("o2.4", $"{lane1}@3"), ("o2.5", $"{lane2}@0"), ("o2.6", $"{lane2}@0")
         ]);
-        await Assert.That(page.Revisions).IsEquivalentTo([(lane1, 1L, 3L), (lane2, 0L, 0L)]);
+        await Assert.That(page.Citable).IsEquivalentTo([(lane1, 1L, 3L), (lane2, 0L, 0L)]);
+        await Assert.That(page.Revisions).IsEmpty();
         await Assert.That(view.Text.Contains(page.Text)).IsTrue();
     }
 

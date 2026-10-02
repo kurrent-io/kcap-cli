@@ -51,10 +51,10 @@ public class JudgeLedgerTests {
     }
 
     [Test]
-    public async Task A_plan_ledger_pages_lanes_round_trip_and_count_as_consulted_and_a_page_without_them_writes_no_key() {
+    public async Task A_plan_ledger_pages_lanes_and_citable_refs_round_trip_as_consulted_not_delivered_and_a_page_without_them_writes_no_key() {
         const string lane = "PlanLane-0000000000000000000000000000f001-r";
         var path = Tmp.PathTo("q1.ledger.jsonl");
-        var ledgerPage = Page(1, "o1", tool: "") with { Source = null, LedgerSources = [lane] };
+        var ledgerPage = Page(1, "o1", tool: "") with { Source = null, Revisions = [], LedgerSources = [lane], Citable = [(lane, 0, 2)] };
         using (var w = JudgeLedgerWriter.Create(path, new JudgeLedgerHeader("run", "q", "v1", Budgets, null, T0))) {
             w.Append(ledgerPage);
             w.Append(Page(2, "p1"));
@@ -67,8 +67,13 @@ public class JudgeLedgerTests {
         await Assert.That(ledger.Pages[1].LedgerSources).IsEmpty();
         await Assert.That(ledger.SourcesWithPage).Contains(lane);
         await Assert.That(ledger.SourcesWithPage).IsEquivalentTo([lane, "AgentSession-r"]);
+        await Assert.That(ledger.Pages[0].Citable).IsEquivalentTo([(lane, 0L, 2L)]);
+        await Assert.That(ledger.CitableEvents).IsEquivalentTo([(lane, 0L), (lane, 1L), (lane, 2L)]);
+        await Assert.That(ledger.DeliveredEvents.Any(e => e.Source == lane)).IsFalse();
+        await Assert.That(ledger.TryExpand($"{lane}@0-2", out _)).IsTrue();
         var lines = File.ReadAllLines(path);
         await Assert.That(lines.Count(l => l.Contains("\"ledger_sources\"", StringComparison.Ordinal))).IsEqualTo(1);
+        await Assert.That(lines.Count(l => l.Contains("\"citable\"", StringComparison.Ordinal))).IsEqualTo(1);
     }
 
     [Test]

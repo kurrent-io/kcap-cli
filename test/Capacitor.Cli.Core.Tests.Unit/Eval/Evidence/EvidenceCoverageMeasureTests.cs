@@ -207,7 +207,7 @@ public class EvidenceCoverageMeasureTests {
 
     static JudgeLedgerPage PlanLedger(string handle, string[] plans, int plansOmitted, int tasksOmitted) =>
         EvidencePageRenderer.Render(++_seq, handle, EvidencePageRenderer.PlanLedgerTool, """{"section":"plan_ledger"}""",
-            $$"""{"scope_version":"v1","plans":[{{string.Join(",", plans)}}],"plans_total":{{plans.Length + plansOmitted}},"plans_omitted":{{plansOmitted}},"tasks_omitted":{{tasksOmitted}},"plans_unavailable":[],"budget_bytes":65536,"over_budget":false}""");
+            $$"""{"scope_version":"v1","plans":[{{string.Join(",", plans)}}],"plans_total":{{plans.Length + plansOmitted}},"plans_omitted":{{plansOmitted}},"tasks_omitted":{{tasksOmitted}},"plans_unavailable":[],"plans_unavailable_omitted":0,"budget_bytes":65536,"over_budget":false}""");
 
     /// <summary>Every lane of a plan the plan_ledger page served is consulted, the one whose tasks the cut shortened
     /// included; a lane of a plan the cut left out still needs reading.</summary>
@@ -240,17 +240,46 @@ public class EvidenceCoverageMeasureTests {
         await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
     }
 
+    /// <summary>A lane read only through the plan ledger is still unread when another source was never opened: each
+    /// omission is reported on its own.</summary>
     [Test]
-    public async Task A_run_whose_lane_entries_the_plan_ledger_all_showed_is_complete() {
-        var lane   = PlanLane(1);
-        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4));
-        var plan   = $$"""{"plan_id":"{{0xF001:x32}}","sources":["{{lane}}"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"{{lane}}@0"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"one","status":"completed","note":null,"title_ref":"{{lane}}@1","status_ref":"{{lane}}@3"},{"task_id":"t2","ordinal":2,"title":"two","status":"pending","note":null,"title_ref":"{{lane}}@2","status_ref":null}]}""";
-        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [plan], plansOmitted: 0, tasksOmitted: 0)]);
+    public async Task A_ledger_only_lane_reports_its_unread_range_beside_a_source_never_consulted() {
+        string lane = PlanLane(1), unopened = PlanLane(2);
+        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4), LaneSource(unopened, 2));
+        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [LedgerPlan(1, lane, 2)], plansOmitted: 0, tasksOmitted: 0)]);
 
         var c = EvidenceCoverageMeasure.ForRetrieval(scope, ledger, []);
 
         await Assert.That(c.SourcesConsulted).IsEquivalentTo([Root, lane]);
-        await Assert.That(c.Omissions).IsEmpty();
-        await Assert.That(c.StopReason).IsNull();
+        await Assert.That(Count(c, EvalOmissionKinds.SourcesNotConsulted)).IsEqualTo(1);
+        var unread = c.Omissions.Single(o => o.Kind == EvalOmissionKinds.PagesNotFetched);
+        await Assert.That(unread.Detail).IsEqualTo("unread_ranges");
+        await Assert.That(unread.Count).IsEqualTo(1);
+        await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
+    }
+
+    /// <summary>A ledger row shows only part of an entry, so a lane whose every ref the ledger printed is consulted but
+    /// unread; the refs stay citable, and only an events page delivering the entries makes the record complete.</summary>
+    [Test]
+    public async Task A_lane_shown_only_through_the_plan_ledger_is_consulted_but_unread_until_its_events_are_delivered() {
+        var lane   = PlanLane(1);
+        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4));
+        var plan   = $$"""{"plan_id":"{{0xF001:x32}}","sources":["{{lane}}"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"{{lane}}@0"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"one","status":"completed","note":null,"title_ref":"{{lane}}@1","status_ref":"{{lane}}@3"},{"task_id":"t2","ordinal":2,"title":"two","status":"pending","note":null,"title_ref":"{{lane}}@2","status_ref":null}]}""";
+        var shownOnly = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [plan], plansOmitted: 0, tasksOmitted: 0)]);
+
+        var shown = EvidenceCoverageMeasure.ForRetrieval(scope, shownOnly, []);
+
+        await Assert.That(shown.SourcesConsulted).IsEquivalentTo([Root, lane]);
+        await Assert.That(shown.Omissions.Single(o => o.Kind == EvalOmissionKinds.PagesNotFetched).Detail).IsEqualTo("unread_ranges");
+        await Assert.That(shown.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
+        foreach (var r in new[] { $"{lane}@0", $"{lane}@1", $"{lane}@2", $"{lane}@3", $"{lane}@1-3" }) {
+            await Assert.That(shownOnly.TryExpand(r, out _)).IsTrue();
+            await Assert.That(EvidenceRefText.TryParse(r, out var parsed) && shownOnly.IsDelivered(parsed)).IsFalse();
+        }
+
+        var read = EvidenceCoverageMeasure.ForRetrieval(scope, Ledger([.. shownOnly.Pages, Events("p2", lane, 0, 3)]), []);
+
+        await Assert.That(read.Omissions).IsEmpty();
+        await Assert.That(read.StopReason).IsNull();
     }
 }
