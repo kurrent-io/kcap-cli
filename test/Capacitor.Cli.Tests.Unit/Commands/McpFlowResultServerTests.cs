@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -220,6 +221,13 @@ public class McpFlowResultServerTests {
         await Assert.That(delays.Aggregate(TimeSpan.Zero, (sum, d) => sum + d)).IsBetween(TimeSpan.FromMinutes(2.5), TimeSpan.FromMinutes(3.5));
         await Assert.That(server.LogEntries.Count).IsEqualTo(delays.Count + 1);
     }
+
+    /// <summary>The harness's per-server tool timeout must outlast the delivery deadline, or Codex
+    /// abandons a submit that is still riding out a restart.</summary>
+    [Test]
+    public async Task The_delivery_deadline_ends_inside_the_result_channel_tool_timeout() =>
+        await Assert.That(McpFlowResultServer.DeliveryDeadline)
+                    .IsLessThan(KcapMcpRegistry.ReservedResultChannelToolTimeout);
 
     /// <summary>A 503 carrying a coded envelope is the server's own verdict, not restart noise.</summary>
     [Test]

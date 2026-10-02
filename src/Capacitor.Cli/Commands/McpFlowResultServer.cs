@@ -39,13 +39,14 @@ sealed class McpFlowResultServer(
     static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(3);
 
     // An uncoded 502/503/504 or a transport failure is the server restarting. These delays sum to
-    // about three minutes, which outlasts a rolling restart, and the deadline keeps a call whose
-    // attempts hang under Codex's 300 s tool-call abort. Resending is safe: results dedupe by round
+    // about three minutes, which outlasts a rolling restart. No retry starts that could run past the
+    // deadline, which keeps the call under the harness's tool timeout
+    // (KcapMcpRegistry.ReservedResultChannelToolTimeout). Resending is safe: results dedupe by round
     // token, messages by message_id.
     static readonly TimeSpan[] UnavailableBackoff =
         new[] { 1, 2, 4, 8, 16, 30, 30, 30, 30, 30 }.Select(s => TimeSpan.FromSeconds(s)).ToArray();
-    static readonly TimeSpan AttemptTimeout   = TimeSpan.FromSeconds(20);
-    static readonly TimeSpan DeliveryDeadline = TimeSpan.FromSeconds(240);
+    static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan DeliveryDeadline = TimeSpan.FromSeconds(240);
 
     // The server does not read the transcript, so a marker delivers nothing; the only useful
     // guidance on failure is to retry the tool itself.
@@ -331,7 +332,8 @@ sealed class McpFlowResultServer(
 
             response?.Dispose();
 
-            if (unavailable == UnavailableBackoff.Length || time.GetElapsedTime(started) >= DeliveryDeadline)
+            if (unavailable == UnavailableBackoff.Length
+             || time.GetElapsedTime(started) + UnavailableBackoff[unavailable] + AttemptTimeout > DeliveryDeadline)
                 return (null, null, "", failure);
 
             await delay(UnavailableBackoff[unavailable++]);

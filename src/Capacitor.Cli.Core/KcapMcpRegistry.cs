@@ -70,6 +70,11 @@ public static class KcapMcpRegistry {
     /// it, and every reviewer runtime must agree on that.</summary>
     public const string ReservedResultChannelId = "kcap-flow-result";
 
+    /// <summary>How long a harness with a per-server tool timeout lets one result-channel call run.
+    /// It must exceed the channel's own delivery deadline, or the harness abandons a submit that is
+    /// still riding out a server restart.</summary>
+    public static readonly TimeSpan ReservedResultChannelToolTimeout = TimeSpan.FromSeconds(300);
+
     /// <summary>The ordered catalog of every tool the reserved result channel serves — the single
     /// source of truth. <c>McpFlowResultServer</c>'s <c>tools/list</c>, Copilot's ACP
     /// <c>--available-tools</c> argv, and <c>LocalPermissionBridge</c>'s unattended auto-approve are
