@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Capacitor.App.ViewModels;
 
 /// Identity is the Id, minted at staging: two pastes of the same bytes are two chips, and a send
@@ -12,7 +14,7 @@ public sealed class StagedAttachment(string fileName, string contentType, ReadOn
     public string SizeLabel => Bytes.Length switch {
         < 1024 => $"{Bytes.Length} B",
         < 1024 * 1024 => $"{Bytes.Length / 1024} KB",
-        _ => $"{Bytes.Length / (1024.0 * 1024.0):0.#} MB",
+        _ => string.Create(CultureInfo.InvariantCulture, $"{Bytes.Length / (1024.0 * 1024.0):0.#} MB"),
     };
 
     internal StagedAttachment Renamed(string fileName) => new(fileName, ContentType, Bytes, Id);
