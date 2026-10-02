@@ -566,6 +566,39 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsTrue(); // still durably spooled for retry
     }
 
+    [Test, NotInParallel]
+    public async Task session_start_states_the_session_id_when_no_nudge_carries_it() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-flows");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout).Contains("Kurrent Capacitor session id:");
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains($"Kurrent Capacitor session id: `{sid}`.");
+    }
+
+    [Test, NotInParallel]
+    public async Task session_start_leaves_the_session_id_line_out_when_the_work_items_nudge_carries_the_id() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains("## Work items");
+        await Assert.That(ctx).Contains($"`{sid}`");
+        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
+    }
+
     const string NextWorkAck =
         """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
 

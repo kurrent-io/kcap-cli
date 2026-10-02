@@ -176,8 +176,7 @@ sealed class PiHookCommand(
         // gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+            SessionNudges.Resolve(HarnessId.Pi, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Pi, harnesses));
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);
