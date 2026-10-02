@@ -443,6 +443,11 @@ public record EvalContextResult {
 
     [JsonPropertyName("compaction")]
     public required EvalContextCompactionSummary Compaction { get; init; }
+
+    // The judge's declared-task block, drawn from the sessions in the chain. A server that predates it sends none,
+    // and the prompts then keep the text they carry without it.
+    [JsonPropertyName("tasks")]
+    public string? Tasks { get; init; }
 }
 
 /// <summary>

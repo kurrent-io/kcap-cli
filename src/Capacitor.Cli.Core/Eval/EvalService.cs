@@ -509,7 +509,7 @@ public static partial class EvalService {
             // raw catalog text.
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId,
-                question with { Prompt = question.RawText ?? question.Prompt }, patterns);
+                question with { Prompt = question.RawText ?? question.Prompt }, patterns, ctx.ContextResult.Tasks);
 
             var commandPath = ResolveJudgeCommandPath();
             var mcpConfig   = BuildJudgeMcpConfig(commandPath, ctx.SessionId, baseUrl);
@@ -532,7 +532,7 @@ public static partial class EvalService {
             );
         } else {
             // The catalog's server-rendered prompt, with the runtime placeholders filled and any {CACHE_BOUNDARY} stripped.
-            var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson);
+            var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson, ctx.ContextResult.Tasks);
 
             outcome = await ClaudeCliRunner.RunDetailedAsync(
                 prompt,
@@ -994,20 +994,34 @@ public static partial class EvalService {
 
     /// <summary>Text-path prompt: the catalog rendered prompt with runtime placeholders
     /// filled and any residual {CACHE_BOUNDARY} stripped (the server runner fills it;
-    /// the CLI judge has no cache boundary).</summary>
+    /// the CLI judge has no cache boundary). With <paramref name="tasks"/> the placeholders are filled in one
+    /// pass, so task text and the trace are never rescanned; without it the prompt keeps its literal <c>{TASKS}</c>.</summary>
     public static string BuildTextQuestionPrompt(
-            EvalQuestionDto question, string sessionId, string evalRunId, string traceJson
+            EvalQuestionDto question, string sessionId, string evalRunId, string traceJson, string? tasks = null
         ) =>
-        question.Prompt
-            .Replace("{CACHE_BOUNDARY}", "")
-            .Replace("{SESSION_ID}",  sessionId)
-            .Replace("{EVAL_RUN_ID}", evalRunId)
-            .Replace("{CATEGORY}",    question.Category)
-            .Replace("{QUESTION_ID}", question.Id)
-            .Replace("{TRACE_JSON}",  traceJson);
+        tasks is null
+            ? question.Prompt
+                .Replace("{CACHE_BOUNDARY}", "")
+                .Replace("{SESSION_ID}",  sessionId)
+                .Replace("{EVAL_RUN_ID}", evalRunId)
+                .Replace("{CATEGORY}",    question.Category)
+                .Replace("{QUESTION_ID}", question.Id)
+                .Replace("{TRACE_JSON}",  traceJson)
+            : EvidencePromptBlocks.Render(question.Prompt, new Dictionary<string, string>(StringComparer.Ordinal) {
+                ["{CACHE_BOUNDARY}"] = "", ["{SESSION_ID}"] = sessionId, ["{EVAL_RUN_ID}"] = evalRunId, ["{CATEGORY}"] = question.Category,
+                ["{QUESTION_ID}"] = question.Id, ["{TRACE_JSON}"] = traceJson, ["{TASKS}"] = tasks
+            });
+
+    /// <summary>The tools template's declared-task section, rendered at <c>{DECLARED_TASKS}</c> only when the server
+    /// sent a block, so a prompt built without one is unchanged.</summary>
+    internal const string DeclaredTasksSection =
+        "## Declared tasks\n\n"
+      + "The agent's own declared task list for the plan this session worked on, when one exists. Each line carries the status and who "
+      + "set it; \"status partial\" means part of that task's history is withheld from this view. When a task list is declared, judge "
+      + "completion against it rather than against prose alone.\n\n";
 
     /// <summary>
-    /// Builds the tools-enabled per-question prompt (DEV-1486). Mirrors the
+    /// Builds the tools-enabled per-question prompt. Mirrors the
     /// text-path <see cref="BuildTextQuestionPrompt"/> but omits <c>{TRACE_JSON}</c>
     /// — the judge pulls session details on demand via MCP instead of reading
     /// them from an embedded compacted trace.
@@ -1017,9 +1031,16 @@ public static partial class EvalService {
             string          sessionId,
             string          evalRunId,
             EvalQuestionDto question,
-            string          knownPatterns
+            string          knownPatterns,
+            string?         tasks = null
         ) =>
-        template
+        tasks is not null
+            ? EvidencePromptBlocks.Render(template, new Dictionary<string, string>(StringComparer.Ordinal) {
+                ["{DECLARED_TASKS}"] = DeclaredTasksSection + tasks + "\n\n", ["{SESSION_ID}"] = sessionId, ["{EVAL_RUN_ID}"] = evalRunId,
+                ["{CATEGORY}"] = question.Category, ["{QUESTION_ID}"] = question.Id, ["{QUESTION_TEXT}"] = question.Prompt, ["{KNOWN_PATTERNS}"] = knownPatterns
+            })
+            : template
+            .Replace("{DECLARED_TASKS}", "")
             .Replace("{SESSION_ID}",     sessionId)
             .Replace("{EVAL_RUN_ID}",    evalRunId)
             .Replace("{CATEGORY}",       question.Category)
