@@ -588,16 +588,17 @@ public class MainWindowSmokeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_dot_stays_visible_beside_the_wait_badge_while_subagents_run() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var visible = await AvaloniaSession.DispatchAsync(() => {
+            var (visible, pulses) = await AvaloniaSession.DispatchAsync(() => {
                 var (_, window) = RailWindow(awaitingInput: true, liveSubagents: 2);
                 var row = RailRow(window, "Fix the flaky test");
                 var dot = row.GetVisualDescendants().OfType<Ellipse>().First();
-                var result = dot.IsVisible;
+                var result = (dot.IsVisible, row.GetVisualDescendants().OfType<Visual>().Any(v => PulseClock.GetIsActive(v) && v.IsEffectivelyVisible));
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
             await Assert.That(visible).IsTrue();
+            await Assert.That(pulses).IsTrue();
         });
     }
 

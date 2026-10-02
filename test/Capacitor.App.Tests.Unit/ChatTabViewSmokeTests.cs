@@ -819,6 +819,9 @@ public class ChatTabViewSmokeTests {
             await Assert.That(glyph.Foreground).IsSameReferenceAs(Brush(isError: false));
             await Assert.That(host.View.GetVisualDescendants().OfType<Border>()
                 .Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(0);
+            // A pill that is not shown must not be on the clock either: an idle marker that still
+            // ticks keeps the timer, and the window's render pass, alive for nothing.
+            await Assert.That(host.View.GetVisualDescendants().OfType<Visual>().Any(PulseClock.GetIsActive)).IsFalse();
             await host.CloseAsync();
         });
     }
@@ -854,6 +857,7 @@ public class ChatTabViewSmokeTests {
             var pulse = ToolRows(host.View)[0].GetVisualDescendants().OfType<Border>()
                 .Single(b => b.Classes.Contains("toolRunning") && b.IsVisible);
             await Assert.That(pulse.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapWarningBrush"));
+            await Assert.That(PulseClock.GetIsActive(pulse)).IsTrue();
             var detail = ToolRows(host.View)[0].GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.IsEffectivelyVisible && t.Text == "ls -la");
             await Assert.That(detail.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));

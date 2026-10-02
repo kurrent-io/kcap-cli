@@ -10,6 +10,8 @@ namespace Capacitor.App.Views;
 public static class PulseClock {
     const double PeriodSeconds = 2.4;
     const double MinOpacity = 0.4;
+    /// Ten frames a second is the whole cost of a pulse: each tick is one render pass of the window.
+    public static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(100);
 
     public static readonly AttachedProperty<bool> IsActiveProperty =
         AvaloniaProperty.RegisterAttached<Visual, bool>("IsActive", typeof(PulseClock));
@@ -48,7 +50,7 @@ public static class PulseClock {
     static void Start(Visual visual) {
         if (!Active.Add(visual)) return;
         visual.Opacity = Opacity;
-        _timer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(50), DispatcherPriority.Render, (_, _) => Tick());
+        _timer ??= new DispatcherTimer(TickInterval, DispatcherPriority.Render, (_, _) => Tick());
         _timer.Start();
     }
 

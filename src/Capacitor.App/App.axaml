@@ -566,23 +566,6 @@
                 </Animation>
             </Style.Animations>
         </Style>
-        <!-- In-flight state markers (a starting session's dot, a running check, a live tool-call
-             row) share one pulse. -->
-        <Style Selector=":is(Control).pulsing, Border.toolRunning">
-            <Style.Animations>
-                <Animation Duration="0:0:1.1" IterationCount="Infinite">
-                    <KeyFrame Cue="0%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                    <KeyFrame Cue="50%">
-                        <Setter Property="Opacity" Value="1" />
-                    </KeyFrame>
-                    <KeyFrame Cue="100%">
-                        <Setter Property="Opacity" Value="0.35" />
-                    </KeyFrame>
-                </Animation>
-            </Style.Animations>
-        </Style>
         <!-- A prompt card that takes dropped files. The resting border lives here rather than on
              the card so the drag-over ring can outrank it: a local value on the control beats
              every style, and a style closer to the control beats one declared here — which is why
