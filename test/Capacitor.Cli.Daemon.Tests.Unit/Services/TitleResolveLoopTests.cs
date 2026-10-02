@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -70,8 +71,74 @@ public class TitleResolveLoopTests {
 
     static TitleAgentView Agent(
             string id = "a1", string vendor = "claude", string? prompt = "Fix the login bug in the auth flow",
-            string? sessionId = "sid-1", string? transcript = "/t.jsonl", DateTime? createdAt = null) =>
-        new(id, vendor, prompt, sessionId, transcript, createdAt ?? T0);
+            string? sessionId = "sid-1", string? transcript = "/t.jsonl", DateTime? createdAt = null,
+            AgentStartTitle? startTitle = null) =>
+        new(id, vendor, prompt, sessionId, transcript, createdAt ?? T0, startTitle);
+
+    [Test]
+    public async Task A_server_title_equal_to_the_derived_start_title_does_not_block_generation() {
+        var h = new Harness();
+        h.Agents.Add(Agent(startTitle: new AgentStartTitle("Login bug", Derived: true)));
+        h.Server.Get = _ => "Login bug";
+        h.Generate = (_, _) => Task.FromResult<string?>("Generated title");
+        h.Time.Advance(TimeSpan.FromMinutes(6));
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.GenerateCalls).IsEqualTo(1);
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Generated title")]);
+        await Assert.That(h.GeneratedPosts).IsEquivalentTo([("sid-1", "Generated title")]);
+    }
+
+    [Test]
+    public async Task A_server_title_equal_to_the_derived_start_title_yields_to_a_native_title() {
+        var h = new Harness();
+        h.Agents.Add(Agent(prompt: null, startTitle: new AgentStartTitle("fix the login redirect", Derived: true)));
+        h.Server.Get = _ => "fix the login redirect";
+        h.Native = _ => "Native title";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Native title")]);
+        await Assert.That(h.Server.Pushed).IsEquivalentTo([("sid-1", new HarnessTitlePost("Native title", HarnessTitleKind.Rename, null))]);
+    }
+
+    [Test]
+    public async Task An_explicit_start_title_is_displayed_and_nothing_is_produced_or_pushed() {
+        var h = new Harness();
+        h.Agents.Add(Agent(startTitle: new AgentStartTitle("Fix login", Derived: false)));
+        h.Server.Get = _ => "Fix login";
+        h.Native = _ => "Native title";
+        h.Generate = (_, _) => Task.FromResult<string?>("Generated title");
+        h.Time.Advance(TimeSpan.FromMinutes(30));
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Fix login")]);
+        await Assert.That(h.NativeCalls).IsEqualTo(0);
+        await Assert.That(h.GenerateCalls).IsEqualTo(0);
+        await Assert.That(h.Server.Pushed).IsEmpty();
+        await Assert.That(h.GeneratedPosts).IsEmpty();
+    }
+
+    [Test]
+    public async Task An_explicit_start_title_yields_to_a_different_server_title() {
+        var h = new Harness();
+        h.Agents.Add(Agent(startTitle: new AgentStartTitle("Fix login", Derived: false)));
+        var server = "Fix login";
+        h.Server.Get = _ => server;
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        server = "Renamed on the web";
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["Fix login", "Renamed on the web"]);
+    }
 
     [Test]
     public async Task A_new_native_rename_is_pushed_even_when_the_server_has_a_title() {

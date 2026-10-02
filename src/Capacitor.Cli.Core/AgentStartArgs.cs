@@ -8,6 +8,7 @@ public sealed class AgentStartArgs {
     public string?  DaemonName  { get; private set; }
     public bool     Detached    { get; private set; }
     public bool     Private     { get; private set; }
+    public string?  Title       { get; private set; }
     public string[] Passthrough { get; private set; } = [];
     public string?  Error       { get; private set; }
 
@@ -15,7 +16,7 @@ public sealed class AgentStartArgs {
         var r = new AgentStartArgs();
 
         if (args.Length == 0) {
-            r.Error = "usage: kcap agent start <vendor> [--worktree] [--private] [--daemon <name>] [-d|--detach] [-- <agent args>]";
+            r.Error = "usage: kcap agent start <vendor> [--worktree] [--private] [--title <text>] [--daemon <name>] [-d|--detach] [-- <agent args>]";
 
             return r;
         }
@@ -47,6 +48,22 @@ public sealed class AgentStartArgs {
                     r.DaemonName = kcap[++i];
 
                     break;
+                case "--title":
+                    if (i + 1 >= kcap.Length || kcap[i + 1].StartsWith('-')) {
+                        r.Error = "--title requires a value";
+
+                        return r;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(kcap[i + 1])) {
+                        r.Error = "--title must not be blank";
+
+                        return r;
+                    }
+
+                    r.Title = kcap[++i].Trim();
+
+                    break;
                 default:
                     r.Error = $"unknown flag {kcap[i]} (agent args go after `--`)";
 
@@ -56,4 +73,6 @@ public sealed class AgentStartArgs {
 
         return r;
     }
+
+    public AgentStartTitle? StartTitle => AgentStartTitle.ForLocalStart(Title, Passthrough);
 }

@@ -19,6 +19,10 @@ Options for start:
   --private               Keep the agent purely local: unregistered, not streamed
                           to the server, not shown in the web UI, and permission
                           prompts answered natively in your terminal
+  --title <text>          Title the agent's session. Without it the session starts
+                          titled after the prompt (the last agent arg, when it is
+                          not a flag or a flag's value) until a better title lands.
+                          No effect with --private
   -d, --detach            Start without attaching; prints the agent id
   --daemon <name>         Target a specific daemon (defaults to your profile's)
   --                      Everything after this is passed to the vendor CLI verbatim

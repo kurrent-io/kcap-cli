@@ -1701,7 +1701,11 @@ public readonly record struct LaunchAgentCommand(
         // A ClaudePermissionModes token for an interactive Claude launch; the daemon's
         // ClaudePermissionModePolicy fails closed on any other shape. Name-bound and trailing, so
         // old daemons ignore it and old servers never set it.
-        string?           PermissionMode = null
+        string?           PermissionMode = null,
+        // The agent's session start title. TitleDerived marks one cut from the prompt, which a
+        // generated title replaces; otherwise it is the caller's and stays. Null from an older server.
+        string?           Title        = null,
+        bool              TitleDerived = false
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -2259,7 +2263,10 @@ public readonly record struct AgentRegistered(
         // The runtime transport this agent launched on — "pty" | "app-server". The server validates
         // it against its own launch decision and refuses a mismatch. Trailing name-bound field — an
         // older server ignores it, an older daemon never sets it (null there).
-        string? RuntimeTransport = null
+        string? RuntimeTransport = null,
+        // The session's start title, with the same meaning as on LaunchAgentCommand.
+        string? Title        = null,
+        bool    TitleDerived = false
     );
 
 public readonly record struct AgentStatusChanged(

@@ -91,7 +91,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows);
+        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows, parsed.StartTitle);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)

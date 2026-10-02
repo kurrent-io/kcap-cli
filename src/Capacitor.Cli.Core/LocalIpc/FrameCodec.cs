@@ -93,24 +93,39 @@ public static class FrameCodec {
     };
 
     // --- Spawn structured payload ---
-    public static LocalFrame Spawn(string vendor, WorkLocation work, bool isPrivate, string cwd, IReadOnlyList<string> args, ushort cols, ushort rows) {
+    // Layout: [work:1][cols:BE16][rows:BE16][vendor:LP][cwd:LP][argc:BE32][args:LP…][private:1][title:1][title text:LP].
+    // Every field after args is appended for wire compatibility: an older daemon ignores trailing
+    // bytes, and a frame from an older CLI simply ends early.
+    const byte SpawnNoTitle       = 0;
+    const byte SpawnExplicitTitle = 1;
+    const byte SpawnDerivedTitle  = 2;
+
+    public static LocalFrame Spawn(
+            string vendor, WorkLocation work, bool isPrivate, string cwd, IReadOnlyList<string> args, ushort cols, ushort rows,
+            AgentStartTitle? title = null) {
         using var ms = new MemoryStream();
         ms.WriteByte((byte)work);
         WriteBe16(ms, cols); WriteBe16(ms, rows);
         WriteLp(ms, vendor); WriteLp(ms, cwd);
         WriteBe32(ms, args.Count);
         foreach (var a in args) WriteLp(ms, a);
-        ms.WriteByte((byte)(isPrivate ? 1 : 0)); // APPENDED after args: older parsers ignore trailing bytes
+        ms.WriteByte((byte)(isPrivate ? 1 : 0));
+        if (title is { } t) {
+            ms.WriteByte(t.Derived ? SpawnDerivedTitle : SpawnExplicitTitle);
+            WriteLp(ms, t.Text);
+        } else {
+            ms.WriteByte(SpawnNoTitle);
+        }
         return new(FrameType.Spawn) { Bytes = ms.ToArray(), Text = vendor, Work = work, Cols = cols, Rows = rows };
     }
     public static string SpawnCwd(LocalFrame f) => ParseSpawn(f.Bytes).cwd;
     public static string[] SpawnArgs(LocalFrame f) => ParseSpawn(f.Bytes).args;
-    public static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows) Spawn(LocalFrame f)
+    public static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows, AgentStartTitle? title) Spawn(LocalFrame f)
         => ParseSpawn(f.Bytes);
 
     const int MaxSpawnArgs = 4096; // sane cap; the wire arg-count is untrusted (local 0600 socket, same-user)
 
-    static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows) ParseSpawn(byte[] p) {
+    static (string vendor, WorkLocation work, bool isPrivate, string cwd, string[] args, ushort cols, ushort rows, AgentStartTitle? title) ParseSpawn(byte[] p) {
         var o = 0;
         Require(p, o, 5); // work(1) + cols(2) + rows(2)
         var work = (WorkLocation)p[o++];
@@ -126,10 +141,18 @@ public static class FrameCodec {
 
         var args = new string[n];
         for (var i = 0; i < n; i++) args[i] = ReadLp(p, ref o);
-        // Trailing private flag (appended for wire-compat): absent (older CLI) => private=true,
-        // the conservative default that preserves Phase-1 unregistered behaviour.
+        // A frame from a CLI that predates the private byte is private: it never asked to register.
         var isPrivate = o >= p.Length || p[o] != 0;
-        return (vendor, work, isPrivate, cwd, args, cols, rows);
+        o++;
+
+        // A frame without the title byte, or with a kind this build does not know, carries no title.
+        AgentStartTitle? title = null;
+        if (o < p.Length && p[o] is SpawnExplicitTitle or SpawnDerivedTitle) {
+            var derived = p[o++] == SpawnDerivedTitle;
+            title = new AgentStartTitle(ReadLp(p, ref o), derived);
+        }
+
+        return (vendor, work, isPrivate, cwd, args, cols, rows, title);
     }
 
     /// <summary>Throws <see cref="InvalidDataException"/> unless <paramref name="count"/> bytes
