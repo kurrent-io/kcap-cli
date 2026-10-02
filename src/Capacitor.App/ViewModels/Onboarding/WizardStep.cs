@@ -1,7 +1,7 @@
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// Declaration order is display order.
-public enum WizardStepId { Welcome, SignIn, Defaults, Harnesses, Import, Daemon, Done }
+public enum WizardStepId { Welcome, SignIn, Harnesses, Import, Daemon, Done }
 
 public enum WizardNavigation { Back, Next, Skip }
 

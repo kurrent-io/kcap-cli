@@ -245,7 +245,7 @@ public class HistoryStepViewModelTests {
     public async Task The_pane_draws_a_track_per_owner_and_per_repository() {
         var tracks = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Report());
-            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => [])]);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
             await h.Vm.Discovery;
 

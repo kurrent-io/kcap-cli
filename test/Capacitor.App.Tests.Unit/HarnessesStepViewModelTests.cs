@@ -266,7 +266,7 @@ public class HarnessesStepViewModelTests {
     public async Task The_pane_renders_a_row_per_detected_harness_and_bundled_tools_as_text() {
         var (rows, toolBoxes) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root);
-            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => [])]);
+            var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };

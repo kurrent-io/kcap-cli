@@ -1,0 +1,109 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             x:Class="Capacitor.App.Views.Onboarding.DonePaneView"
+             x:DataType="vm:DoneStepViewModel">
+    <StackPanel Spacing="14">
+        <Border Classes="frCard">
+            <StackPanel Spacing="20">
+                <!-- Figures, while the import runs and after. -->
+                <StackPanel Spacing="14" IsVisible="{Binding ShowsFigures}">
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="30">
+                        <StackPanel Spacing="2">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <TextBlock x:Name="LandedValueText" Classes="frValue" Text="{Binding LandedValue}" />
+                                <TextBlock Classes="frUnit" Text="{Binding LandedUnit}" VerticalAlignment="Bottom" Margin="0,0,0,4" />
+                            </StackPanel>
+                            <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}" Text="{Binding LandedCaption}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="2">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <TextBlock Classes="frValue" Text="{Binding RepositoriesValue}" />
+                                <TextBlock Classes="frUnit" Text="{Binding RepositoriesUnit}" VerticalAlignment="Bottom" Margin="0,0,0,4" />
+                            </StackPanel>
+                            <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}" Text="{Binding RepositoriesCaption}" />
+                        </StackPanel>
+                    </Grid>
+                    <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
+                                 Background="{StaticResource FrDividerBrush}" Foreground="{StaticResource FrAccentBrush}"
+                                 IsVisible="{Binding Running}" />
+                </StackPanel>
+
+                <Border Classes="frWarning" IsVisible="{Binding FailedVisible}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                        <Path Data="M12 3 2 21h20L12 3Zm0 6v6m0 3v.5" Stroke="{StaticResource KcapDangerBrush}" StrokeThickness="2"
+                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="5">
+                            <TextBlock x:Name="FailedTitleText" Classes="frLabel" FontSize="12.5" Text="{Binding FailedTitle}" />
+                            <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}" Text="{Binding FailedBody}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <TextBlock Classes="frBody" IsVisible="{Binding NothingToCountVisible}"
+                           Text="There is nothing to count yet — your next session is the first one, and it shows up in your workspace as it happens." />
+
+                <!-- What records from now on. -->
+                <StackPanel Spacing="10" IsVisible="{Binding CaptureVisible}">
+                    <Border Classes="frDivider" IsVisible="{Binding ShowsFigures}" />
+                    <ItemsControl x:Name="CaptureItems" ItemsSource="{Binding Capture}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" ItemSpacing="22" LineSpacing="8" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:CaptureItem">
+                                <StackPanel Orientation="Horizontal" Spacing="7">
+                                    <Ellipse Width="6" Height="6" VerticalAlignment="Center" Classes.needsYou="{Binding NeedsYou}">
+                                        <Ellipse.Styles>
+                                            <Style Selector="Ellipse"><Setter Property="Fill" Value="{StaticResource KcapSuccessBrush}" /></Style>
+                                            <Style Selector="Ellipse.needsYou"><Setter Property="Fill" Value="{StaticResource FrAtmosphereBrush}" /></Style>
+                                        </Ellipse.Styles>
+                                    </Ellipse>
+                                    <TextBlock Text="{Binding Label}" FontSize="12" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding State}" Classes="frSignal" FontSize="10" VerticalAlignment="Center"
+                                               Classes.needsYou="{Binding NeedsYou}">
+                                        <TextBlock.Styles>
+                                            <Style Selector="TextBlock"><Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" /></Style>
+                                            <Style Selector="TextBlock.needsYou"><Setter Property="Foreground" Value="{StaticResource FrAtmosphereBrush}" /></Style>
+                                        </TextBlock.Styles>
+                                    </TextBlock>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="frNote" IsVisible="{Binding PathHazardVisible}">
+                        <Run Text="Nothing can be captured until the login shell can find " /><Run Text="kcap" FontFamily="{StaticResource FrMonoFont}" /><Run Text=". Go back to your harnesses to fix it, and capture starts working." />
+                    </TextBlock>
+                </StackPanel>
+
+                <TextBlock Classes="frNote" Text="{Binding FooterLine}"
+                           IsVisible="{Binding FooterLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Detours: the daemon, and what Codex asks the first time. -->
+        <Border Classes="frCard">
+            <StackPanel>
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="frLabel" FontSize="15" Text="Run your agents on this machine from anywhere" />
+                    <TextBlock x:Name="DaemonLineText" Classes="frBody" FontSize="13" Text="{Binding DaemonLine}" />
+                </StackPanel>
+                <StackPanel Spacing="6" IsVisible="{Binding CodexNoteVisible}">
+                    <Border Classes="frDivider" Margin="0,18" />
+                    <TextBlock Classes="frLabel" FontSize="15" Text="Codex may ask before it trusts a project" />
+                    <TextBlock Classes="frBody" FontSize="13"
+                               Text="The first run in a new folder puts up its own prompt. Answer it once, in the folder you work in." />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
+            <TextBlock Classes="frNote" VerticalAlignment="Center"
+                       Text="Agents you already have open pick this up when they next start." />
+            <Button Grid.Column="1" x:Name="OpenWorkspaceButton" Classes="frLink" Content="OPEN YOUR WORKSPACE →"
+                    Command="{Binding OpenWorkspaceCommand}" IsVisible="{Binding WorkspaceVisible}" />
+        </Grid>
+    </StackPanel>
+</UserControl>
