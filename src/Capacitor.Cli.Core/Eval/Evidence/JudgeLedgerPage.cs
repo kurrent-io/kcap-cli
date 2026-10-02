@@ -15,14 +15,18 @@ public sealed record JudgeLedgerPage(
         bool HasNext, string? Next) {
     public int Bytes { get; } = Encoding.UTF8.GetByteCount(Text);
 
-    /// <summary>Lanes of the plans a plan_ledger page served: consulted, though only the entries it showed were delivered.</summary>
+    /// <summary>Lanes of the plans a plan_ledger page served: consulted, though the page delivers none of their entries.</summary>
     public IReadOnlyList<string> LedgerSources { get; init; } = [];
+
+    /// <summary>Refs a plan_ledger page showed for citation only: a ledger row is not its entry's content, so these are
+    /// never delivered events.</summary>
+    public IReadOnlyList<(string Source, long From, long To)> Citable { get; init; } = [];
 
     public bool Equals(JudgeLedgerPage? other) =>
         other is not null && Seq == other.Seq && Handle == other.Handle && Tool == other.Tool && ArgsJson == other.ArgsJson && Source == other.Source
      && Text == other.Text && HasNext == other.HasNext && Next == other.Next
      && Revisions.SequenceEqual(other.Revisions) && Turns.SequenceEqual(other.Turns) && Bodies.SequenceEqual(other.Bodies) && Detail.SequenceEqual(other.Detail)
-     && LedgerSources.SequenceEqual(other.LedgerSources)
+     && LedgerSources.SequenceEqual(other.LedgerSources) && Citable.SequenceEqual(other.Citable)
      && Cites.Count == other.Cites.Count && Cites.All(kv => other.Cites.TryGetValue(kv.Key, out var v) && v == kv.Value);
 
     public override int GetHashCode() => HashCode.Combine(Seq, Handle, Text);

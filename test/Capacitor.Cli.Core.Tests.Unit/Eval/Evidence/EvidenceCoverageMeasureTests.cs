@@ -240,17 +240,28 @@ public class EvidenceCoverageMeasureTests {
         await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
     }
 
+    /// <summary>A ledger row shows only part of an entry, so a lane whose every ref the ledger printed is consulted but
+    /// unread; the refs stay citable, and only an events page delivering the entries makes the record complete.</summary>
     [Test]
-    public async Task A_run_whose_lane_entries_the_plan_ledger_all_showed_is_complete() {
+    public async Task A_lane_shown_only_through_the_plan_ledger_is_consulted_but_unread_until_its_events_are_delivered() {
         var lane   = PlanLane(1);
         var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4));
         var plan   = $$"""{"plan_id":"{{0xF001:x32}}","sources":["{{lane}}"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"{{lane}}@0"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"one","status":"completed","note":null,"title_ref":"{{lane}}@1","status_ref":"{{lane}}@3"},{"task_id":"t2","ordinal":2,"title":"two","status":"pending","note":null,"title_ref":"{{lane}}@2","status_ref":null}]}""";
-        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [plan], plansOmitted: 0, tasksOmitted: 0)]);
+        var shownOnly = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [plan], plansOmitted: 0, tasksOmitted: 0)]);
 
-        var c = EvidenceCoverageMeasure.ForRetrieval(scope, ledger, []);
+        var shown = EvidenceCoverageMeasure.ForRetrieval(scope, shownOnly, []);
 
-        await Assert.That(c.SourcesConsulted).IsEquivalentTo([Root, lane]);
-        await Assert.That(c.Omissions).IsEmpty();
-        await Assert.That(c.StopReason).IsNull();
+        await Assert.That(shown.SourcesConsulted).IsEquivalentTo([Root, lane]);
+        await Assert.That(shown.Omissions.Single(o => o.Kind == EvalOmissionKinds.PagesNotFetched).Detail).IsEqualTo("unread_ranges");
+        await Assert.That(shown.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
+        foreach (var r in new[] { $"{lane}@0", $"{lane}@1", $"{lane}@2", $"{lane}@3", $"{lane}@1-3" }) {
+            await Assert.That(shownOnly.TryExpand(r, out _)).IsTrue();
+            await Assert.That(EvidenceRefText.TryParse(r, out var parsed) && shownOnly.IsDelivered(parsed)).IsFalse();
+        }
+
+        var read = EvidenceCoverageMeasure.ForRetrieval(scope, Ledger([.. shownOnly.Pages, Events("p2", lane, 0, 3)]), []);
+
+        await Assert.That(read.Omissions).IsEmpty();
+        await Assert.That(read.StopReason).IsNull();
     }
 }
