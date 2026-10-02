@@ -3,9 +3,6 @@ using Capacitor.Cli.Core.Eval;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval;
 
-/// <summary>The legacy prompts carry the declared-task block the eval context sends: the text prompt fills its
-/// <c>{TASKS}</c> in one pass, the tools prompt gains a declared-task section before the question, and a context from a
-/// server that sends no block leaves both prompts as they are without it.</summary>
 public class EvalServiceDeclaredTasksTests {
     const string Block = "Declared tasks: 2/4 done\n1. [completed] Scaffold {TRACE_JSON} the module (source: mcp)";
 
