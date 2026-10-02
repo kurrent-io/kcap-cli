@@ -10,7 +10,8 @@ Subcommands:
   sessions                Start the MCP sessions server (stdio) — search and
                           inspect past Kurrent Capacitor sessions.
   flows                   Start the MCP flows server (stdio) — start and manage
-                          review flows from within an agent session.
+                          review flows, and start separate hosted agents,
+                          from within an agent session.
   memory                  Start the MCP memory server (stdio) — team memory
                           tools (search, get, save, update, rescope, archive).
   workitems               Start the MCP workitems server (stdio) — declare and
