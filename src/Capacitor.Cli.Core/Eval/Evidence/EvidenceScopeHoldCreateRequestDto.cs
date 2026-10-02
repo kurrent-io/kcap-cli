@@ -8,4 +8,5 @@ public sealed record EvidenceScopeHoldCreateRequestDto {
     [JsonPropertyName("continuations")]    public required bool   Continuations   { get; init; }
     [JsonPropertyName("delegates")]        public required bool   Delegates       { get; init; }
     [JsonPropertyName("adopted_children")] public required bool   AdoptedChildren { get; init; }
+    [JsonPropertyName("include_plans")]    public          bool?  IncludePlans    { get; init; }
 }

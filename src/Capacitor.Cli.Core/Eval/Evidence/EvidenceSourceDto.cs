@@ -13,5 +13,6 @@ public sealed record EvidenceSourceDto {
     [JsonPropertyName("first_revision")]   public          long    FirstRevision  { get; init; }
     [JsonPropertyName("turn_count")]       public          int?    TurnCount      { get; init; }
     [JsonPropertyName("availability")]     public required string  Availability   { get; init; }
+    [JsonPropertyName("plan_id")]          public          string? PlanId         { get; init; }
     [JsonIgnore] public bool IsAvailable => Availability == "available";
 }
