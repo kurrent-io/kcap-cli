@@ -10,7 +10,6 @@ using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Setup;
-using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -226,60 +225,51 @@ public class WizardSimpleStepsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_window_selects_a_template_for_each_simple_step() {
+    public async Task The_window_renders_the_done_page_from_its_facts() {
         var result = await AvaloniaSession.DispatchAsync(async () => {
-            var defaults = new DefaultsStepViewModel(Config.Root);
-            var done = new DoneStepViewModel(() => [("Connect your harnesses", false, "kcap isn't on this machine")]);
-            var vm = new OnboardingViewModel([defaults, done]);
+            var done = new DoneStepViewModel(() => new DoneFacts(["Claude Code"], false, false, null, true, "test-mac", null));
+            var vm = new OnboardingViewModel([done]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var daemonNameText = window.GetVisualDescendants().OfType<TextBox>().FirstOrDefault(t => t.Name == "DaemonNameBox")?.Text;
-
-            await vm.SkipCommand.Execute().ToTask(); // Defaults -> Done (Skip never persists — no real config write here)
-            Dispatcher.UIThread.RunJobs();
-
-            var summaryList = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "SummaryList");
-            var summaryTitle = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "SummaryTitleText")?.Text;
-            var summaryNote = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "SummaryNoteText")?.Text;
-            var summaryGlyph = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "SummaryGlyphText")?.Text;
+            var texts    = window.GetVisualDescendants().OfType<TextBlock>().ToList();
+            var title    = texts.FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
+            var daemon   = texts.FirstOrDefault(t => t.Name == "DaemonLineText")?.Text;
+            var capture  = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "CaptureItems")?.ItemCount;
+            var next     = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "NextButton")?.Content;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (daemonNameText, summaryList, summaryTitle, summaryNote, summaryGlyph);
+            return (title, daemon, capture, next);
         });
 
-        await Assert.That(result.daemonNameText).IsEqualTo(Environment.UserName.ToLowerInvariant());
-
-        await Assert.That(result.summaryList).IsNotNull();
-        await Assert.That(result.summaryTitle).IsEqualTo("Connect your harnesses");
-        await Assert.That(result.summaryNote).IsEqualTo("kcap isn't on this machine");
-        await Assert.That(result.summaryGlyph).IsEqualTo("—");
+        await Assert.That(result.title).IsEqualTo("From now on, your agents remember");
+        await Assert.That(result.daemon).StartsWith("Running as a service on test-mac.");
+        await Assert.That(result.capture).IsEqualTo(1);
+        await Assert.That(result.next).IsEqualTo("OPEN CAPACITOR");
     }
 }
 
 /// Real ConfigMutator against the config path.
-public class DefaultsStepViewModelTests {
+public class MachineNameViewModelTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 
     [Test]
     public async Task The_default_name_is_the_lowercased_username() {
-        var vm = new DefaultsStepViewModel(Config.Root);
+        var vm = new MachineNameViewModel(Config.Root);
 
-        await Assert.That(vm.Title).IsEqualTo("This machine");
         await Assert.That(vm.DaemonName).IsEqualTo(Environment.UserName.ToLowerInvariant());
-        await Assert.That(vm.Applicable).IsTrue();
-        await Assert.That(vm.Satisfied).IsFalse();
+        await Assert.That(vm.Saved).IsFalse();
     }
 
     [Test]
-    public async Task Next_persists_the_name_and_preserves_unrelated_config() {
+    public async Task Save_persists_the_name_and_preserves_unrelated_config() {
         var existing = new ProfileConfig {
             ActiveProfile = "acme",
             Profiles = new() {
@@ -294,12 +284,12 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root) { DaemonName = "acme-daemon" };
+        var vm = new MachineNameViewModel(Config.Root) { DaemonName = "acme-daemon" };
 
-        var canLeave = await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        var canLeave = await vm.SaveAsync(CancellationToken.None);
 
         await Assert.That(canLeave).IsTrue();
-        await Assert.That(vm.Satisfied).IsTrue();
+        await Assert.That(vm.Saved).IsTrue();
 
         var saved   = ConfigMutator.LoadPure(ConfigPath);
         var profile = saved.Profiles["acme"];
@@ -316,7 +306,7 @@ public class DefaultsStepViewModelTests {
 
     // The persist must follow the wizard's resolved identity, not on-disk ActiveProfile (KCAP_PROFILE split).
     [Test]
-    public async Task Next_persists_to_the_injected_resolved_profile_not_the_active_one() {
+    public async Task Save_persists_to_the_injected_resolved_profile_not_the_active_one() {
         var existing = new ProfileConfig {
             ActiveProfile = "acme",
             Profiles = new() {
@@ -326,12 +316,12 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => "work") { DaemonName = "work-daemon" };
+        var vm = new MachineNameViewModel(Config.Root, resolveProfileName: () => "work") { DaemonName = "work-daemon" };
 
-        var canLeave = await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        var canLeave = await vm.SaveAsync(CancellationToken.None);
 
         await Assert.That(canLeave).IsTrue();
-        await Assert.That(vm.Satisfied).IsTrue();
+        await Assert.That(vm.Saved).IsTrue();
 
         var saved = ConfigMutator.LoadPure(ConfigPath);
 
@@ -348,9 +338,9 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => "ghost") { DaemonName = "acme-daemon" };
+        var vm = new MachineNameViewModel(Config.Root, resolveProfileName: () => "ghost") { DaemonName = "acme-daemon" };
 
-        await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await vm.SaveAsync(CancellationToken.None);
 
         var saved = ConfigMutator.LoadPure(ConfigPath);
 
@@ -366,110 +356,127 @@ public class DefaultsStepViewModelTests {
         };
         File.WriteAllText(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var vm = new DefaultsStepViewModel(Config.Root, resolveProfileName: () => null) { DaemonName = "acme-daemon" };
+        var vm = new MachineNameViewModel(Config.Root, resolveProfileName: () => null) { DaemonName = "acme-daemon" };
 
-        await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await vm.SaveAsync(CancellationToken.None);
 
         var saved = ConfigMutator.LoadPure(ConfigPath);
 
         await Assert.That(saved.Profiles["acme"].Daemon!.Name).IsEqualTo("acme-daemon");
     }
 
-    [Test]
-    public async Task Skip_and_back_do_not_persist_and_leave_the_step_unsatisfied() {
-        var vm = new DefaultsStepViewModel(Config.Root) { DaemonName = "acme-daemon" };
-
-        await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None)).IsTrue();
-        await Assert.That(await vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None)).IsTrue();
-
-        await Assert.That(vm.Satisfied).IsFalse();
-        await Assert.That(File.Exists(ConfigPath)).IsFalse();
-    }
-
     // A real write failure (read-only config dir), not a fake, proves CanLeaveAsync's own catch.
     [Test]
     [UnsupportedOSPlatform("windows")]
-    public async Task A_persist_failure_vetoes_Next_with_a_visible_message() {
+    public async Task A_save_failure_is_refused_with_a_visible_message() {
         Skip.When(OperatingSystem.IsWindows(), "chmod-based read-only config dir is POSIX-only.");
 
         var dir = Path.GetDirectoryName(ConfigPath)!;
-        var vm  = new DefaultsStepViewModel(Config.Root) { DaemonName = "acme-daemon" };
+        var vm  = new MachineNameViewModel(Config.Root) { DaemonName = "acme-daemon" };
 
         File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         try {
-            var canLeave = await vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var canLeave = await vm.SaveAsync(CancellationToken.None);
 
             await Assert.That(canLeave).IsFalse();
-            await Assert.That(vm.Satisfied).IsFalse();
+            await Assert.That(vm.Saved).IsFalse();
             await Assert.That(vm.Message).IsNotNull();
-            await Assert.That(vm.Message).Contains("Could not save defaults");
+            await Assert.That(vm.Message).Contains("Could not save the machine name");
         } finally {
             File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
 }
 
-/// Closing recap. Owns no commands and no Rx subscriptions — runs without the headless session,
-/// like ConnectChoiceViewModelTests.
+/// The last page reads its headline and figures off what the earlier pages did.
 public class DoneStepViewModelTests {
-    [Test]
-    public async Task Summary_reflects_the_providers_current_output_including_why_skipped_notes() {
-        IReadOnlyList<(string Title, bool Satisfied, string? Note)> current = [
-            ("Command-line tool", false, "kcap CLI not found"),
-            ("Sign in", true, null),
-            ("Enable daemon", false, "requires sign-in"),
-        ];
-        var vm = new DoneStepViewModel(() => current);
+    static DoneFacts Facts(IReadOnlyList<string>? recording = null, bool hazard = false, HistoryImportRun? import = null) =>
+        new(recording ?? ["Claude Code"], false, hazard, import, true, "test-mac", "https://acme.kcap.ai");
 
-        await vm.OnEnterAsync(CancellationToken.None);
+    static async Task<HistoryImportRun> FinishedRun(int imported, int failed) {
+        var cli = new FakeKcapCli {
+            ImportBehavior = (_, onLine, _) => {
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, $"  {imported} imported · 0 skipped · {failed} failed"));
+                return Task.FromResult(new StreamingResult(0, false, []));
+            },
+        };
+        var run = new HistoryImportRun(100, 2, "from the last 90 days", 1, action => action());
+        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"])]);
+        await run.Completion;
 
-        await Assert.That(vm.Summary.Select(e => (e.Title, e.Satisfied, e.Note)))
-            .IsEquivalentTo(current, CollectionOrdering.Matching);
-        await Assert.That(vm.Summary[0].Glyph).IsEqualTo("—");
-        await Assert.That(vm.Summary[0].Detail).IsEqualTo("kcap CLI not found");
-        await Assert.That(vm.Summary[1].Glyph).IsEqualTo("✓");
-        await Assert.That(vm.Summary[1].Detail).IsNull();
+        return run;
     }
 
     [Test]
-    public async Task A_satisfied_row_still_shows_its_outcome_note() {
-        var vm = new DoneStepViewModel(() => [
-            ("Sessions from this machine", true, "Org-repo sessions visible in the workspace. Machine name daemon-a."),
-        ]);
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_headline_follows_what_actually_happened() {
+        var (imported, remembering, nothing, blocked) = await AvaloniaSession.DispatchAsync(async () => {
+            async Task<string> TitleFor(DoneFacts facts) {
+                var vm = new DoneStepViewModel(() => facts);
+                await vm.OnEnterAsync(CancellationToken.None);
+                return vm.Title;
+            }
 
-        await Assert.That(vm.Summary[0].Detail)
-            .IsEqualTo("Org-repo sessions visible in the workspace. Machine name daemon-a.");
-    }
-
-    [Test]
-    public async Task Summary_re_renders_on_every_entry() {
-        var callCount = 0;
-        var vm = new DoneStepViewModel(() => {
-            callCount++;
-
-            return callCount == 1
-                ? [("Step", false, "not yet")]
-                : [("Step", true, (string?)null)];
+            return (await TitleFor(Facts(import: await FinishedRun(40, 0))), await TitleFor(Facts()),
+                await TitleFor(Facts(recording: [])), await TitleFor(Facts(hazard: true)));
         });
 
-        await vm.OnEnterAsync(CancellationToken.None);
-        var first = vm.Summary[0].Satisfied;
-
-        await vm.OnEnterAsync(CancellationToken.None);
-        var second = vm.Summary[0].Satisfied;
-
-        await Assert.That(first).IsFalse();
-        await Assert.That(second).IsTrue();
+        await Assert.That(imported).IsEqualTo("Your work so far");
+        await Assert.That(remembering).IsEqualTo("From now on, your agents remember");
+        await Assert.That(nothing).IsEqualTo("Nothing is being recorded yet");
+        await Assert.That(blocked).IsEqualTo("Nothing is being recorded yet"); // hooks that cannot find kcap record nothing
     }
 
     [Test]
-    public async Task OnEnterAsync_raises_PropertyChanged_for_Summary() {
-        var vm = new DoneStepViewModel(() => []);
-        var raised = new List<string?>();
-        vm.PropertyChanged += (_, args) => raised.Add(args.PropertyName);
+    [NotInParallel("AvaloniaSession")]
+    public async Task Failed_uploads_are_named_with_where_they_still_are() {
+        var (visible, title, body, landed, unit) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new DoneStepViewModel(() => Facts(import: null));
+            var run = await FinishedRun(30, 3);
+            vm = new DoneStepViewModel(() => Facts(import: run));
+            await vm.OnEnterAsync(CancellationToken.None);
 
-        await vm.OnEnterAsync(CancellationToken.None);
+            return (vm.FailedVisible, vm.FailedTitle, vm.FailedBody, vm.LandedValue, vm.LandedUnit);
+        });
 
-        await Assert.That(raised).Contains(nameof(DoneStepViewModel.Summary));
+        await Assert.That(visible).IsTrue();
+        await Assert.That(title).IsEqualTo("3 sessions failed to upload");
+        await Assert.That(body).IsEqualTo("They are still on test-mac. Run kcap import to try again.");
+        await Assert.That(landed).IsEqualTo("30");
+        await Assert.That(unit).IsEqualTo("/ 100");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_facts_are_read_again_on_every_entry() {
+        var calls = await AvaloniaSession.DispatchAsync(async () => {
+            var count = 0;
+            var vm = new DoneStepViewModel(() => { count++; return Facts(); });
+            await vm.OnEnterAsync(CancellationToken.None);
+            await vm.OnEnterAsync(CancellationToken.None);
+            return count;
+        });
+
+        await Assert.That(calls).IsEqualTo(2);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_your_workspace_opens_the_signed_in_server() {
+        var opened = await AvaloniaSession.DispatchAsync(async () => {
+            var opener = new RecordingUrlOpener();
+            var vm = new DoneStepViewModel(() => Facts(), opener);
+            await vm.OnEnterAsync(CancellationToken.None);
+            vm.OpenWorkspaceCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+            return opener.Opened.ToList();
+        });
+
+        await Assert.That(opened).IsEquivalentTo(["https://acme.kcap.ai"]);
+    }
+
+    sealed class RecordingUrlOpener : IUrlOpener {
+        public readonly List<string> Opened = [];
+        public void Open(string url) => Opened.Add(url);
     }
 }

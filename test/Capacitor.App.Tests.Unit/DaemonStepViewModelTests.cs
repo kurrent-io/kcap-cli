@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -86,13 +87,18 @@ public class DaemonStepViewModelTests {
         public (string Profile, string Server, string DaemonName) UnderConfigLock = (Profile, RawServer, DaemonName);
         public string? TerminalPath = "/usr/bin:/bin";
 
-        public Harness() {
+        public Harness(bool withName = false) {
             Time   = new TimerCountingTimeProvider(Clock);
             Claims = new ConsentFlipClaims(_config.Root);
+            Name   = withName ? new MachineNameViewModel(_config.Root, "first-name") : null;
             Vm = new DaemonStepViewModel(
                 Cli, Lane.RunAsync, () => Identity, Observation, Ops, Claims, () => UnderConfigLock, Surface,
-                _ => Task.FromResult<string?>(TerminalPath), Time);
+                _ => Task.FromResult<string?>(TerminalPath), Time, Name);
         }
+
+        public readonly MachineNameViewModel? Name;
+
+        public ConfigRoot Root => _config.Root;
 
         public void ArmClaim() => Claims.Arm(new ConsentFlipClaim(Profile, CanonicalServer));
 
@@ -833,7 +839,7 @@ public class DaemonStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Leaving_mid_mutation_detaches_the_waiter_and_never_vetoes() {
+    public async Task Going_back_mid_mutation_detaches_the_waiter() {
         var (observedCancel, canLeave, status) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Status(Snap());
@@ -851,7 +857,7 @@ public class DaemonStepViewModelTests {
             var action = h.Act();
             await entered.Task;
 
-            var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var left = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
             await action;
 
             return (cancelled.Task.IsCompleted, left, h.Vm.Status);
@@ -860,6 +866,47 @@ public class DaemonStepViewModelTests {
         await Assert.That(observedCancel).IsTrue();
         await Assert.That(canLeave).IsTrue();
         await Assert.That(status).IsEqualTo(DaemonStepViewModel.DetachedMessage);
+    }
+
+    /// The service is installed under the name on the page, so the name is saved, and the row read
+    /// again, before the install runs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Enabling_saves_the_machine_name_first() {
+        var (saved, statusReadsBefore, statusReadsAfter, installs) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness(withName: true);
+            h.Status(Snap());
+            await h.Enter();
+            var before = h.Cli.StatusCallCount;
+            h.Name!.DaemonName = "renamed";
+
+            await h.Act();
+
+            var name = ConfigMutator.LoadPure(AppConfig.GetConfigPath(h.Root)).Profiles.Values.Single().Daemon?.Name;
+            return (name, before, h.Cli.StatusCallCount, h.Lane.Requests.Count);
+        });
+
+        await Assert.That(saved).IsEqualTo("renamed");
+        await Assert.That(statusReadsAfter).IsGreaterThan(statusReadsBefore);
+        await Assert.That(installs).IsEqualTo(1);
+    }
+
+    /// The daemon is required: moving on without one is refused, and says why.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(WizardNavigation.Next)]
+    [Arguments(WizardNavigation.Skip)]
+    public async Task Moving_on_without_a_running_daemon_is_refused(WizardNavigation direction) {
+        var (left, status) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Status(Snap());
+            await h.Enter();
+
+            return (await h.Vm.CanLeaveAsync(direction, CancellationToken.None), h.Vm.Status);
+        });
+
+        await Assert.That(left).IsFalse();
+        await Assert.That(status).IsEqualTo(DaemonStepViewModel.RequiredMessage);
     }
 
     [Test]
@@ -906,7 +953,7 @@ public class DaemonStepTemplateTests {
                 () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
                 _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
 
-            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
+            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
@@ -924,7 +971,7 @@ public class DaemonStepTemplateTests {
         });
 
         await Assert.That(actionButton).IsNotNull();
-        await Assert.That(actionButton!.Content).IsEqualTo("Enable daemon");
+        await Assert.That(actionButton!.Content).IsEqualTo("ENABLE DAEMON");
         await Assert.That(actionButton.IsVisible).IsTrue();
         await Assert.That(refreshButton).IsNotNull();
         await Assert.That(refreshButton!.IsVisible).IsFalse();
@@ -944,7 +991,7 @@ public class DaemonStepTemplateTests {
                 () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
                 _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
 
-            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
+            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };

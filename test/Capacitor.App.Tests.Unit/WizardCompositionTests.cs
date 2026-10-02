@@ -99,45 +99,25 @@ public class WizardCompositionHappyPathTests {
             await Assert.That(authHandler.Requests.Any(r => r.Contains("/auth/config"))).IsTrue();
             await Assert.That(harness.Claims.Pending().Select(c => c.Profile).ToList()).IsEquivalentTo([ProfileName]);
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Sign-in -> Defaults
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Defaults -> Harnesses (persists via ConfigMutator)
-
-            var defaults = graph.Steps.OfType<DefaultsStepViewModel>().Single();
-            await Assert.That(defaults.Satisfied).IsTrue();
-            await Assert.That(defaults.Message).IsNull();
-
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> Import (no CLI, nothing installable)
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Import -> Daemon (no CLI, nothing runnable)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Sign-in -> Harnesses
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> History (persists; no CLI, nothing installable)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Daemon (nothing to import)
 
             var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.CliMissing);
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Daemon -> Done
-            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Done);
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // refused: the daemon is required
 
-            return graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
+            return (graph.ViewModel.Current.Id, daemon.Status);
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
-        var byTitle = summary.ToDictionary(e => e.Title);
-
-        await Assert.That(summary.Count).IsEqualTo(5); // every configured step but Welcome and Done
-        await Assert.That(byTitle["Sign in"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Sign in"].Note).IsEqualTo("No sign-in required for this server.");
-        await Assert.That(byTitle["This machine"].Satisfied).IsTrue();
-        await Assert.That(byTitle["This machine"].Note).IsEqualTo("Machine name daemon-a.");
-        await Assert.That(byTitle["Connect your harnesses"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Connect your harnesses"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Import past sessions"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Import past sessions"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Enable the daemon"].Satisfied).IsFalse();
-        // The dominant CLI-missing note, never the stale "requires sign-in" — sign-in DID commit.
-        await Assert.That(byTitle["Enable the daemon"].Note).IsEqualTo(WizardComposition.CliMissingNote);
+        await Assert.That(summary.Id).IsEqualTo(WizardStepId.Daemon);
+        await Assert.That(summary.Status).IsEqualTo(DaemonStepViewModel.RequiredMessage);
 
         var config = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(config.Profiles[ProfileName].ServerUrl).IsEqualTo(ServerUrl);
         await Assert.That(config.Profiles[ProfileName].AuthProvider?.Provider).IsEqualTo(AuthProvider.None);
         await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("org_public");
-        await Assert.That(config.Profiles[ProfileName].Daemon?.Name).IsEqualTo("daemon-a");
 
         // No daemon touchpoint reached with no CLI resolved: no lane traffic, no IPC, no CLI spawns.
         await Assert.That(harness.Lane.Requests).IsEmpty();

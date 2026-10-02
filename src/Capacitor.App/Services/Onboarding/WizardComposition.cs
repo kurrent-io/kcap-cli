@@ -73,9 +73,6 @@ internal sealed record WizardGraphOptions(
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
-    internal const string CliMissingNote     = "kcap isn't on this machine";
-    internal const string RequiresSignInNote = "Sign in to enable the daemon";
-
     /// Production bridges: one marshalling boundary (Avalonia's dispatcher in the app) and a
     /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.
     internal static WizardBridges BuildBridges(
@@ -119,8 +116,9 @@ internal static class WizardComposition {
         var pathFix  = options.ShimApplicable
             ? new PathFixViewModel(options.ShimInstaller, options.AppState, options.ShimTarget)
             : null;
-        // Defaults persists to the same fresh identity the daemon step gates on, falling back to ActiveProfile.
-        var defaults = new DefaultsStepViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
+        // The name persists to the same fresh identity the daemon step gates on, falling back to ActiveProfile.
+        var machineName = new MachineNameViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
+        var machine     = MachineLabel(Environment.MachineName);
         // ONE detection feed for both vendor steps: two would probe the login shell twice for the
         // same answer, and the two steps' vendor lists could then disagree.
         var detect = options.DetectionFeed(options.Probe);
@@ -131,10 +129,10 @@ internal static class WizardComposition {
             stampOffered: ids => offers.StampOffered(ids, options.Time.GetUtcNow()),
             options.Root, pathFix,
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
-            MachineLabel(Environment.MachineName),
+            machine,
             () => options.ResolveIdentity()?.Profile);
         var history = new HistoryStepViewModel(
-            cli, () => harnesses.Recording, options.Bridges.Post, MachineLabel(Environment.MachineName), options.Time);
+            cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time);
         var daemon = new DaemonStepViewModel(
             cli, options.RunMutation,
             // Gated on a committed sign-in and resolved fresh per call, never the startup-cached profile.
@@ -145,12 +143,23 @@ internal static class WizardComposition {
                 ? id.DaemonName
                 : options.DefaultDaemonName ?? "daemon")),
             claims,
-            options.ResolveConsentFlipIdentity, options.Surface, options.Probe.TerminalPathAsync, options.Time);
+            options.ResolveConsentFlipIdentity, options.Surface, options.Probe.TerminalPathAsync, options.Time,
+            machineName);
 
-        IWizardStep[] configured = [welcome, signIn, defaults, harnesses, history, daemon];
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
-        var done = new DoneStepViewModel(() => Summarize(configured, cli.CliPath is not null));
-        IWizardStep[] steps = [.. configured, done];
+        var done = new DoneStepViewModel(() => {
+            var recording = harnesses.Rows.Where(r => r is { Record: true, Succeeded: true }).ToList();
+
+            return new DoneFacts(
+                [.. recording.Select(r => r.Label)],
+                recording.Any(r => r.Id == HarnessId.Codex),
+                harnesses.PathHazard,
+                history.Run,
+                daemon.Satisfied,
+                machine,
+                signIn.Satisfied ? options.ResolveIdentity()?.Server : null);
+        }, options.UrlOpener);
+        IWizardStep[] steps = [welcome, signIn, harnesses, history, daemon, done];
 
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface);
         signIn.Completed += () => _ = AdvanceAfterHoldAsync(wizard, wizard.Visit, options.Time, options.ShutdownToken);
@@ -169,55 +178,10 @@ internal static class WizardComposition {
         wizard.TryAdvanceFrom(WizardStepId.SignIn, visit);
     }
 
-    /// The Done step's rows: outcome labels, not the in-wizard step titles.
-    internal static IReadOnlyList<(string Title, bool Satisfied, string? Note)> Summarize(
-            IReadOnlyList<IWizardStep> steps, bool cliAvailable) =>
-        steps.Where(step => step.Id is not (WizardStepId.Done or WizardStepId.Welcome))
-            .Select(step => (
-                SummaryTitle(step),
-                step.Satisfied,
-                step.Satisfied ? SuccessNote(step) : SkipNote(step, cliAvailable)))
-            .ToList();
-
-    static string SummaryTitle(IWizardStep step) => step switch {
-        SignInStepViewModel    => "Sign in",
-        DefaultsStepViewModel  => "This machine",
-        HarnessesStepViewModel => "Connect your harnesses",
-        HistoryStepViewModel   => "Import past sessions",
-        _                      => step.Title,
-    };
-
-    static string? SuccessNote(IWizardStep step) => step switch {
-        SignInStepViewModel signIn       => signIn.Status,
-        DefaultsStepViewModel defaults   => $"Machine name {defaults.DaemonName}.",
-        HarnessesStepViewModel harnesses => HarnessesNote(harnesses),
-        _                                => null,
-    };
-
-    static string? HarnessesNote(HarnessesStepViewModel step) {
-        var names = step.Rows.Where(r => r.Succeeded).Select(r => r.Label).ToList();
-
-        return names.Count == 0 ? null : "Turned on for " + string.Join(", ", names);
-    }
-
     /// The machine's own name as a person would say it: no ".local", lower case.
     internal static string MachineLabel(string machineName) {
         var name = machineName.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ? machineName[..^6] : machineName;
 
         return name.ToLowerInvariant();
     }
-
-    // A missing CLI dominates: every step that shells out is unreachable for that one reason.
-    static string? SkipNote(IWizardStep step, bool cliAvailable) {
-        if (!cliAvailable && NeedsCli(step.Id)) return CliMissingNote;
-
-        return step switch {
-            DaemonStepViewModel { Row: DaemonRow.RequiresSignIn } => RequiresSignInNote,
-            DaemonStepViewModel daemonStep                        => daemonStep.Message,
-            _                                                     => null,
-        };
-    }
-
-    static bool NeedsCli(WizardStepId id) =>
-        id is WizardStepId.Harnesses or WizardStepId.Import or WizardStepId.Daemon;
 }

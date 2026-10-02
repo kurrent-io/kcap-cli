@@ -83,7 +83,9 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             Func<(string Profile, string Server, string DaemonName)> resolveIdentityUnderConfigLock,
             ILifecycleSurface surface,
             Func<CancellationToken, Task<string?>> terminalPathAsync,
-            TimeProvider time) {
+            TimeProvider time,
+            MachineNameViewModel? machine = null) {
+        Machine                         = machine;
         _cli                            = cli;
         _runMutation                    = runMutation;
         _resolveIdentity                = resolveIdentity;
@@ -101,10 +103,23 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         RefreshCommand = ReactiveCommand.CreateFromTask(() => RefreshAsync(CancellationToken.None), idle);
     }
 
+    internal const string RequiredMessage = "The daemon has to be running to finish setup.";
+
     public WizardStepId Id         => WizardStepId.Daemon;
-    public string       Title      => "Enable the daemon";
+    public string       Title      => "Run your agents on this machine from anywhere";
+    public string       Eyebrow    => "Your daemon";
     public bool         Applicable => true;
-    public string Lede => "Runs hosted agents and reviews in the background. Starts again after a reboot.";
+    public bool         Skippable  => false;
+    public string?      NextLabel  => "Continue";
+
+    public string Lede =>
+        "Start a run from another machine and have it land on this one, where your code is. The daemon runs as a " +
+        "background service and starts again after a restart.";
+
+    /// The machine's name, saved before the first enable so the service is installed under it.
+    public MachineNameViewModel? Machine { get; }
+
+    string? _savedName;
 
     /// Set ONLY by the lane's own success outcome or the already-enabled row, and never cleared —
     /// a later re-classification must not re-derive (or revoke) a mutation's success from a snapshot.
@@ -170,9 +185,15 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     public Task OnEnterAsync(CancellationToken ct) => RefreshAsync(ct);
 
-    /// Never vetoes: a running mutation belongs to the LANE, so cancelling detaches this
-    /// waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
+    /// Vetoes only moving forward without a running daemon. Back cancels, and a running mutation
+    /// belongs to the LANE, so cancelling detaches this waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        // Required: the app has nothing to run without it. A run in flight is left to finish.
+        if (direction != WizardNavigation.Back && !Satisfied) {
+            if (!Busy) Status = RequiredMessage;
+            return false;
+        }
+
         _classifyCts?.Cancel();
         _actionCts?.Cancel();
 
@@ -367,6 +388,19 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task RunActionCoreAsync(CancellationToken ct) {
+        // The request names the daemon, so a changed name is saved and the row read again under it
+        // before anything is installed.
+        if (Machine is { } machine && machine.DaemonName != _savedName) {
+            if (!await machine.SaveAsync(ct).ConfigureAwait(false)) {
+                Status = machine.Message;
+                return;
+            }
+
+            _savedName = machine.DaemonName;
+            await ClassifyAsync(ct).ConfigureAwait(false);
+            if (Satisfied || Affordance == DaemonAffordance.None) return;
+        }
+
         Busy = true;
         try {
             switch (Affordance) {
