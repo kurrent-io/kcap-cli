@@ -145,7 +145,7 @@ public static class EvidencePageRenderer {
             w.WriteStartObject();
             if (row.Str(refField) is { } reference) w.WriteString("cite", delivered(reference));
             foreach (var field in row.EnumerateObject()) {
-                if (field.NameEquals("status_ref") && field.Value.ValueKind == JsonValueKind.String) w.WriteString("status_cite", delivered(field.Value.GetString()!));
+                if (field.NameEquals("status_ref") && field.Value.IsString) w.WriteString("status_cite", delivered(field.Value.GetString()!));
                 field.WriteTo(w);
             }
             w.WriteEndObject();
