@@ -8,10 +8,10 @@ using Capacitor.Cli.Local;
 
 namespace Capacitor.Cli.Commands;
 
-/// One row of the daemon's agent table (`id\tstatus\trepo\tkind\tflowRunId\tflowRole` on the
-/// wire). A daemon older than #379 sends only the first three; the rest default.
+/// One row of the daemon's agent table (`id\tstatus\trepo\tkind\tflowRunId\tflowRole\ttitle` on
+/// the wire). An older daemon sends only the first three or six columns; the rest default.
 internal readonly record struct AgentRow(
-    string Id, string Status, string Repo, string Kind, string FlowRunId, string FlowRole);
+    string Id, string Status, string Repo, string Kind, string FlowRunId, string FlowRole, string Title = "");
 
 /// <summary>
 /// `kcap agent start|ls|stop|attach` — drive daemon-hosted agents from the local
@@ -319,13 +319,28 @@ internal sealed class AgentCommand(
             return 0;
         }
 
-        Console.WriteLine($"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} REPO");
-        foreach (var a in agents) {
-            var role = a.FlowRole.Length > 0 ? $"  [{a.FlowRole}]" : "";
-            Console.WriteLine($"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {a.Repo}{role}");
-        }
+        foreach (var line in FormatAgentTable(agents)) Console.WriteLine(line);
 
         return 0;
+    }
+
+    /// The title goes last: it is the widest free-form column, so the repo column is padded to
+    /// its longest value instead. With no titles at all (an older daemon) the column is omitted.
+    internal static IEnumerable<string> FormatAgentTable(IReadOnlyList<AgentRow> agents) {
+        static string RepoCell(AgentRow a) => a.FlowRole.Length > 0 ? $"{a.Repo}  [{a.FlowRole}]" : a.Repo;
+
+        if (agents.All(a => a.Title.Length == 0)) {
+            yield return $"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} REPO";
+            foreach (var a in agents) yield return $"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {RepoCell(a)}";
+
+            yield break;
+        }
+
+        var repoWidth = Math.Max("REPO".Length, agents.Max(a => RepoCell(a).Length));
+
+        yield return $"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} {"REPO".PadRight(repoWidth)} TITLE";
+        foreach (var a in agents)
+            yield return $"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {RepoCell(a).PadRight(repoWidth)} {a.Title}".TrimEnd();
     }
 
     /// <summary>
@@ -339,7 +354,7 @@ internal sealed class AgentCommand(
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
             await using var stream = new NetworkStream(socket, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.List), default);
+            await FrameCodec.WriteAsync(stream, LocalFrame.ListWithTitles(), default);
             var resp = await FrameCodec.ReadAsync(stream, default);
 
             if (resp is null) {
@@ -362,13 +377,13 @@ internal sealed class AgentCommand(
 
             if (resp.Text.Length == 0) return [];
 
-            // Exactly 3 columns is an older daemon; exactly 6 is a current one. Any other width
+            // 3 or 6 columns is an older daemon; 7 is a current one. Any other width
             // means the row was corrupted in transit — most plausibly a delimiter inside a
             // free-form field — and a shifted kind column would misreport what `stop --all` is
             // about to do. Refuse the whole table rather than consent to a guess.
             string[] rows = [.. resp.Text.Split('\n').Where(l => l.Length > 0)];
 
-            if (rows.Any(l => l.Split('\t').Length is not (3 or 6))) {
+            if (rows.Any(l => l.Split('\t').Length is not (3 or 6 or 7))) {
                 await Console.Error.WriteLineAsync(
                     "kcap: daemon sent a malformed agent table (unexpected column count); refusing to act on it");
 
@@ -489,7 +504,8 @@ internal sealed class AgentCommand(
             p.Length > 2 ? p[2] : "",
             p.Length > 3 && p[3].Length > 0 ? p[3] : "agent",
             p.Length > 4 ? p[4] : "",
-            p.Length > 5 ? p[5] : "");
+            p.Length > 5 ? p[5] : "",
+            p.Length > 6 ? p[6] : "");
     }
 
     /// <summary>A full agent id as minted by `Guid.NewGuid().ToString("N")`.</summary>

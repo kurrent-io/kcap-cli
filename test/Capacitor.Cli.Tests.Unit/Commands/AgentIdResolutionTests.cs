@@ -76,6 +76,40 @@ public class AgentIdResolutionTests {
     }
 
     [Test]
+    public async Task Row_with_the_title_column_carries_the_title() {
+        var row = AgentCommand.ParseAgentRow("ab12\tRunning\t/repo\tagent\t\t\tFix the flaky test");
+        await Assert.That(row.Kind).IsEqualTo("agent");
+        await Assert.That(row.Title).IsEqualTo("Fix the flaky test");
+    }
+
+    [Test]
+    public async Task Row_without_the_title_column_has_an_empty_title() {
+        var row = AgentCommand.ParseAgentRow("ab12\tRunning\t/repo\treview-flow\tflow-7f3a\treviewer");
+        await Assert.That(row.Title).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Table_pads_the_repo_column_and_puts_the_title_last() {
+        string[] lines = [.. AgentCommand.FormatAgentTable([
+            new AgentRow("a1", "Running", "/r", "agent", "", "", "Fix the flaky test"),
+            new AgentRow("b2", "Running", "/longer/repo", "review-flow", "f", "reviewer", ""),
+        ])];
+
+        var width = "/longer/repo  [reviewer]".Length;
+        await Assert.That(lines[0]).EndsWith($" {"REPO".PadRight(width)} TITLE");
+        await Assert.That(lines[1]).EndsWith($" {"/r".PadRight(width)} Fix the flaky test");
+        await Assert.That(lines[2]).EndsWith("/longer/repo  [reviewer]");
+    }
+
+    [Test]
+    public async Task Table_from_an_older_daemon_has_no_title_column() {
+        string[] lines = [.. AgentCommand.FormatAgentTable([new AgentRow("a1", "Running", "/r", "agent", "", "")])];
+
+        await Assert.That(lines[0]).EndsWith("REPO");
+        await Assert.That(lines[1]).EndsWith("/r");
+    }
+
+    [Test]
     public async Task Row_from_an_older_daemon_defaults_to_an_unprotected_agent() {
         // An older daemon sends three columns. Treating the missing kind as `agent` is what
         // makes the group keep working against it — protection simply does not engage.

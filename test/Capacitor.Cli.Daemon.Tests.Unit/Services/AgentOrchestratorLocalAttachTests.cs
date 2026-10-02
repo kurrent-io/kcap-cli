@@ -785,7 +785,7 @@ public class AgentOrchestratorLocalAttachTests {
             var server = new CaptureServerConnection();
             orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
-                "agent-xyz", null, "", null, "/tmp/repo", "claude",
+                "agent-xyz", "Fix the flaky test", "", null, "/tmp/repo", "claude",
                 new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
             ActivityClock = new AgentActivityClock(TimeProvider.System),
@@ -807,12 +807,13 @@ public class AgentOrchestratorLocalAttachTests {
             await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
             await using var stream = new NetworkStream(sock, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.List), cts.Token);
+            await FrameCodec.WriteAsync(stream, LocalFrame.ListWithTitles(), cts.Token);
             var resp = await FrameCodec.ReadAsync(stream, cts.Token);
 
             await Assert.That(resp!.Type).IsEqualTo(FrameType.AgentList);
             await Assert.That(resp.Text).Contains("agent-xyz");
             await Assert.That(resp.Text).Contains("Running");
+            await Assert.That(resp.Text).EndsWith("\tFix the flaky test");
         } finally {
             if (orch is not null) await orch.DisposeAsync();
             if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
@@ -884,7 +885,7 @@ public class AgentOrchestratorLocalAttachTests {
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(client, default);
+        await orch.HandleLocalListAsync(withTitles: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -1344,6 +1345,30 @@ public class AgentOrchestratorLocalAttachTests {
         public void Resize(ushort     _, ushort __) { }
         public void SendInterrupt() { }
     }
+    /// The title column only appears when the client asks: an older CLI refuses any table that is
+    /// not 3 or 6 columns wide.
+    [Test]
+    public async Task Local_list_appends_the_title_column_only_on_request() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("titled-1", prompt: "Fix the\tflaky test");
+
+        async Task<string[]> ListAsync(bool withTitles) {
+            using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+            await orch.HandleLocalListAsync(withTitles, client, default);
+            client.WrittenStream.Position = 0;
+            var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+            return reply!.Text.Split('\t');
+        }
+
+        await Assert.That((await ListAsync(withTitles: false)).Length).IsEqualTo(6);
+
+        var cols = await ListAsync(withTitles: true);
+        await Assert.That(cols.Length).IsEqualTo(7);
+        await Assert.That(cols[6]).IsEqualTo("Fix the flaky test");
+    }
+
     [Test]
     public async Task Local_list_neutralises_delimiters_inside_a_free_form_field() {
         // Repo paths and flow roles are free-form and may legally hold a tab or newline. Emitted
@@ -1356,7 +1381,7 @@ public class AgentOrchestratorLocalAttachTests {
             flowRunId: "flow\t7f3a", flowRole: "rev\niewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(client, default);
+        await orch.HandleLocalListAsync(withTitles: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
