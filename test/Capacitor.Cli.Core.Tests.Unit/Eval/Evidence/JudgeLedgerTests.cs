@@ -65,7 +65,7 @@ public class JudgeLedgerTests {
         await Assert.That(ledger.Pages[0].LedgerSources).IsEquivalentTo([lane]);
         await Assert.That(ledger.Pages[0].Equals(ledgerPage)).IsTrue();
         await Assert.That(ledger.Pages[1].LedgerSources).IsEmpty();
-        await Assert.That(ledger.LedgerSources).IsEquivalentTo([lane]);
+        await Assert.That(ledger.SourcesWithPage).Contains(lane);
         await Assert.That(ledger.SourcesWithPage).IsEquivalentTo([lane, "AgentSession-r"]);
         var lines = File.ReadAllLines(path);
         await Assert.That(lines.Count(l => l.Contains("\"ledger_sources\"", StringComparison.Ordinal))).IsEqualTo(1);

@@ -15,7 +15,7 @@ public sealed record JudgeLedgerPage(
         bool HasNext, string? Next) {
     public int Bytes { get; } = Encoding.UTF8.GetByteCount(Text);
 
-    /// <summary>Plan lanes a plan_ledger page showed whole: consulted through their fold, never read event by event.</summary>
+    /// <summary>Lanes of the plans a plan_ledger page served: consulted, though only the entries it showed were delivered.</summary>
     public IReadOnlyList<string> LedgerSources { get; init; } = [];
 
     public bool Equals(JudgeLedgerPage? other) =>

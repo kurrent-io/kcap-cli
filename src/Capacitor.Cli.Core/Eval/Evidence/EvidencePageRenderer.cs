@@ -114,9 +114,7 @@ public static class EvidencePageRenderer {
 
         var text = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
         if (planLedger && root.Arr("plans") is { } plans) {
-            // a plan whose tasks the cut shortened, always the last one served, was not shown whole
-            var whole = (root.Num("tasks_omitted") ?? 0) > 0 ? plans.GetArrayLength() - 1 : plans.GetArrayLength();
-            foreach (var plan in plans.EnumerateArray().Take(whole))
+            foreach (var plan in plans.EnumerateArray())
                 if (plan.Arr("sources") is { } lanes) ledgered.AddRange(lanes.EnumerateArray().Select(l => l.GetString()).OfType<string>());
         }
         var runs = planLedger ? [.. cited.SelectMany(c => Runs(c.Key, c.Value))] : source is null ? [] : Runs(source, revisions);
