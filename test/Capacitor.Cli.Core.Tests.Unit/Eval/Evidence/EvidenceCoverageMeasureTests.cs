@@ -192,4 +192,65 @@ public class EvidenceCoverageMeasureTests {
         await Assert.That(failure.TurnsFetched).IsEqualTo(2);
         await Assert.That(failure.Validate()).IsNull();
     }
+
+    static string PlanLane(int n) => $"PlanLane-{0xF000 + n:x32}-r";
+
+    static EvidenceSourceDto LaneSource(string id, long revisions) => new() {
+        SourceId = id, Kind = "plan", SessionId = "r", FirstRevision = 0, RevisionCutoff = revisions - 1, Availability = "available"
+    };
+
+    static string LedgerPlan(int n, string lane, int tasks) {
+        var rows = string.Join(",", Enumerable.Range(0, tasks).Select(i =>
+            $$"""{"task_id":"t{{i}}","ordinal":{{i}},"title":"task {{i}}","status":"pending","note":null,"title_ref":"{{lane}}@{{i}}","status_ref":null}"""));
+        return $$"""{"plan_id":"{{0xF000 + n:x32}}","sources":["{{lane}}"],"documents":[],"tasks":[{{rows}}]}""";
+    }
+
+    static JudgeLedgerPage PlanLedger(string handle, string[] plans, int plansOmitted, int tasksOmitted) =>
+        EvidencePageRenderer.Render(++_seq, handle, EvidencePageRenderer.PlanLedgerTool, """{"section":"plan_ledger"}""",
+            $$"""{"scope_version":"v1","plans":[{{string.Join(",", plans)}}],"plans_total":{{plans.Length + plansOmitted}},"plans_omitted":{{plansOmitted}},"tasks_omitted":{{tasksOmitted}},"plans_unavailable":[],"budget_bytes":65536,"over_budget":false}""");
+
+    /// <summary>Every lane of a plan the plan_ledger page served is consulted, the one whose tasks the cut shortened
+    /// included; a lane of a plan the cut left out still needs reading.</summary>
+    [Test]
+    public async Task A_lane_the_plan_ledger_served_is_consulted_and_one_it_left_out_is_not() {
+        string served = PlanLane(1), shortened = PlanLane(2), omitted = PlanLane(3);
+        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(served, 3), LaneSource(shortened, 3), LaneSource(omitted, 3));
+        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [LedgerPlan(1, served, 2), LedgerPlan(2, shortened, 1)], plansOmitted: 1, tasksOmitted: 5)]);
+
+        var c = EvidenceCoverageMeasure.ForRetrieval(scope, ledger, []);
+
+        await Assert.That(c.SourcesConsulted).IsEquivalentTo([Root, served, shortened]);
+        await Assert.That(Count(c, EvalOmissionKinds.SourcesNotConsulted)).IsEqualTo(1);
+        await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
+    }
+
+    /// <summary>The fold never renders a lane's attachments or superseded entries, so a served lane with entries the page
+    /// did not show is partly read, not complete.</summary>
+    [Test]
+    public async Task A_served_lane_with_entries_the_plan_ledger_did_not_show_reports_them_unread() {
+        var lane   = PlanLane(1);
+        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4));
+        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [LedgerPlan(1, lane, 2)], plansOmitted: 0, tasksOmitted: 0)]);
+
+        var c = EvidenceCoverageMeasure.ForRetrieval(scope, ledger, []);
+
+        await Assert.That(c.SourcesConsulted).IsEquivalentTo([Root, lane]);
+        await Assert.That(c.Omissions.Single(o => o.Kind == EvalOmissionKinds.PagesNotFetched).Detail).IsEqualTo("unread_ranges");
+        await Assert.That(Count(c, EvalOmissionKinds.PagesNotFetched)).IsEqualTo(1);
+        await Assert.That(c.StopReason).IsEqualTo(EvalStopReasons.JudgeStopped);
+    }
+
+    [Test]
+    public async Task A_run_whose_lane_entries_the_plan_ledger_all_showed_is_complete() {
+        var lane   = PlanLane(1);
+        var scope  = Scope(Src(Root, 0, 0, null), LaneSource(lane, 4));
+        var plan   = $$"""{"plan_id":"{{0xF001:x32}}","sources":["{{lane}}"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"{{lane}}@0"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"one","status":"completed","note":null,"title_ref":"{{lane}}@1","status_ref":"{{lane}}@3"},{"task_id":"t2","ordinal":2,"title":"two","status":"pending","note":null,"title_ref":"{{lane}}@2","status_ref":null}]}""";
+        var ledger = Ledger([Events("p1", Root, 0, 0), PlanLedger("o1", [plan], plansOmitted: 0, tasksOmitted: 0)]);
+
+        var c = EvidenceCoverageMeasure.ForRetrieval(scope, ledger, []);
+
+        await Assert.That(c.SourcesConsulted).IsEquivalentTo([Root, lane]);
+        await Assert.That(c.Omissions).IsEmpty();
+        await Assert.That(c.StopReason).IsNull();
+    }
 }

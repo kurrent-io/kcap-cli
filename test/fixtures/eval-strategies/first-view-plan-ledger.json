@@ -1,0 +1,89 @@
+{
+  "state": "built",
+  "scope_version": "v3",
+  "scope_complete": true,
+  "scope_incomplete_reasons": [],
+  "requested_strategy": "completion",
+  "strategy": "completion",
+  "strategy_version": "completion-v2",
+  "guidance": "Judge each obligation separately.",
+  "index_state": null,
+  "budget_bytes": 100000,
+  "sections": [
+    {
+      "purpose": "plan_ledger",
+      "kind": "plan_ledger",
+      "operation": "ReadPlanLedgerAsync",
+      "budget_bytes": 65536,
+      "turns": null,
+      "events": null,
+      "calls": null,
+      "authorizations": null,
+      "plan_ledger": {
+        "scope_version": "v3",
+        "plans": [
+          {
+            "plan_id": "0000000000000000000000000000f001",
+            "sources": [
+              "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001"
+            ],
+            "documents": [
+              {
+                "document_key": "doc",
+                "kind": "plan",
+                "path": "docs/plan.md",
+                "ref": "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001@1"
+              }
+            ],
+            "tasks": [
+              {
+                "task_id": "t1",
+                "ordinal": 1,
+                "title": "Write the reader",
+                "status": "completed",
+                "note": "merged",
+                "title_ref": "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001@3",
+                "status_ref": "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001@2"
+              },
+              {
+                "task_id": "t2",
+                "ordinal": 2,
+                "title": "Wire the section",
+                "status": "not attributed",
+                "note": null,
+                "title_ref": "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001@3",
+                "status_ref": null
+              }
+            ]
+          },
+          {
+            "plan_id": "0000000000000000000000000000f002",
+            "sources": [
+              "PlanLane-0000000000000000000000000000f002-00000000000000000000000000000001"
+            ],
+            "documents": [],
+            "tasks": [
+              {
+                "task_id": "u1",
+                "ordinal": 1,
+                "title": "Follow-up",
+                "status": "in_progress",
+                "note": null,
+                "title_ref": "PlanLane-0000000000000000000000000000f002-00000000000000000000000000000001@0",
+                "status_ref": "PlanLane-0000000000000000000000000000f002-00000000000000000000000000000001@0"
+              }
+            ]
+          }
+        ],
+        "plans_total": 2,
+        "plans_omitted": 0,
+        "tasks_omitted": 0,
+        "plans_unavailable": [],
+        "budget_bytes": 65536,
+        "over_budget": false
+      }
+    }
+  ],
+  "omitted_sections": [],
+  "limitations": []
+}

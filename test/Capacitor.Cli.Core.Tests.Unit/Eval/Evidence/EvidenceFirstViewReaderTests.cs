@@ -4,7 +4,8 @@ using Capacitor.Cli.Core.Eval.Evidence;
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
 /// <summary>A built first view becomes seeded pages continuing the orientation's handles, with its strategy stamps and its
-/// guidance; the server's first-view vector reads as one turns page naming its omitted section; an unavailable, failed or
+/// guidance; the server's first-view vector reads as one turns page naming its omitted section, and its plan-ledger vector as one
+/// page citing every document, task title and stated status; an unavailable, failed or
 /// unreadable answer is no view; a refused or moved scope is reported by its status.</summary>
 public class EvidenceFirstViewReaderTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
@@ -53,6 +54,27 @@ public class EvidenceFirstViewReaderTests : IDisposable {
         using var args = JsonDocument.Parse(page.ArgsJson);
         await Assert.That(args.RootElement.GetProperty("section").GetString()).IsEqualTo("opening_turns");
         await Assert.That(view.Text.Contains("AgentSession-abc@0-41")).IsTrue();
+    }
+
+    [Test]
+    public async Task The_server_plan_ledger_vector_reads_as_one_seeded_page_citing_every_document_title_and_status() {
+        _stub.Route("GET", "evidence-first-view", 200, File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "eval-strategies", "first-view-plan-ledger.json")));
+        const string lane1 = "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001";
+        const string lane2 = "PlanLane-0000000000000000000000000000f002-00000000000000000000000000000001";
+
+        var (view, _, _) = await EvidenceFirstViewReader.ReadAsync(Reader(), "tok", "completion", 2, CancellationToken.None);
+
+        await Assert.That(view!.StrategyVersion).IsEqualTo("completion-v2");
+        var page = view.Pages.Single();
+        await Assert.That(page.Handle).IsEqualTo("o2");
+        await Assert.That(page.Tool).IsEqualTo("");
+        await Assert.That(page.LedgerSources).IsEquivalentTo([lane1, lane2]);
+        await Assert.That(page.HasNext).IsFalse();
+        await Assert.That(page.Cites.OrderBy(c => c.Key, StringComparer.Ordinal).Select(c => (c.Key, c.Value))).IsEquivalentTo([
+            ("o2.1", $"{lane1}@1"), ("o2.2", $"{lane1}@3"), ("o2.3", $"{lane1}@2"), ("o2.4", $"{lane1}@3"), ("o2.5", $"{lane2}@0"), ("o2.6", $"{lane2}@0")
+        ]);
+        await Assert.That(page.Revisions).IsEquivalentTo([(lane1, 1L, 3L), (lane2, 0L, 0L)]);
+        await Assert.That(view.Text.Contains(page.Text)).IsTrue();
     }
 
     [Test]

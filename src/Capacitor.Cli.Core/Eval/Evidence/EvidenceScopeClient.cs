@@ -9,7 +9,7 @@ namespace Capacitor.Cli.Core.Eval.Evidence;
 /// again, so the session's growth cannot move the version, and disposing the client releases it.</summary>
 public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string sessionId, TimeProvider time, bool holds = false) : IAsyncDisposable {
     public const int    MaxManifestPages = 10;
-    public const string SingleQuery      = "continuations=false&delegates=true&adopted_children=false";
+    public const string SingleQuery      = "continuations=false&delegates=true&adopted_children=false&include_plans=true";
 
     public static readonly TimeSpan ArtifactLifetime           = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan PhaseSetupMargin           = TimeSpan.FromSeconds(60);
@@ -114,7 +114,7 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     // One request key per resolution, so a redelivery of this request can never take a second hold.
     Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> TakeHoldAsync(CancellationToken ct) {
         var body = JsonSerializer.Serialize(new EvidenceScopeHoldCreateRequestDto {
-            RequestId = Guid.NewGuid().ToString("N"), Continuations = false, Delegates = true, AdoptedChildren = false
+            RequestId = Guid.NewGuid().ToString("N"), Continuations = false, Delegates = true, AdoptedChildren = false, IncludePlans = true
         }, CapacitorJsonContext.Default.EvidenceScopeHoldCreateRequestDto);
         return SendPageAsync(HttpMethod.Post, Route("holds"), new StringContent(body, Encoding.UTF8, "application/json"), ct);
     }

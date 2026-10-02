@@ -56,7 +56,7 @@ public class EvidenceContractFixtureTests {
             using var entry = JsonDocument.Parse(FullyDeferred(kind.Name));
             var fields = EvidenceCanonicalContent.Deferred(entry.RootElement).Select(b => b.Field).Distinct().Order(StringComparer.Ordinal).ToList();
             await Assert.That(fields).IsEquivalentTo(Strings(kind.Value));
-            await Assert.That(EvidenceCanonicalContent.IsContentKind(kind.Name)).IsEqualTo(!Strings(kind.Value).SequenceEqual(["payload"]));
+            await Assert.That(EvidenceCanonicalContent.IsContentKind(kind.Name)).IsEqualTo(!Strings(kind.Value).Contains("payload"));
         }
 
         await Assert.That(Strings(Fixture.GetProperty("shared_body_key_fields"))).IsEquivalentTo(["arguments", "call"]);
@@ -69,6 +69,22 @@ public class EvidenceContractFixtureTests {
         const string inline = """{"ref":"AgentSession-r@1","revision":1,"event_type":"E","kind":"assistant_text","text":"hi","text_body":{"field":"text","ordinal":null,"bytes":2,"ref":"AgentSession-r@1"},"payload_body":{"field":"payload","ordinal":null,"bytes":9,"ref":"AgentSession-r@1"}}""";
         using var entry = JsonDocument.Parse(inline);
         await Assert.That(EvidenceCanonicalContent.Deferred(entry.RootElement)).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_plan_entry_defers_its_payload_only_without_inline_content_and_its_text_only_without_inline_text() {
+        const string r = "PlanLane-0000000000000000000000000000f001-s1@1";
+        const string payload = $$"""{"field":"payload","ordinal":null,"bytes":9,"ref":"{{r}}"}""";
+        const string text    = $$"""{"field":"text","ordinal":null,"bytes":9,"ref":"{{r}}"}""";
+        static List<string> Fields(string extra) {
+            using var entry = JsonDocument.Parse($$"""{"ref":"{{r}}","revision":1,"event_type":"PlanDocumentDeclared","kind":"plan_entry","payload_body":{{payload}}{{extra}}}""");
+            return [.. EvidenceCanonicalContent.Deferred(entry.RootElement).Select(b => b.Field)];
+        }
+
+        await Assert.That(Fields(",\"plan_content\":{\"path\":\"p.md\"}")).IsEmpty();
+        await Assert.That(Fields(",\"plan_content\":null")).IsEquivalentTo(["payload"]);
+        await Assert.That(Fields($",\"plan_content\":{{}},\"text_body\":{text}")).IsEquivalentTo(["text"]);
+        await Assert.That(Fields($",\"plan_content\":{{}},\"text\":\"# Plan\",\"text_body\":{text}")).IsEmpty();
     }
 
     // Every body the entry can defer is left as a descriptor: no inline text, output or arguments, and one call past the listed ones.

@@ -16,6 +16,7 @@ public sealed class JudgeLedger {
             foreach (var (h, r) in p.Cites) _cites[h] = r;
             foreach (var (s, from, to) in p.Revisions) for (var r = from; r <= to; r++) events.Add((s, r));
             foreach (var t in p.Turns) turns.Add(t);
+            foreach (var lane in p.LedgerSources) sources.Add(lane);
             if (p.Source is { } source && p.Tool is "list_turns" or "read_events") sources.Add(source);
             using var args = JsonDocument.Parse(p.ArgsJson);
             if (args.RootElement.Bool("next") == true && args.RootElement.Str("page") is { } continued) followed.Add(continued);

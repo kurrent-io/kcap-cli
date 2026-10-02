@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core.Eval.Evidence;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
@@ -127,5 +128,41 @@ public class EvidencePageRendererTests {
         using var lastDoc = JsonDocument.Parse(last.Text);
         await Assert.That(lastDoc.RootElement.Arr("sources")!.Value.GetArrayLength()).IsEqualTo(10);
         await Assert.That(lastDoc.RootElement.Num("next_from")).IsNull();
+    }
+
+    const string Lane = "PlanLane-0000000000000000000000000000f001-s1";
+
+    const string PlanLedgerBody = """{"scope_version":"v3","plans":[{"plan_id":"0000000000000000000000000000f001","sources":["PlanLane-0000000000000000000000000000f001-s1"],"documents":[{"document_key":"doc","kind":"plan","path":"docs/plan.md","ref":"PlanLane-0000000000000000000000000000f001-s1@1"}],"tasks":[{"task_id":"t1","ordinal":1,"title":"Write","status":"completed","note":"merged","title_ref":"PlanLane-0000000000000000000000000000f001-s1@3","status_ref":"PlanLane-0000000000000000000000000000f001-s1@2"},{"task_id":"t2","ordinal":2,"title":"Wire","status":"not attributed","note":null,"title_ref":"PlanLane-0000000000000000000000000000f001-s1@3","status_ref":null}]}],"plans_total":3,"plans_omitted":1,"tasks_omitted":4,"plans_unavailable":[{"plan_id":"0000000000000000000000000000f009","sources":["PlanLane-0000000000000000000000000000f009-s1"]}],"budget_bytes":65536,"over_budget":false}""";
+
+    [Test]
+    public async Task A_plan_ledger_page_cites_each_document_task_title_and_stated_status_and_delivers_those_events() {
+        var page = EvidencePageRenderer.Render(0, "o4", "read_plan_ledger", """{"section":"plan_ledger"}""", PlanLedgerBody);
+
+        using var doc = JsonDocument.Parse(page.Text);
+        var root = doc.RootElement;
+        await Assert.That(root.Str("page")).IsEqualTo("o4");
+        await Assert.That(root.Bool("has_next")).IsFalse();
+        await Assert.That(root.Num("tasks_omitted")).IsEqualTo(4);
+        await Assert.That(root.Arr("plans_unavailable")!.Value.GetArrayLength()).IsEqualTo(1);
+        var plan = root.Arr("plans")!.Value[0];
+        await Assert.That(plan.Str("plan_id")).IsEqualTo("0000000000000000000000000000f001");
+        await Assert.That(plan.Arr("documents")!.Value[0].Str("cite")).IsEqualTo("o4.1");
+        var tasks = plan.Arr("tasks")!.Value.EnumerateArray().ToList();
+        await Assert.That(tasks[0].EnumerateObject().Select(p => p.Name).ToList()).IsEquivalentTo(
+            ["cite", "task_id", "ordinal", "title", "status", "note", "title_ref", "status_cite", "status_ref"], CollectionOrdering.Matching);
+        await Assert.That((tasks[0].Str("cite"), tasks[0].Str("status_cite"))).IsEqualTo(("o4.2", "o4.3"));
+        await Assert.That(tasks[1].Str("cite")).IsEqualTo("o4.4");
+        await Assert.That(tasks[1].TryGetProperty("status_cite", out _)).IsFalse();
+
+        await Assert.That(page.Cites["o4.1"]).IsEqualTo($"{Lane}@1");
+        await Assert.That(page.Cites["o4.3"]).IsEqualTo($"{Lane}@2");
+        await Assert.That(page.Cites["o4.4"]).IsEqualTo($"{Lane}@3");
+        await Assert.That(page.Cites.Count).IsEqualTo(4);
+        await Assert.That(page.Revisions).IsEquivalentTo([(Lane, 1L, 3L)]);
+        await Assert.That(page.Tool).IsEqualTo("");
+        await Assert.That(page.LedgerSources).IsEquivalentTo([Lane]);
+        await Assert.That(page.Source).IsNull();
+        await Assert.That(page.Bodies).IsEmpty();
+        await Assert.That(page.HasNext).IsFalse();
     }
 }

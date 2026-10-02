@@ -40,6 +40,7 @@ public class EvidenceScopeHoldClientTests : IDisposable {
         await Assert.That(take.GetProperty("request_id").GetString()!.Length).IsEqualTo(32);
         await Assert.That(take.GetProperty("continuations").GetBoolean()).IsFalse();
         await Assert.That(take.GetProperty("adopted_children").GetBoolean()).IsFalse();
+        await Assert.That(take.GetProperty("include_plans").GetBoolean()).IsTrue();
         await Assert.That(client.State!.Held).IsTrue();
 
         time.Advance(TimeSpan.FromSeconds(1_800 - 780));

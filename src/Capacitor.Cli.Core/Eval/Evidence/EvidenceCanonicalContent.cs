@@ -3,8 +3,9 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
 /// <summary>What must reach the model before a wire event entry counts as delivered: the typed text, output or arguments of the
-/// five content kinds, and the payload of every other kind. Metadata and envelope never count. The shared contract fixture
-/// pins this table against the server's.</summary>
+/// five content kinds, and the payload of every other kind. A plan entry's payload is delivered by an inline <c>plan_content</c>,
+/// and a document's text is a body of its own. Metadata and envelope never count. The shared contract fixture pins this table
+/// against the server's.</summary>
 public static class EvidenceCanonicalContent {
     static readonly IReadOnlySet<string> ContentKinds = new HashSet<string>(StringComparer.Ordinal) {
         "user_message", "assistant_text", "assistant_thinking", "tool_call", "tool_result"
@@ -36,6 +37,10 @@ public static class EvidenceCanonicalContent {
                 break;
             case "tool_result":
                 if (entry.Str("output") is null && Descriptor(entry, "output_body") is { } output) bodies.Add(output);
+                break;
+            case "plan_entry":
+                if (IsAbsent(entry, "plan_content") && Descriptor(entry, "payload_body") is { } content) bodies.Add(content);
+                if (entry.Str("text") is null && Descriptor(entry, "text_body") is { } document) bodies.Add(document);
                 break;
             default:
                 if (Descriptor(entry, "payload_body") is { } payload) bodies.Add(payload);
