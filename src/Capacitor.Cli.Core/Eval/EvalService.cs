@@ -1016,8 +1016,8 @@ public static partial class EvalService {
     /// sent a block, so a prompt built without one is unchanged.</summary>
     internal const string DeclaredTasksSection =
         "## Declared tasks\n\n"
-      + "The agent's own declared task list for the plan this session worked on, when one exists. Each line carries the status and who "
-      + "set it; \"status partial\" means part of that task's history is withheld from this view. When a task list is declared, judge "
+      + "The agent's own declared task list for the plan this session worked on, when one exists, with each task's status as this "
+      + "session recorded it; \"status not attributed\" means this session never set one. When a task list is declared, judge "
       + "completion against it rather than against prose alone.\n\n";
 
     /// <summary>
