@@ -230,6 +230,9 @@ public partial class WorktreeManager(
         // containment and could reject a safe launch, since a source-only conditional include can define a
         // driver the target never sees.
         if (await IsGitRepoWithCommits(repoPath, time)) {
+            if (!string.IsNullOrEmpty(baseRef) && !await IsValidRefNameAsync(repoPath, baseRef))
+                throw new InvalidOperationException($"invalid_base_ref: {baseRef}");
+
             // Created HERE rather than in a shared prologue. The standalone branch below must validate the
             // destination chain BEFORE anything is created — a pre-existing `.capacitor` or `worktrees`
             // symlink is FOLLOWED by this call, so a check placed after the branch decision would run once
@@ -247,6 +250,17 @@ public partial class WorktreeManager(
                     await StripOrRollBackAsync(local);
 
                     return local;
+                }
+
+                // An agent's branch exists only on its own machine, where origin cannot supply it.
+                if (await ResolveLocalBranchAsync(repoPath, baseRef) is { } branchHead) {
+                    await WithWorktreeMetadataGate(repoPath, time, () =>
+                        RunGit(repoPath, GitTimeout, time, noHooks,
+                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, branchHead));
+                    var fromBranch = new WorktreeInfo(worktreePath, branch, repoPath);
+                    await StripOrRollBackAsync(fromBranch);
+
+                    return fromBranch;
                 }
 
                 // Fetch into a per-worktree ref instead of the shared FETCH_HEAD
@@ -1505,6 +1519,23 @@ public partial class WorktreeManager(
         var result = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [], "cat-file", "-e", $"{sha}^{{commit}}");
 
         return result.ExitCode == 0;
+    }
+
+    /// <summary>A base ref arrives over the hub. <c>check-ref-format --branch</c> also expands
+    /// <c>@{-N}</c> to another branch, so only a name it echoes back unchanged is accepted.</summary>
+    async Task<bool> IsValidRefNameAsync(string repoPath, string baseRef) {
+        if (baseRef.StartsWith('-')) return false;
+
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "check-ref-format", "--branch", baseRef);
+
+        return result.ExitCode == 0 && result.Stdout.Trim() == baseRef;
+    }
+
+    async Task<string?> ResolveLocalBranchAsync(string repoPath, string name) {
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [],
+            "rev-parse", "--verify", "--quiet", $"refs/heads/{name}^{{commit}}");
+
+        return result.ExitCode == 0 && result.Stdout.Trim() is { Length: > 0 } sha ? sha : null;
     }
 
     static Task RunGit(string cwd, TimeSpan timeout, TimeProvider time, params string[] args) =>

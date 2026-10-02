@@ -673,7 +673,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports,
             EvalProtocolVersion: 2,
             VendorModels: _config.VendorModels,
-            SupportsRawInput: AdvertisesRawInput);
+            SupportsRawInput: AdvertisesRawInput,
+            SupportsBranchBaseRef: true);
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";

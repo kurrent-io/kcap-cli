@@ -125,6 +125,69 @@ public class WorktreeManagerTests {
     }
 
     [Test]
+    public async Task CreateAsync_with_a_local_branch_name_starts_from_that_branch_head() {
+        using var repo = GitRepo.Create("local-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var defaultBranch = repo.CurrentBranch;
+        repo.Checkout("feature/agent-work", create: true);
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("agent commit");
+        var branchHead = repo.Head;
+        repo.Checkout(defaultBranch);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "local-branch", baseRef: "feature/agent-work");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(branchHead);
+            await Assert.That(worktree.FetchedRef).IsNull();
+            await Assert.That(worktree.Branch).IsEqualTo("capacitor/local-branch");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_branch_name_missing_locally_fetches_it_from_origin() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out var sideSha);
+
+        // Created after the clone, so only origin has it.
+        repo.Upstream.Do("branch", "remote-only", sideSha);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "remote-branch", baseRef: "remote-only");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(sideSha);
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-branch");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    [Arguments("bad..name")]
+    [Arguments("-delete-me")]
+    [Arguments("@{-1}")]
+    [Arguments("with space")]
+    public async Task CreateAsync_refuses_a_base_ref_that_is_not_a_valid_ref_name(string baseRef) {
+        using var repo = GitRepo.Create("invalid-ref");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+
+        var manager = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await manager.CreateAsync(repo, name: "invalid-ref", baseRef: baseRef));
+
+        await Assert.That(ex!.Message).Contains("invalid_base_ref");
+        await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
+    }
+
+    [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
 

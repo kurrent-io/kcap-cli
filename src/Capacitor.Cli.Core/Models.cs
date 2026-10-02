@@ -2194,7 +2194,11 @@ public readonly record struct DaemonConnect(
         Dictionary<string, VendorModelOption[]>?    VendorModels = null,
         // Advertises the SendRawInput handler. False from a daemon predating it; the server then
         // never sends raw input.
-        bool                                        SupportsRawInput = false
+        bool                                        SupportsRawInput = false,
+        // A launch's base ref may name a local branch, which the daemon resolves on its own machine
+        // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
+        // cannot see a branch that exists only here.
+        bool                                        SupportsBranchBaseRef = false
     );
 
 public sealed record UnattendedVendorCapability(

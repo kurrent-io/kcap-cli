@@ -48,6 +48,27 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
+    public async Task DaemonConnect_advertises_branch_base_refs() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+
+        await Assert.That(conn.BuildDaemonConnect("mac", [], [], null).SupportsBranchBaseRef).IsTrue();
+    }
+
+    [Test]
+    public async Task DaemonConnect_serializes_branch_base_ref_support_with_a_snake_case_name() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            conn.BuildDaemonConnect("mac", [], [], null), CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(json).Contains("\"supports_branch_base_ref\":true");
+    }
+
+    [Test]
     public async Task SendRawInputCommand_serializes_with_snake_case_names() {
         var json = System.Text.Json.JsonSerializer.Serialize(
             new SendRawInputCommand("a-1", "Gw==", Guid.Parse("00000000-0000-0000-0000-000000000001")),
