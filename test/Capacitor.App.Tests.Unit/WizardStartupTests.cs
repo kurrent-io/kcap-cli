@@ -629,7 +629,7 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
-                WizardStepId.Welcome, WizardStepId.SignIn, WizardStepId.Defaults,
+                WizardStepId.Welcome, WizardStepId.SignIn,
                 WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Daemon, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
@@ -798,56 +798,21 @@ public class WizardStartupTests {
         await Assert.That(hasProvisioner).IsTrue();
     }
 
-    // ── the Done step's summary (why-skipped notes) ───────────────────────────
+    // ── the Done step's facts ──────────────────────────────────────────────────
 
+    /// Before anything committed, Done says nothing records and offers no workspace to open.
     [Test]
-    public async Task A_missing_cli_is_the_summary_note_for_every_step_that_needs_one() {
-        await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
-            harness.CliPath = null;
-            harness.Cli.CliPath = null;
-
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var summary = graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
-
-            await Assert.That(summary.Count).IsEqualTo(5); // every step but Welcome and Done
-            foreach (var title in new[] { "Connect your harnesses", "Import past sessions", "Enable the daemon" })
-                await Assert.That(summary.Single(e => e.Title == title).Note).IsEqualTo(WizardComposition.CliMissingNote);
-
-            return true;
-        });
-    }
-
-    [Test]
-    public async Task An_unsigned_in_daemon_step_reads_as_requires_sign_in_in_the_summary() {
-        await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
-
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
-            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
-
-            await daemon.RefreshAsync(CancellationToken.None);
-
-            await Assert.That(done.Summary.Single(e => e.Title == "Enable the daemon").Note)
-                .IsEqualTo(WizardComposition.RequiresSignInNote);
-
-            return true;
-        });
-    }
-
-    [Test]
-    public async Task A_sign_in_that_never_ran_reads_as_skipped_in_the_summary() {
+    public async Task Done_reads_an_unfinished_setup_as_nothing_recorded() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
             var graph = WizardComposition.BuildGraph(harness.Options());
             var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
 
-            var entry = done.Summary.Single(e => e.Title == "Sign in");
-            await Assert.That(entry.Satisfied).IsFalse();
-            await Assert.That(entry.Detail).IsEqualTo("Skipped");
-            await Assert.That(done.Summary.Any(e => e.Title == new WelcomeStepViewModel().Title)).IsFalse();
+            await Assert.That(done.Title).IsEqualTo("Nothing is being recorded yet");
+            await Assert.That(done.WorkspaceVisible).IsFalse();
+            await Assert.That(done.ShowsFigures).IsFalse();
 
             return true;
         });

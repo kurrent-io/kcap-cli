@@ -43,7 +43,7 @@ public class OnboardingViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Steps_excludes_non_applicable_entries_and_starts_on_the_first_applicable_one() {
         var (stepIds, currentId) = await AvaloniaSession.DispatchAsync(async () => {
-            var shim = new FakeWizardStep(WizardStepId.Defaults) { Applicable = false };
+            var shim = new FakeWizardStep(WizardStepId.Daemon) { Applicable = false };
             var connect = new FakeWizardStep(WizardStepId.Welcome);
             var done = new FakeWizardStep(WizardStepId.Done);
             var vm = new OnboardingViewModel([shim, connect, done]);
@@ -421,11 +421,11 @@ public class OnboardingViewModelTests {
     public async Task TryGoTo_refuses_a_step_that_is_not_part_of_this_run() {
         var accepted = await AvaloniaSession.DispatchAsync(async () => {
             var connect = new FakeWizardStep(WizardStepId.Welcome);
-            var shim = new FakeWizardStep(WizardStepId.Defaults) { Applicable = false };
+            var shim = new FakeWizardStep(WizardStepId.Daemon) { Applicable = false };
             var vm = new OnboardingViewModel([shim, connect]);
             await vm.PendingEnterForTesting;
 
-            return vm.TryGoTo(WizardStepId.Defaults);
+            return vm.TryGoTo(WizardStepId.Daemon);
         });
 
         await Assert.That(accepted).IsFalse();
@@ -438,7 +438,7 @@ public class OnboardingViewModelTests {
     public async Task TryAdvanceFrom_moves_to_the_step_after_the_one_that_finished() {
         var (accepted, currentId) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new OnboardingViewModel([
-                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Defaults),
+                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Daemon),
                 new FakeWizardStep(WizardStepId.Done),
             ]);
             await vm.PendingEnterForTesting;
@@ -450,7 +450,7 @@ public class OnboardingViewModelTests {
         });
 
         await Assert.That(accepted).IsTrue();
-        await Assert.That(currentId).IsEqualTo(WizardStepId.Defaults);
+        await Assert.That(currentId).IsEqualTo(WizardStepId.Daemon);
     }
 
     [Test]
@@ -458,7 +458,7 @@ public class OnboardingViewModelTests {
     public async Task TryAdvanceFrom_is_refused_once_the_user_has_left_that_step_or_closed_the_wizard() {
         var (elsewhere, elsewhereId, closed, closedId) = await AvaloniaSession.DispatchAsync(async () => {
             var moved = new OnboardingViewModel([
-                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Defaults),
+                new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Daemon),
                 new FakeWizardStep(WizardStepId.Done),
             ]);
             await moved.PendingEnterForTesting;
@@ -478,7 +478,7 @@ public class OnboardingViewModelTests {
         });
 
         await Assert.That(elsewhere).IsFalse();
-        await Assert.That(elsewhereId).IsEqualTo(WizardStepId.Defaults); // not skipped past
+        await Assert.That(elsewhereId).IsEqualTo(WizardStepId.Daemon); // not skipped past
         await Assert.That(closed).IsFalse();
         await Assert.That(closedId).IsEqualTo(WizardStepId.SignIn);
     }
@@ -491,7 +491,7 @@ public class OnboardingViewModelTests {
         var (accepted, currentId) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new OnboardingViewModel([
                 new FakeWizardStep(WizardStepId.Welcome), new FakeWizardStep(WizardStepId.SignIn),
-                new FakeWizardStep(WizardStepId.Defaults),
+                new FakeWizardStep(WizardStepId.Daemon),
             ]);
             await vm.PendingEnterForTesting;
             await vm.NextCommand.Execute().ToTask();
