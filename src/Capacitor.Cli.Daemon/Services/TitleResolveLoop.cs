@@ -33,9 +33,10 @@ internal interface ITitleServerPort {
 /// with the string the seed already shows, and treating it as real would block both the
 /// generated push and the generation fallback.</para>
 ///
-/// <para>The agent's own start title is an echo in the same sense. When the caller chose it,
-/// the server keeps it over native and generated titles, so the loop neither produces nor pushes
-/// one for that agent and only displays the server's title, or the chosen one.</para>
+/// <para>The agent's own start title is an echo in the same sense. When the caller chose it, the
+/// server keeps it over every generated title but lets a rename replace it: native titles are
+/// still pushed, generation is skipped, and the chosen title shows until a rename or another
+/// server title replaces it.</para>
 ///
 /// <para>The ladder never downgrades: a lane that stops producing (a transient read failure,
 /// a server hiccup) keeps the last applied title rather than blanking it.</para>
@@ -151,12 +152,7 @@ internal sealed class TitleResolveLoop {
     }
 
     async Task ResolveOneAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
-        if (agent.StartTitle is { Derived: false } chosen) {
-            var (ok, real) = await ReadServerAsync(agent, state, ct);
-            Apply(agent, state, (ok ? real : state.ServerTitle) ?? Normalize(chosen.Text));
-
-            return;
-        }
+        var chosen = agent.StartTitle is { Derived: false } start ? Normalize(start.Text) : null;
 
         try {
             if (ExtractNative(agent, state) is { } extracted) state.Native = extracted;
@@ -169,7 +165,7 @@ internal sealed class TitleResolveLoop {
 
         // An unreadable server is not a silent one: generation must not spend an LLM call on a
         // session whose watcher-made title merely couldn't be fetched.
-        if (serverReadOk && serverReal is null && native is null && !state.GenerationAttempted
+        if (chosen is null && serverReadOk && serverReal is null && native is null && !state.GenerationAttempted
          && !string.IsNullOrWhiteSpace(agent.Prompt)
          && _time.GetUtcNow() - DateTime.SpecifyKind(agent.CreatedAt, DateTimeKind.Utc) >= GenerationGrace) {
             state.GenerationAttempted = true;
@@ -187,7 +183,9 @@ internal sealed class TitleResolveLoop {
 
         // On a failed read the last successfully-read authority stands in, so an outage tick
         // cannot demote the applied title down the ladder.
-        Apply(agent, state, (serverReadOk ? serverReal : state.ServerTitle) ?? Normalize(native?.Title) ?? state.Generated);
+        // Only a rename outranks a chosen start title; the server refuses an auto native title over it.
+        var local = chosen is not null && native?.Kind != HarnessTitleKind.Rename ? chosen : Normalize(native?.Title) ?? chosen;
+        Apply(agent, state, (serverReadOk ? serverReal : state.ServerTitle) ?? local ?? state.Generated);
 
         // The harness's own title is pushed whenever it changes, independent of the server's
         // current title — it is authoritative for what the harness itself calls the session.

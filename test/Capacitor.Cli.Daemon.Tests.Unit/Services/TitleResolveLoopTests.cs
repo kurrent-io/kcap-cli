@@ -106,11 +106,40 @@ public class TitleResolveLoopTests {
     }
 
     [Test]
-    public async Task An_explicit_start_title_is_displayed_and_nothing_is_produced_or_pushed() {
+    public async Task An_explicit_start_title_still_pushes_a_native_rename() {
         var h = new Harness();
         h.Agents.Add(Agent(startTitle: new AgentStartTitle("Fix login", Derived: false)));
         h.Server.Get = _ => "Fix login";
-        h.Native = _ => "Native title";
+        h.Native = _ => "Renamed in Claude";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed)
+            .IsEquivalentTo([("sid-1", new HarnessTitlePost("Renamed in Claude", HarnessTitleKind.Rename, null))]);
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Renamed in Claude")]);
+    }
+
+    [Test]
+    public async Task An_explicit_start_title_outranks_an_auto_native_title_in_display() {
+        var h = new Harness { NativeKind = HarnessTitleKind.Auto };
+        h.Agents.Add(Agent(startTitle: new AgentStartTitle("Fix login", Derived: false)));
+        h.Server.Get = _ => "Fix login";
+        h.Native = _ => "Auto native title";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Server.Pushed)
+            .IsEquivalentTo([("sid-1", new HarnessTitlePost("Auto native title", HarnessTitleKind.Auto, null))]);
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Fix login")]);
+    }
+
+    [Test]
+    public async Task An_explicit_start_title_never_runs_generation() {
+        var h = new Harness();
+        h.Agents.Add(Agent(startTitle: new AgentStartTitle("Fix login", Derived: false)));
+        h.Server.Get = _ => "Fix login";
         h.Generate = (_, _) => Task.FromResult<string?>("Generated title");
         h.Time.Advance(TimeSpan.FromMinutes(30));
         var loop = h.Build();
@@ -118,11 +147,9 @@ public class TitleResolveLoopTests {
         await loop.TickAsync(CancellationToken.None);
         await loop.TickAsync(CancellationToken.None);
 
-        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Fix login")]);
-        await Assert.That(h.NativeCalls).IsEqualTo(0);
         await Assert.That(h.GenerateCalls).IsEqualTo(0);
-        await Assert.That(h.Server.Pushed).IsEmpty();
         await Assert.That(h.GeneratedPosts).IsEmpty();
+        await Assert.That(h.Applied).IsEquivalentTo([("a1", "Fix login")]);
     }
 
     [Test]
