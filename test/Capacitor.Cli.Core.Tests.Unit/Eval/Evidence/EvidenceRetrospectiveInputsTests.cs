@@ -90,6 +90,51 @@ public class EvidenceRetrospectiveInputsTests : IDisposable {
         await Assert.That(trace.Contains("turn window text")).IsTrue();
     }
 
+    const string Lane = "PlanLane-0000000000000000000000000000f001-00000000000000000000000000000001";
+
+    static string PlanEntry(long revision, string eventType, string extra) {
+        var r = $"{Lane}@{revision}";
+        return $"{{\"ref\":{EvidenceServerStub.Quote(r)},\"revision\":{revision},\"event_type\":{EvidenceServerStub.Quote(eventType)},\"kind\":\"plan_entry\","
+             + $"\"payload_body\":{EvidenceServerStub.Descriptor(r, "payload", 40)}{extra}}}";
+    }
+
+    void PlanEvents(long revision, string entry) =>
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Lane, [entry]), new Dictionary<string, string> { ["ref"] = $"{Lane}@{revision}" });
+
+    [Test]
+    public async Task A_cited_plan_task_shows_its_plan_content() {
+        PlanEvents(1, PlanEntry(1, "PlanTasksDeclared", ",\"plan_kind\":\"tasks\",\"plan_content\":{\"tasks\":[{\"id\":\"t1\",\"title\":\"Add the retry policy\"}]}"));
+
+        var (trace, failed) = await Inputs().BuildTraceAsync(Scope(), [Assessment("q", "assessed", 1, $"{Lane}@1")], 200_000, null, CancellationToken.None);
+
+        await Assert.That(failed).IsNull();
+        await Assert.That(trace.Contains("Add the retry policy")).IsTrue();
+    }
+
+    [Test]
+    public async Task A_cited_plan_document_reads_its_deferred_text() {
+        var r = $"{Lane}@2";
+        PlanEvents(2, PlanEntry(2, "PlanDocumentDeclared", $",\"plan_kind\":\"document\",\"plan_content\":{{\"path\":\"plan.md\"}},\"text_body\":{EvidenceServerStub.Descriptor(r, "text", 20_000)}"));
+        _stub.Route("GET", "evidence-body", 200, EvidenceServerStub.BodyChunk(r, "text", "Ship the retry policy behind a flag"), new Dictionary<string, string> { ["ref"] = r, ["field"] = "text" });
+
+        var (trace, failed) = await Inputs().BuildTraceAsync(Scope(), [Assessment("q", "assessed", 1, r)], 200_000, null, CancellationToken.None);
+
+        await Assert.That(failed).IsNull();
+        await Assert.That(trace.Contains("Ship the retry policy behind a flag")).IsTrue();
+        await Assert.That(trace.Contains("plan.md")).IsTrue();
+    }
+
+    [Test]
+    public async Task A_moved_scope_while_reading_a_plan_body_is_run_fatal() {
+        var r = $"{Lane}@3";
+        PlanEvents(3, PlanEntry(3, "PlanDocumentDeclared", $",\"text_body\":{EvidenceServerStub.Descriptor(r, "text", 20_000)}"));
+        _stub.Route("GET", "evidence-body", 409, """{"code":"scope_moved","current_version":"v2"}""");
+
+        var (_, failed) = await Inputs().BuildTraceAsync(Scope(), [Assessment("q", "assessed", 1, r)], 200_000, null, CancellationToken.None);
+
+        await Assert.That(failed).IsEqualTo(409);
+    }
+
     [Test]
     public async Task A_moved_scope_during_the_re_read_is_run_fatal() {
         _stub.Route("GET", "evidence-events", 409, """{"code":"scope_moved","current_version":"v2"}""");
