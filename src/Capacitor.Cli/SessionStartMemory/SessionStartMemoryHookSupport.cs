@@ -13,15 +13,10 @@ namespace Capacitor.Cli.SessionStartMemory;
 /// </summary>
 internal static class SessionStartMemoryHookSupport {
     /// <summary>
-    /// Builds the combined memory, guidelines and flows SessionStart context provider. Both lanes draw from one
-    /// authenticated client accessor and the composite resolves the repo/machine scope ONCE for both.
-    /// Which lanes actually run is decided per request via
-    /// <see cref="SessionStartMemoryContextRequest.Disabled"/> (memory) and its
-    /// <c>GuidelinesDisabled</c> flag — a disabled lane contributes nothing.
-    ///
-    /// <para>This is the single construction site for the eight non-Claude harnesses. Claude does NOT
-    /// use it — it keeps a memory-only <see cref="SessionStartMemoryContextProvider"/> and renders
-    /// guidelines from its own hook POST response.</para>
+    /// Builds the combined memory, guidelines and flows SessionStart context provider. The three lanes share one
+    /// authenticated client accessor and one repo/machine scope resolution. Each request switches lanes off
+    /// through <see cref="SessionStartMemoryContextRequest.Disabled"/>, <c>GuidelinesDisabled</c> and
+    /// <c>FlowsDisabled</c>; a disabled lane contributes nothing.
     ///
     /// <para><paramref name="client"/> is invoked inside the fetch, not here: the lifecycle gate runs
     /// first and declines most invocations, and resolving a credential ahead of it charges every one

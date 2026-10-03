@@ -724,7 +724,8 @@ public sealed class ClaudeHookCommand(
                 "compact" => SessionLifecycleReason.Compact,
                 _ => SessionLifecycleReason.New
             };
-            var memoryIndexTask = StartMemoryIndexTask(nativeSessionId, sessionCwd, memoryDisabled, lifecycleReason, budget.Remaining);
+            var flowsDisabled = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Claude, harnesses);
+            var memoryIndexTask = StartMemoryIndexTask(nativeSessionId, sessionCwd, memoryDisabled, flowsDisabled, lifecycleReason, budget.Remaining);
 
             // 2. Single bounded POST — keep resp alive to read the response body for the
             //    context-envelope emission and plan-content POST on success.
@@ -1178,22 +1179,24 @@ public sealed class ClaudeHookCommand(
         string? nativeSessionId,
         string? cwd,
         bool disabled,
+        bool flowsDisabled,
         SessionLifecycleReason reason,
         TimeSpan budget) {
-        if (disabled || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
+        if ((disabled && flowsDisabled) || string.IsNullOrEmpty(nativeSessionId) || budget <= TimeSpan.Zero)
             return null;
 
         // The memory subsystem is optional, and the whole fetch stays inside the fail-open boundary.
         try {
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = new SessionStartMemoryContextProvider(
-                new SessionStartMemoryScopeResolver(router, config, workdir, clock.Time), http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
 
+            // Claude's guidelines arrive with the SessionStart response, so the composite runs memory and flows only.
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
-                new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None));
+                new SessionStartMemoryContextRequest(Url, cwd, disabled, budget, CancellationToken.None,
+                    GuidelinesDisabled: true, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

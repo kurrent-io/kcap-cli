@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.SessionStartMemory;
 using Microsoft.Extensions.Time.Testing;
 
@@ -22,6 +24,13 @@ public class FlowsLaneTests {
           {"id":"triage","offer":"on_request","when_to_use":"When asked."}
         ]}
         """;
+
+    [Test]
+    public async Task The_lane_is_off_for_a_harness_without_kcap_flows() {
+        using var home = new TempDir();
+
+        await Assert.That(SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Codex, TestHarnesses.Under(new UserHome(home.Path)))).IsTrue();
+    }
 
     [Test]
     public async Task Proactive_flows_render_with_their_when_to_use() {

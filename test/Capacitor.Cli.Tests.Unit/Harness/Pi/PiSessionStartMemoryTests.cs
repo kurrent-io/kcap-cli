@@ -115,13 +115,13 @@ public class PiSessionStartMemoryTests {
         // The url / scope / budget guards suppress even with guidelines ENABLED; disabled alone
         // does not (a single lane off still fetches the other) — both off is required.
         await Assert.That(await Hook("not a url").StartMemoryIndexTask(
-            "/abs/file.jsonl", "/scope", disabled: false, guidelinesDisabled: false,
+            "/abs/file.jsonl", "/scope", disabled: false, guidelinesDisabled: false, flowsDisabled: false,
             TimeSpan.FromSeconds(2), null)).IsNull();
-        await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", scopeRoot: null, disabled: false, guidelinesDisabled: false,
+        await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", scopeRoot: null, disabled: false, guidelinesDisabled: false, flowsDisabled: false,
             TimeSpan.FromSeconds(2), null)).IsNull();
-        await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", "/scope", disabled: true, guidelinesDisabled: true,
+        await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", "/scope", disabled: true, guidelinesDisabled: true, flowsDisabled: true,
             TimeSpan.FromSeconds(2), null)).IsNull();
-        await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", "/scope", disabled: false, guidelinesDisabled: false,
+        await Assert.That(await Hook().StartMemoryIndexTask("/abs/file.jsonl", "/scope", disabled: false, guidelinesDisabled: false, flowsDisabled: false,
             TimeSpan.Zero, null)).IsNull();
     }
 }

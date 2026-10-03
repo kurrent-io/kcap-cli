@@ -120,18 +120,18 @@ public class AntigravitySessionStartMemoryTests {
         // any client is built: an unusable URL should spend no budget, no lease, and start no task.
         // Both lanes off ⇒ suppressed; a single lane off would still fetch.
         await Assert.That(await Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: true, guidelinesDisabled: true, TimeSpan.FromSeconds(5))).IsNull();
+            disabled: true, guidelinesDisabled: true, flowsDisabled: true, TimeSpan.FromSeconds(5))).IsNull();
 
         // The scope / budget / url guards suppress even with guidelines ENABLED.
         await Assert.That(await Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", scopeRoot: null,
-            disabled: false, guidelinesDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
+            disabled: false, guidelinesDisabled: false, flowsDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
 
         await Assert.That(await Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: false, guidelinesDisabled: false, TimeSpan.Zero)).IsNull();
+            disabled: false, guidelinesDisabled: false, flowsDisabled: false, TimeSpan.Zero)).IsNull();
 
         await Assert.That(await Hook("").StartMemoryIndexTask(
             "e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: false, guidelinesDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
+            disabled: false, guidelinesDisabled: false, flowsDisabled: false, TimeSpan.FromSeconds(5))).IsNull();
     }
 
     /// <summary>The memory subsystem is optional, so a store that cannot even be constructed must
@@ -143,7 +143,7 @@ public class AntigravitySessionStartMemoryTests {
         MemoryStoreProbe.Poison(Config.Root);
 
         var task = Hook().StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: false, guidelinesDisabled: true, TimeSpan.FromSeconds(5));
+            disabled: false, guidelinesDisabled: true, flowsDisabled: true, TimeSpan.FromSeconds(5));
 
         await Assert.That(await task).IsNull();
     }
