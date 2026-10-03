@@ -16,7 +16,7 @@ public sealed class AgentStartArgs {
         var r = new AgentStartArgs();
 
         if (args.Length == 0) {
-            r.Error = "usage: kcap agent start <vendor> [--worktree] [--private] [--title <text>] [--daemon <name>] [-d|--detach] [-- <agent args>]";
+            r.Error = "usage: kcap agent start <vendor> [--worktree] [--private] [--title <text>|--title=<text>] [--daemon <name>] [-d|--detach] [-- <agent args>]";
 
             return r;
         }
@@ -49,19 +49,17 @@ public sealed class AgentStartArgs {
 
                     break;
                 case "--title":
-                    if (i + 1 >= kcap.Length || kcap[i + 1].StartsWith('-')) {
+                    if (i + 1 >= kcap.Length || KcapFlags.Contains(kcap[i + 1])) {
                         r.Error = "--title requires a value";
 
                         return r;
                     }
 
-                    if (string.IsNullOrWhiteSpace(kcap[i + 1])) {
-                        r.Error = "--title must not be blank";
+                    if (!r.TrySetTitle(kcap[++i])) return r;
 
-                        return r;
-                    }
-
-                    r.Title = kcap[++i].Trim();
+                    break;
+                case var flag when flag.StartsWith("--title=", StringComparison.Ordinal):
+                    if (!r.TrySetTitle(flag["--title=".Length..])) return r;
 
                     break;
                 default:
@@ -72,6 +70,21 @@ public sealed class AgentStartArgs {
         }
 
         return r;
+    }
+
+    // A title may itself start with '-', so only these are taken as a missing value.
+    static readonly string[] KcapFlags = ["--", "--worktree", "--private", "--daemon", "-d", "--detach", "--title"];
+
+    bool TrySetTitle(string value) {
+        if (string.IsNullOrWhiteSpace(value)) {
+            Error = "--title must not be blank";
+
+            return false;
+        }
+
+        Title = value.Trim();
+
+        return true;
     }
 
     public AgentStartTitle? StartTitle => AgentStartTitle.ForLocalStart(Title, Passthrough);

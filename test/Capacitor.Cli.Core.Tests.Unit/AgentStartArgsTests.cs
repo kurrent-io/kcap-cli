@@ -133,4 +133,29 @@ public class AgentStartArgsTests {
         await Assert.That(a.Error).IsEqualTo("--title must not be blank");
         await Assert.That(a.Title).IsNull();
     }
+
+    [Test]
+    public async Task Title_in_equals_form_may_start_with_a_dash() {
+        var a = AgentStartArgs.Parse(["claude", "--title=-WIP- fix"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("-WIP- fix");
+    }
+
+    [Test]
+    public async Task Title_in_spaced_form_may_start_with_a_dash() {
+        var a = AgentStartArgs.Parse(["claude", "--title", "-WIP- fix", "--private"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("-WIP- fix");
+        await Assert.That(a.Private).IsTrue();
+    }
+
+    [Test]
+    public async Task Empty_equals_form_title_is_an_error() {
+        var a = AgentStartArgs.Parse(["claude", "--title="]);
+
+        await Assert.That(a.Error).IsEqualTo("--title must not be blank");
+        await Assert.That(a.Title).IsNull();
+    }
 }

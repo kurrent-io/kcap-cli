@@ -4,7 +4,10 @@ using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
+[ParallelLimiter<SubprocessLimit>]
 public class AgentOrchestratorStartTitleTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static async Task<CaptureServerConnection> LaunchAsync(string repoPath, string agentId, string? prompt, string? title, bool titleDerived) {
         var server = new CaptureServerConnection();
         var claude = new SpyHostedAgentRuntimeFactory("claude") { EmitsTerminalOutput = false, SupportsUnattended = true };
@@ -52,8 +55,7 @@ public class AgentOrchestratorStartTitleTests {
 
     [Test]
     public async Task Reregistration_resends_the_start_title() {
-        using var worktree = new TempDir();
-        var path   = worktree.CreateDir("worktree");
+        var path   = Tmp.CreateDir("worktree");
         var server = new CaptureServerConnection();
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
@@ -78,8 +80,7 @@ public class AgentOrchestratorStartTitleTests {
 
     [Test]
     public async Task Status_title_seeds_from_the_start_title_over_the_prompt() {
-        using var worktree = new TempDir();
-        var path = worktree.CreateDir("worktree");
+        var path = Tmp.CreateDir("worktree");
 
         var agent = new AgentInstance(
             "agent-seed", "fix the login redirect", "", null, path, "claude",

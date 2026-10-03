@@ -153,6 +153,24 @@ public class TitleResolveLoopTests {
     }
 
     [Test]
+    public async Task A_rename_back_to_the_start_title_is_shown_once_another_title_took_effect() {
+        var h = new Harness();
+        h.Agents.Add(Agent(startTitle: new AgentStartTitle("A", Derived: false)));
+        var server = "A";
+        h.Server.Get = _ => server;
+        h.Native = _ => "B";
+        var loop = h.Build();
+
+        await loop.TickAsync(CancellationToken.None);
+        server = "B"; // the native rename landed
+        await loop.TickAsync(CancellationToken.None);
+        server = "A"; // renamed back on the web
+        await loop.TickAsync(CancellationToken.None);
+
+        await Assert.That(h.Applied.Select(a => a.Title)).IsEquivalentTo(["B", "A"]);
+    }
+
+    [Test]
     public async Task An_explicit_start_title_yields_to_a_different_server_title() {
         var h = new Harness();
         h.Agents.Add(Agent(startTitle: new AgentStartTitle("Fix login", Derived: false)));

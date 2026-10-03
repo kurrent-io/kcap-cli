@@ -2020,7 +2020,7 @@ kcap agent start claude --title "Fix login" -- "fix the login redirect"  # name 
 
 - **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--private`, `--title <text>`, `--daemon <name>`, `-d`/`--detach`.
 - **Visibility:** by default the agent is **registered with the server**, so it appears in your own web UI immediately and you can drive it from the browser — start in the terminal, continue from anywhere. It is **visible only to you** until you share it. Pass `--private` to keep it purely local: unregistered, not streamed to the server, and not shown in the web UI.
-- **Session title:** `--title <text>` names the agent's session, and that name sticks. Without it, the session starts titled after the prompt — the last argument after `--`, when neither it nor the argument before it is a flag — and a generated title replaces that once one lands. `--private` agents are never registered, so a title has no effect on them.
+- **Session title:** `--title <text>` (or `--title=<text>`) names the agent's session, and that name sticks until it is renamed. Without it, the session starts titled after the prompt — the last argument after `--`, when neither it nor the argument before it is a flag — and a generated title replaces that once one lands. `--private` agents are never registered, so a title has no effect on them.
 - **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
 
 - **What a worktree deliberately does NOT inherit:** an agent worktree is a checkout of whatever branch is

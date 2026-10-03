@@ -70,6 +70,9 @@ internal sealed class TitleResolveLoop {
         /// only by a successful read proving the server silent.
         public string? ServerTitle;
         public bool GenerationAttempted;
+        /// Set once any title other than the start title has been applied. From then on a server
+        /// title equal to the start title is a rename back to it, not the registration echo.
+        public bool StartTitleSuperseded;
         /// The transcript path, length and last-write time the native lane was last invoked
         /// against — a match skips re-invoking it (a JSON parse of the whole file) this tick.
         /// Scoped to this agent's state so it is dropped with the agent rather than growing
@@ -229,6 +232,7 @@ internal sealed class TitleResolveLoop {
 
         _apply(agent.Id, best);
         state.Applied = best;
+        if (best != Normalize(agent.StartTitle?.Text)) state.StartTitleSuperseded = true;
     }
 
     /// <summary>One server read plus the bookkeeping it settles: what counts as independent
@@ -249,7 +253,7 @@ internal sealed class TitleResolveLoop {
             string? serverReal = null;
             if (serverTitle is not null && !state.PushAttempts.Contains(serverTitle)
              && !IsPromptEcho(serverTitle, agent.Prompt)
-             && serverTitle != Normalize(agent.StartTitle?.Text)) {
+             && (state.StartTitleSuperseded || serverTitle != Normalize(agent.StartTitle?.Text))) {
                 serverReal = serverTitle;
             }
 
