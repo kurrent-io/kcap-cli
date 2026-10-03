@@ -18,6 +18,12 @@ static class StartAgentOptionsTool {
     internal const string UnreadableAnswer =
         "Error: the daemon list (GET /api/daemons) could not be read. Nothing was started; retry the call.";
 
+    internal const string HostedCaller =
+        "this session is itself a hosted agent: start_agent runs every start on the daemon hosting it, so there is no daemon to choose and daemon is ignored.";
+
+    internal const string HostingDaemonUnlisted =
+        "The daemon hosting this agent is not among the daemons this machine can identify, so its harnesses are unknown here. Ask the user which harness to start, and pass it as vendor; a harness that daemon lacks is refused with the ones it has.";
+
     internal const string AskForHarness =
         "If the user did not name the harness to start, ask them which one of the listed harnesses to use before calling start_agent, and pass it as vendor.";
 
@@ -31,7 +37,8 @@ static class StartAgentOptionsTool {
         McpToolAnnotations.Read
     );
 
-    internal static (string Text, bool IsError) Render(int status, string body, string? localMachineId, string? driverVendor) {
+    internal static (string Text, bool IsError) Render(
+            int status, string body, string? localMachineId, string? driverVendor, string? callerAgentId = null) {
         if (status is < 200 or >= 300) return ($"Error: HTTP {status} — {body}", true);
 
         using var document = TryParse(body);
@@ -39,14 +46,19 @@ static class StartAgentOptionsTool {
 
         var driver = driverVendor is { Length: > 0 } ? driverVendor : "unknown";
         var text   = new StringBuilder($"harness running this session: {driver}\n");
+        var hosted = callerAgentId is { Length: > 0 };
 
-        if (localMachineId is null) return (text.Append(NoMachineId).ToString(), false);
+        if (hosted) text.Append(HostedCaller).Append('\n');
+
+        if (localMachineId is null) return (text.Append(hosted ? HostingDaemonUnlisted : NoMachineId).ToString(), false);
 
         var connected = document.RootElement.EnumerateArray()
             .Where(d => d.IsObject && d.Bool("connected") != false && d.Str("name") is { Length: > 0 })
             .ToList();
 
         var here = connected.Where(d => d.Str("machine_id") == localMachineId).ToList();
+
+        if (here.Count == 0 && hosted) return (text.Append(HostingDaemonUnlisted).ToString(), false);
 
         if (here.Count == 0) {
             text.Append("No daemon of yours is connected on this machine, so start_agent would be refused. ").Append(StartADaemon);
@@ -66,7 +78,10 @@ static class StartAgentOptionsTool {
 
         foreach (var daemon in here) text.Append(DescribeDaemon(daemon)).Append('\n');
 
-        if (here.Count > 1) text.Append("Several daemons run here: ask the user which one, and pass it as daemon.\n");
+        if (here.Count > 1)
+            text.Append(hosted
+                ? "The daemon hosting this agent is one of these; a harness it lacks is refused with the ones it has.\n"
+                : "Several daemons run here: ask the user which one, and pass it as daemon.\n");
 
         return (text.Append(AskForHarness).ToString(), false);
     }
@@ -74,10 +89,14 @@ static class StartAgentOptionsTool {
     static string DescribeDaemon(JsonElement daemon) {
         var line = new StringBuilder($"- {daemon.Str("name")}: ");
 
-        if (daemon.Num("max_agents") is { } max && daemon.Num("active_agents") is { } active)
-            line.Append(active >= max ? $"at capacity ({active} of {max} agent slots in use)" : $"{active} of {max} agent slots in use");
-        else
-            line.Append("agent slots not reported");
+        var active = daemon.Num("active_agents");
+
+        line.Append((daemon.Num("max_agents"), active) switch {
+            (null, _) or (_, null) => "agent slots not reported",
+            // A daemon configured with 0 runs any number of agents.
+            (0, var a)             => $"{a} agents running, no limit",
+            (var m, var a)         => a >= m ? $"at capacity ({a} of {m} agent slots in use)" : $"{a} of {m} agent slots in use"
+        });
 
         line.Append("; harnesses: ").Append(daemon.Arr("supported_vendors") is { } vendors
             ? Names(vendors) is { Length: > 0 } names ? names : "none"

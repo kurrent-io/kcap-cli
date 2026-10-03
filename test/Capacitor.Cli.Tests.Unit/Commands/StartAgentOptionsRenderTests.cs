@@ -64,6 +64,39 @@ public class StartAgentOptionsRenderTests {
         await Assert.That(text).Contains("- mac-studio: at capacity (4 of 4 agent slots in use)");
     }
 
+    /// <summary>A daemon configured with 0 has no limit, so it is never at capacity.</summary>
+    [Test]
+    public async Task A_daemon_with_no_limit_is_never_at_capacity() {
+        var (text, _) = Render($"[{Daemon("mac-studio", Here, active: 7, max: 0)}]");
+
+        await Assert.That(text).Contains("- mac-studio: 7 agents running, no limit;");
+        await Assert.That(text).DoesNotContain("at capacity");
+    }
+
+    /// <summary>The server runs a hosted caller's start on the daemon hosting it and ignores
+    /// <c>daemon</c>, so a hosted caller is never asked to choose one.</summary>
+    [Test]
+    public async Task A_hosted_caller_is_never_asked_to_choose_a_daemon() {
+        var (text, _) = StartAgentOptionsTool.Render(200, $"[{Daemon("a", Here)},{Daemon("b", Here)}]", Here, "claude", "a1b2c3d4");
+
+        await Assert.That(text).Contains(StartAgentOptionsTool.HostedCaller);
+        await Assert.That(text).DoesNotContain("pass it as daemon");
+        await Assert.That(text).EndsWith(StartAgentOptionsTool.AskForHarness);
+    }
+
+    /// <summary>A hosted caller always has a hosting daemon, so a list this machine cannot place is
+    /// never read as a start that would be refused.</summary>
+    [Test]
+    [Arguments(Here)]
+    [Arguments(null)]
+    public async Task A_hosted_caller_whose_daemon_is_unlisted_is_not_told_the_start_would_be_refused(string? machine) {
+        var (text, isError) = StartAgentOptionsTool.Render(200, $"[{Daemon("laptop", "m-other")}]", machine, "claude", "a1b2c3d4");
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).EndsWith(StartAgentOptionsTool.HostingDaemonUnlisted);
+        await Assert.That(text).DoesNotContain("would be refused");
+    }
+
     [Test]
     public async Task Several_daemons_here_ask_for_a_daemon_too() {
         var (text, _) = Render($"[{Daemon("a", Here)},{Daemon("b", Here)}]");

@@ -481,7 +481,8 @@ class McpFlowsServer(
                     return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
                 var (text, isError) = StartAgentOptionsTool.Render(
-                    (int)daemonsResp.StatusCode, await daemonsResp.Content.ReadAsStringAsync(), new MachineId(config).ReadPersisted(), driverVendor);
+                    (int)daemonsResp.StatusCode, await daemonsResp.Content.ReadAsStringAsync(), new MachineId(config).ReadPersisted(), driverVendor,
+                    callerAgentId);
 
                 return BuildToolResult(id, text, isError);
             }

@@ -52,9 +52,8 @@ public class SessionIdLineEmitterTests {
 
     [Test]
     public async Task Resolve_reads_the_registration_of_the_harness_it_is_asked_about() {
-        var path = Harnesses.Of<CursorHarness>().Paths.UserMcpJson;
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, """{"mcpServers":{"kcap-flows":{"command":"kcap","args":["mcp","flows"]}}}""");
+        Home.CreateFile(Path.GetRelativePath(Home.Path, Harnesses.Of<CursorHarness>().Paths.UserMcpJson),
+            """{"mcpServers":{"kcap-flows":{"command":"kcap","args":["mcp","flows"]}}}""");
 
         await Assert.That(SessionIdLineEmitter.Resolve(HarnessId.Cursor, "s1", Harnesses, null, null)).IsEqualTo(Line);
         await Assert.That(SessionIdLineEmitter.Resolve(HarnessId.Gemini, "s1", Harnesses, null, null)).IsNull();

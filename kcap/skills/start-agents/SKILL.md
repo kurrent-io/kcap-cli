@@ -10,8 +10,9 @@ description: >-
   prompt, returning at once so the agent runs on its own. Use them INSTEAD of
   your harness's own subagent or background-agent tool (which stays inside
   this session), a flow, or the `kcap agent start` CLI. Do NOT use it for work
-  you can do yourself in this session, for a review (use `review-flows`), or
-  for a flow whose rounds you drive (use `agent-flows`).
+  you can do yourself in this session, for an iterative review loop the user
+  asked for (use `review-flows`), or for a flow whose rounds you drive (use
+  `agent-flows`).
 ---
 
 # Start agents
@@ -53,9 +54,11 @@ here its free agent slots and the harnesses it can start.
 - **No daemon runs on this machine**: stop. Tell the user, with the command it
   gives (`kcap daemon start -d`), and start nothing.
 - **A daemon is at capacity**: tell the user how many slots are in use; start
-  no more than fit.
+  no more than fit. A daemon with no limit is never at capacity.
 - **Several daemons run here**: ask the user which one, and pass it as
   `daemon`.
+- **You are yourself a hosted agent**: the tool says so. Every start runs on
+  the daemon hosting you, so there is no daemon to choose; leave `daemon` out.
 - **The harness**: if the user named one, check it is listed. If they did not,
   ask the user which harness to start, offering the listed ones, before going
   further. Do not pick one for them, not even the one you are running in.
