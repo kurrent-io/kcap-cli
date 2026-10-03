@@ -8,8 +8,9 @@ public class AgentInstructionsWriterTests {
         // The steering block is how the harnesses that do NOT consult a SKILL.md as an invocable
         // skill (Copilot, Gemini, Pi, OpenCode, Antigravity) get the proactive review-offer
         // behavior — dropping this paragraph silently removes the feature on those harnesses.
-        await Assert.That(KcapAgentInstructions.Body).Contains("proactively OFFER an independent second-harness review");
-        await Assert.That(KcapAgentInstructions.Body).Contains("list_reviewer_vendors");
+        await Assert.That(KcapAgentInstructions.Body).Contains("Flows you may offer");
+        await Assert.That(KcapAgentInstructions.Body).Contains("get_flow_definition");
+        await Assert.That(KcapAgentInstructions.Body).DoesNotContain("proactively OFFER an independent second-harness review");
     }
 
     [Test]
