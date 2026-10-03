@@ -110,4 +110,15 @@ internal static class AvaloniaSession {
             await WithImmediateRxScheduler(body);
             return true;
         });
+
+    /// What the OS does when another app takes focus; headless Show() leaves a window active. The
+    /// platform layer's Deactivated hook is internal to Avalonia, so it is reached through the
+    /// interface map by member name.
+    public static void LoseKeyboardFocus(Avalonia.Controls.Window window) {
+        var impl = window.PlatformImpl!;
+        var contract = impl.GetType().GetInterfaces().First(i => i.Name == "IWindowBaseImpl");
+        var map = impl.GetType().GetInterfaceMap(contract);
+        var getter = Array.FindIndex(map.InterfaceMethods, m => m.Name == "get_Deactivated");
+        (map.TargetMethods[getter].Invoke(impl, null) as Action)?.Invoke();
+    }
 }

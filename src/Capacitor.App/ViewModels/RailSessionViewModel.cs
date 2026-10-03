@@ -21,9 +21,6 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Vendor { get; }
     public bool HasVendor { get; }
     public string? Model { get; }
-    /// Curated display name when the slug is known; the slug otherwise.
-    public string? ModelLabel { get; }
-    public bool HasModel { get; }
     public string Meta { get; }
     public string Tooltip => Status.Tip;
     /// The daemon name badge for a remote row; null for a local one.
@@ -64,8 +61,6 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         Vendor = row.Vendor;
         HasVendor = !string.IsNullOrEmpty(row.Vendor);
         Model = string.IsNullOrEmpty(row.Model) ? null : row.Model;
-        HasModel = Model is not null;
-        ModelLabel = Model is { } model ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, model) : null;
         IsStarting = row.Origin == AgentOrigin.Pending;
         var subagents = row.LiveSubagents is int live and > 0 ? $"{live} subagent{(live == 1 ? "" : "s")}" : null;
         Meta = IsStarting ? LaunchStages.Label(row.LaunchStage) : Join(kindExtra, borrowed, age, subagents);
