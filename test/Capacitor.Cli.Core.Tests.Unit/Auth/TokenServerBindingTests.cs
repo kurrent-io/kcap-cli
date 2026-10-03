@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
@@ -210,6 +211,48 @@ public class TokenServerBindingTests {
         await Assert.That(result?.AccessToken).IsEqualTo("fresh");
         await Assert.That(endpoint.Presented).IsEquivalentTo(["peer-expired"]);
         await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("default"))!.AccessToken).IsEqualTo("fresh");
+    }
+
+    /// <summary>A differing expired token bound to another server is never rotated: the caller would
+    /// discard the result, and the rotation would have spent that server's credential.</summary>
+    [Test]
+    public async Task Force_refresh_does_not_rotate_a_differing_expired_token_bound_elsewhere() {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default",
+            Tokens(serverUrl: OtherServer, username: "peer", expiresIn: TimeSpan.FromMinutes(-3)) with { AccessToken = "peer-expired" });
+        var endpoint = new RefreshEndpointStub("fresh");
+
+        var result = await AuthFixtures.NewTokenStore(Config.Root, endpoint)
+            .ForceRefreshAsync(ProfileConfig.DefaultName, "stale-rejected-token", Server);
+
+        await Assert.That(result).IsNull();
+        await Assert.That(endpoint.Presented).IsEmpty();
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("default"))!.AccessToken).IsEqualTo("peer-expired");
+    }
+
+    /// <summary>The refresh path follows the token re-read under the lock, not the one read before it:
+    /// a peer's GitHub App token stored while we waited goes to the server's refresh endpoint, never
+    /// to WorkOS.</summary>
+    [Test]
+    public async Task Force_refresh_refreshes_a_peer_token_through_its_own_provider() {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default",
+            Tokens(serverUrl: Server) with {
+                AccessToken = "stale-rejected-token", Provider = AuthProvider.WorkOS, RefreshToken = "rt", ClientId = "cid"
+            });
+        var endpoint = new RefreshEndpointStub("fresh");
+        var peer     = Tokens(serverUrl: Server, username: "peer", expiresIn: TimeSpan.FromMinutes(-3)) with { AccessToken = "peer-expired" };
+
+        Task<StoredTokens?> forced;
+
+        using (new FileStream(Config.PathTo("tokens", "default.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            forced = AuthFixtures.NewTokenStore(Config.Root, endpoint)
+                .ForceRefreshAsync(ProfileConfig.DefaultName, "stale-rejected-token", Server);
+            await Task.Delay(500);
+            await File.WriteAllTextAsync(Config.PathTo("tokens", "default.json"),
+                JsonSerializer.Serialize(peer, CapacitorJsonContext.Default.StoredTokens));
+        }
+
+        await Assert.That((await forced)?.AccessToken).IsEqualTo("fresh");
+        await Assert.That(endpoint.Presented).IsEquivalentTo(["peer-expired"]);
     }
 
     /// <summary>When the lock cannot be taken, a differing token that has expired is not a peer's

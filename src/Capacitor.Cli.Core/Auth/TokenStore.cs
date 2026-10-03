@@ -516,19 +516,28 @@ public sealed class TokenStore(
             string profile, string rejectedAccessToken, string? expectedServerUrl, CancellationToken ct) {
         var tokens = await LoadWithLegacyFallbackAsync(profile, ct);
         if (tokens is null) return null;
-
-        Func<StoredTokens, Task<StoredTokens?>> refresh = tokens.Provider switch {
-            AuthProvider.WorkOS when tokens.RefreshToken is not null && tokens.ClientId is not null
-                => value => RefreshWorkOSAsync(value, ct),
-            AuthProvider.GitHubApp => value => RefreshGitHubAsync(profile, value, ct),
-            _ => _ => Task.FromResult<StoredTokens?>(null)
-        };
         if (tokens.Provider is not (AuthProvider.WorkOS or AuthProvider.GitHubApp)) return null;
+
+        // Decided from the token re-read under the lock: a peer may have stored one for another
+        // server or provider since the read above, and rotating it would spend a credential the
+        // caller then discards, or send it to the wrong refresh endpoint.
+        Task<StoredTokens?> Refresh(StoredTokens latest) {
+            var differs = !string.Equals(latest.AccessToken, rejectedAccessToken, StringComparison.Ordinal);
+
+            if (differs && expectedServerUrl is not null && !BoundToTarget(latest, expectedServerUrl))
+                return Task.FromResult<StoredTokens?>(null);
+
+            return latest switch {
+                { Provider: AuthProvider.WorkOS, RefreshToken: not null, ClientId: not null } => RefreshWorkOSAsync(latest, ct),
+                { Provider: AuthProvider.GitHubApp } => RefreshGitHubAsync(profile, latest, ct),
+                _ => Task.FromResult<StoredTokens?>(null)
+            };
+        }
 
         var refreshed = await RefreshWithCrossProcessLockAsync(
             profile,
             tokens,
-            refresh,
+            Refresh,
             needsRefresh: t => string.Equals(t.AccessToken, rejectedAccessToken, StringComparison.Ordinal)
                                || t.IsExpiredAt(time.GetUtcNow()),
             cancellationToken: ct);
