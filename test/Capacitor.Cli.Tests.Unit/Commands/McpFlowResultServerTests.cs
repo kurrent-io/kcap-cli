@@ -394,8 +394,10 @@ public class McpFlowResultServerTests {
         }
     }
 
+    /// <summary>A retried tool call mints a new message_id, so giving up must not ask for one: a send
+    /// that landed with its response lost would reach the driver twice.</summary>
     [Test]
-    public async Task Send_message_gives_up_after_the_restart_window() {
+    public async Task Send_message_gives_up_after_the_restart_window_without_asking_for_a_resend() {
         var transport = new ScriptedTransport(_ => throw new HttpRequestException("Connection refused"));
         using var client = new HttpClient(transport);
 
@@ -406,6 +408,8 @@ public class McpFlowResultServerTests {
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("unreachable");
+        await Assert.That(text).Contains("may or may not have reached");
+        await Assert.That(text).DoesNotContain("Retry");
         await Assert.That(transport.Bodies).Count().IsEqualTo(delays.Count + 1);
         await Assert.That(delays.Aggregate(TimeSpan.Zero, (sum, d) => sum + d)).IsBetween(TimeSpan.FromMinutes(2.5), TimeSpan.FromMinutes(3.5));
     }

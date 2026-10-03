@@ -381,7 +381,9 @@ sealed class McpFlowResultServer(
         using var response = reply.Response;
 
         if (response is null)
-            return ($"Error: the Capacitor server is unreachable ({reply.Failure}). Retry this tool call.", true);
+            // No retry hint: a new call mints a new message_id, so a send that landed unanswered
+            // would reach the driver twice.
+            return ($"Error: the Capacitor server is unreachable ({reply.Failure}). The message may or may not have reached the flow driver; sending it again could deliver it twice.", true);
 
         if (response.IsSuccessStatusCode)
             return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);
