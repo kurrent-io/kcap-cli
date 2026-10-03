@@ -37,7 +37,8 @@ public static class AgentsSkillsInstaller {
         "plans",
         "guided-tour",
         "suggest-review-flow",
-        "eval-watch"
+        "eval-watch",
+        "start-agents"
     ];
 
     /// <summary>

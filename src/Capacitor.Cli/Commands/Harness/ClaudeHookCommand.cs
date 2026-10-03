@@ -829,15 +829,12 @@ public sealed class ClaudeHookCommand(
                         responseNode, coordinationNoticesDisabled);
 
                     // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
-                    var workItemsNudge = WorkItemsNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
-                    var plansNudge = PlansNudgeEmitter.Resolve(
-                        HarnessId.Claude, sessionId, activeProfile?.DisablePlansNudge is true, harnesses);
+                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Claude, harnesses);
 
                     envelope = SessionStartAdditionalContext.BuildEnvelope(
-                        lessonsFragment, nextWorkFragment, nudgeFragment, memoryFragment, coordinationFragment, workItemsNudge, plansNudge, harnessNudge,
+                        lessonsFragment, nextWorkFragment, nudgeFragment, memoryFragment, coordinationFragment, sessionNudges, harnessNudge,
                         firstRunNotice);
                 } catch {
                     // Best effort — never break session capture for hook output emission.

@@ -70,7 +70,8 @@ public class McpFlowsServerTests : IDisposable {
             string  provider          = "None",
             string? workingDirectory  = null,
             string? harnessSessionId  = null,
-            string? harnessProjectDir = null) {
+            string? harnessProjectDir = null,
+            string? hostedAgentId     = null) {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
 
@@ -79,7 +80,7 @@ public class McpFlowsServerTests : IDisposable {
         psi.Environment["KCAP_URL"] = _server.Url!;
         psi.Environment["KCAP_SESSION_ID"] = sessionId;
 
-        ApplyHarnessSignals(psi, harnessSessionId, harnessProjectDir);
+        ApplyHarnessSignals(psi, harnessSessionId, harnessProjectDir, hostedAgentId);
 
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
         _spawnedProcesses.Add(process);
@@ -97,7 +98,7 @@ public class McpFlowsServerTests : IDisposable {
     /// ambient resolution — an inherited one would silently route requester-context tests down that
     /// fallback branch whenever the suite runs from a Codex session.</para>
     /// </summary>
-    static void ApplyHarnessSignals(ProcessStartInfo psi, string? harnessSessionId, string? harnessProjectDir) {
+    static void ApplyHarnessSignals(ProcessStartInfo psi, string? harnessSessionId, string? harnessProjectDir, string? hostedAgentId = null) {
         if (harnessSessionId is null) psi.Environment.Remove("CLAUDE_CODE_SESSION_ID");
         else psi.Environment["CLAUDE_CODE_SESSION_ID"] = harnessSessionId;
 
@@ -105,6 +106,9 @@ public class McpFlowsServerTests : IDisposable {
         else psi.Environment["CLAUDE_PROJECT_DIR"] = harnessProjectDir;
 
         psi.Environment.Remove("CODEX_THREAD_ID");
+
+        if (hostedAgentId is null) psi.Environment.Remove("KCAP_AGENT_ID");
+        else psi.Environment["KCAP_AGENT_ID"] = hostedAgentId;
     }
 
     static async Task<JsonObject> SendRequest(Process proc, JsonObject request, TimeSpan? timeout = null) {
@@ -301,7 +305,7 @@ public class McpFlowsServerTests : IDisposable {
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(10);
+            await Assert.That(tools!.Count).IsEqualTo(12);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("start_review_flow")).IsTrue();
@@ -314,6 +318,8 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(names.Contains("close_flow")).IsTrue();
             await Assert.That(names.Contains("list_reviewer_vendors")).IsTrue();
             await Assert.That(names.Contains("list_flow_definitions")).IsTrue();
+            await Assert.That(names.Contains("start_agent")).IsTrue();
+            await Assert.That(names.Contains("list_start_agent_options")).IsTrue();
         } finally {
             await ShutdownAsync(proc);
         }
@@ -1787,6 +1793,64 @@ public class McpFlowsServerTests : IDisposable {
             await Assert.That(idDesc.Contains("exactly one")).IsTrue();
             await Assert.That(yamlDesc.Contains("exactly one")).IsTrue();
             await Assert.That(yamlDesc.Contains("workspace: none")).IsTrue();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>The whole path through the real process: the running harness's session, the hosting
+    /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.</summary>
+    [Test]
+    public async Task Start_agent_posts_once_and_returns_without_reading_the_agent_back() {
+        const string runningSession = "11111111-2222-3333-4444-555555555555";
+
+        _server.Given(Request.Create().WithPath("/api/agents/start").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""
+                    {"status":"requested","agent_id":"a1b2c3d4","url":"https://cap.test/agents/a1b2c3d4","daemon":"mac-studio",
+                     "repo_path":"/r","vendor":"claude","model":"default","work_item":{"id":null,"reason":"none"}}
+                    """));
+
+        Repo.CreateFile("README.md", "test");
+        Repo.CommitAll("initial");
+        var worktree = Repo.AddWorktree(Path.Combine(".capacitor", "worktrees", "agent-1"), "capacitor/agent-1");
+
+        using var proc = SpawnMcpServerWithSession(
+            "aaaaaaaabbbbbbbbccccccccdddddddd",
+            harnessSessionId:  runningSession,
+            harnessProjectDir: Repo.Path,
+            hostedAgentId:     "0f1e2d3c");
+
+        try {
+            var args = new JsonObject {
+                ["cwd"]       = worktree.Path,
+                ["prompt"]    = "Fix the retry.",
+                ["work_item"] = "none"
+            };
+
+            var response = await SendRequest(proc, ToolsCallRequest(3, "start_agent", args));
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsNotEqualTo(true);
+            var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+            await Assert.That(text).IsNotNull();
+            await Assert.That(text!).Contains("status: requested");
+            await Assert.That(text).Contains("agent_id: a1b2c3d4");
+
+            var calls = _server.LogEntries.Where(e => e.RequestMessage.Path != "/auth/config").ToList();
+            await Assert.That(calls.Count).IsEqualTo(1);
+            await Assert.That(calls[0].RequestMessage.Path).IsEqualTo("/api/agents/start");
+
+            var body = JsonNode.Parse(calls[0].RequestMessage.Body ?? "")!.AsObject();
+            await Assert.That(body["session_id"]?.GetValue<string>()).IsEqualTo("11111111222233334444555555555555");
+            await Assert.That(body["caller_agent_id"]?.GetValue<string>()).IsEqualTo("0f1e2d3c");
+            await Assert.That(body["vendor"]?.GetValue<string>()).IsEqualTo("claude");
+            await Assert.That(body["cwd"]?.GetValue<string>()).Contains("agent-1");
+
+            // By directory name: git records the main repository with symlinks resolved.
+            var repoPath = body["repo_path"]?.GetValue<string>();
+            await Assert.That(repoPath).IsNotNull();
+            await Assert.That(Path.GetFileName(repoPath!)).IsEqualTo(Path.GetFileName(Repo.Path.TrimEnd(Path.DirectorySeparatorChar)));
+            await Assert.That(repoPath).DoesNotContain("agent-1");
         } finally {
             await ShutdownAsync(proc);
         }

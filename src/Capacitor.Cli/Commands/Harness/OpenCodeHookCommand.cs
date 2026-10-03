@@ -176,8 +176,7 @@ sealed class OpenCodeHookCommand(
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
             ? HarnessNudgeEmitter.Combine(
-                WorkItemsNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-                PlansNudgeEmitter.Resolve(HarnessId.OpenCode, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
                 // Inside the gate, unlike the harness nudge below: resolving takes the one-shot
                 // marker, and an older plugin discards this stdout, so outside it the notice would be
                 // spent on a session that never shows it.
