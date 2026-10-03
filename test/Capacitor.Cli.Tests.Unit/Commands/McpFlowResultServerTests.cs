@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -12,9 +13,9 @@ public class McpFlowResultServerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     // Resolutions.None: these tests exercise routing, not profile selection.
-    McpFlowResultServer Server() =>
+    McpFlowResultServer Server(TimeProvider? time = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
-            new FixedCapacitorHttpClient(), NoTelemetry.Startup, TimeProvider.System);
+            new FixedCapacitorHttpClient(), NoTelemetry.Startup, time ?? TimeProvider.System);
 
     static JsonObject Args(string? roundToken = "round-1", string? kind = "findings", string? findings = "1. issue") {
         var o = new JsonObject();
@@ -228,6 +229,35 @@ public class McpFlowResultServerTests {
     public async Task The_delivery_deadline_ends_inside_the_result_channel_tool_timeout() =>
         await Assert.That(McpFlowResultServer.DeliveryDeadline)
                     .IsLessThan(KcapMcpRegistry.ReservedResultChannelToolTimeout);
+
+    /// <summary>Race retries answer to the same deadline as restart retries: slow 503s spend most of
+    /// the window, and the race codes that follow must not carry the call past it.</summary>
+    [Test]
+    public async Task Submit_race_retries_stop_at_the_delivery_deadline() {
+        var time  = new FakeTimeProvider();
+        var start = time.GetUtcNow();
+
+        HttpResponseMessage Slow(int seconds, HttpStatusCode status, string body) {
+            time.Advance(TimeSpan.FromSeconds(seconds));
+            return new HttpResponseMessage(status) { Content = new StringContent(body) };
+        }
+
+        var transport = new ScriptedTransport([
+            ..Enumerable.Repeat<Func<HttpRequestMessage, HttpResponseMessage>>(
+                _ => Slow(15, HttpStatusCode.ServiceUnavailable, "<html>503</html>"), 6),
+            _ => Slow(18, HttpStatusCode.Conflict, """{"error":"no_open_round","message":"no round awaiting a result"}""")
+        ]);
+        using var client = new HttpClient(transport);
+
+        var (text, isError) = await Server(time).SubmitCoreAsync(
+            client, "http://kcap.test", "agent-1", Args(), d => { time.Advance(d); return Task.CompletedTask; });
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("no round awaiting a result");
+        await Assert.That(text).Contains("Retry this tool call");
+        await Assert.That(transport.Bodies.Count).IsGreaterThan(6);
+        await Assert.That(time.GetUtcNow() - start).IsLessThanOrEqualTo(McpFlowResultServer.DeliveryDeadline);
+    }
 
     /// <summary>A 503 carrying a coded envelope is the server's own verdict, not restart noise.</summary>
     [Test]

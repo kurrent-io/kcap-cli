@@ -280,6 +280,7 @@ sealed class McpFlowResultServer(
 
     /// <summary>POSTs a fresh body per attempt until the server answers with something other than
     /// restart noise or a coded refusal <paramref name="isRace"/> names, within the retry budgets.
+    /// No retry of either kind starts unless it can finish inside <see cref="DeliveryDeadline"/>.
     /// A null response means the restart window was spent; <c>Failure</c> then says what the last
     /// attempt saw.</summary>
     async Task<(HttpResponseMessage? Response, string? Code, string Message, string? Failure)> PostRetryingAsync(
@@ -319,7 +320,7 @@ sealed class McpFlowResultServer(
                 // A coded 503 is the server answering, not a proxy in front of a restarting one.
                 if (code is null && (int)response.StatusCode is 502 or 503 or 504) {
                     failure = $"HTTP {(int)response.StatusCode}";
-                } else if (isRace(code) && ++races < MaxAttempts) {
+                } else if (isRace(code) && ++races < MaxAttempts && FitsDeadline(RetryDelay)) {
                     response.Dispose();
                     await delay(RetryDelay);
                     continue;
@@ -332,12 +333,14 @@ sealed class McpFlowResultServer(
 
             response?.Dispose();
 
-            if (unavailable == UnavailableBackoff.Length
-             || time.GetElapsedTime(started) + UnavailableBackoff[unavailable] + AttemptTimeout > DeliveryDeadline)
+            if (unavailable == UnavailableBackoff.Length || !FitsDeadline(UnavailableBackoff[unavailable]))
                 return (null, null, "", failure);
 
             await delay(UnavailableBackoff[unavailable++]);
         }
+
+        bool FitsDeadline(TimeSpan nextDelay) =>
+            time.GetElapsedTime(started) + nextDelay + AttemptTimeout <= DeliveryDeadline;
 
         static JsonObject? TryParse(string s) {
             try { return JsonNode.Parse(s)?.AsObject(); } catch { return null; }
