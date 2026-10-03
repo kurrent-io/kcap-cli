@@ -332,7 +332,7 @@ guidance:
     when the user asked you to review the spec yourself.
   driver_guide: |
     ## Before starting
-    - Call `list_reviewer_vendors` and recommend a reviewer that can run for this repository, preferring a vendor other than your own harness. Pass `vendor` only for a reviewer the user named.
+    - Call `list_reviewer_vendors` and recommend a reviewer that can run for this repository, preferring a vendor other than your own harness. Pass `vendor` for the reviewer the user named or accepted from your recommendation; omit it only when the user wants the saved `flows.reviewer_vendor` preference. If `list_reviewer_vendors` lists none, tell the user why per its reasons instead of starting.
 
     ## What to submit
     - `target_kind: spec`, `target_ref`: the spec's repository-relative path, `target_title`: its title.
@@ -357,7 +357,7 @@ guidance:
     user's yes. Skip it when the user asked you to review the code yourself, or mid-task.
   driver_guide: |
     ## Before starting
-    - Call `list_reviewer_vendors` and recommend a reviewer that can run for this repository, preferring a vendor other than your own harness. Pass `vendor` only for a reviewer the user named.
+    - Call `list_reviewer_vendors` and recommend a reviewer that can run for this repository, preferring a vendor other than your own harness. Pass `vendor` for the reviewer the user named or accepted from your recommendation; omit it only when the user wants the saved `flows.reviewer_vendor` preference. If `list_reviewer_vendors` lists none, tell the user why per its reasons instead of starting.
 
     ## What to submit
     - `target_kind: pr` with the PR number as `target_ref`, or `target_kind: branch` with the branch name; `target_title`: a one-line summary.
