@@ -66,6 +66,25 @@ public class UnauthorizedRecoveryHandlerTests {
         await Assert.That(transport.SentTokens).IsEquivalentTo(["original", "peer-refreshed"]);
     }
 
+    /// <summary>The memoized bearer outlived its lifetime while a peer stored a newer token that has
+    /// since expired too. The resend must carry a token refreshed from the stored one, not the
+    /// expired peer token the server is bound to refuse.</summary>
+    [Test]
+    public async Task A_differing_expired_stored_token_is_refreshed_before_the_resend() {
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default",
+            Token("peer-expired") with { ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-3) });
+        var endpoint = new RefreshEndpointStub("fresh");
+
+        var transport = new RecordingHandler(HttpStatusCode.Unauthorized, HttpStatusCode.OK);
+        using var client = Client(transport, Token("original"), endpoint);
+
+        var response = await client.GetAsync("https://kcap.example.com/api/thing");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(transport.SentTokens).IsEquivalentTo(["original", "fresh"]);
+        await Assert.That(endpoint.Presented).IsEquivalentTo(["peer-expired"]);
+    }
+
     [Test]
     public async Task Exactly_one_extra_attempt_is_made_when_the_retry_also_fails() {
         await AuthFixtures.NewTokenStore(Config.Root).SaveAsync("default", Token("peer-refreshed"));
@@ -238,8 +257,8 @@ public class UnauthorizedRecoveryHandlerTests {
     // Seeds the handler's first resolve with `initial` directly rather than through the store, so a
     // wrong-server or empty store entry set up for the ROTATE path never leaks into the seed. Rotation
     // still goes to the real, store-backed source, which is what these tests exercise.
-    HttpClient Client(RecordingHandler transport, StoredTokens initial) {
-        var real   = new TokenStoreCredentials(AuthFixtures.NewTokenStore(Config.Root), ProfileConfig.DefaultName, "https://kcap.example.com");
+    HttpClient Client(RecordingHandler transport, StoredTokens initial, HttpMessageHandler? refreshEndpoint = null) {
+        var real   = new TokenStoreCredentials(AuthFixtures.NewTokenStore(Config.Root, refreshEndpoint), ProfileConfig.DefaultName, "https://kcap.example.com");
         var source = new SeededResolve(initial.AccessToken, real);
         var retry  = new UnauthorizedRecoveryHandler(source) { InnerHandler = transport };
 

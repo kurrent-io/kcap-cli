@@ -431,10 +431,10 @@ public sealed class TokenStore(
     /// refresh-aware accessor, which would see the same expired token and refresh a second time,
     /// re-spending a WorkOS refresh token that is single-use.
     ///
-    /// The raw result is returned even when it equals the rejected token. Resending it is usually
-    /// futile, but it is the recovery that shipped (a server that rejected transiently — a rolling
-    /// restart, a node with stale key material — accepts the very next attempt), and the callers
-    /// retry at most once either way.
+    /// The raw result is returned even when it equals the rejected token: a server that rejected
+    /// transiently — a rolling restart, a node with stale key material — accepts the very next
+    /// attempt, and the callers retry at most once either way. A DIFFERENT token that has expired
+    /// is withheld, since rotation already declined to adopt it and the server can only refuse it.
     /// </summary>
     public async Task<StoredTokens?> RecoverForServerAsync(
             string profile, string targetBaseUrl, string rejectedAccessToken, CancellationToken ct = default) {
@@ -444,9 +444,11 @@ public sealed class TokenStore(
 
         var stored = await LoadWithLegacyFallbackAsync(profile, ct);
 
-        if (stored is null) return null;
+        if (stored is null || !BoundToTarget(stored, targetBaseUrl)) return null;
 
-        return BoundToTarget(stored, targetBaseUrl) ? stored : null;
+        var differs = !string.Equals(stored.AccessToken, rejectedAccessToken, StringComparison.Ordinal);
+
+        return differs && stored.IsExpiredAt(time.GetUtcNow()) ? null : stored;
     }
 
     /// <summary>
@@ -492,10 +494,10 @@ public sealed class TokenStore(
     /// The existing profile-scoped lock still serializes rotating credentials across processes.
     ///
     /// <paramref name="rejectedAccessToken"/> is the token the failing request actually sent.
-    /// Refreshing is conditional on the persisted token still BEING that one: if a peer process
-    /// rotated in between, its fresh token is adopted as-is. Refreshing unconditionally would
-    /// rotate a credential that was never rejected — and for WorkOS, whose refresh token is
-    /// single-use, that is a real cost, not just extra traffic.
+    /// Refreshing is conditional on the persisted token still BEING that one, or having expired:
+    /// if a peer process rotated in between, its token is adopted as-is while it is still valid.
+    /// Refreshing unconditionally would rotate a credential that was never rejected — and for
+    /// WorkOS, whose refresh token is single-use, that is a real cost, not just extra traffic.
     /// </summary>
     /// <param name="expectedServerUrl">
     /// The server the caller is about to retry against. The lock may hand back a token a PEER
@@ -514,20 +516,30 @@ public sealed class TokenStore(
             string profile, string rejectedAccessToken, string? expectedServerUrl, CancellationToken ct) {
         var tokens = await LoadWithLegacyFallbackAsync(profile, ct);
         if (tokens is null) return null;
-
-        Func<StoredTokens, Task<StoredTokens?>> refresh = tokens.Provider switch {
-            AuthProvider.WorkOS when tokens.RefreshToken is not null && tokens.ClientId is not null
-                => value => RefreshWorkOSAsync(value, ct),
-            AuthProvider.GitHubApp => value => RefreshGitHubAsync(profile, value, ct),
-            _ => _ => Task.FromResult<StoredTokens?>(null)
-        };
         if (tokens.Provider is not (AuthProvider.WorkOS or AuthProvider.GitHubApp)) return null;
+
+        // Decided from the token re-read under the lock: a peer may have stored one for another
+        // server or provider since the read above, and rotating it would spend a credential the
+        // caller then discards, or send it to the wrong refresh endpoint.
+        Task<StoredTokens?> Refresh(StoredTokens latest) {
+            var differs = !string.Equals(latest.AccessToken, rejectedAccessToken, StringComparison.Ordinal);
+
+            if (differs && expectedServerUrl is not null && !BoundToTarget(latest, expectedServerUrl))
+                return Task.FromResult<StoredTokens?>(null);
+
+            return latest switch {
+                { Provider: AuthProvider.WorkOS, RefreshToken: not null, ClientId: not null } => RefreshWorkOSAsync(latest, ct),
+                { Provider: AuthProvider.GitHubApp } => RefreshGitHubAsync(profile, latest, ct),
+                _ => Task.FromResult<StoredTokens?>(null)
+            };
+        }
 
         var refreshed = await RefreshWithCrossProcessLockAsync(
             profile,
             tokens,
-            refresh,
-            needsRefresh: t => string.Equals(t.AccessToken, rejectedAccessToken, StringComparison.Ordinal),
+            Refresh,
+            needsRefresh: t => string.Equals(t.AccessToken, rejectedAccessToken, StringComparison.Ordinal)
+                               || t.IsExpiredAt(time.GetUtcNow()),
             cancellationToken: ct);
 
         if (refreshed is null || expectedServerUrl is null) return refreshed;
