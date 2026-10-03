@@ -1572,6 +1572,11 @@ class McpFlowsServer(
             if (Str(definition, "description") is { Length: > 0 } description)
                 sb.AppendLine($"  {description.ReplaceLineEndings(" ").Trim()}");
 
+            if (Str(definition, "when_to_use") is { Length: > 0 } whenToUse)
+                sb.AppendLine(Str(definition, "offer") == "proactive"
+                    ? $"  when to use (offer proactively): {whenToUse.ReplaceLineEndings(" ").Trim()}"
+                    : $"  when to use (on request): {whenToUse.ReplaceLineEndings(" ").Trim()}");
+
             foreach (var participant in participants.OfType<JsonObject>()) {
                 var role   = Str(participant, "role") ?? "?";
                 var vendor = Str(participant, "vendor") ?? "vendor unset (the request or your saved flows.reviewer_vendor preference decides)";
@@ -2575,6 +2580,7 @@ class McpFlowsServer(
             "Call it before start_flow whenever the user has not named a definition, or named one you have not seen listed. " +
             "Read-only and side-effect-free: this does NOT start anything. " +
             "Each entry gives the id to pass as definition_id, its version and description, whether it is single-participant (start_flow runs round 1 and accepts vendor/model overrides) or multi-participant (start_flow is round-less; address each role with send_to_participant), and per participant its role, authored vendor (unset means the request or your saved preference decides) and model. " +
+            "A definition may also say when to use it, and whether you may offer it unprompted (offer proactively) or only run it when asked (on request). Before starting one, call get_flow_definition for its guide. " +
             "Disabled or deleted definitions are not listed, and start_flow refuses them. " +
             "A server_catching_up error means the catalog is temporarily unreadable — retry shortly rather than treating the list as empty; an empty list is authoritative.",
             new("object", new(), []),
