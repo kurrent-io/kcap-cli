@@ -90,7 +90,7 @@ public class SessionStatusDotsTests {
     }
 
     [Test]
-    public async Task A_tip_labels_the_session_the_requester_and_the_borrowed_checkout() {
+    public async Task A_tip_labels_the_requester_and_the_borrowed_checkout_but_not_the_session_id() {
         var row = AgentRow.FromLocal(
             new("a", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null,
                 "ada@example.com", AwaitingInput: false, SessionId: "abc123", BorrowedFrom: "/repo/wt"),
@@ -101,20 +101,21 @@ public class SessionStatusDotsTests {
         await Assert.That(status.Tip).Contains("Working\nStatus");
 
         var timed = SessionStatusDots.Present(
-            "Running", false, false, null, false, null, null, "Working for 2m 39s", sessionId: null);
+            "Running", false, false, null, false, null, null, "Working for 2m 39s");
         await Assert.That(timed.Label).IsEqualTo("Working");
         await Assert.That(timed.Tip).IsEqualTo("Working for 2m 39s\nStatus");
 
         var asked = SessionStatusDots.Present(
-            "Running", true, true, null, pending: true, null, null, null, sessionId: null, answerExpected: true);
+            "Running", true, true, null, pending: true, null, null, null, answerExpected: true);
         await Assert.That(asked.Kind).IsEqualTo(AgentStatusKind.Answer);
         await Assert.That(asked.Label).IsEqualTo("Answer");
         await Assert.That(asked.Tip).IsEqualTo("An answer is expected\nStatus");
         await Assert.That(asked.Tip).DoesNotContain("Idle");
-        await Assert.That(status.Tip).Contains("\n\nabc123\nSession");
+        await Assert.That(status.Tip).DoesNotContain("abc123");
 
         var named = SessionStatusDots.ForRow(row with { Model = "claude-opus-5" }, pending: false);
         await Assert.That(named.Tip).Contains("Claude Opus 5\nModel");
+        await Assert.That(named.Tip).Contains("Claude Code\nHarness");
         await Assert.That(status.Tip).Contains("\n\nada@example.com\nRequester");
         await Assert.That(status.Tip).Contains("\n\n/repo/wt\nBorrowed from");
     }

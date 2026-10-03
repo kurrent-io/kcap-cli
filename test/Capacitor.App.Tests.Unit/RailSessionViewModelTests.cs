@@ -59,7 +59,7 @@ public class RailSessionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Title_is_primary_with_vendor_and_model_as_chips() {
+    public async Task Title_is_primary_and_the_tip_names_the_harness_and_model() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
@@ -67,7 +67,8 @@ public class RailSessionViewModelTests {
             await Assert.That(row.Vendor).IsEqualTo("claude");
             await Assert.That(row.HasVendor).IsTrue();
             await Assert.That(row.Model).IsEqualTo("Opus 5");
-            await Assert.That(row.HasModel).IsTrue();
+            await Assert.That(row.Tooltip).Contains("Claude Code\nHarness");
+            await Assert.That(row.Tooltip).Contains("Opus 5\nModel");
         });
     }
 
@@ -109,11 +110,12 @@ public class RailSessionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Null_model_hides_the_model_chip() {
+    public async Task Null_model_leaves_the_model_off_the_tip() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var row = new RailSessionViewModel(Row(model: null), new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(row.Model).IsNull();
-            await Assert.That(row.HasModel).IsFalse();
+            await Assert.That(row.Tooltip).Contains("Claude Code\nHarness");
+            await Assert.That(row.Tooltip).DoesNotContain("\nModel");
         });
     }
 

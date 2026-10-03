@@ -376,16 +376,6 @@ public class MainWindowSmokeTests {
         await Assert.That(reads.afterReshow).IsEqualTo(3);
     }
 
-    /// What the OS does when another app takes focus. The platform layer's Deactivated hook is
-    /// internal to Avalonia, so it is reached through the interface map by member name.
-    static void LoseKeyboardFocus(Window window) {
-        var impl = window.PlatformImpl!;
-        var contract = impl.GetType().GetInterfaces().First(i => i.Name == "IWindowBaseImpl");
-        var map = impl.GetType().GetInterfaceMap(contract);
-        var getter = Array.FindIndex(map.InterfaceMethods, m => m.Name == "get_Deactivated");
-        (map.TargetMethods[getter].Invoke(impl, null) as Action)?.Invoke();
-    }
-
     /// PR context follows the window being on screen: an open workspace in a visible window loads
     /// and shows its pull request while another app holds keyboard focus, and only minimizing or
     /// hiding the window masks it.
@@ -416,7 +406,7 @@ public class MainWindowSmokeTests {
                 await WorkspaceFixtures.WaitUntilAsync(() => pullRequests.CanReveal, what: "PR shown in the visible window");
 
                 await Assert.That(window.IsActive).IsTrue();
-                LoseKeyboardFocus(window);
+                AvaloniaSession.LoseKeyboardFocus(window);
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(window.IsActive).IsFalse();
                 await Assert.That(pullRequests.CanReveal).IsTrue();
@@ -636,7 +626,7 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.SiblingEdge).IsEqualTo(0);
             await Assert.That(seen.SelectedWeight).IsEqualTo(FontWeight.SemiBold);
             await Assert.That(seen.SiblingWeight).IsEqualTo(FontWeight.Normal);
-            await Assert.That(seen.TitleTip).IsEqualTo("Fix the flaky test");
+            await Assert.That(seen.TitleTip).IsNull();
         });
     }
 
@@ -711,7 +701,8 @@ public class MainWindowSmokeTests {
     }
 
     /// The vendor mark, the status word, and the age share one baseline. The age has no extra
-    /// padding, or it sits below that line. The model is named only in the vendor mark's tip.
+    /// padding, or it sits below that line. The row carries the only tip, and it names the
+    /// harness and the model; no child shows a tip of its own.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Vendor_mark_and_running_time_share_the_status_line() {
@@ -724,11 +715,6 @@ public class MainWindowSmokeTests {
                 var word = mark.FindControl<TextBlock>("StatusWord")!;
                 var vendor = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("vendorMark"));
                 var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
-                ToolTip.SetIsOpen(vendor, true);
-                Dispatcher.UIThread.RunJobs();
-                window.UpdateLayout();
-                var tip = (StackPanel)ToolTip.GetTip(vendor)!;
-                var tipLines = tip.Children.OfType<TextBlock>().Select(t => t.Text).ToArray();
                 double Center(Control control) =>
                     control.TranslatePoint(new Point(0, control.Bounds.Height / 2), row)!.Value.Y;
                 double Baseline(TextBlock text) =>
@@ -748,8 +734,9 @@ public class MainWindowSmokeTests {
                     MarkLeft: Left(mark),
                     MetaGap: row.Bounds.Width - Right(meta),
                     ModelInRow: row.GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text == "opus"),
-                    TipVendor: tipLines[0],
-                    TipModel: tipLines[1],
+                    ChildTips: row.GetVisualDescendants().Count(v => v is Control c && ToolTip.GetTip(c) is not null),
+                    RowTipIsStatus: ToolTip.GetTip(row) is AgentStatusTip,
+                    RowTip: ((RailSessionViewModel)row.DataContext!).Tooltip,
                     HasMark: vendor.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any(),
                     MetaAlign: meta.VerticalAlignment);
                 window.Close();
@@ -757,8 +744,10 @@ public class MainWindowSmokeTests {
                 return result;
             });
             await Assert.That(seen.VendorName).IsEqualTo("Claude Code");
-            await Assert.That(seen.TipVendor).IsEqualTo("Claude Code");
-            await Assert.That(seen.TipModel).IsEqualTo("opus");
+            await Assert.That(seen.ChildTips).IsEqualTo(0);
+            await Assert.That(seen.RowTipIsStatus).IsTrue();
+            await Assert.That(seen.RowTip).Contains("Claude Code\nHarness");
+            await Assert.That(seen.RowTip).Contains("opus\nModel");
             await Assert.That(seen.VendorLeft).IsLessThan(seen.MarkLeft);
             await Assert.That(seen.MetaGap).IsLessThan(16);
             await Assert.That(seen.ModelInRow).IsFalse();
@@ -772,7 +761,8 @@ public class MainWindowSmokeTests {
     }
 
     /// A raw daemon status and an unknown launch stage are open text. The row caps both so they
-    /// stay inside the rail; "Needs you" and a known stage still fit whole.
+    /// stay inside the rail; "Needs you" and a known stage still fit whole. A trimmed stage is
+    /// read in full from the row's tip, not one of its own.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_long_status_and_launch_stage_stay_inside_the_row() {
@@ -810,7 +800,8 @@ public class MainWindowSmokeTests {
                     StageWidth: stageWidth,
                     MetaMax: pendingMeta.MaxWidth,
                     MetaText: pendingMeta.Text,
-                    MetaTip: ToolTip.GetTip(pendingMeta) as string,
+                    MetaTip: ToolTip.GetTip(pendingMeta),
+                    RowTip: ((RailSessionViewModel)pendingRow.DataContext!).Tooltip,
                     MetaTrimmed: Trimmed(pendingMeta),
                     MetaInside: Right(pendingMeta, pendingRow) <= pendingRow.Bounds.Width + 1,
                     MarkClearsMeta: Math.Abs(CenterY(pendingMark, pendingRow) - CenterY(pendingMeta, pendingRow)) > 8
@@ -825,7 +816,8 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.NeedsYouSlack).IsGreaterThan(-4);
             await Assert.That(seen.StageWidth).IsLessThanOrEqualTo(seen.MetaMax);
             await Assert.That(seen.MetaText).IsEqualTo(LaunchStages.Label(longStage));
-            await Assert.That(seen.MetaTip).IsEqualTo(seen.MetaText);
+            await Assert.That(seen.MetaTip).IsNull();
+            await Assert.That(seen.RowTip).Contains(seen.MetaText!);
             await Assert.That(seen.MetaTrimmed).IsTrue();
             await Assert.That(seen.MetaInside).IsTrue();
             await Assert.That(seen.MarkClearsMeta).IsTrue();

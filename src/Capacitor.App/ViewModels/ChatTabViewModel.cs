@@ -358,7 +358,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var answerExpected = Cards.PendingCards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
         AgentStatus = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
-            question ? _usageLimit!.Summary : null, stage, elapsed, sessionId: null,
+            question ? _usageLimit!.Summary : null, stage, elapsed,
             answerExpected: answerExpected);
         StatusText = AgentStatus.Label;
     }
