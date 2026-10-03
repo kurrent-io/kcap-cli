@@ -8,7 +8,8 @@ description: >-
   this skill (and do NOT call the flows MCP tools) for an ordinary review
   request such as "review my PR", "review this diff/spec/design", or "code
   review" where the user just wants you to review it yourself — perform that
-  review directly instead.
+  review directly instead. For any other catalogue flow, or a flow offered
+  from your session context, use `agent-flows`.
 ---
 
 # Review Flows
