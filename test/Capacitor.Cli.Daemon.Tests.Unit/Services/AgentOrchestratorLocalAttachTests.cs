@@ -310,6 +310,27 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
     }
 
+    [Test]
+    public async Task Registered_spawn_reports_the_frame_start_title() {
+        using var tmp = new TempDir();
+
+        var server    = new TripwireServerConnection();
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new EnvCapturingPtyFactory(), launchers);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        var title = new AgentStartTitle("fix the login redirect", Derived: true);
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, tmp.Path, ["fix the login redirect"], 80, 24, title);
+        await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+        await Assert.That(server.RegisteredTitles).IsEquivalentTo(new AgentStartTitle?[] { title });
+    }
+
     // Consent: the owner consent gate lives in HandleLaunchAgentCore (the SERVER-driven launch
     // choke point) only. The local 0600 socket path (kcap agent start -> HandleLocalSpawnAsync)
     // never calls that method, so a deny-default gate must not stop it — that socket is the
@@ -1056,7 +1077,8 @@ public class AgentOrchestratorLocalAttachTests {
 
         public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
-        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
+        public ConcurrentBag<AgentStartTitle?> RegisteredTitles { get; } = [];
+        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, AgentStartTitle? title = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.CompletedTask; }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
         public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }

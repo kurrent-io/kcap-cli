@@ -84,14 +84,17 @@ internal record AgentInstance(
     /// launch's <see cref="LaunchKind"/>, recorded once at construction.
     public AttachmentPlacement Placement { get; init; } = AttachmentPlacement.Worktree;
 
+    /// <summary>The title this agent's session starts with, reported on registration. Null for an
+    /// agent started with neither a title nor a prompt to derive one from.</summary>
+    public AgentStartTitle? StartTitle { get; init; }
+
     bool _titleComputed;
     string? _title;
-    /// <summary>The status payload's display title, computed ONCE from the immutable Prompt
-    /// (SnapshotAgentsForStatus re-runs for every agent on every status pulse — re-parsing an
-    /// invariant there is pure waste, same reasoning as TranscriptPath's cache).</summary>
+    /// <summary>The status payload's display seed, computed once: the status pulse re-runs for
+    /// every agent on every revision.</summary>
     public string? Title {
         get {
-            if (!_titleComputed) { _title = TitleFromPrompt(Prompt); _titleComputed = true; }
+            if (!_titleComputed) { _title = StartTitle?.Text ?? AgentStartTitle.Shorten(Prompt); _titleComputed = true; }
             return _title;
         }
     }
@@ -113,21 +116,6 @@ internal record AgentInstance(
     /// <see cref="AgentOrchestrator.SetCommands"/> so the status pulse and the server report cannot be
     /// forgotten. Null until a producer reports any.</summary>
     public IReadOnlyList<HostedAgentCommand>? Commands { get; set; }
-
-    /// First non-blank line of the launch prompt, trimmed, capped at 80 chars total (ellipsis when
-    /// cut, never splitting a surrogate pair) — the status payload is re-sent on every revision,
-    /// so the full prompt never rides it.
-    internal static string? TitleFromPrompt(string? prompt) {
-        if (prompt is null) return null;
-        foreach (var raw in prompt.Split('\n')) {
-            var line = raw.Trim();
-            if (line.Length == 0) continue;
-            if (line.Length <= 80) return line;
-            var cut = char.IsHighSurrogate(line[78]) ? 78 : 79;
-            return line[..cut] + "…";
-        }
-        return null;
-    }
 
     /// <summary>Codex turn diagnostic: monotonic per-agent round generation for the post-send
     /// rollout-growth probe. Bumped (under the send gate, BEFORE each round's input is delivered) so
@@ -2110,6 +2098,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return await HandleAdmittedLaunchAsync(cmd);
     }
 
+    /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
+    internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
+        !string.IsNullOrWhiteSpace(cmd.Title)
+            ? new AgentStartTitle(cmd.Title.Trim(), cmd.TitleDerived)
+            : AgentStartTitle.FromPrompt(cmd.Prompt);
+
     /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
     /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
@@ -2117,6 +2111,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd) {
         var agentId       = cmd.AgentId;
         var prompt        = cmd.Prompt;
+        var startTitle    = StartTitleOf(cmd);
         var model         = cmd.Model;
         // A protocol-v3 explicit-reviewer-model launch pins the server-resolved LaunchModel VERBATIM.
         // Compute the effective model ONCE here so every site that records/reports the model this
@@ -2613,7 +2608,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
             using var pendingLaunch = TrackPendingLaunch(
                 agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
-                vendor: cmd.Vendor, repoPath: repoPath, title: AgentInstance.TitleFromPrompt(prompt));
+                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
 
             try {
                 start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
@@ -2729,7 +2724,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 FlowRole            = cmd.FlowRole,
                 RequesterUserId     = cmd.RequesterUserId,
                 RequesterDisplay    = cmd.RequesterDisplay,
-                InactivityBoundSeconds = cmd.InactivityBoundSeconds
+                InactivityBoundSeconds = cmd.InactivityBoundSeconds,
+                StartTitle          = startTitle
             };
             PublishAgent(agent);
             published = true;
@@ -4614,7 +4610,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return;
 
-        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport);
+        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
 
         // Report the PTY size so read-only viewers lock their xterm to it. Best-effort.
         try {
@@ -5045,7 +5041,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport);
+                    await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
 
                     // The acknowledgement is what re-registered means: whatever was written to
                     // the old connection may not have arrived, and that holds even if the sends
@@ -5360,7 +5356,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         [.. _agents.Values.Select(a => new TitleAgentView(
             a.Id, a.Vendor, a.Prompt,
             a.IsPrivate ? null : a.SessionId ?? (a.Runtime as IAcpTranscriptSource)?.AcpSessionId,
-            a.TranscriptPath, a.CreatedAt))];
+            a.TranscriptPath, a.CreatedAt, a.StartTitle))];
 
     internal static HarnessTitlePost? NativeTitleFor(TitleAgentView agent) =>
         agent is { Vendor: "claude", TranscriptPath: { } path } && ClaudeNativeTitle.TryExtractWithKind(path) is { } title

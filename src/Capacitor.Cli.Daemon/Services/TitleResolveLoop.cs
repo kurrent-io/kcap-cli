@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Logging;
 
@@ -5,7 +6,8 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>The slice of an agent the title resolver reads; snapshotted per tick.</summary>
 internal sealed record TitleAgentView(
-    string Id, string Vendor, string? Prompt, string? SessionId, string? TranscriptPath, DateTime CreatedAt);
+    string Id, string Vendor, string? Prompt, string? SessionId, string? TranscriptPath, DateTime CreatedAt,
+    AgentStartTitle? StartTitle = null);
 
 /// <summary>The server's title surface for one session: read the current title, push a
 /// harness-native one (with its kind and change time) via the harness-title path.</summary>
@@ -30,6 +32,11 @@ internal interface ITitleServerPort {
 /// truncated-prompt title, not a real one: adopting it would overwrite a better native title
 /// with the string the seed already shows, and treating it as real would block both the
 /// generated push and the generation fallback.</para>
+///
+/// <para>The agent's own start title is an echo in the same sense. When the caller chose it, the
+/// server keeps it over every generated title but lets a rename replace it: native titles are
+/// still pushed, generation is skipped, and the chosen title shows until a rename or another
+/// server title replaces it.</para>
 ///
 /// <para>The ladder never downgrades: a lane that stops producing (a transient read failure,
 /// a server hiccup) keeps the last applied title rather than blanking it.</para>
@@ -63,6 +70,9 @@ internal sealed class TitleResolveLoop {
         /// only by a successful read proving the server silent.
         public string? ServerTitle;
         public bool GenerationAttempted;
+        /// Set once any title other than the start title has been applied. From then on a server
+        /// title equal to the start title is a rename back to it, not the registration echo.
+        public bool StartTitleSuperseded;
         /// The transcript path, length and last-write time the native lane was last invoked
         /// against — a match skips re-invoking it (a JSON parse of the whole file) this tick.
         /// Scoped to this agent's state so it is dropped with the agent rather than growing
@@ -145,6 +155,8 @@ internal sealed class TitleResolveLoop {
     }
 
     async Task ResolveOneAsync(TitleAgentView agent, AgentTitleState state, CancellationToken ct) {
+        var chosen = agent.StartTitle is { Derived: false } start ? Normalize(start.Text) : null;
+
         try {
             if (ExtractNative(agent, state) is { } extracted) state.Native = extracted;
         } catch (Exception ex) {
@@ -156,7 +168,7 @@ internal sealed class TitleResolveLoop {
 
         // An unreadable server is not a silent one: generation must not spend an LLM call on a
         // session whose watcher-made title merely couldn't be fetched.
-        if (serverReadOk && serverReal is null && native is null && !state.GenerationAttempted
+        if (chosen is null && serverReadOk && serverReal is null && native is null && !state.GenerationAttempted
          && !string.IsNullOrWhiteSpace(agent.Prompt)
          && _time.GetUtcNow() - DateTime.SpecifyKind(agent.CreatedAt, DateTimeKind.Utc) >= GenerationGrace) {
             state.GenerationAttempted = true;
@@ -174,12 +186,9 @@ internal sealed class TitleResolveLoop {
 
         // On a failed read the last successfully-read authority stands in, so an outage tick
         // cannot demote the applied title down the ladder.
-        var best = (serverReadOk ? serverReal : state.ServerTitle) ?? Normalize(native?.Title) ?? state.Generated;
-
-        if (best is not null && best != state.Applied) {
-            _apply(agent.Id, best);
-            state.Applied = best;
-        }
+        // Only a rename outranks a chosen start title; the server refuses an auto native title over it.
+        var local = chosen is not null && native?.Kind != HarnessTitleKind.Rename ? chosen : Normalize(native?.Title) ?? chosen;
+        Apply(agent, state, (serverReadOk ? serverReal : state.ServerTitle) ?? local ?? state.Generated);
 
         // The harness's own title is pushed whenever it changes, independent of the server's
         // current title — it is authoritative for what the harness itself calls the session.
@@ -218,6 +227,14 @@ internal sealed class TitleResolveLoop {
         }
     }
 
+    void Apply(TitleAgentView agent, AgentTitleState state, string? best) {
+        if (best is null || best == state.Applied) return;
+
+        _apply(agent.Id, best);
+        state.Applied = best;
+        if (best != Normalize(agent.StartTitle?.Text)) state.StartTitleSuperseded = true;
+    }
+
     /// <summary>One server read plus the bookkeeping it settles: what counts as independent
     /// authority, and the retained-across-outages <see cref="AgentTitleState.ServerTitle"/>. A
     /// confirmed push is not re-armed by a read that no longer shows it: the server has no path
@@ -235,7 +252,8 @@ internal sealed class TitleResolveLoop {
             // revision could never advance past it.
             string? serverReal = null;
             if (serverTitle is not null && !state.PushAttempts.Contains(serverTitle)
-             && !IsPromptEcho(serverTitle, agent.Prompt)) {
+             && !IsPromptEcho(serverTitle, agent.Prompt)
+             && (state.StartTitleSuperseded || serverTitle != Normalize(agent.StartTitle?.Text))) {
                 serverReal = serverTitle;
             }
 

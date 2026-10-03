@@ -299,7 +299,7 @@ internal partial class AgentOrchestrator {
     }
 
     async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -362,6 +362,7 @@ internal partial class AgentOrchestrator {
                 // missing the day this path grows an ACP runtime.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
+                StartTitle     = startTitle,
                 Work           = work,
                 McpConfigPath  = built.McpConfigPath,
                 CurrentCols    = cols,
