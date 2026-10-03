@@ -157,6 +157,9 @@ After applying the role-surface safety gate, if `start_review_flow` / `submit_re
 ## Workflow
 
 ```
+get_flow_definition(kind)
+  → follow its guide: what to submit, how to iterate (a server that publishes no guides says so; the rest of this skill applies)
+
 start_review_flow(kind, target_kind, target_ref, target_title, context)
   → reviewer returns a result: findings (with the findings text) | clean
 

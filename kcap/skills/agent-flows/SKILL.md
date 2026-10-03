@@ -87,7 +87,7 @@ server rejects the override outright.
 
 ## Read the flow's guide first
 
-Call `get_flow_definition(definition_id)` before `start_flow`. The guide is written by whoever published the flow: what to put in `context`, which target to name, how to iterate on its results and when to close. Where it differs from the generic rules below, follow the guide. A server that does not publish guides says so; then work from the definition's description and the rules below.
+Before a catalogue start (`definition_id`), call `get_flow_definition(definition_id)`. The guide is written by whoever published the flow: what to put in `context`, which target to name, how to iterate on its results and when to close. Where it differs from the generic rules below, follow the guide. A server that does not publish guides says so; then work from the definition's description and the rules below. A flow started with an inline `definition_yaml` has no catalogue id and no guide: drive it by the generic rules and its own YAML.
 
 ## Composing a dynamic flow
 
@@ -171,7 +171,7 @@ The server enforces per-run budgets; watch for these in tool error responses:
 
 ## Workflow
 
-Every flow starts the same way:
+A catalogue flow (`definition_id`) starts with its guide; an inline `definition_yaml` flow skips this step:
 
 ```
 get_flow_definition(definition_id)
@@ -226,7 +226,7 @@ report completion to user
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
 | `list_flow_definitions` | — | — | Before `start_flow`, whenever the user has not named a definition or named one you have not seen listed. Read-only: returns each runnable definition's id, version, description, whether it is single- or multi-participant, and its participants' role, authored vendor and model. A `server_catching_up` error is retryable — do not read it as an empty catalog. |
-| `get_flow_definition` | `definition_id` | — | Before `start_flow`, every time. Read-only: returns the definition's participants and when to use it, then its authored driver guide (what to submit, how to iterate, when to close). An unknown, disabled or deleted id is an error; an older server reports that it publishes no guides. |
+| `get_flow_definition` | `definition_id` | — | Before every catalogue (`definition_id`) `start_flow`. Read-only: returns the definition's participants and when to use it, then its authored driver guide (what to submit, how to iterate, when to close). An unknown, disabled or deleted id is an error; an older server reports that it publishes no guides. |
 | `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (reserved aliases only — explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (reserved aliases only — explicit reviewer model override; REQUIRES `vendor`, rejected on dynamic/multi-participant starts), `instructions`, `mode` (`context-only` — optional; by default the participant's worktree is mirrored from THIS SESSION's project directory, not from the directory you are working in. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
 | `send_to_participant` | `flow_run_id`, `participant` (role name declared in the flow definition's `participants` map; single-participant definitions use `reviewer` — an unknown role is rejected, naming the valid ones), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result for that role, or to launch a role for the first time. Pass the same `flow_run_id`, the role's name, and the updated message. |
 | `get_flow_status` | — | `flow_run_id` (omit to read the newest open flow this session started, or on a harness without a session identity the newest one started from this workspace; several open flows are listed instead), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow run (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |
