@@ -199,17 +199,88 @@ public class FlowsLaneTests {
             throw new IOException("no scope");
     }
 
-    [Test]
-    public async Task A_failing_scope_resolution_still_delivers_the_flows_lane() {
-        var time      = new FakeTimeProvider();
-        var scope     = new FixedScope("repo", "machine");
-        var composite = new SessionStartCompositeContextProvider(new ThrowingScope(),
-            new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new Handler(HttpStatusCode.OK, "[]", null))), time),
-            new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NoContent, "", null))), time),
+    sealed class HangingScope : ISessionStartMemoryScopeResolver {
+        public int Calls;
+
+        public Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct) {
+            Calls++;
+            return new TaskCompletionSource<SessionStartMemoryScope>().Task;
+        }
+    }
+
+    static SessionStartCompositeContextProvider WithScope(ISessionStartMemoryScopeResolver resolver, (HttpStatusCode, string) memory, (HttpStatusCode, string) guidelines) {
+        var time = new FakeTimeProvider();
+
+        return new SessionStartCompositeContextProvider(resolver,
+            new SessionStartMemoryContextProvider(new FixedScope("repo", "machine"), Lazy(new HttpClient(new Handler(memory.Item1, memory.Item2, null))), time),
+            new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(guidelines.Item1, guidelines.Item2, null))), time),
             new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.OK, Catalog, null))), time),
             time);
+    }
 
-        var result = await composite.GetAsync(Req(memory: true, guidelines: true, flows: true));
+    const string MemoryBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+
+    [Test]
+    public async Task A_failing_scope_resolution_still_delivers_the_flows_lane_when_scoped_lanes_are_off() {
+        var composite = WithScope(new ThrowingScope(), (HttpStatusCode.OK, "[]"), (HttpStatusCode.NoContent, ""));
+
+        var result = await composite.GetAsync(Req(flows: true));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment!).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);
+    }
+
+    [Test]
+    public async Task A_failing_scope_resolution_retries_while_memory_is_enabled() {
+        var composite = WithScope(new ThrowingScope(), (HttpStatusCode.OK, "[]"), (HttpStatusCode.NoContent, ""));
+
+        var result = await composite.GetAsync(Req(memory: true, flows: true));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+    }
+
+    [Test]
+    public async Task A_flows_only_request_never_resolves_scope() {
+        var scope     = new HangingScope();
+        var composite = WithScope(scope, (HttpStatusCode.OK, "[]"), (HttpStatusCode.NoContent, ""));
+
+        var result = await composite.GetAsync(Req(flows: true)).WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment!).Contains(SessionStartFlowsLane.Header);
+        await Assert.That(scope.Calls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Flows_content_does_not_mask_a_memory_retry() {
+        var result = await Composite(memory: (HttpStatusCode.ServiceUnavailable, ""), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.OK, Catalog))
+            .GetAsync(Req(memory: true, flows: true));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+        await Assert.That(result.Fragment).IsNull();
+    }
+
+    [Test]
+    public async Task Flows_content_does_not_mask_a_guidelines_retry() {
+        var result = await Composite(memory: (HttpStatusCode.OK, "[]"), guidelines: (HttpStatusCode.ServiceUnavailable, ""), flows: (HttpStatusCode.OK, Catalog))
+            .GetAsync(Req(guidelines: true, flows: true));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+    }
+
+    [Test]
+    public async Task Memory_content_commits_even_when_guidelines_want_a_retry() {
+        var result = await Composite(memory: (HttpStatusCode.OK, MemoryBody), guidelines: (HttpStatusCode.ServiceUnavailable, ""), flows: (HttpStatusCode.OK, Catalog))
+            .GetAsync(Req(memory: true, guidelines: true, flows: true));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment!).Contains(SessionStartFlowsLane.Header);
+    }
+
+    [Test]
+    public async Task Empty_memory_and_guidelines_still_deliver_flows_under_the_marker() {
+        var result = await Composite(memory: (HttpStatusCode.OK, "[]"), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.OK, Catalog))
+            .GetAsync(Req(memory: true, guidelines: true, flows: true));
 
         await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
         await Assert.That(result.Fragment!).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);

@@ -20,31 +20,31 @@ internal sealed class SessionStartCompositeContextProvider(
         using var expiry = new CancellationTokenSource(request.Budget, time);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken, expiry.Token);
 
-        // The flows lane ignores scope, so it starts before scope resolves and survives its failure.
         var flowsTask = request.FlowsDisabled ? null : RunLaneAsync(() => flows.FetchAsync(request, cts.Token));
+
+        // Flows ignore scope, and a slow scope resolution must not spend the budget they share.
+        if (request.Disabled && request.GuidelinesDisabled)
+            return Combine(null, null, flowsTask is null ? null : await flowsTask);
 
         SessionStartMemoryScope scope;
         try {
             scope = await scopeResolver.ResolveAsync(request.Cwd, request.Budget, cts.Token);
         } catch (Exception ex) when (IsFailOpen(ex)) {
             diagnostic?.Invoke($"SessionStart scope resolution skipped: {ex.Message}");
-            var flowsOnly = flowsTask is null ? null : await flowsTask;
-            var combined  = Combine(null, [null, flowsOnly]);
+            if (flowsTask is not null) await flowsTask;
 
-            return combined.Disposition == SessionStartMemoryDisposition.Ready ? combined : SessionStartMemoryContextResult.Retry;
+            return SessionStartMemoryContextResult.Retry;
         }
 
         // Started before any further await so the lanes share the budget in parallel.
         var memoryTask     = request.Disabled           ? null : RunLaneAsync(() => memory.FetchWithScopeAsync(scope, request, cts.Token));
         var guidelinesTask = request.GuidelinesDisabled ? null : RunLaneAsync(() => guidelines.FetchWithScopeAsync(scope, request, cts.Token));
 
-        var memoryResult = memoryTask is null ? null : await memoryTask;
-        SessionStartMemoryContextResult?[] others = [
-            guidelinesTask is null ? null : await guidelinesTask,
-            flowsTask      is null ? null : await flowsTask
-        ];
+        var memoryResult     = memoryTask     is null ? null : await memoryTask;
+        var guidelinesResult = guidelinesTask is null ? null : await guidelinesTask;
+        var flowsResult      = flowsTask      is null ? null : await flowsTask;
 
-        return Combine(memoryResult, others);
+        return Combine(memoryResult, guidelinesResult, flowsResult);
     }
 
     async Task<SessionStartMemoryContextResult> RunLaneAsync(Func<Task<SessionStartMemoryContextResult>> lane) {
@@ -56,31 +56,43 @@ internal sealed class SessionStartCompositeContextProvider(
         }
     }
 
-    static SessionStartMemoryContextResult Combine(SessionStartMemoryContextResult? memoryResult, SessionStartMemoryContextResult?[] others) {
-        var memoryFragment = Ready(memoryResult);
-        var otherFragments = others.Select(Ready).OfType<string>().ToList();
+    // Flows content alone must not commit the lease while memory or guidelines want a retry.
+    static SessionStartMemoryContextResult Combine(
+            SessionStartMemoryContextResult? memoryResult, SessionStartMemoryContextResult? guidelinesResult, SessionStartMemoryContextResult? flowsResult) {
+        var memoryFragment     = Fragment(memoryResult);
+        var guidelinesFragment = Fragment(guidelinesResult);
+        var flowsFragment      = Fragment(flowsResult);
 
-        if (memoryFragment is not null || otherFragments.Count > 0)
-            return new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, Compose(memoryFragment, otherFragments));
+        if (memoryFragment is not null || guidelinesFragment is not null)
+            return Committed(Compose(memoryFragment, [guidelinesFragment, flowsFragment]));
 
-        SessionStartMemoryContextResult?[] all = [memoryResult, ..others];
-        var retries = all.Where(r => r?.Disposition == SessionStartMemoryDisposition.RetryableFailure).ToList();
-        if (retries.Count == 0) return SessionStartMemoryContextResult.Empty;
+        if (IsRetry(memoryResult) || IsRetry(guidelinesResult))
+            return Retry([memoryResult, guidelinesResult, flowsResult]);
 
-        return new SessionStartMemoryContextResult(
-            SessionStartMemoryDisposition.RetryableFailure, RetryAfter: retries.Max(r => r!.RetryAfter));
+        if (flowsFragment is not null) return Committed(Compose(null, [flowsFragment]));
+        if (IsRetry(flowsResult)) return Retry([flowsResult]);
 
-        static string? Ready(SessionStartMemoryContextResult? r) =>
+        return SessionStartMemoryContextResult.Empty;
+
+        static string? Fragment(SessionStartMemoryContextResult? r) =>
             r is { Disposition: SessionStartMemoryDisposition.Ready, Fragment: { } f } ? f : null;
+
+        static SessionStartMemoryContextResult Committed(string fragment) => new(SessionStartMemoryDisposition.Ready, fragment);
+
+        static bool IsRetry(SessionStartMemoryContextResult? r) => r?.Disposition == SessionStartMemoryDisposition.RetryableFailure;
+
+        static SessionStartMemoryContextResult Retry(SessionStartMemoryContextResult?[] all) =>
+            new(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: all.Where(IsRetry).Max(r => r!.RetryAfter));
     }
 
     /// <summary>Marker first: Pi and OpenCode capture stdout only when it opens with it, and only the memory
     /// fragment carries it.</summary>
-    static string Compose(string? memoryFragment, IReadOnlyList<string> others) {
-        var rest = string.Join("\n\n", others);
+    static string Compose(string? memoryFragment, IReadOnlyList<string?> others) {
+        var present = others.OfType<string>().ToList();
+        var rest    = string.Join("\n\n", present);
         if (memoryFragment is null) return MemoryIndexEmitter.FragmentMarker + "\n" + rest;
 
-        return others.Count == 0 ? memoryFragment : memoryFragment + "\n\n" + rest;
+        return present.Count == 0 ? memoryFragment : memoryFragment + "\n\n" + rest;
     }
 
     static bool IsFailOpen(Exception ex) =>
