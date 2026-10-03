@@ -1,14 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
-using Capacitor.Cli.SessionStartMemory;
 
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
-
-sealed class FixedScope(string? repo, string? machine) : ISessionStartMemoryScopeResolver {
-    public Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct) =>
-        Task.FromResult(new SessionStartMemoryScope(repo, machine));
-}
 
 sealed class Handler(HttpStatusCode status, string body, TimeSpan? retryAfter = null) : HttpMessageHandler {
     public int Calls;
