@@ -1,5 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.SessionStartMemory;
@@ -11,7 +13,7 @@ namespace Capacitor.Cli.SessionStartMemory;
 /// </summary>
 internal static class SessionStartMemoryHookSupport {
     /// <summary>
-    /// Builds the combined memory + guidelines SessionStart context provider. Both lanes draw from one
+    /// Builds the combined memory, guidelines and flows SessionStart context provider. Both lanes draw from one
     /// authenticated client accessor and the composite resolves the repo/machine scope ONCE for both.
     /// Which lanes actually run is decided per request via
     /// <see cref="SessionStartMemoryContextRequest.Disabled"/> (memory) and its
@@ -38,8 +40,13 @@ internal static class SessionStartMemoryHookSupport {
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
         var guidelines = new SessionStartGuidelinesLane(client, time);
-        return new SessionStartCompositeContextProvider(resolver, memory, guidelines, time);
+        var flows      = new SessionStartFlowsLane(client, time);
+        return new SessionStartCompositeContextProvider(resolver, memory, guidelines, flows, time);
     }
+
+    /// <summary>Offering a flow the agent cannot start is worse than not offering it.</summary>
+    public static bool FlowsLaneDisabled(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) =>
+        !McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, KcapMcpServers.FlowsServerName, codexConfigPath);
 
     /// <summary>
     /// Awaits an in-flight fragment fetch under the budget remaining AT THIS INSTANT — never the
