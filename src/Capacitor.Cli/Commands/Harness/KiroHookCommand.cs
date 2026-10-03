@@ -98,8 +98,9 @@ sealed class KiroHookCommand(
             string?    scopeRoot,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             TimeSpan   budget) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -113,7 +114,7 @@ sealed class KiroHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionLifecycleReason.RepeatedTurnCallback, CallbackMayRepeat: true),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -326,6 +327,7 @@ sealed class KiroHookCommand(
             // user's opt-out on those deployments (the defect found reviewing the Copilot adapter).
             activeProfile?.DisableMemoryIndex is true,
             activeProfile?.DisableSessionGuidelines is true,
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Kiro, harnesses),
             // Remaining already reserves Safety — do not subtract it again.
             budget.Remaining);
 

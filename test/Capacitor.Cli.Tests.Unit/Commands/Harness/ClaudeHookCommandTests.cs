@@ -396,6 +396,51 @@ public class ClaudeHookCommandTests {
         await Assert.That(stdout).Contains("Team memory");
     }
 
+    const string ProactiveCatalog = """{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}""";
+
+    [Test, NotInParallel]
+    public async Task session_start_offers_proactive_flows_when_kcap_flows_is_registered() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+        fx.RegisterClaudeMcpServer("kcap-flows");
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout).Contains("Flows you may offer");
+        await Assert.That(stdout).Contains("- code-review: After a change is complete.");
+    }
+
+    [Test, NotInParallel]
+    public async Task without_the_flows_mcp_server_flows_are_neither_requested_nor_offered() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
+        await Assert.That(stdout).DoesNotContain("Flows you may offer");
+    }
+
+    [Test, NotInParallel]
+    public async Task with_memory_disabled_the_flows_offer_still_arrives() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisableMemoryIndex = true }) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+        fx.RegisterClaudeMcpServer("kcap-flows");
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (_, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+
+        await Assert.That(stdout).Contains("Flows you may offer");
+        await Assert.That(fx.MemoryIndexRequested).IsFalse();
+    }
+
     [Test, NotInParallel]
     public async Task session_start_with_an_empty_memory_index_array_emits_nothing() {
         // CompleteWithoutContext disposition (a successful, empty fetch) — with no lessons/nudge
@@ -1512,6 +1557,9 @@ public class ClaudeHookCommandTests {
         public HttpStatusCode MemoryIndexStatus { get; set; } = HttpStatusCode.OK;
         public TimeSpan       MemoryIndexDelay  { get; set; } = TimeSpan.Zero;
 
+        public string FlowDefinitionsBody { get; set; } = """{"definitions":[]}""";
+        public int FlowDefinitionsRequestCount => _memoryServer.LogEntries.Count(e => e.RequestMessage.Path == "/api/flows/definitions");
+
         /// <summary>Every request the stub server saw, for a test asserting that none arrived.</summary>
         public int ServerRequestCount => _memoryServer.LogEntries.Count;
 
@@ -1582,6 +1630,10 @@ public class ClaudeHookCommandTests {
             if (MemoryIndexDelay > TimeSpan.Zero) response = response.WithDelay(MemoryIndexDelay);
 
             _memoryServer.Given(Request.Create().WithPath("/api/memories/index").UsingGet()).RespondWith(response);
+
+            _memoryServer.Given(Request.Create().WithPath("/api/flows/definitions").UsingGet())
+                .RespondWith(Response.Create().WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json").WithBody(FlowDefinitionsBody));
         }
 
         /// <summary>Installs the kcap plugin under the fixture's home with a bundled .mcp.json naming
