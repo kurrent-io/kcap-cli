@@ -144,8 +144,9 @@ public class AntigravitySessionStartMemoryTests {
             .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
                 .WithBody("""{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}"""));
 
+        // Budget is generous to accommodate the real round trip through scope resolution and the WireMock fetch under full parallelism.
         var fragment = await Hook(server.Url!).StartMemoryIndexTask("e80c33bfc10f4d2fb626b0043f488fc0", "/repo",
-            disabled: true, guidelinesDisabled: true, flowsDisabled: false, TimeSpan.FromSeconds(5));
+            disabled: true, guidelinesDisabled: true, flowsDisabled: false, TimeSpan.FromSeconds(30));
 
         await Assert.That(server.FindLogEntries(Request.Create().WithPath("/api/flows/definitions").UsingGet()).Count).IsEqualTo(1);
         await Assert.That(fragment).IsNotNull();
