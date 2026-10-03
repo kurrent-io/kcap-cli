@@ -20,18 +20,23 @@ internal sealed class SessionStartCompositeContextProvider(
         using var expiry = new CancellationTokenSource(request.Budget, time);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken, expiry.Token);
 
+        // The flows lane ignores scope, so it starts before scope resolves and survives its failure.
+        var flowsTask = request.FlowsDisabled ? null : RunLaneAsync(() => flows.FetchAsync(request, cts.Token));
+
         SessionStartMemoryScope scope;
         try {
             scope = await scopeResolver.ResolveAsync(request.Cwd, request.Budget, cts.Token);
         } catch (Exception ex) when (IsFailOpen(ex)) {
             diagnostic?.Invoke($"SessionStart scope resolution skipped: {ex.Message}");
-            return SessionStartMemoryContextResult.Retry;
+            var flowsOnly = flowsTask is null ? null : await flowsTask;
+            var combined  = Combine(null, [null, flowsOnly]);
+
+            return combined.Disposition == SessionStartMemoryDisposition.Ready ? combined : SessionStartMemoryContextResult.Retry;
         }
 
-        // Started before any await so the lanes share the budget in parallel.
+        // Started before any further await so the lanes share the budget in parallel.
         var memoryTask     = request.Disabled           ? null : RunLaneAsync(() => memory.FetchWithScopeAsync(scope, request, cts.Token));
         var guidelinesTask = request.GuidelinesDisabled ? null : RunLaneAsync(() => guidelines.FetchWithScopeAsync(scope, request, cts.Token));
-        var flowsTask      = request.FlowsDisabled      ? null : RunLaneAsync(() => flows.FetchAsync(request, cts.Token));
 
         var memoryResult = memoryTask is null ? null : await memoryTask;
         SessionStartMemoryContextResult?[] others = [

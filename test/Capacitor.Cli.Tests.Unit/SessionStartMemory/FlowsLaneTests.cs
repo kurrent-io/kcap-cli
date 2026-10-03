@@ -33,6 +33,15 @@ public class FlowsLaneTests {
     }
 
     [Test]
+    public async Task The_lane_is_on_for_a_harness_that_registers_kcap_flows() {
+        using var home = new TempDir();
+        var config = home.CreateFile("config.toml", "[mcp_servers.kcap-flows]\ncommand = \"kcap\"\nargs = [\"mcp\", \"flows\"]\n");
+
+        await Assert.That(SessionStartMemoryHookSupport.FlowsLaneDisabled(
+            HarnessId.Codex, TestHarnesses.Under(new UserHome(home.Path)), config)).IsFalse();
+    }
+
+    [Test]
     public async Task Proactive_flows_render_with_their_when_to_use() {
         var fragment = SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog));
 
@@ -73,6 +82,19 @@ public class FlowsLaneTests {
         await Assert.That(fragment).Contains("Also offerable: ");
         await Assert.That(fragment).Contains("flow-13");
         await Assert.That(fragment).EndsWith(SessionStartFlowsLane.Footer);
+    }
+
+    [Test]
+    public async Task At_most_ten_flows_are_described_whatever_room_is_left() {
+        var defs = new JsonArray();
+        for (var i = 1; i <= 12; i++)
+            defs.Add(new JsonObject { ["id"] = $"flow-{i:00}", ["offer"] = "proactive", ["when_to_use"] = "w" });
+
+        var lines = SessionStartFlowsLane.BuildFragment(new JsonObject { ["definitions"] = defs })!.Split('\n');
+
+        await Assert.That(lines.Count(l => l.StartsWith("- ", StringComparison.Ordinal))).IsEqualTo(10);
+        await Assert.That(lines.Where(l => l.StartsWith("- ", StringComparison.Ordinal)).Any(l => l.Contains("flow-11") || l.Contains("flow-12"))).IsFalse();
+        await Assert.That(lines.Single(l => l.StartsWith("Also offerable: ", StringComparison.Ordinal))).IsEqualTo("Also offerable: flow-11, flow-12");
     }
 
     [Test]
@@ -122,6 +144,13 @@ public class FlowsLaneTests {
     }
 
     [Test]
+    public async Task A_non_json_200_is_empty_not_retried() {
+        var result = await Lane(HttpStatusCode.OK, "not json").FetchAsync(Req(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
+    }
+
+    [Test]
     public async Task The_lane_reads_the_definitions_listing() {
         var handler = new Handler(HttpStatusCode.OK, Catalog, null);
         var lane    = new SessionStartFlowsLane(Lazy(new HttpClient(handler)), TimeProvider.System);
@@ -163,6 +192,27 @@ public class FlowsLaneTests {
         var fragment = result.Fragment!;
         await Assert.That(fragment.IndexOf(MemoryIndexEmitter.FragmentMarker, StringComparison.Ordinal)).IsEqualTo(0);
         await Assert.That(fragment.IndexOf(SessionStartFlowsLane.Header, StringComparison.Ordinal)).IsGreaterThan(0);
+    }
+
+    sealed class ThrowingScope : ISessionStartMemoryScopeResolver {
+        public Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct) =>
+            throw new IOException("no scope");
+    }
+
+    [Test]
+    public async Task A_failing_scope_resolution_still_delivers_the_flows_lane() {
+        var time      = new FakeTimeProvider();
+        var scope     = new FixedScope("repo", "machine");
+        var composite = new SessionStartCompositeContextProvider(new ThrowingScope(),
+            new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new Handler(HttpStatusCode.OK, "[]", null))), time),
+            new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NoContent, "", null))), time),
+            new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.OK, Catalog, null))), time),
+            time);
+
+        var result = await composite.GetAsync(Req(memory: true, guidelines: true, flows: true));
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment!).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);
     }
 
     static SessionStartCompositeContextProvider Composite(

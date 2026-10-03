@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.WorkItems;
 
@@ -25,7 +26,14 @@ internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpCli
         if (outcome.Body is null)
             return new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
 
-        return BuildFragment(JsonNode.Parse(outcome.Body)) is { } fragment
+        JsonNode? root;
+        try {
+            root = JsonNode.Parse(outcome.Body);
+        } catch (JsonException) {
+            return SessionStartMemoryContextResult.Empty;
+        }
+
+        return BuildFragment(root) is { } fragment
             ? new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, fragment)
             : SessionStartMemoryContextResult.Empty;
     }
