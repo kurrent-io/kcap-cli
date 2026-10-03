@@ -256,7 +256,7 @@ sealed class OpenCodeHookCommand(
             bool       guidelinesDisabled,
             bool       flowsDisabled,
             TimeSpan   budget) {
-        // Both lanes off ⇒ nothing to fetch. A single disabled lane still runs the other.
+        // All three lanes off ⇒ nothing to fetch; any one enabled lane still runs.
         if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))

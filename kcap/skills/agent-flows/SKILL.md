@@ -17,7 +17,7 @@ description: >-
 
 # Agent Flows
 
-Use the `kcap mcp flows` MCP tools (`list_flow_definitions`, `start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it only when the user explicitly opts into it.
+Use the `kcap mcp flows` MCP tools (`list_flow_definitions`, `get_flow_definition`, `start_flow`, `send_to_participant`, `get_flow_status`, `close_flow`) to run a structured agent **flow**: your work is handed to a **separate, hosted participant agent** driven by a flow definition from the server's catalog, which returns a result (kind `findings` with the participant's result text, or `clean`); you address a `findings` result and keep iterating until the clean signal. This is a deliberate, heavier workflow — use it when the user asks for a flow or accepts one you offered, never on your own initiative.
 
 ## Long rounds are normal
 
@@ -41,10 +41,10 @@ Only start a flow when the user explicitly asks for one — e.g. "start a flow",
 
 ## Choosing the flow definition
 
-Once the user has explicitly opted into a flow (see above), pick the `definition_id`:
+Once the user has asked for a flow or accepted one you offered (see above), pick the `definition_id`:
 
 - The flow the user named, or the one you offered and they accepted.
-- Anything else → the definition id the user named, or one from `list_flow_definitions` (read-only), which lists every definition this server can start — operator-published ones included — with its version, description, participant roles and their authored vendor and model, and whether it is single- or multi-participant. Call it whenever the user has not named a definition, or named one you have not seen listed: a definition it does not list is disabled, deleted or unknown, and `start_flow` will refuse it. If several fit, ask the user rather than guessing. A server that answers that it cannot list definitions only predates the tool — the two built-ins and any id the user names still work.
+- If the user has not named one → choose from `list_flow_definitions` (read-only), which lists every definition this server can start — operator-published ones included — with its version, description, participant roles and their authored vendor and model, and whether it is single- or multi-participant. Call it whenever the user has not named a definition, or named one you have not seen listed: a definition it does not list is disabled, deleted or unknown, and `start_flow` will refuse it. If several fit, ask the user rather than guessing. A server that answers that it cannot list definitions only predates the tool — the two built-ins and any id the user names still work.
 
 For the reserved `spec-review` and `code-review` aliases, reviewer-vendor language is role-bound:
 pass the one vendor explicitly named as the reviewer, ignore driver-harness mentions, honor

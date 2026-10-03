@@ -4,10 +4,10 @@ namespace Capacitor.Cli.Core.Tests.Unit.Instructions;
 
 public class AgentInstructionsWriterTests {
     [Test]
-    public async Task Body_carries_the_proactive_review_offer_nudge() {
+    public async Task Body_carries_the_flow_offer_nudge() {
         // The steering block is how the harnesses that do NOT consult a SKILL.md as an invocable
-        // skill (Copilot, Gemini, Pi, OpenCode, Antigravity) get the proactive review-offer
-        // behavior — dropping this paragraph silently removes the feature on those harnesses.
+        // skill (Copilot, Gemini, Pi, OpenCode, Antigravity) get the catalogue-flow offer
+        // behavior — dropping this paragraph silently removes it on those harnesses.
         await Assert.That(KcapAgentInstructions.Body).Contains("Flows you may offer");
         await Assert.That(KcapAgentInstructions.Body).Contains("get_flow_definition");
         await Assert.That(KcapAgentInstructions.Body).DoesNotContain("proactively OFFER an independent second-harness review");
