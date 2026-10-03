@@ -62,8 +62,11 @@ context to submit (spec path / branch name and explicit commit range, reviewer w
 iterate, when to close, and for `code-review` that tests are out of scope. `SyncBuiltIns` re-seeds
 them at a new version unless an admin has published over them.
 
-An admin override of a built-in keeps its own YAML. Without a `guidance` block it is `on_request` and
-stops being offered; the release notes say so.
+`SyncBuiltIns` never rewrites an admin-published override of a built-in id, so the guidance reaches an
+override at read time instead. For a built-in id whose current definition has no `guidance` block,
+the listing and `/definitions/{id}` serve the guidance from the embedded built-in YAML. An override
+that authors any `guidance` block is served as written; `guidance: { offer: on_request }` is how an
+admin stops agents offering it. Admin-authored YAML is never modified and no version is appended.
 
 ### CLI: session-start flows lane
 
@@ -127,6 +130,11 @@ The new-CLI/old-server regression is accepted: the server ships first.
 **Server**
 - Parser: a valid `guidance` block, the length caps, `when_to_use` required when proactive, unknown keys rejected.
 - Seed: both built-ins carry guidance and re-version; an admin override is left alone.
+- Guidance fallback for a built-in id:
+  - an override with no `guidance` serves the embedded guidance
+  - an override with its own `guidance` serves it as written
+  - an override with `offer: on_request` is not proactive
+  - a custom (non-built-in) id with no `guidance` gets no fallback
 - Endpoints: listing fields; `/{id}` returns 404 for disabled and deleted definitions.
 - `flow-definition.schema.json` validates both built-in YAML files.
 
