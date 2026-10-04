@@ -833,11 +833,17 @@ public sealed class ClaudeHookCommand(
                     var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
                     var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Claude, harnesses);
 
-                    // The memory index is the one fragment that grows with the account, so it goes
-                    // last and absorbs the context cap instead of the nudges behind it.
-                    envelope = SessionStartAdditionalContext.BuildEnvelopeWithTail(
-                        [lessonsFragment, nextWorkFragment, nudgeFragment, coordinationFragment, sessionNudges, harnessNudge, firstRunNotice],
-                        trimmableTail: memoryFragment);
+                    // Short instructions are funded first so the server-sized lists absorb the cap.
+                    envelope = SessionStartAdditionalContext.BuildRankedEnvelope([
+                        new(lessonsFragment, Rank: 2, Trimmable: true),
+                        new(nextWorkFragment, Rank: 1),
+                        new(nudgeFragment),
+                        new(coordinationFragment, Rank: 2, Trimmable: true),
+                        new(sessionNudges),
+                        new(harnessNudge),
+                        new(firstRunNotice),
+                        new(memoryFragment, Rank: 3, Trimmable: true),
+                    ]);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }

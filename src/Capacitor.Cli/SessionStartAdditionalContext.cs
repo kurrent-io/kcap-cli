@@ -12,46 +12,49 @@ static class SessionStartAdditionalContext {
     /// sees only the head, so whatever is joined last is what disappears.</summary>
     public const int MaxContextChars = 10_000;
 
-    public static string? BuildEnvelope(params string?[] fragments) => BuildEnvelopeWithTail(fragments, trimmableTail: null);
+    const string Separator = "\n\n";
+
+    public static string? BuildEnvelope(params string?[] fragments) =>
+        BuildRankedEnvelope(fragments.Select(f => new ContextFragment(f)).ToList());
 
     /// <summary>
-    /// Keeps each of <paramref name="fragments"/> whole, in order, while it fits under
-    /// <see cref="MaxContextChars"/>, dropping one that does not; a fragment cut mid-way could leave a
-    /// data fence open. <paramref name="trimmableTail"/> goes last and is cut at a line break to fill
-    /// what room is left, so a long list there cannot push the fragments ahead of it off the end.
+    /// Renders <paramref name="fragments"/> in the order given, but hands out room under
+    /// <see cref="MaxContextChars"/> by rank, lowest first, so a long fragment cannot crowd out a shorter
+    /// better-ranked one placed after it. A fragment that does not fit is cut at a line break when it is
+    /// trimmable and dropped otherwise: cutting anything else could leave a data fence open.
     /// </summary>
-    public static string? BuildEnvelopeWithTail(IReadOnlyList<string?> fragments, string? trimmableTail) {
-        var kept = new List<string>(fragments.Count + 1);
-        var used = 0;
-        foreach (var f in fragments) {
-            if (string.IsNullOrWhiteSpace(f)) continue;
-            var cost = Separator(kept) + f.Length;
-            if (used + cost > MaxContextChars) continue;
-            kept.Add(f);
-            used += cost;
+    public static string? BuildRankedEnvelope(IReadOnlyList<ContextFragment> fragments) {
+        var granted = new string?[fragments.Count];
+        // Every kept fragment is charged a separator, so the budget carries one extra for the first.
+        var room = MaxContextChars + Separator.Length;
+
+        foreach (var i in Enumerable.Range(0, fragments.Count).OrderBy(i => fragments[i].Rank)) {
+            var (text, _, trimmable) = fragments[i];
+            if (string.IsNullOrWhiteSpace(text)) continue;
+            var fit = text.Length + Separator.Length <= room ? text
+                    : trimmable ? CutAtLineBreak(text, room - Separator.Length)
+                    : null;
+            if (fit is null) continue;
+            granted[i] = fit;
+            room -= fit.Length + Separator.Length;
         }
 
-        if (!string.IsNullOrWhiteSpace(trimmableTail)) {
-            var room = MaxContextChars - used - Separator(kept);
-            if (trimmableTail.Length <= room) {
-                kept.Add(trimmableTail);
-            } else if (room > 0) {
-                var cut = trimmableTail.LastIndexOf('\n', room - 1);
-                if (cut > 0) kept.Add(trimmableTail[..cut]);
-            }
-        }
-
+        var kept = granted.OfType<string>().ToList();
         if (kept.Count == 0) return null;
 
         var envelope = new JsonObject {
             ["hookSpecificOutput"] = new JsonObject {
                 ["hookEventName"]     = "SessionStart",
-                ["additionalContext"] = string.Join("\n\n", kept)
+                ["additionalContext"] = string.Join(Separator, kept)
             }
         };
 
         return envelope.ToJsonString();
     }
 
-    static int Separator(List<string> kept) => kept.Count == 0 ? 0 : 2;
+    static string? CutAtLineBreak(string text, int maxChars) {
+        if (maxChars <= 0) return null;
+        var cut = text.LastIndexOf('\n', maxChars - 1);
+        return cut > 0 ? text[..cut] : null;
+    }
 }

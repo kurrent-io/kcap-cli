@@ -626,6 +626,30 @@ public class ClaudeHookCommandTests {
             .IsLessThan(ctx.IndexOf("## Team memory", StringComparison.Ordinal));
     }
 
+    /// <summary>Pins that guidelines rendered ahead of the plans nudge cannot crowd it out, and that
+    /// guidelines over the cap keep their head rather than vanishing.</summary>
+    [Test, NotInParallel]
+    public async Task session_start_keeps_the_plans_nudge_and_the_guidelines_head_when_guidelines_overflow_the_cap() {
+        var clusters = Enumerable.Range(0, 150).Select(i => new JsonObject {
+            ["text"] = $"guideline {i} " + new string('g', 100), ["category"] = "agent_guidance",
+        });
+        using var fx = new Fixture(Config.Root) {
+            RespondJson = new JsonObject { ["top_clusters"] = new JsonArray([.. clusters]) }.ToJsonString()
+        };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("- guideline 0 ");
+        await Assert.That(ctx).DoesNotContain("- guideline 149 ");
+    }
+
     const string NextWorkAck =
         """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
 
