@@ -242,8 +242,11 @@ internal partial class AgentOrchestrator {
         if (Encoding.UTF8.GetByteCount(text) > InputWire.MaxTextBytes)
             return Refuse(SendTextReasons.TooLarge, $"text exceeds {InputWire.MaxTextBytes} bytes");
         if (!_agents.TryGetValue(agentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {agentId}");
-        if (agent.Kind != LaunchKind.Default) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
+        if (!AcceptsTypedInput(agent.Kind)) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
         if (agent.Status is "Starting" or "Completed" or "Failed") return Refuse(SendTextReasons.NotRunning, $"agent is {agent.Status}");
+        // A quit becomes a daemon-side stop, which for a review agent would skip the confirmed Stop.
+        if (agent.Kind != LaunchKind.Default && !agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+            return Refuse(SendTextReasons.ProtectedKind, $"{ProtectionReason(agent)}: use Stop to end it");
 
         // Named refusals rather than the delivery core's one drop token: the composer shows the
         // wording to the person who picked the files, and can keep their text to retry without them.
@@ -410,10 +413,14 @@ internal partial class AgentOrchestrator {
                 $"{agentId} is a hosted {agent.Runtime.Vendor} agent — it has no terminal to attach to. "
               + "Drive it from the dashboard."), ct);
 
-        // A review or flow agent is addressed through the flow protocol, never by typing at it,
-        // so the daemon — not the client — decides this attach carries no input.
-        return AttachClientLoopAsync(agent, stream, ct, readOnly: agent.Kind != LaunchKind.Default);
+        // The daemon, not the client, decides whether this attach carries input.
+        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind));
     }
+
+    /// A PR-review agent is a dialogue the reviewer types into; a flow participant is driven only
+    /// through the flow protocol. Any other kind fails safe as read-only. Stop protection is a
+    /// separate rule: both review kinds still need --force to stop.
+    internal static bool AcceptsTypedInput(LaunchKind kind) => kind is LaunchKind.Default or LaunchKind.Review;
 
     /// Human-readable "why is this read-only/refused", carried on the AttachedReadOnly frame and
     /// the not-live StopV2 refusal below (which reads the same kind from a persisted PID record

@@ -2084,10 +2084,10 @@ kcap agent stop --all -y   # stop the listed non-review agents, no prompt
 
 Agent ids are long, so `attach` and `stop` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
 
-**Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two, because they are driven by the flow protocol rather than by you:
+**Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two:
 
-- `kcap agent attach` on one is **read-only** — you see its output, your keystrokes are not delivered, and your terminal size is not applied to it.
-- `kcap agent stop` on one is **refused** unless you pass `--force`, and `stop --all` skips them and says how many it skipped.
+- `kcap agent attach` on a `review-flow` participant is **read-only** — it is driven by the flow protocol, so you see its output, your keystrokes are not delivered, and your terminal size is not applied to it. A `review` agent is a dialogue, so attaching to one is read-write.
+- `kcap agent stop` on either is **refused** unless you pass `--force`, and `stop --all` skips them and says how many it skipped.
 
 **Agents with no terminal.** Some hosted vendors (Antigravity's `agy`, and the ACP-backed ones — Cursor, Copilot, Kiro, Gemini) never produce terminal output at all: their stdout is protocol traffic, not a screen. `kcap agent attach` on one of those is **refused by name**, telling you which vendor it is and to drive the agent from the dashboard, rather than attaching you to a blank window that never repaints. They still appear in `kcap agent ls`, and `kcap agent stop` works on them normally.
 
