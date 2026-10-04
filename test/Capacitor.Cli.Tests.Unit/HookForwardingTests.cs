@@ -184,6 +184,45 @@ public class SessionStartAdditionalContextTests {
         await Assert.That(ctx).IsEqualTo("first\n\nsecond");
     }
 
+    static string Context(string envelope) =>
+        JsonNode.Parse(envelope)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+
+    [Test]
+    public async Task BuildEnvelope_drops_a_fragment_that_does_not_fit_whole_and_keeps_later_ones() {
+        var big = new string('x', SessionStartAdditionalContext.MaxContextChars);
+
+        var ctx = Context(SessionStartAdditionalContext.BuildEnvelope("first", big, "last")!);
+
+        await Assert.That(ctx).IsEqualTo("first\n\nlast");
+    }
+
+    [Test]
+    public async Task BuildEnvelopeWithTail_cuts_the_tail_at_a_line_break_to_fit_the_cap() {
+        var line = new string('m', 99);
+        var tail = string.Join('\n', Enumerable.Repeat(line, 200));
+
+        var ctx = Context(SessionStartAdditionalContext.BuildEnvelopeWithTail(["nudge"], tail)!);
+
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).StartsWith("nudge\n\n" + line);
+        await Assert.That(ctx).EndsWith(line);
+    }
+
+    [Test]
+    public async Task BuildEnvelopeWithTail_keeps_a_tail_that_fits_whole() {
+        var ctx = Context(SessionStartAdditionalContext.BuildEnvelopeWithTail(["a", null], "b\nc")!);
+
+        await Assert.That(ctx).IsEqualTo("a\n\nb\nc");
+    }
+
+    [Test]
+    public async Task BuildEnvelopeWithTail_drops_a_tail_with_no_line_break_inside_the_room_left() {
+        var result = SessionStartAdditionalContext.BuildEnvelopeWithTail(
+            [], new string('m', SessionStartAdditionalContext.MaxContextChars + 1));
+
+        await Assert.That(result).IsNull();
+    }
+
     [Test]
     public async Task BuildEnvelope_produces_single_top_level_json_object() {
         var result = SessionStartAdditionalContext.BuildEnvelope("first", "second")!;

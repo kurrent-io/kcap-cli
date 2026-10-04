@@ -599,6 +599,33 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
     }
 
+    /// <summary>Pins that a memory index far past Claude Code's context cap is what gets trimmed, not
+    /// the plans nudge: the index alone must exceed the cap, otherwise this proves nothing.</summary>
+    [Test, NotInParallel]
+    public async Task session_start_keeps_the_plans_nudge_when_the_memory_index_overflows_the_context_cap() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var entries = Enumerable.Range(0, 150).Select(i => new JsonObject {
+            ["memory_id"] = $"m{i}", ["slug"] = $"slug-{i}", ["audience"] = "team",
+            ["description"] = new string('d', 200), ["kind"] = "project",
+        });
+        fx.MemoryIndexBody = new JsonArray([.. entries]).ToJsonString();
+        var fullIndex = MemoryIndexEmitter.BuildFragment(JsonNode.Parse(fx.MemoryIndexBody), disabled: false)!;
+        await Assert.That(fullIndex.Length).IsGreaterThan(SessionStartAdditionalContext.MaxContextChars);
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("## Team memory");
+        await Assert.That(ctx.IndexOf("## Plans", StringComparison.Ordinal))
+            .IsLessThan(ctx.IndexOf("## Team memory", StringComparison.Ordinal));
+    }
+
     const string NextWorkAck =
         """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
 
