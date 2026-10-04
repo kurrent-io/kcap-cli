@@ -244,6 +244,9 @@ internal partial class AgentOrchestrator {
         if (!_agents.TryGetValue(agentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {agentId}");
         if (!AcceptsTypedInput(agent.Kind)) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
         if (agent.Status is "Starting" or "Completed" or "Failed") return Refuse(SendTextReasons.NotRunning, $"agent is {agent.Status}");
+        // A quit becomes a daemon-side stop, which for a review agent would skip the confirmed Stop.
+        if (agent.Kind != LaunchKind.Default && !agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+            return Refuse(SendTextReasons.ProtectedKind, $"{ProtectionReason(agent)}: use Stop to end it");
 
         // Named refusals rather than the delivery core's one drop token: the composer shows the
         // wording to the person who picked the files, and can keep their text to retry without them.

@@ -87,7 +87,6 @@ public class LocalSendTextTests {
         await Assert.That((await Send(orch, Payload("done", "hi"))).Reason).IsEqualTo(SendTextReasons.NotRunning);
     }
 
-    /// <summary>A PR-review agent is a dialogue: the composer's text reaches it like any agent's.</summary>
     [Test]
     public async Task A_review_agent_accepts_composer_text() {
         await using var orch = Build();
@@ -98,6 +97,20 @@ public class LocalSendTextTests {
 
         await Assert.That(ack).IsEqualTo(new SendTextAckDto(true, null, null, SendTextOutcomes.Delivered));
         await Assert.That(rt.SentInputs).IsEquivalentTo(new[] { "what does roots.go change?" });
+    }
+
+    /// A composer quit would otherwise stop a review agent without the confirmation Stop asks for.
+    [Test]
+    public async Task A_quit_typed_at_a_review_agent_is_refused_and_leaves_it_running() {
+        await using var orch = Build();
+        var rt    = new FakeAcpRuntime();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", rt, kind: LaunchKind.Review);
+
+        var ack = await Send(orch, Payload("rev", "/quit"));
+
+        await Assert.That(ack.Reason).IsEqualTo(SendTextReasons.ProtectedKind);
+        await Assert.That(agent.Status).IsEqualTo("Running");
+        await Assert.That(rt.SentInputs).IsEmpty();
     }
 
     [Test]

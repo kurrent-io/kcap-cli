@@ -377,6 +377,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set => this.RaiseAndSetIfChanged(ref _isReadOnlyParticipant, value);
     }
 
+    bool _takesAttachments = true;
+    bool TakesAttachments { get => _takesAttachments; set => this.RaiseAndSetIfChanged(ref _takesAttachments, value); }
+
+    internal const string NoAttachmentsHint = "a review agent takes no attachments";
+
     string _readOnlyNotice = "";
     public string ReadOnlyNotice { get => _readOnlyNotice; private set => this.RaiseAndSetIfChanged(ref _readOnlyNotice, value); }
 
@@ -538,7 +543,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Observable.Merge(
                 _input.WhenAnyValue(i => i.CanAttach).Select(_ => Unit.Default),
                 _input.WhenAnyValue(i => i.AttachHint).Select(_ => Unit.Default),
-                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default))
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default),
+                this.WhenAnyValue(x => x.TakesAttachments).Select(_ => Unit.Default))
             .Subscribe(_ => {
                 this.RaisePropertyChanged(nameof(IAttachmentSink.CanAttach));
                 this.RaisePropertyChanged(nameof(IAttachmentSink.AttachHint));
@@ -559,7 +565,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var snapshot = ComposerText;
             var edits = _composerEdits;
             var files = Tray.Snapshot();
-            if (files.Count > 0 && !_input.CanAttach) { Notice(_input.AttachHint); return; }
+            if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
             IReadOnlyList<string> ids = [];
             if (files.Count > 0) {
                 // The bytes have to be on the server before the prompt names them: a prompt that
@@ -671,6 +677,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void OnSession(ChatSessionInfo info) {
         ReadOnlyNotice = info.ReadOnlyNotice;
         IsReadOnlyParticipant = info.ReadOnlyNotice.Length > 0;
+        TakesAttachments = info.TakesAttachments;
         _vendor = info.Vendor;
         _root = info.Root;
         _rootSubject.OnNext(info.Root);
@@ -778,8 +785,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The one surface every intake source hands its result to.
     public IAttachmentSink Attachments => this;
 
-    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant;
-    string? IAttachmentSink.AttachHint => _input.AttachHint;
+    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant && TakesAttachments;
+    string? IAttachmentSink.AttachHint => TakesAttachments ? _input.AttachHint : NoAttachmentsHint;
     int IAttachmentSink.FreeSlots => Tray.FreeSlots;
 
     void IAttachmentSink.Accept(IntakeResult result) {

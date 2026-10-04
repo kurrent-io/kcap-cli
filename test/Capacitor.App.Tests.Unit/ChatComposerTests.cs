@@ -206,6 +206,15 @@ public class ChatComposerTests {
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "sidekick"))).IsEqualTo("sidekick agent");
     }
 
+    /// A review agent takes text but no files: both daemon lanes refuse its attachments, so offering
+    /// the picker would upload files only for the send to fail.
+    [Test]
+    public async Task Only_a_plain_agent_takes_attachments() {
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true), ended: false).TakesAttachments).IsTrue();
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true, kind: "review"), ended: false).TakesAttachments).IsFalse();
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true, kind: "review-flow"), ended: false).TakesAttachments).IsFalse();
+    }
+
     /// Thread identity: the hint's own change lands on the UI thread even when the terminal's
     /// state flips from a pool thread.
     [Test]
