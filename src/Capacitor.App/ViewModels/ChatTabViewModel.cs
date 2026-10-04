@@ -380,12 +380,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     string _readOnlyNotice = "";
     public string ReadOnlyNotice { get => _readOnlyNotice; private set => this.RaiseAndSetIfChanged(ref _readOnlyNotice, value); }
 
-    /// Why this session cannot be messaged, or "" for an ordinary agent. Mirrors the wording of
-    /// the daemon's attach-time ProtectionReason so the chat banner and the terminal banner name
-    /// the same block identically; an unrecognised kind fails safe as protected, like
-    /// AgentActionService.IsProtectedKind.
+    /// Why this session cannot be messaged, or "" when it can. Mirrors the wording of the daemon's
+    /// attach-time ProtectionReason so the chat banner and the terminal banner name the same block
+    /// identically.
     internal static string ParticipantNotice(AgentStatusDto dto) {
-        if (!AgentActionService.IsProtectedKind(dto.Kind)) return "";
+        if (AgentActionService.AcceptsTypedInput(dto.Kind)) return "";
         var role = string.IsNullOrEmpty(dto.FlowRole) ? "" : $", role {dto.FlowRole}";
         var flow = string.IsNullOrEmpty(dto.FlowRunId) ? "" : $" (flow {dto.FlowRunId}{role})";
         return $"{dto.Kind} agent{flow}";

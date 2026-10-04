@@ -978,6 +978,28 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
     }
 
+    /// A PR-review agent is a dialogue the reviewer types into, unlike a flow participant.
+    [Test]
+    public async Task Attaching_to_a_review_agent_stays_read_write() {
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             pty    = new RecordingPtyProcess();
+        orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review, pty: pty);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("hello"u8.ToArray()), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("rev-1", client, default);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
+        await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
+    }
+
     // ── Test doubles for the local-spawn lifecycle ──────────────────────
 
     sealed class EnvCapturingPtyFactory : IPtyProcessFactory {

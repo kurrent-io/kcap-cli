@@ -74,17 +74,30 @@ public class LocalSendTextTests {
     [Test]
     public async Task Protected_kind_and_not_running_are_refused_before_the_core() {
         await using var orch = Build();
-        AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", new FakeAcpRuntime(), kind: LaunchKind.Review);
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "flow", new FakeAcpRuntime(), kind: LaunchKind.ReviewFlow);
 
-        var ack = await Send(orch, Payload("rev", "hi"));
+        var ack = await Send(orch, Payload("flow", "hi"));
 
         await Assert.That(ack.Reason).IsEqualTo(SendTextReasons.ProtectedKind);
-        await Assert.That(ack.Error).Contains("review");
+        await Assert.That(ack.Error).Contains("review-flow");
 
         AgentOrchestratorHarness.SeedAcpAgent(orch, "starting", new FakeAcpRuntime(), status: "Starting");
         await Assert.That((await Send(orch, Payload("starting", "hi"))).Reason).IsEqualTo(SendTextReasons.NotRunning);
         AgentOrchestratorHarness.SeedAcpAgent(orch, "done", new FakeAcpRuntime(), status: "Completed");
         await Assert.That((await Send(orch, Payload("done", "hi"))).Reason).IsEqualTo(SendTextReasons.NotRunning);
+    }
+
+    /// <summary>A PR-review agent is a dialogue: the composer's text reaches it like any agent's.</summary>
+    [Test]
+    public async Task A_review_agent_accepts_composer_text() {
+        await using var orch = Build();
+        var rt = new FakeAcpRuntime();
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", rt, kind: LaunchKind.Review);
+
+        var ack = await Send(orch, Payload("rev", "what does roots.go change?"));
+
+        await Assert.That(ack).IsEqualTo(new SendTextAckDto(true, null, null, SendTextOutcomes.Delivered));
+        await Assert.That(rt.SentInputs).IsEquivalentTo(new[] { "what does roots.go change?" });
     }
 
     [Test]

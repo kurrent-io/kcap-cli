@@ -200,7 +200,7 @@ public class ChatComposerTests {
     [Test]
     public async Task Participant_notice_mirrors_the_daemon_protection_reason() {
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true))).IsEqualTo("");
-        await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "review"))).IsEqualTo("review agent");
+        await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "review"))).IsEqualTo("");
         await Assert.That(ChatTabViewModel.ParticipantNotice(
             Agent("a", "claude", true, kind: "review-flow") with { FlowRunId = "f1" })).IsEqualTo("review-flow agent (flow f1)");
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "sidekick"))).IsEqualTo("sidekick agent");
