@@ -1770,7 +1770,7 @@ public partial class App : Application {
         _directory?.Dispose();
         _remoteAgents?.Dispose();
         _modelCatalog?.Dispose();
-        _gh?.Dispose();
+        if (_gh is not null) await _gh.DisposeAsync().ConfigureAwait(false);
         if (_serverClients is null) return;
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }

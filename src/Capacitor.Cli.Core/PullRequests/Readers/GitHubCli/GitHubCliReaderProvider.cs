@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 
-public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable {
+public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable, IAsyncDisposable {
     static readonly PullRequestReaderTool GitHubCliTool = new("GitHub CLI", "https://cli.github.com",
         host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
     readonly TimeProvider _time = time;
@@ -231,6 +231,8 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
     }
 
     PullRequestRead<T>? Refuse<T>(PullRequestSubjectDto subject) where T : class {
+        // Ahead of the reuse window and the cursors: a disposed reader serves nothing, cached or not.
+        if (cli.IsStopped) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
         if (!Serves(subject.Provider, subject.Host)) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "no_reader", AccessFailure: "invalid");
         if (!PullRequestWire.ValidSubject(subject) || !GitHubCliRunner.ValidHost(subject.Host) || !GitHubCliRunner.ValidOwner(subject.Owner)
             || !GitHubCliRunner.ValidRepo(subject.RepoName) || !GitHubCliRunner.ValidNumber(subject.Number)) return Invalid<T>(subject);
@@ -249,4 +251,5 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
 
     // Owns the runner: disposing cancels its in-flight gh runs. _probeGate is left alone so a probe racing teardown can still release it.
     public void Dispose() => cli.Dispose();
+    public ValueTask DisposeAsync() => cli.DisposeAsync();
 }

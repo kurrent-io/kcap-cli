@@ -7,14 +7,16 @@ namespace Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 /// Locates and spawns <c>gh</c>. A GUI app inherits launchd's PATH, which omits Homebrew and
 /// user-local prefixes, so the login shell's PATH is searched first on macOS and Linux.
 /// </summary>
-public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? shell, Func<string, string?> getEnv) : IDisposable {
+public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? shell, Func<string, string?> getEnv) : IDisposable, IAsyncDisposable {
     public const int OutputLimit = 4 * 1024 * 1024;
     public const int ViewOutputLimit = 16 * 1024 * 1024;
     public static readonly TimeSpan Deadline = TimeSpan.FromSeconds(20);
     static readonly IReadOnlyDictionary<string, string> Overlay = new Dictionary<string, string>(StringComparer.Ordinal) {
         ["GH_PROMPT_DISABLED"] = "1", ["GH_NO_UPDATE_NOTIFIER"] = "1", ["NO_COLOR"] = "1", ["GH_PAGER"] = "cat", ["CLICOLOR"] = "0",
     };
-    readonly SemaphoreSlim _slots = new(2, 2);
+    const int Slots = 2;
+    static readonly TimeSpan QuiesceCap = TimeSpan.FromSeconds(2);
+    readonly SemaphoreSlim _slots = new(Slots, Slots);
     // Cancelled, never disposed: a run racing teardown must still be able to link to it.
     readonly CancellationTokenSource _lifetime = new();
     string? _path;
@@ -65,6 +67,15 @@ public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? she
     public static bool ValidNodeId(string? id) => id is { Length: > 0 and <= 256 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '=' or '-');
     public static bool ValidCursor(string? cursor) => cursor is { Length: > 0 and <= 512 } && cursor.All(c => c is >= '!' and <= '~');
 
+    public bool IsStopped => _lifetime.IsCancellationRequested;
+
     // Kills any gh still running (KillTree) rather than leaving it to outlive the app.
     public void Dispose() => _lifetime.Cancel();
+
+    /// <summary>Also waits, up to a short cap, for the killed runs: a slot frees only once its gh has exited.</summary>
+    public async ValueTask DisposeAsync() {
+        _lifetime.Cancel();
+        for (var i = 0; i < Slots; i++)
+            if (!await _slots.WaitAsync(QuiesceCap).ConfigureAwait(false)) return;
+    }
 }

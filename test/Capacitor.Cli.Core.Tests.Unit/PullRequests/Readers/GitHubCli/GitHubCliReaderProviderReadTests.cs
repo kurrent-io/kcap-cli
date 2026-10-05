@@ -341,6 +341,36 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task A_cached_view_is_not_served_after_the_provider_is_disposed() {
+        using var h = await Ready(Tmp);
+        await h.Provider.OverviewAsync("session", Subject, default);
+        var calls = h.Process.Calls.Count;
+        h.Provider.Dispose();
+        var overview = await h.Provider.OverviewAsync("session", Subject, default);
+        var checks = await h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", null, null, null, default);
+        await Assert.That(overview.Reason).IsEqualTo("tool_failed");
+        await Assert.That(checks.Reason).IsEqualTo("tool_failed");
+        await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
+    }
+
+    /// <summary>Teardown awaits the killed gh, so shutdown cannot complete while one is still exiting.</summary>
+    [Test]
+    public async Task Async_disposal_waits_for_an_in_flight_gh_to_finish() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        var exited = new TaskCompletionSource();
+        h.Process.WhenPending(["pr", "view"], new TaskCompletionSource<ProcessResult>(), onCancel: exited.Task);
+        await h.Provider.ProbeAsync(false, default);
+        var overview = h.Provider.OverviewAsync("session", Subject, default);
+        await Task.Delay(50);
+        var disposal = h.Provider.DisposeAsync().AsTask();
+        await Task.Delay(50);
+        await Assert.That(disposal.IsCompleted).IsFalse();
+        exited.SetResult();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That((await overview).Reason).IsEqualTo("tool_failed");
+    }
+
+    [Test]
     public async Task A_cancelled_caller_still_sees_its_own_cancellation() {
         using var h = new GhHarness(Tmp); h.SignedIn("github.com");
         h.Process.WhenPending(["pr", "list"], new TaskCompletionSource<ProcessResult>());
