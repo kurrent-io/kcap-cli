@@ -63,6 +63,61 @@ public sealed class ClaudeHookCommand(
         );
     }
 
+    /// <summary>The plan-read hook blocks the agent's Read, so it gets a fraction of the usual ceiling.</summary>
+    static readonly TimeSpan PlanReadCeiling = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// <c>kcap hook --claude --plan-read</c>: a synchronous PostToolUse on <c>Read</c>, separate from
+    /// the async catch-all because only a synchronous hook's context reaches the agent before its next
+    /// step. Asks the server whether the file is a plan the session has not declared, and passes the
+    /// answer on as hook context, once per session and document.
+    /// </summary>
+    public async Task<int> HandlePlanRead(TextReader stdin, TextWriter? stdout = null) {
+        HttpClient? client = null;
+        try {
+            return await HandlePlanReadCore(stdin, async cap => {
+                if (!HookHttp.IsPostable(Url)) return null;
+                var created = await BoundedAuth.CreateClientWithinAsync(
+                    () => http.ForHookAsync(), cap, clock.Time, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter));
+                return client = created?.Client;
+            }, stdout);
+        } finally {
+            client?.Dispose();
+        }
+    }
+
+    internal async Task<int> HandlePlanReadCore(
+            TextReader stdin, Func<TimeSpan, Task<HttpClient?>> clientWithin, TextWriter? stdout = null) {
+        try {
+            var body = await stdin.ReadToEndAsync();
+            if (ClaudePlanRead.Parse(body) is not { } read) return 0;
+
+            var profile = profiles.Effective;
+            if (profile?.DisablePlansNudge is true) return 0;
+            if (!McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, harnesses, "kcap-plans")) return 0;
+
+            var ledger = new PlanReadNudgeLedger(config);
+            if (ledger.WasNudged(read.SessionId, read.Path)) return 0;
+
+            var budget = clock.Budget(PlanReadCeiling);
+            if (await ShouldSuppressCaptureAsync(read.SessionId, body, "post-tool-use", profile, budget)) return 0;
+
+            if (await clientWithin(budget.Remaining) is not { } client) return 0;
+
+            using var content = new StringContent(read.ToRequest().ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostOnceAsync($"{Url}/hooks/plan-read", content, clock.Time, budget.Remaining);
+            if (!resp.IsSuccessStatusCode) return 0;
+
+            if (ClaudePlanRead.ReadNudge(await resp.Content.ReadAsStringAsync()) is not { } nudge) return 0;
+
+            await (stdout ?? Console.Out).WriteLineAsync(ClaudePlanRead.RenderHookOutput(nudge));
+            ledger.Record(read.SessionId, read.Path);
+            return 0;
+        } catch {
+            return 0;
+        }
+    }
+
     internal async Task<int> HandleWithDeps(
             HookSpool spool, TextReader stdin,
             Func<Task<AuthAttempt>> clientFactory,
@@ -876,7 +931,10 @@ public sealed class ClaudeHookCommand(
 
             // The session is over and the server holds the uploaded snapshot, so nothing here is
             // read again — and session-end is the only thing that evicts these directories.
-            if (sessionId is not null) EvictPolicyState(sessionId);
+            if (sessionId is not null) {
+                EvictPolicyState(sessionId);
+                new PlanReadNudgeLedger(config).Evict(sessionId.Replace("-", ""));
+            }
 
             // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
             // session-end so a stranded session-start always reaches the server before it.
