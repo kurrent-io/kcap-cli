@@ -1,20 +1,23 @@
 ---
 name: connect-capacitor
 description: >-
-  This skill should be used on a Grok Bot cloud computer (or a fresh machine
-  with no kcap installed) when the user asks to "connect Capacitor", "set up
+  This skill should be used when the user asks to "connect Capacitor", "set up
   Capacitor", "set up kcap", "log in to Capacitor", "start recording my chats",
   or when a kcap tool or skill fails because `kcap` is not installed or not
-  signed in. Installs the kcap CLI and signs it in, after which the installed
-  plugin's watcher records every chat.
+  signed in. Installs the kcap CLI and signs it in; on a Grok Bot cloud computer
+  it also starts the watcher that records every chat.
 ---
 
 # Connect Capacitor
 
-Chats are recorded by `kcap grok-bot watch`, a background process on this cloud
-computer that reads every chat from the local Grok Bot gateway. It needs
-the `kcap` CLI installed and signed in. Every Bot on the account shares the
+Installs and signs in the `kcap` CLI. On a Grok Bot cloud computer, chats are
+then recorded by `kcap grok-bot watch`, a background process that reads every
+chat from the local Grok Bot gateway; every Bot on the account shares the
 computer, so this is a one-time step per account, not per Bot.
+
+You are on a Grok Bot cloud computer when `~/sand-data/gateway.json` exists.
+Steps 4 and 5 apply only there. Elsewhere, stop after step 3: the agent's own
+hooks or plugin record its sessions, which `kcap setup` configures.
 
 ## 1. Check what is already there
 
@@ -48,13 +51,16 @@ kcap setup --server-url <url> --device --no-prompt \
   --skip-cursor-hooks --skip-cursor-mcp --skip-import
 ```
 
+On a machine that is not a Grok Bot computer, run plain `kcap setup` instead and
+let it detect the installed agents.
+
 - `--device` prints a URL and a short code. **Show both to the user** and ask
   them to approve on their own device; the command finishes once they do.
 - `--skip-cursor-hooks` and `--skip-cursor-mcp` are required: this plugin
   already supplies the MCP servers, and Grok Bot's hooks carry no conversation
   id, so they cannot record a chat.
 
-## 4. Start the watcher
+## 4. Start the watcher (Grok Bot only)
 
 ```bash
 pgrep -af "kcap grok-bot watch" || {
@@ -68,7 +74,7 @@ The log should show `watching …` and then `opened session …` / `sent N entri
 lines. A second watcher refuses to start, so running this again is safe — run it
 again whenever `pgrep` finds nothing (after a computer restart, for example).
 
-## 5. Tell the user
+## 5. Tell the user (Grok Bot only)
 
 - Every Bot's chats are recorded, including history from before today: the
   first run backfills each thread.
