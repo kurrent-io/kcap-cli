@@ -30,7 +30,7 @@
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="Svg.Controls.Skia.Avalonia" Version="12.0.0.17" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
-    <PackageVersion Include="ReactiveUI.Avalonia.Reactive" Version="12.1.2" />
+    <PackageVersion Include="ReactiveUI.Avalonia.Reactive" Version="12.1.5" />
     <PackageVersion Include="Spectre.Console" Version="0.57.2" />
     <PackageVersion Include="SvcSystems.UI.Terminal" Version="2.0.0" />
     <PackageVersion Include="Tomlyn" Version="2.10.1" />
@@ -38,8 +38,8 @@
          an MTP extension only loads against its own platform version. -->
     <PackageVersion Include="Microsoft.Testing.Extensions.GitHubActionsReport" Version="2.4.1" />
     <PackageVersion Include="Microsoft.Testing.Extensions.HangDump" Version="2.4.0" />
-    <PackageVersion Include="TUnit" Version="1.68.4" />
-    <PackageVersion Include="TUnit.Core" Version="1.68.4" />
+    <PackageVersion Include="TUnit" Version="1.72.10" />
+    <PackageVersion Include="TUnit.Core" Version="1.72.10" />
     <PackageVersion Include="Velopack" Version="1.2.158" />
     <PackageVersion Include="WireMock.Net" Version="2.18.0" />
     <PackageVersion Include="XTerm.NET" Version="2.0.2" />
