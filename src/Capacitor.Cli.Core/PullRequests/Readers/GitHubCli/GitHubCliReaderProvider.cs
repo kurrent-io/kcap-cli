@@ -117,7 +117,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
             "checks" => ((object)view.Checks, view.ChecksCapped), "reviewers" => ((object)view.Reviewers, false),
             "reviews" => ((object)view.Reviews, view.ReviewsCapped), _ => ((object)view.Comments, view.CommentsCapped)
         };
-        var entry = new GitHubCliCursorEntry(GitHubCliCursors.NewHandle(), key, Now, section == "checks" ? view.HeadSha : null, frozen.Items, 0, null, frozen.Capped);
+        var entry = new GitHubCliCursorEntry(GitHubCliCursors.NewHandle(), key, view.FetchedAt, section == "checks" ? view.HeadSha : null, frozen.Items, 0, null, frozen.Capped);
         return Slice<T>(_cursors.Mint(entry), key, entry, subject, started);
     }
 
@@ -221,7 +221,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
         try {
             var result = await cli.RunAsync(["pr", "view", subject.Number.ToString(CultureInfo.InvariantCulture), "--repo", Repo(subject.Host, subject.Owner, subject.RepoName),
                 "--json", GitHubCliMapping.ViewFields], GitHubCliRunner.ViewOutputLimit, CancellationToken.None).ConfigureAwait(false);
-            var view = result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.View(result.Stdout, subject, Now) : null;
+            var view = result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.View(result.Stdout, Now) : null;
             if (view is not null) lock (_views) {
                 _recent[key] = (_time.GetTimestamp(), view);
                 while (_recent.Count > 64) _recent.Remove(_recent.MinBy(pair => pair.Value.At).Key);

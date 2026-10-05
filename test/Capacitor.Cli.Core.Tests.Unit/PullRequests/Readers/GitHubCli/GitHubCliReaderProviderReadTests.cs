@@ -297,4 +297,18 @@ public class GitHubCliReaderProviderReadTests {
         await Assert.That((await h.Provider.PageAsync<PullRequestReviewDto>("session", Subject, "checks", null, null, null, default)).Kind).IsEqualTo(PullRequestReadKind.InvalidProtocol);
         await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
     }
+
+    /// <summary>A section page served from the reuse window dates its snapshot to the fetch that produced the data, as the overview does.</summary>
+    [Test]
+    public async Task A_section_page_from_the_reuse_window_carries_the_view_fetch_time() {
+        using var h = await Ready(Tmp);
+        var fetchedAt = h.Time.GetUtcNow().UtcDateTime;
+        await h.Provider.OverviewAsync("session", Subject, default);
+        h.Time.Advance(TimeSpan.FromSeconds(9));
+        var read = await h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", null, null, null, default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(1);
+        await Assert.That(read.FetchedAt).IsEqualTo(fetchedAt);
+        await Assert.That(read.Data!.SnapshotStartedAt).IsEqualTo(fetchedAt);
+        await Assert.That(read.Data.SnapshotCompletedAt).IsEqualTo(fetchedAt);
+    }
 }
