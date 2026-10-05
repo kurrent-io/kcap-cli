@@ -695,6 +695,88 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("- guideline 149 ");
     }
 
+    static string PlanReadPayload(string sid, string path, string content = "# Plan\n- [ ] one") =>
+        new JsonObject {
+            ["hook_event_name"] = "PostToolUse", ["session_id"] = sid, ["cwd"] = "/repo", ["tool_name"] = "Read",
+            ["tool_input"]      = new JsonObject { ["file_path"] = path },
+            ["tool_response"]   = new JsonObject { ["type"] = "text", ["file"] = new JsonObject { ["filePath"] = path, ["content"] = content } },
+        }.ToJsonString();
+
+    static int PlanReadPosts(Fixture fx) => fx.Sent.Count(s => s.StartsWith("/hooks/plan-read|", StringComparison.Ordinal));
+
+    [Test]
+    public async Task plan_read_hands_the_server_nudge_to_the_agent_once_per_document() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"nudge":"declare it"}""" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+        var payload = PlanReadPayload(sid, "/repo/docs/plans/x.md");
+
+        var first = new StringWriter();
+        await fx.PlanReadAsync(payload, first);
+        var second = new StringWriter();
+        await fx.PlanReadAsync(payload, second);
+
+        var output = JsonNode.Parse(first.ToString())!["hookSpecificOutput"]!;
+        await Assert.That(output["hookEventName"]!.GetValue<string>()).IsEqualTo("PostToolUse");
+        await Assert.That(output["additionalContext"]!.GetValue<string>()).IsEqualTo("declare it");
+        await Assert.That(second.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(1);
+
+        var posted = JsonNode.Parse(fx.Sent.Single(s => s.StartsWith("/hooks/plan-read|", StringComparison.Ordinal)).Split('|', 2)[1])!;
+        await Assert.That(posted["session_id"]!.GetValue<string>()).IsEqualTo(sid.Replace("-", ""));
+        await Assert.That(posted["path"]!.GetValue<string>()).IsEqualTo("/repo/docs/plans/x.md");
+        await Assert.That(posted["content"]!.GetValue<string>()).IsEqualTo("# Plan\n- [ ] one");
+    }
+
+    [Test]
+    public async Task plan_read_asks_again_after_an_empty_answer() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var payload = PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.md");
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(payload, stdout);
+        await fx.PlanReadAsync(payload, stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task plan_read_never_asks_about_a_file_that_is_not_markdown() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"nudge":"declare it"}""" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.cs"), stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task plan_read_stays_silent_when_kcap_plans_is_not_registered() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"nudge":"declare it"}""" };
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.md"), stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task plan_read_honours_the_plans_nudge_opt_out() {
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisablePlansNudge = true }) { RespondJson = """{"nudge":"declare it"}""" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.md"), stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
+    }
+
     const string NextWorkAck =
         """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
 
@@ -1665,6 +1747,13 @@ public class ClaudeHookCommandTests {
 
             return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin), stdout);
+        }
+
+        /// <summary>One plan-read hook invocation, posting through the stub client.</summary>
+        public Task<int> PlanReadAsync(string stdin, TextWriter stdout) {
+            StubMemoryServer();
+            return new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+                .HandlePlanReadCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client), stdout);
         }
 
         /// <summary>Registered per call, not in the constructor, so a test can set the body, status
