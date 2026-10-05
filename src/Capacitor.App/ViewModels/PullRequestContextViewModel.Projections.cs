@@ -96,7 +96,11 @@ public sealed partial class PullRequestContextViewModel {
     static string Reason<T>(PullRequestRead<T> read) where T : class => read.Kind switch {
         PullRequestReadKind.SignedOut => "Sign in to see pull requests.",
         PullRequestReadKind.SubjectUnavailable => "This pull request is no longer linked or visible.",
-        PullRequestReadKind.InvalidProtocol => "The server returned an invalid PR response. Retry after updating the server and app.",
+        PullRequestReadKind.InvalidProtocol => read.Reader switch {
+            null => "The server returned an invalid PR response. Retry after updating the server and app.",
+            var tool when read.Reason == "oversized" => $"This pull request is too large to read through {tool}.",
+            var tool => $"{tool} returned a response the app could not read. Update {tool} and refresh.",
+        },
         PullRequestReadKind.Ready or PullRequestReadKind.Stale => "Refreshing access before opening new content…",
         _ => read.Reason switch {
             "github_not_linked" => "Link GitHub in your account settings to read this pull request.",
@@ -111,7 +115,8 @@ public sealed partial class PullRequestContextViewModel {
             "tool_signed_out" => "The local CLI is not signed in for this host. Sign in and refresh.",
             "tool_denied" => "Your account cannot read this pull request.",
             "tool_failed" => "The local CLI could not read this pull request. Refresh to try again.",
-            _ => "Couldn't load pull request context. Retry when the server is reachable."
+            _ => read.Reader is { } tool ? $"Couldn't read this pull request through {tool}. Refresh to try again."
+                : "Couldn't load pull request context. Retry when the server is reachable."
         }
     };
     static string Author(PullRequestActorDto? actor) => actor is null ? "Unknown author" : actor.Kind == "team"
