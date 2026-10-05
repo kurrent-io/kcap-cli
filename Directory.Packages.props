@@ -38,8 +38,8 @@
          an MTP extension only loads against its own platform version. -->
     <PackageVersion Include="Microsoft.Testing.Extensions.GitHubActionsReport" Version="2.4.1" />
     <PackageVersion Include="Microsoft.Testing.Extensions.HangDump" Version="2.4.0" />
-    <PackageVersion Include="TUnit" Version="1.68.4" />
-    <PackageVersion Include="TUnit.Core" Version="1.68.4" />
+    <PackageVersion Include="TUnit" Version="1.72.10" />
+    <PackageVersion Include="TUnit.Core" Version="1.72.10" />
     <PackageVersion Include="Velopack" Version="1.2.158" />
     <PackageVersion Include="WireMock.Net" Version="2.18.0" />
     <PackageVersion Include="XTerm.NET" Version="2.0.2" />
