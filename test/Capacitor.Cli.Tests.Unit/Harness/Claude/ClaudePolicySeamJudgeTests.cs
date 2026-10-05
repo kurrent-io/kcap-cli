@@ -34,12 +34,8 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
 
     void WriteUserPolicy(string yaml) => File.WriteAllText(Config.Root.Path("approvals.yaml"), yaml);
 
-    string Transcript() {
-        var path = Tmp.PathTo("transcript.jsonl");
-        File.WriteAllText(path,
-            """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"push when the tests pass"}}""" + "\n");
-        return path;
-    }
+    string Transcript() => Tmp.CreateFile("transcript.jsonl",
+        """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"push when the tests pass"}}""" + "\n");
 
     JsonObject Payload(string hookEvent, string command, string? callId = "toolu_1") {
         var node = new JsonObject {
@@ -103,15 +99,15 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
         await Assert.That(request["budget_ms"]!.GetValue<int>()).IsGreaterThan(0);
     }
 
-    /// <summary>Once the drain has delivered the snapshot the server resolves it itself, so the
+    /// <summary>Once a drain has delivered the snapshot the server resolves it itself, so the
     /// request stops carrying it.</summary>
     [Test]
     public async Task A_delivered_snapshot_is_not_sent_inline() {
         WriteUserPolicy(JudgeOn);
         Judge("ask");
         await Seam.HandlePreToolUseAsync(Payload("PreToolUse", "git push").ToJsonString(), Sid, false, new StringWriter(), Ample);
-        var upload = SpooledPolicyEvents.Snapshots(Config.Root, Sid).Single().ToJsonString();
-        PolicyDecisionEmitter.MarkSnapshotDelivered(Config.Root, upload);
+        await new HookSpool(Config.Root, TimeProvider.System).DrainAllAsync(
+            Sid, (_, _) => Task.FromResult(DrainOutcome.Delivered), TimeSpan.FromSeconds(30), CancellationToken.None);
 
         await Seam.HandlePreToolUseAsync(Payload("PreToolUse", "git push", "toolu_2").ToJsonString(), Sid, false, new StringWriter(), Ample);
 

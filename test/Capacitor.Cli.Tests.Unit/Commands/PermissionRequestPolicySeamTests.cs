@@ -9,7 +9,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// Which permission requests <see cref="PermissionRequestCommand.Handle(string?, bool, TextWriter)"/>
+/// Which permission requests <see cref="PermissionRequestCommand.Handle(string?, bool, TextWriter, Func{TimeSpan})"/>
 /// hands to the approval policy, and what a seam-answered prompt costs the paths behind it: an
 /// answered prompt is never also recorded, an excluded session is never evaluated, and a rendered
 /// session's prompt still goes to the bridge that owns it.

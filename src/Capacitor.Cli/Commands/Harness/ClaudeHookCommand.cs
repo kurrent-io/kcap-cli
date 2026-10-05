@@ -207,8 +207,7 @@ public sealed class ClaudeHookCommand(
                 var rendered = hosted.IsRendered;
 
                 return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time))
-                    .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out,
-                        budget.Remaining < Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget ? budget.Remaining : Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget);
+                    .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out, JudgeShare(budget));
             } catch { return 0; }
         }
 
@@ -481,8 +480,9 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
+            // Read after the watcher self-heal inside Handle, which spends from the same budget.
             return await new PermissionRequestCommand(config, profiles, hosted, http, watchers, clock.Time)
-                .Handle(body, selfHeal, stdout);
+                .Handle(body, selfHeal, stdout, () => JudgeShare(budget));
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a
@@ -1164,6 +1164,9 @@ public sealed class ClaudeHookCommand(
         writer.WriteLine(merged.ToJsonString());
     }
 
+    static TimeSpan JudgeShare(HookBudget budget) =>
+        budget.Remaining < Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget ? budget.Remaining : Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget;
+
     /// <summary>Records how many tool calls ran past the policy engine unmatched, and resets the
     /// counter so a resumed session never re-reports them.</summary>
     void StampPassThroughCount(JsonNode node, string sessionId) {
@@ -1310,7 +1313,6 @@ public sealed class ClaudeHookCommand(
                 using var content = new StringContent(body, Encoding.UTF8, "application/json");
                 using var resp    = await client.PostOnceAsync($"{Url}/hooks/{route}", content, clock.Time, perAttempt, CancellationToken.None);
                 if (!resp.IsSuccessStatusCode) return HookSpool.OutcomeOf((int)resp.StatusCode);
-                if (route == "policy-snapshot") PolicyDecisionEmitter.MarkSnapshotDelivered(config, body);
                 if (route == "session-end") {
                     try {
                         var node = JsonNode.Parse(await resp.Content.ReadAsStringAsync());

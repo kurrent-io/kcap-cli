@@ -239,7 +239,6 @@ public class SpoolOutageRecoveryTests : IDisposable {
         await MakeSpool().DrainAllAsync(Sid, MakeCommand().ClaudePoster(client, TimeSpan.FromSeconds(2)),
             TimeSpan.FromSeconds(5), CancellationToken.None);
 
-        await Assert.That(Capacitor.Cli.Policy.PolicyDecisionEmitter.IsSnapshotDelivered(Config.Root, Sid, "abc123"))
-            .IsEqualTo(delivered);
+        await Assert.That(MakeSpool().IsPolicySnapshotDelivered(Sid, "abc123")).IsEqualTo(delivered);
     }
 }

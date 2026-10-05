@@ -30,6 +30,10 @@ public static class ClaudeJudgeDeclarationReader {
     const int MaxTarget = 1024;
     const int MaxRetainedRefusals = 256;
 
+    /// <summary>The most one read takes in, across every file: about 0.4 s of scanning, so a session
+    /// whose backlog is larger catches up over several hooks instead of outliving one.</summary>
+    internal const long MaxBytesPerRead = 16 * 1024 * 1024;
+
     // Claude Code writes a declined prompt as an error result opening with the first, and the
     // result's toolUseResult as the second. Hook, classifier and interrupt texts are not a human's no.
     static readonly string[] HumanRejectionMarkers = [
@@ -37,12 +41,19 @@ public static class ClaudeJudgeDeclarationReader {
         "User rejected tool use",
     ];
 
-    public static ClaudeJudgeDeclarations Read(string? transcriptPath, string? toolUseId, string? cwd, string? statePath = null) {
+    public static ClaudeJudgeDeclarations Read(string? transcriptPath, string? toolUseId, string? cwd, string? statePath = null) =>
+        Read(transcriptPath, toolUseId, cwd, statePath, MaxBytesPerRead);
+
+    internal static ClaudeJudgeDeclarations Read(
+            string? transcriptPath, string? toolUseId, string? cwd, string? statePath, long maxBytesPerRead) {
         if (string.IsNullOrEmpty(transcriptPath)) return ClaudeJudgeDeclarations.Unreadable;
 
-        var state = Load(statePath, transcriptPath);
+        var state     = Load(statePath, transcriptPath);
+        var allowance = maxBytesPerRead;
+        var changed   = false;
+        bool caughtUp;
         try {
-            Scan(state, transcriptPath, main: true);
+            caughtUp = Scan(state, transcriptPath, main: true, cwd, ref allowance, ref changed);
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             return ClaudeJudgeDeclarations.Unreadable;
         }
@@ -50,17 +61,21 @@ public static class ClaudeJudgeDeclarationReader {
         var complete = true;
         try {
             foreach (var file in SubagentTranscripts(transcriptPath))
-                Scan(state, file, main: false);
+                caughtUp &= Scan(state, file, main: false, cwd, ref allowance, ref changed);
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             complete = false;
         }
 
-        Save(statePath, state);
+        if (changed) Save(statePath, state);
+
+        // Mid-backlog the newest messages and refusals are not read yet, so the read so far proves
+        // nothing about the turn or the refusal history.
+        if (!caughtUp) return ClaudeJudgeDeclarations.Unreadable;
 
         var turns = state.Turns.Count > 0
             ? new PolicyJudgeTurnSetV1([.. state.Turns.Select(t => new PolicyJudgeDeclaredTurnV1(t.Id, t.PromptId))], Reference(toolUseId))
             : null;
-        return new(turns, Declare(state, cwd, complete));
+        return new(turns, Declare(state, complete));
     }
 
     static IEnumerable<string> SubagentTranscripts(string transcriptPath) {
@@ -69,10 +84,11 @@ public static class ClaudeJudgeDeclarationReader {
         return Directory.Exists(dir) ? Directory.GetFiles(dir, "*.jsonl") : [];
     }
 
-    /// <summary>Reads the complete lines appended to <paramref name="path"/> since its cursor. A
-    /// line still being written stays for the next read; a file shorter than its cursor was replaced,
-    /// so everything taken from it is dropped and it is read again whole.</summary>
-    static void Scan(ClaudeJudgeScanState state, string path, bool main) {
+    /// <summary>Reads the complete lines appended to <paramref name="path"/> since its cursor, up to
+    /// what <paramref name="allowance"/> leaves. A line still being written stays for the next read;
+    /// a file shorter than its cursor was replaced, so everything taken from it is dropped and it is
+    /// read again whole. False when bytes are left unread for want of allowance.</summary>
+    static bool Scan(ClaudeJudgeScanState state, string path, bool main, string? cwd, ref long allowance, ref bool changed) {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var offset = state.Cursors.FirstOrDefault(c => c.Path == path)?.Offset ?? 0;
         var length = stream.Length;
@@ -80,14 +96,22 @@ public static class ClaudeJudgeDeclarationReader {
             offset = 0;
             if (main) state.Turns.Clear();
             state.Refusals.RemoveAll(r => r.File == path);
+            state.DroppedRefusals.Remove(path);
+            changed = true;
         }
-        if (length == offset) return;
+        if (length == offset) return true;
+        if (allowance <= 0) return false;
 
-        var chunk = new byte[length - offset];
+        var take = Math.Min(length - offset, allowance);
+        var chunk = new byte[take];
         stream.Seek(offset, SeekOrigin.Begin);
         stream.ReadExactly(chunk);
         var end = chunk.AsSpan().LastIndexOf((byte)'\n');
-        if (end < 0) return;
+        // A single line longer than the whole allowance can never be taken; skip past it rather
+        // than stall on it forever.
+        if (end < 0) return take == length - offset || SkipLine(state, path, stream, offset, ref changed);
+        allowance -= end + 1;
+        changed = true;
         var lines = Lines(chunk.AsSpan(0, end + 1));
 
         var context = main ? ClaudeTranscriptEvents.Instance.CreateContext("judge", agentId: null) : null;
@@ -101,23 +125,47 @@ public static class ClaudeJudgeDeclarationReader {
         }
 
         if (found.Count > 0) {
-            Resolve(found, lines);
+            Resolve(found, lines, cwd);
             if (found.Any(r => r.ToolName is null) && offset > 0) {
                 var prefix = new byte[offset];
                 stream.Seek(0, SeekOrigin.Begin);
                 stream.ReadExactly(prefix);
-                Resolve(found, Lines(prefix));
+                Resolve(found, Lines(prefix), cwd);
             }
             state.Refusals.AddRange(found);
             var excess = state.Refusals.Count - MaxRetainedRefusals;
             if (excess > 0) {
+                foreach (var dropped in state.Refusals.Take(excess))
+                    state.DroppedRefusals[dropped.File] = state.DroppedRefusals.GetValueOrDefault(dropped.File) + 1;
                 state.Refusals.RemoveRange(0, excess);
-                state.DroppedRefusals += excess;
             }
         }
 
+        Advance(state, path, offset + end + 1);
+        // Read to the end of the file: all that can remain is a line still being written.
+        return take == length - offset;
+    }
+
+    static void Advance(ClaudeJudgeScanState state, string path, long offset) {
         state.Cursors.RemoveAll(c => c.Path == path);
-        state.Cursors.Add(new(path, offset + end + 1));
+        state.Cursors.Add(new(path, offset));
+    }
+
+    static bool SkipLine(ClaudeJudgeScanState state, string path, FileStream stream, long offset, ref bool changed) {
+        var buffer = new byte[64 * 1024];
+        stream.Seek(offset, SeekOrigin.Begin);
+        var position = offset;
+        int read;
+        while ((read = stream.Read(buffer)) > 0) {
+            var nl = buffer.AsSpan(0, read).IndexOf((byte)'\n');
+            if (nl >= 0) {
+                Advance(state, path, position + nl + 1);
+                changed = true;
+                break;
+            }
+            position += read;
+        }
+        return false;
     }
 
     static List<byte[]> Lines(ReadOnlySpan<byte> bytes) {
@@ -166,22 +214,22 @@ public static class ClaudeJudgeDeclarationReader {
             if (root.Str("type") != "user" || root.Obj("message")?.Arr("content") is not { } blocks) return;
             var promptId = root.Str("promptId");
             var timestamp = root.Str("timestamp");
+            // The root describes one result and names none, so it speaks for a line with exactly one.
+            var single = blocks.EnumerateArray().Count(b => b.Str("type") == "tool_result") == 1
+                ? root.Str("toolUseResult")
+                : null;
             foreach (var block in blocks.EnumerateArray()) {
                 if (block.Str("type") != "tool_result" || block.Bool("is_error") != true) continue;
                 if (block.Str("tool_use_id") is not { Length: > 0 } callId) continue;
-                if (!IsHumanRejection(ResultText(block))) continue;
-                found.Add(new(file, callId, promptId, timestamp, null, null));
+                if (!IsHumanRejection(ResultText(block)) && !IsHumanRejection(single)) continue;
+                found.Add(new(file, callId, promptId, timestamp, null, null, false));
             }
         } catch (JsonException) { }
     }
 
-    static string? ResultText(JsonElement block) {
-        if (block.Str("content") is { } text) return text;
-        if (block.Arr("content") is not { } parts) return null;
-        foreach (var part in parts.EnumerateArray())
-            if (part.Str("type") == "text" && part.Str("text") is { } t) return t;
-        return null;
-    }
+    // Joined as the transcript projection joins them, so an empty leading block cannot hide the marker.
+    static string? ResultText(JsonElement block) =>
+        block.Str("content") ?? (block.Arr("content") is { } parts ? TranscriptText.JoinTextBlocks(parts, "text") : null);
 
     static bool IsHumanRejection(string? text) {
         if (string.IsNullOrEmpty(text)) return false;
@@ -195,32 +243,34 @@ public static class ClaudeJudgeDeclarationReader {
     /// <summary>Fills in each refusal's tool and input from its call's line, decoding only lines
     /// that name a refused id. The call precedes its result, so one the new bytes do not hold is in
     /// what an earlier read consumed — read again only then, and a refusal lands rarely.</summary>
-    static void Resolve(List<ClaudeJudgeScanRefusal> found, List<byte[]> lines) {
+    static void Resolve(List<ClaudeJudgeScanRefusal> found, List<byte[]> lines, string? cwd) {
         var ids = found.Select(r => Encoding.UTF8.GetBytes(r.CallId)).ToArray();
         foreach (var line in lines) {
             if (line.AsSpan().IndexOf("\"tool_use\""u8) < 0) continue;
             for (var i = 0; i < found.Count; i++) {
                 if (found[i].ToolName is not null || line.AsSpan().IndexOf(ids[i]) < 0) continue;
-                if (CallIn(Encoding.UTF8.GetString(line), found[i].CallId) is { } call)
-                    found[i] = found[i] with { ToolName = call.Name, ToolInput = call.Input };
+                if (CallIn(Encoding.UTF8.GetString(line), found[i].CallId, cwd) is { } call)
+                    found[i] = found[i] with { ToolName = call.Name, Target = call.Target, Clipped = call.Clipped };
             }
             if (found.TrueForAll(r => r.ToolName is not null)) return;
         }
     }
 
-    static (string Name, string? Input)? CallIn(string line, string callId) {
+    static (string Name, string Target, bool Clipped)? CallIn(string line, string callId, string? cwd) {
         try {
             using var doc = JsonDocument.Parse(line);
             if (doc.RootElement.Obj("message")?.Arr("content") is not { } blocks) return null;
-            foreach (var block in blocks.EnumerateArray())
-                if (block.Str("type") == "tool_use" && block.Str("id") == callId && block.Str("name") is { } name)
-                    return (name, block.Prop("input")?.GetRawText());
+            foreach (var block in blocks.EnumerateArray()) {
+                if (block.Str("type") != "tool_use" || block.Str("id") != callId || block.Str("name") is not { } name) continue;
+                var target = PolicyJudgeTarget.Of(ClaudeActionNormalizer.Normalize(name, block.Prop("input")?.Clone(), cwd));
+                return target.Length > MaxTarget ? (name, target[..MaxTarget], true) : (name, target, false);
+            }
         } catch (JsonException) { }
         return null;
     }
 
-    static PolicyJudgeRefusalsV1 Declare(ClaudeJudgeScanState state, string? cwd, bool complete) {
-        if (state.Refusals.Count > MaxRefusals || state.DroppedRefusals > 0) complete = false;
+    static PolicyJudgeRefusalsV1 Declare(ClaudeJudgeScanState state, bool complete) {
+        if (state.Refusals.Count > MaxRefusals || state.DroppedRefusals.Values.Any(n => n > 0)) complete = false;
 
         // Newest first across the main and subagent files; ISO-8601 timestamps order as strings.
         var newest = state.Refusals
@@ -239,20 +289,11 @@ public static class ClaudeJudgeDeclarationReader {
                 continue;
             }
             var tool = r.ToolName;
-            var target = PolicyJudgeTarget.Of(ClaudeActionNormalizer.Normalize(tool, Input(r.ToolInput), cwd));
             if (tool.Length > MaxTool) { tool = tool[..MaxTool]; complete = false; }
-            if (target.Length > MaxTarget) { target = target[..MaxTarget]; complete = false; }
-            entries.Add(new(r.CallId, tool, target, Reference(r.PromptId)));
+            if (r.Clipped) complete = false;
+            entries.Add(new(r.CallId, tool, r.Target ?? "", Reference(r.PromptId)));
         }
         return new(complete, PolicyJudgeRefusalsV1.SourceTranscript, [.. entries]);
-    }
-
-    static JsonElement? Input(string? json) {
-        if (json is null) return null;
-        try {
-            using var doc = JsonDocument.Parse(json);
-            return doc.RootElement.Clone();
-        } catch (JsonException) { return null; }
     }
 
     static string? Reference(string? value) => value is { Length: > 0 and <= MaxReference } ? value : null;

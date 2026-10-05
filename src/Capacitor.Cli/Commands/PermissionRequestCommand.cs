@@ -25,7 +25,8 @@ class PermissionRequestCommand(
     /// an excluded session's decisions cannot be recorded, and the audit contract is that every
     /// engine decision is, so it is ungoverned at this seam exactly as it is at PreToolUse. The
     /// permission record/long-poll itself still runs: hosted agents need the decision regardless.</param>
-    public async Task<int> Handle(string? body, bool selfHealWatcher = true, TextWriter? stdout = null) {
+    public async Task<int> Handle(
+            string? body, bool selfHealWatcher = true, TextWriter? stdout = null, Func<TimeSpan>? judgeBudget = null) {
         body ??= await Console.In.ReadToEndAsync();
 
         JsonNode? node;
@@ -66,7 +67,7 @@ class PermissionRequestCommand(
         // (see selfHealWatcher).
         if (selfHealWatcher && !isRenderedAgent
             && await new ClaudePolicySeam(config, time, PolicyJudgeGateway.ForHook(http, Url, time))
-                .HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
+                .HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out, judgeBudget?.Invoke())
                 == SeamAnswer.Answered) {
             return 0;
         }

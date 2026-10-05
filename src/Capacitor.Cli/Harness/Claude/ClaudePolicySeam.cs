@@ -240,7 +240,7 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
             var declarations = ClaudeJudgeDeclarationReader.Read(f.TranscriptPath, ctx.CallId, f.Cwd,
                 config.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(ctx.SessionId)}.json"));
             var action       = PolicyWire.ToWire(ctx.Action);
-            var inline       = PolicyDecisionEmitter.IsSnapshotDelivered(config, ctx.SessionId, ctx.Snapshot.Id)
+            var inline       = new HookSpool(config, time).IsPolicySnapshotDelivered(ctx.SessionId, ctx.Snapshot.Id)
                 ? null
                 : PolicyWire.ToUpload(ctx.SessionId, ctx.Snapshot);
 

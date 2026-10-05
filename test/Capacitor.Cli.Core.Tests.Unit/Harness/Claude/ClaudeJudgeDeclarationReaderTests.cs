@@ -40,11 +40,7 @@ public class ClaudeJudgeDeclarationReaderTests {
         },
     }.ToJsonString();
 
-    string Write(params string[] lines) {
-        var path = Tmp.PathTo("session.jsonl");
-        File.WriteAllText(path, string.Join("\n", lines) + "\n");
-        return path;
-    }
+    string Write(params string[] lines) => Tmp.CreateFile("session.jsonl", string.Join("\n", lines) + "\n");
 
     static JsonObject Cmd(string command) => new() { ["command"] = command };
 
@@ -156,8 +152,7 @@ public class ClaudeJudgeDeclarationReaderTests {
     [Test]
     public async Task A_subagents_refusal_counts_for_the_session() {
         var main = Write(Human(1, "go"));
-        var sub = Tmp.CreateDir(Path.Combine("session", "subagents"));
-        File.WriteAllText(Path.Combine(sub, "agent-a1.jsonl"),
+        Tmp.CreateFile(["session", "subagents", "agent-a1.jsonl"],
             ToolUse("toolu_s", "Write", new JsonObject { ["file_path"] = "/repo/x.cs", ["content"] = "" }) + "\n"
           + Result("toolu_s", Rejection, isError: true) + "\n");
 
@@ -178,8 +173,7 @@ public class ClaudeJudgeDeclarationReaderTests {
 
     [Test]
     public async Task A_line_still_being_written_is_skipped() {
-        var path = Tmp.PathTo("session.jsonl");
-        File.WriteAllText(path, Human(1, "first") + "\n" + Human(2, "second")[..20]);
+        var path = Tmp.CreateFile("session.jsonl", Human(1, "first") + "\n" + Human(2, "second")[..20]);
 
         var d = ClaudeJudgeDeclarationReader.Read(path, null, null);
 
@@ -229,9 +223,8 @@ public class ClaudeJudgeDeclarationReaderTests {
 
     [Test]
     public async Task A_line_completed_after_a_read_is_taken_whole_by_the_next() {
-        var path = Tmp.PathTo("session.jsonl");
         var second = Human(2, "second");
-        File.WriteAllText(path, Human(1, "first") + "\n" + second[..20]);
+        var path = Tmp.CreateFile("session.jsonl", Human(1, "first") + "\n" + second[..20]);
         ClaudeJudgeDeclarationReader.Read(path, null, null, State);
         File.AppendAllText(path, second[20..] + "\n");
 
@@ -255,10 +248,59 @@ public class ClaudeJudgeDeclarationReaderTests {
     [Test]
     public async Task A_corrupt_state_costs_only_a_full_read() {
         var path = Write(Human(1, "first"));
-        File.WriteAllText(State, "{ not json");
+        Tmp.CreateFile("state.json", "{ not json");
 
         var d = ClaudeJudgeDeclarationReader.Read(path, null, null, State);
 
         await Assert.That(d.Turns!.UserMessages.Single().Id).IsEqualTo(Id(1));
+    }
+
+    [Test]
+    public async Task A_result_whose_rejection_follows_an_empty_text_block_is_a_refusal() {
+        var result = new JsonObject {
+            ["type"] = "user", ["uuid"] = Guid.NewGuid().ToString(), ["promptId"] = "p1",
+            ["message"] = new JsonObject {
+                ["role"] = "user",
+                ["content"] = new JsonArray(new JsonObject {
+                    ["type"] = "tool_result", ["tool_use_id"] = "toolu_1", ["is_error"] = true,
+                    ["content"] = new JsonArray(
+                        new JsonObject { ["type"] = "text", ["text"] = "" },
+                        new JsonObject { ["type"] = "text", ["text"] = Rejection }),
+                }),
+            },
+        }.ToJsonString();
+        var d = ClaudeJudgeDeclarationReader.Read(Write(Human(1, "go"), ToolUse("toolu_1", "Bash", Cmd("x")), result), null, null);
+
+        await Assert.That(d.Refusals.Entries.Single().ToolUseId).IsEqualTo("toolu_1");
+    }
+
+    /// <summary>A backlog larger than one read's allowance is caught up over several hooks; until it
+    /// is, nothing is declared as known.</summary>
+    [Test]
+    public async Task A_backlog_over_the_allowance_declares_nothing_until_caught_up() {
+        var lines = Enumerable.Range(1, 40).Select(n => Human(n, $"message {n}")).ToArray();
+        var path = Write(lines);
+        var allowance = new FileInfo(path).Length / 3;
+
+        var first = ClaudeJudgeDeclarationReader.Read(path, null, null, State, allowance);
+        await Assert.That(first.Turns).IsNull();
+        await Assert.That(first.Refusals.Complete).IsFalse();
+
+        ClaudeJudgeDeclarations last = first;
+        for (var i = 0; i < 5 && last.Turns is null; i++)
+            last = ClaudeJudgeDeclarationReader.Read(path, null, null, State, allowance);
+
+        await Assert.That(last.Turns!.UserMessages[^1].Id).IsEqualTo(Id(40));
+        await Assert.That(last.Refusals.Complete).IsTrue();
+    }
+
+    [Test]
+    public async Task A_line_longer_than_the_allowance_is_skipped_not_stalled_on() {
+        var path = Write(Human(1, new string('x', 4000)), Human(2, "after"));
+
+        ClaudeJudgeDeclarationReader.Read(path, null, null, State, 1000);
+        var d = ClaudeJudgeDeclarationReader.Read(path, null, null, State, 1000);
+
+        await Assert.That(d.Turns!.UserMessages.Single().Id).IsEqualTo(Id(2));
     }
 }
