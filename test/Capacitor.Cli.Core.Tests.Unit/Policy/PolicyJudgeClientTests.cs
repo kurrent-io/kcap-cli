@@ -115,14 +115,20 @@ public class PolicyJudgeClientTests : IDisposable {
         await Assert.That(result.FailureClass).IsEqualTo(PolicyJudgeResult.Timeout);
     }
 
+    /// <summary>Thrown by a handler, not provoked against a closed port: Windows retries a refused
+    /// connection for about two seconds, which the budget reads as a timeout.</summary>
     [Test]
-    public async Task An_unreachable_server_is_pass_through() {
-        var url = _server.Url!;
-        _server.Stop();
-        var result = await new PolicyJudgeClient(new HttpClient(), url, TimeProvider.System)
+    public async Task A_transport_failure_is_pass_through() {
+        using var http = new HttpClient(new FailingHandler());
+        var result = await new PolicyJudgeClient(http, "http://judge.test", TimeProvider.System)
             .ConsultAsync(Request, TimeSpan.FromSeconds(2));
 
         await Assert.That(result.Outcome).IsEqualTo(PolicyOutcome.None);
         await Assert.That(result.FailureClass).IsEqualTo(PolicyJudgeResult.TransportError);
+    }
+
+    sealed class FailingHandler : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException("connection refused");
     }
 }
