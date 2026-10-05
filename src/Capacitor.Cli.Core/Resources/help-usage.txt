@@ -65,6 +65,7 @@ Session:
   eval [--model N] [--chain] [id]  Run LLM-as-judge evaluation over a session
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
   import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
+  grok-bot watch [--once]          Record every Grok Bot chat (run on the Grok Bot cloud computer)
   set-title <title>                Set session title
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)

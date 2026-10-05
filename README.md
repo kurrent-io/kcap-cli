@@ -328,6 +328,7 @@ At a glance — each links to its section below:
 | [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
+| [`kcap grok-bot watch`](#grok-bot) | Record every Grok Bot chat, run on the Grok Bot cloud computer |
 | [`kcap recap`](#session-recap) | AI summary + per-turn outline of a session |
 | [`kcap sessions`](#listing-sessions-on-a-repository) | List the sessions you can see, on one repo or all, optionally within a period |
 | [`kcap validate-plan`](#plan-validation) | Check that every planned item was completed |
@@ -1007,6 +1008,26 @@ Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. 
 `--private` also covers sessions the run only *revisits*. Agents that record subagents (Cursor, Antigravity, Gemini) can attach a previously-missed subagent to a session that was already fully imported, so for those a `--private` re-run marks every session it touched private — not just the ones with brand-new top-level content. That is deliberate: a session's visibility can't be left to whether a re-run happened to find new content, and re-running with `--private` is the supported way to privatize sessions an earlier non-private import made visible.
 
 After discovery, the import surfaces a one-shot report of any transcript working directories that no longer exist on disk. Sessions whose cwd was an ephemeral worktree (e.g. `~/dev/my-repo/.claude/worktrees/<slug>` or `~/dev/my-repo/.capacitor/worktrees/<slug>`) are transparently attributed to their parent project when that project still exists, so deleted-worktree paths drop out of the missing-cwds list. kcap's own background helper runs (the headless `claude -p` calls behind title generation and "what's done" summaries) record their transcripts in a throwaway temp directory that is removed the moment the run ends; these are never imported, and they're also excluded from the missing-cwds report so its dead temp paths don't drown out real ones. What remains is typically local repo dirs that have been renamed — those won't match an `--org` / `--repo` scope until you tell kcap how their old paths map to the new ones. See [Renamed repo directories (`kcap remap`)](#renamed-repo-directories-kcap-remap) below for the fix.
+
+### Grok Bot
+
+Grok Bot runs only on a Cursor-hosted cloud computer, writes no transcript file there, and its hooks carry no conversation id, so none of the hook or watcher paths above can record it. `kcap grok-bot watch` runs on that computer instead: it polls the computer's local Grok Bot gateway and records every chat: each Bot's own thread, and every new chat, which the gateway lists as a group.
+
+```bash
+npm install -g @kurrent/kcap
+kcap setup --server-url https://<your-tenant> --device --no-prompt --skip-cursor-hooks --skip-cursor-mcp --skip-import
+nohup kcap grok-bot watch >> ~/.config/kcap/grok-bot/watch.log 2>&1 &
+```
+
+The kcap plugin from the Cursor marketplace does the same through its `connect-capacitor` skill — ask any Bot to "connect Capacitor".
+
+- **Sessions.** A Bot has one endless thread; a new session starts at the first message after two hours of quiet (`--gap-minutes`), and ends once that gap passes with no new message and no turn running.
+- **What is recorded.** User messages, Bot messages, and the questions a Bot asks with the answer chosen. Tool calls, computer use and created files are not in the gateway's transcript and are not recorded.
+- **History.** The first run backfills every chat. Delivery state lives in `~/.config/kcap/grok-bot/state.json` and advances only once the server accepts each call, so a restarted watcher resends nothing and loses nothing.
+- **Failures back off.** A failed cycle — gateway unreachable, server refusing a call, a lapsed sign-in (`kcap login --device` fixes it) — is retried with a doubling wait up to five minutes and logged once, not on every retry; nothing advances until the server accepts, so recovery loses nothing.
+- **One per computer.** A second `kcap grok-bot watch` refuses to start. `--once` runs a single polling cycle and exits, 1 if it failed; `--dry-run` logs the calls it would make and sends and saves nothing.
+
+The gateway is an internal, undocumented Grok Bot API; a Grok Bot update can change it. The watcher logs and retries rather than guessing at an unfamiliar shape.
 
 ### Daemon
 

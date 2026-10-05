@@ -37,6 +37,11 @@ public class UpdateNoticeIsHumanFacingTests {
         await Assert.That(UpdateNotice.IsHumanFacing("watch", ["watch", "sid", "/tmp/t.jsonl"])).IsFalse();
     }
 
+    [Test]
+    public async Task Grok_bot_watcher_is_suppressed() {
+        await Assert.That(UpdateNotice.IsHumanFacing("grok-bot", ["grok-bot", "watch"])).IsFalse();
+    }
+
     // --- Suppressed: the whole `daemon` command family (there is no separate `run` subcommand —
     // the foreground shape is plain `kcap daemon start`, which blocks for the daemon's lifetime) ---
 

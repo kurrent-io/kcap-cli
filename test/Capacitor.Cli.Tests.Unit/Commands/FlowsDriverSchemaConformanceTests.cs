@@ -390,8 +390,9 @@ public class FlowsDriverSchemaConformanceTests {
     /// inline arm could be deleted while one of two INDEPENDENT Codex registration mechanisms went
     /// untested.</summary>
     static readonly (string File, string Harness)[] BundledConfigs = [
-        (".mcp.json",       "Claude Code"),
-        (".codex-mcp.json", "Codex plugin"),
+        (".mcp.json",        "Claude Code"),
+        (".codex-mcp.json",  "Codex plugin"),
+        (".cursor-mcp.json", "Cursor plugin"),
     ];
 
     public static IEnumerable<Func<(string File, string Harness)>> Bundled() =>
