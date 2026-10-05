@@ -38,7 +38,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
 
     public DesktopNotificationCoordinator(IPermissionService permissions, IAgentDirectory directory,
             IObservable<NotificationPreferences> preferences, IDesktopNotificationSink sink,
-            Func<bool> isForeground, Action<AgentRow> openAgent, IAppNotifier notifier, IScheduler scheduler) {
+            Func<bool> isForeground, IObservable<string?> viewedAgent, Action<AgentRow> openAgent, IAppNotifier notifier, IScheduler scheduler) {
         _permissions = permissions;
         _pendingCache = permissions.Pending.AsObservableCache();
         _sink = sink;
@@ -47,6 +47,7 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         _notifier = notifier;
         _scheduler = scheduler;
         _subscriptions.Add(preferences.ObserveOn(scheduler).Subscribe(OnPreferences));
+        _subscriptions.Add(viewedAgent.ObserveOn(scheduler).Subscribe(OnViewed));
         _subscriptions.Add(directory.LocalDaemonOnAppServer.ObserveOn(scheduler).Subscribe(value => {
             _localOnAppServer = value;
             ReconcilePending();
@@ -72,6 +73,12 @@ public sealed class DesktopNotificationCoordinator : IDisposable {
         _preferences = preferences;
         foreach (var notice in _notices.Values.ToArray())
             if (!Enabled(notice)) Close(notice.Id);
+    }
+
+    /// The user has the agent on screen: its cards there supersede every notice about it.
+    void OnViewed(string? agentId) {
+        if (_disposed || agentId is null) return;
+        foreach (var notice in _notices.Values.Where(n => n.Row.Id == agentId).ToArray()) Close(notice.Id);
     }
 
     void OnRows(IReadOnlyList<AgentRow> rows) {

@@ -25,18 +25,20 @@ public class DesktopNotificationCoordinatorTests {
         public readonly FakeAgentDirectory Directory = new();
         public readonly BehaviorSubject<NotificationPreferences> Preferences = new(new());
         public readonly Sink Sink = new();
+        public readonly Subject<string?> Viewed = new();
         public readonly List<AgentRow> Opened = [];
         public readonly DesktopNotificationCoordinator Coordinator;
         public bool Foreground;
 
         public Harness(IScheduler? scheduler = null) {
             Directory.Rows.AddOrUpdate(Row());
-            Coordinator = new(Permissions, Directory, Preferences, Sink, () => Foreground,
+            Coordinator = new(Permissions, Directory, Preferences, Sink, () => Foreground, Viewed,
                 Opened.Add, new AppNotifier(), scheduler ?? ImmediateScheduler.Instance);
         }
 
         public void Dispose() {
             Coordinator.Dispose();
+            Viewed.Dispose();
             Preferences.Dispose();
             Permissions.Dispose();
             Directory.Dispose();
@@ -437,6 +439,28 @@ public class DesktopNotificationCoordinatorTests {
         await Assert.That(h.Opened.Single().Id).IsEqualTo("a1");
         h.Directory.Rows.AddOrUpdate(Row(false));
         h.Directory.Rows.AddOrUpdate(Row(true));
+        await Assert.That(h.Sink.Shown.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Viewing_an_agent_withdraws_its_notices_without_replaying_them() {
+        using var h = new Harness();
+        h.Permissions.Add(PermissionEntries.Entry());
+        var permission = h.Sink.Shown.Single();
+        h.Viewed.OnNext("other");
+        h.Viewed.OnNext(null);
+        await Assert.That(h.Sink.Closed).IsEmpty();
+        h.Viewed.OnNext("a1");
+        await Assert.That(h.Sink.Closed).IsEquivalentTo([permission.Id]);
+        h.Directory.Rows.AddOrUpdate(Row() with { Title = "New title" });
+        await Assert.That(h.Sink.Shown.Count).IsEqualTo(1);
+
+        h.Permissions.Remove("r1");
+        h.Directory.Rows.AddOrUpdate(Row(true));
+        var idle = h.Sink.Shown[1];
+        h.Viewed.OnNext("a1");
+        await Assert.That(h.Sink.Closed).Contains(idle.Id);
+        h.Directory.Rows.AddOrUpdate(Row(true) with { Title = "Newer title" });
         await Assert.That(h.Sink.Shown.Count).IsEqualTo(2);
     }
 
