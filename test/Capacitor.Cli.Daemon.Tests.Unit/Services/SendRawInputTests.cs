@@ -44,6 +44,34 @@ public class SendRawInputTests {
         await Assert.That(fake.RawInputs).IsEmpty();
     }
 
+    /// <summary>A flow participant is driven only through the flow protocol; a PR-review agent is a
+    /// dialogue the reviewer types into.</summary>
+    [Test]
+    [Arguments(LaunchKind.ReviewFlow, false)]
+    [Arguments(LaunchKind.Review, true)]
+    public async Task Raw_input_reaches_only_kinds_that_accept_typing(LaunchKind kind, bool delivered) {
+        await using var orch  = Build();
+        var             fake  = new FakeHostedAgentRuntime("claude", emitsTerminalOutput: true);
+        var             agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "a-1", fake, kind: kind);
+
+        await orch.HandleSendRawInputForTest(Cmd(agent.Id, Convert.ToBase64String("/exit\r"u8)));
+
+        await Assert.That(fake.RawInputs.Count).IsEqualTo(delivered ? 1 : 0);
+    }
+
+    [Test]
+    [Arguments(LaunchKind.ReviewFlow, false)]
+    [Arguments(LaunchKind.Review, true)]
+    public async Task Special_keys_reach_only_kinds_that_accept_typing(LaunchKind kind, bool delivered) {
+        await using var orch  = Build();
+        var             fake  = new FakeHostedAgentRuntime("claude", emitsTerminalOutput: true);
+        var             agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "a-1", fake, kind: kind);
+
+        await orch.HandleSendSpecialKeyForTest(agent.Id, "ctrl_c");
+
+        await Assert.That(fake.SpecialKeys.Count).IsEqualTo(delivered ? 1 : 0);
+    }
+
     /// <summary>Teardown keeps the agent registered while it disposes the runtime, so each of these
     /// states is reachable by a keystroke that arrives during it.</summary>
     static (AgentOrchestrator Orch, FakeHostedAgentRuntime Fake, AgentInstance Agent) BuildClosing(string state) {

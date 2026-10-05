@@ -18,9 +18,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
     readonly TimeProvider        _time;
     readonly UnixPtyReaderThread _reader;
 
-    UnixPtyProcess(int masterFd, int childPid, string startIdentity, TimeProvider time) {
+    UnixPtyProcess(PtyMasterHandle master, int masterFd, int childPid, string startIdentity, TimeProvider time) {
         _time         = time;
-        _master       = new(masterFd);
+        _master       = master;
         Pid           = childPid;
         StartIdentity = startIdentity;
         _reader       = new(masterFd, childPid, _cts.Token);
@@ -165,15 +165,28 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     $"pty_spawn failed: step {result.FailedStep}, errno {result.ErrNo}");
             }
 
-            try {
-                return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
-            } catch {
-                Abandon(result.MasterFd, result.Pid);
-
-                throw;
-            }
+            return Adopt(
+                result.MasterFd, result.Pid,
+                master => new UnixPtyProcess(master, result.MasterFd, result.Pid, result.StartIdentityString, time)
+            );
         } finally {
             UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
+        }
+    }
+
+    /// <summary>Wraps the master fd in its handle for <paramref name="create"/>, and abandons the
+    /// child if that throws. <see cref="Abandon"/> closes the fd, so the handle is disowned first:
+    /// its finalizer would close the same number again, by then possibly another file's.</summary>
+    internal static T Adopt<T>(int masterFd, int pid, Func<PtyMasterHandle, T> create) {
+        var master = new PtyMasterHandle(masterFd);
+
+        try {
+            return create(master);
+        } catch {
+            master.SetHandleAsInvalid();
+            Abandon(masterFd, pid);
+
+            throw;
         }
     }
 

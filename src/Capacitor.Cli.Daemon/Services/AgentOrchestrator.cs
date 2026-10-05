@@ -4491,7 +4491,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.IsPrivate) return; // server-origin key ignored for private agents
+        if (agent.IsPrivate || !AcceptsTypedInput(agent.Kind)) return;
 
         if (IsClosingToInput(agent)) return;
 
@@ -4509,7 +4509,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.IsPrivate) return;
+        if (agent.IsPrivate || !AcceptsTypedInput(agent.Kind)) return;
 
         if (IsClosingToInput(agent)) return;
 
