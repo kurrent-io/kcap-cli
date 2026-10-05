@@ -19,6 +19,8 @@ public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? she
     readonly SemaphoreSlim _slots = new(Slots, Slots);
     // Cancelled, never disposed: a run racing teardown must still be able to link to it.
     readonly CancellationTokenSource _lifetime = new();
+    readonly Lock _quiesceGate = new();
+    Task? _quiesced;
     string? _path;
 
     public async Task<string?> LocateAsync(bool refresh, CancellationToken ct) {
@@ -72,10 +74,14 @@ public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? she
     // Kills any gh still running (KillTree) rather than leaving it to outlive the app.
     public void Dispose() => _lifetime.Cancel();
 
-    /// <summary>Also waits, up to a short cap, for the killed runs: a slot frees only once its gh has exited.</summary>
-    public async ValueTask DisposeAsync() {
+    /// <summary>Also waits, up to a short cap, for the killed runs: a slot frees only once its gh has exited. Later calls share the first wait.</summary>
+    public ValueTask DisposeAsync() {
+        lock (_quiesceGate) return new(_quiesced ??= QuiesceAsync());
+    }
+
+    // Claims the slots concurrently so the cap bounds the whole wait, not each slot in turn.
+    async Task QuiesceAsync() {
         _lifetime.Cancel();
-        for (var i = 0; i < Slots; i++)
-            if (!await _slots.WaitAsync(QuiesceCap).ConfigureAwait(false)) return;
+        await Task.WhenAll(Enumerable.Range(0, Slots).Select(_ => _slots.WaitAsync(QuiesceCap))).ConfigureAwait(false);
     }
 }

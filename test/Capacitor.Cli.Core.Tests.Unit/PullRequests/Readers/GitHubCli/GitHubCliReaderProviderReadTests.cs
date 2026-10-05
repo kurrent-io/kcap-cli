@@ -370,6 +370,15 @@ public class GitHubCliReaderProviderReadTests {
         await Assert.That((await overview).Reason).IsEqualTo("tool_failed");
     }
 
+    /// <summary>Startup-failure teardown and a later quit both dispose; the second must not wait out the cap on slots the first still holds.</summary>
+    [Test]
+    public async Task A_second_async_disposal_completes_at_once() {
+        using var h = await Ready(Tmp);
+        await h.Provider.DisposeAsync();
+        var second = h.Provider.DisposeAsync().AsTask();
+        await Assert.That(second.IsCompleted).IsTrue();
+    }
+
     [Test]
     public async Task A_cancelled_caller_still_sees_its_own_cancellation() {
         using var h = new GhHarness(Tmp); h.SignedIn("github.com");
