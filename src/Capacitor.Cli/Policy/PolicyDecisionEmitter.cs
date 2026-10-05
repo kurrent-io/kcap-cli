@@ -27,11 +27,34 @@ internal sealed class PolicyDecisionEmitter(ConfigRoot config, TimeProvider time
         return Task.CompletedTask;
     }
 
+    // Sanitized like the snapshot and journal keys: a raw id carrying a path separator would put the
+    // marker in a nested directory the session-end eviction never looks in, and that eviction
+    // matches the `{key}-` prefix both markers share.
+    static string SpooledMarker(ConfigRoot config, string sessionId, string snapshotId) =>
+        config.Path("policy", "uploaded",
+            $"{PolicySnapshotStore.Sanitize(sessionId)}-{snapshotId[..Math.Min(16, snapshotId.Length)]}");
+
+    static string DeliveredMarker(ConfigRoot config, string sessionId, string snapshotId) =>
+        SpooledMarker(config, sessionId, snapshotId) + ".delivered";
+
+    /// <summary>Whether the server has acknowledged this session's snapshot upload. Until it has, a
+    /// judge request carries the snapshot inline; a missed mark only costs the bytes again.</summary>
+    internal static bool IsSnapshotDelivered(ConfigRoot config, string sessionId, string snapshotId) =>
+        File.Exists(DeliveredMarker(config, sessionId, snapshotId));
+
+    /// <summary>Called by a drain poster once the server accepted a <c>policy-snapshot</c> entry.</summary>
+    internal static void MarkSnapshotDelivered(ConfigRoot config, string uploadBody) {
+        try {
+            var upload = JsonSerializer.Deserialize(uploadBody, CapacitorJsonContext.Default.PolicySnapshotUploadV1);
+            if (upload is not { SessionId: { Length: > 0 } sid, SnapshotId: { Length: > 0 } snap }) return;
+            var marker = DeliveredMarker(config, sid, snap);
+            Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+            File.WriteAllText(marker, "");
+        } catch { }
+    }
+
     void EnsureSnapshotSpooled(HookSpool spool, string sessionId, PolicySnapshot snapshot) {
-        // Sanitized like the snapshot and journal keys: a raw id carrying a path separator would
-        // put the marker in a nested directory the session-end eviction never looks in.
-        var marker = config.Path("policy", "uploaded",
-            $"{PolicySnapshotStore.Sanitize(sessionId)}-{snapshot.Id[..Math.Min(16, snapshot.Id.Length)]}");
+        var marker = SpooledMarker(config, sessionId, snapshot.Id);
         if (File.Exists(marker)) return;
         var body = JsonSerializer.Serialize(PolicyWire.ToUpload(sessionId, snapshot),
             CapacitorJsonContext.Default.PolicySnapshotUploadV1);

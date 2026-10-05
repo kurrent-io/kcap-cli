@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Policy;
 
 // ReSharper disable MethodHasAsyncOverload
 
@@ -64,7 +65,8 @@ class PermissionRequestCommand(
         // no journal shared across the two processes. An excluded session is ungoverned entirely
         // (see selfHealWatcher).
         if (selfHealWatcher && !isRenderedAgent
-            && await new ClaudePolicySeam(config, time).HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
+            && await new ClaudePolicySeam(config, time, PolicyJudgeGateway.ForHook(http, Url, time))
+                .HandlePermissionRequestAsync(node, sessionId, stdout ?? Console.Out)
                 == SeamAnswer.Answered) {
             return 0;
         }

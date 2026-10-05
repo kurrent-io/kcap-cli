@@ -221,4 +221,25 @@ public class SpoolOutageRecoveryTests : IDisposable {
         // prevent the entry from being marked Delivered.
         await Assert.That(SpoolFiles.Any()).IsFalse();
     }
+
+    /// <summary>The judge stops carrying the snapshot inline only once the server has accepted the
+    /// spooled upload; a refused delivery must leave it inline.</summary>
+    [Test, NotInParallel("SpoolDir")]
+    [Arguments(200, true)]
+    [Arguments(503, false)]
+    public async Task A_delivered_snapshot_upload_is_marked_delivered(int status, bool delivered) {
+        _server.Given(Request.Create().WithPath("/hooks/policy-snapshot").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(status));
+        var upload = $$"""
+            {"session_id":"{{Sid}}","snapshot_id":"abc123","engine_version":"1","degraded":false,"degradations":[],"documents":[]}
+            """;
+        MakeSpool().Append(Sid, "policy-snapshot", upload);
+
+        using var client = new HttpClient();
+        await MakeSpool().DrainAllAsync(Sid, MakeCommand().ClaudePoster(client, TimeSpan.FromSeconds(2)),
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(Capacitor.Cli.Policy.PolicyDecisionEmitter.IsSnapshotDelivered(Config.Root, Sid, "abc123"))
+            .IsEqualTo(delivered);
+    }
 }
