@@ -30,6 +30,7 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
+using ReactiveUI.Reactive;
 
 namespace Capacitor.App;
 
@@ -144,6 +145,7 @@ public partial class App : Application {
     IDesktopNotificationAccess? _notificationAccess;
     IDisposable? _notificationAccessPrompt;
     DesktopNotificationCoordinator? _desktopNotifications;
+    readonly Subject<string?> _viewedAgent = new();
     NotificationSessionSubscriptions? _notificationSessions;
     // The server lane's half of the permission graph. Disposed as a group with _permissions: the
     // feed and the tracker first (both push into the cache and hold timers), the access service
@@ -613,7 +615,7 @@ public partial class App : Application {
                 : null;
 
         _coordinator = new MainWindowCoordinator(
-            () => BuildAndShowMainWindow(
+            () => TrackViewedAgent(BuildAndShowMainWindow(
                 service, _config, _appState, actions, notifier, ticker,
                 _shutdown.Token, activity, launch, _time, lifecycle.StartActionAsync,
                 lifecycleStatus, _navigation, _workspaceTeardown.Track, BuildWorkspace,
@@ -631,7 +633,7 @@ public partial class App : Application {
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction),
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -661,7 +663,7 @@ public partial class App : Application {
                 ReactiveUI.Reactive.RxSchedulers.MainThreadScheduler);
             _desktopNotifications = new DesktopNotificationCoordinator(
                 permissions, directory, notificationSettings.Changes, _notificationSink,
-                () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive),
+                () => _shutdownStarted || desktop.Windows.Any(window => window.IsActive), _viewedAgent,
                 row => {
                     if (_shutdownStarted) return;
                     _coordinator.ShowMainWindow();
@@ -1229,6 +1231,21 @@ public partial class App : Application {
         WindowSizeMemory.Restore(window, appState);
         WindowSizeMemory.Attach(window, appState);
         window.Show();
+        return window;
+    }
+
+    /// Publishes the directory row key of the agent open in the main window while that window is active.
+    MainWindow TrackViewedAgent(MainWindow window) {
+        if (window.DataContext is not MainWindowViewModel vm) return window;
+        var subscription = window.GetObservable(Window.IsActiveProperty)
+            .CombineLatest(vm.WhenAnyValue(x => x.CurrentWorkspace), (active, open) => !active ? null : open switch {
+                RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+                { } local => $"local:{local.AgentId}",
+                null => null,
+            })
+            .DistinctUntilChanged()
+            .Subscribe(_viewedAgent.OnNext);
+        window.Closed += (_, _) => subscription.Dispose();
         return window;
     }
 
