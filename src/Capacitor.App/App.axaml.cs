@@ -1219,11 +1219,15 @@ public partial class App : Application {
         return window;
     }
 
-    /// Publishes the agent open in the main window while that window is the active one.
+    /// Publishes the directory row key of the agent open in the main window while that window is active.
     MainWindow TrackViewedAgent(MainWindow window) {
         if (window.DataContext is not MainWindowViewModel vm) return window;
         var subscription = window.GetObservable(Window.IsActiveProperty)
-            .CombineLatest(vm.WhenAnyValue(x => x.CurrentWorkspace), (active, open) => active ? open?.AgentId : null)
+            .CombineLatest(vm.WhenAnyValue(x => x.CurrentWorkspace), (active, open) => !active ? null : open switch {
+                RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+                { } local => $"local:{local.AgentId}",
+                null => null,
+            })
             .DistinctUntilChanged()
             .Subscribe(_viewedAgent.OnNext);
         window.Closed += (_, _) => subscription.Dispose();
