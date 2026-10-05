@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 namespace Capacitor.Cli.Core.Tests.Unit;
 
 public class AgentsSkillsInstallerTests {
-    static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan", "review-flows", "agent-flows", "work-items", "plans", "guided-tour", "suggest-review-flow", "eval-watch", "start-agents"];
+    static readonly string[] SourceNames = ["recap", "errors", "disable", "hide", "validate-plan", "review-flows", "agent-flows", "work-items", "plans", "guided-tour", "eval-watch", "start-agents"];
 
     [Test]
     public async Task Mirror_of_SourceNames_matches_the_installer() {
@@ -219,6 +219,31 @@ public class AgentsSkillsInstallerTests {
         }
         await Assert.That(Directory.Exists(dst.PathTo("user-skill"))).IsTrue();
     }
+
+    [Test]
+    public async Task Install_prunes_a_retired_skill_folder() {
+        using var tmp    = new TempDir();
+        var       target = tmp.CreateDir("skills");
+        tmp.CreateFile("skills/kcap-suggest-review-flow/SKILL.md", "stale");
+
+        await Assert.That(AgentsSkillsInstaller.Install(RepoTree.SkillsSource(), target)).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-suggest-review-flow"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Remove_also_removes_a_retired_skill_folder() {
+        using var tmp    = new TempDir();
+        var       target = tmp.CreateDir("skills");
+        tmp.CreateFile("skills/kcap-suggest-review-flow/SKILL.md", "stale");
+
+        AgentsSkillsInstaller.Remove(target);
+
+        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-suggest-review-flow"))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_retired_name_is_never_a_source_name() =>
+        await Assert.That(AgentsSkillsInstaller.RetiredSourceNames.Intersect(AgentsSkillsInstaller.SourceNames)).IsEmpty();
 
     [Test]
     public async Task Remove_returns_false_when_no_kcap_folders_present() {
