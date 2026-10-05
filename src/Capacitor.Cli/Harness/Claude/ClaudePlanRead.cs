@@ -9,6 +9,8 @@ sealed record ClaudePlanRead(string SessionId, string Path, string? Content) {
     /// near the top; the rest of a long document would only cost upload on the agent's tool path.</summary>
     internal const int MaxContentChars = 16_384;
 
+    const int RedactionMargin = 512;
+
     /// <summary>Null for anything but a PostToolUse of <c>Read</c> on a <c>.md</c> path with a session id.
     /// The session id comes back dashless, the form the disabled-session markers are keyed by.</summary>
     public static ClaudePlanRead? Parse(string body) {
@@ -48,10 +50,15 @@ sealed record ClaudePlanRead(string SessionId, string Path, string? Content) {
             }
         }.ToJsonString();
 
+    /// <summary>Redacted before it is cut, with a margin, so a secret straddling the cut is still
+    /// matched whole rather than sent as an unrecognisable prefix.</summary>
     static string? Head(string? content) {
-        if (content is null || content.Length <= MaxContentChars) return content;
-        var end = char.IsHighSurrogate(content[MaxContentChars - 1]) ? MaxContentChars - 1 : MaxContentChars;
-        return content[..end];
+        if (content is null) return null;
+        var window = content.Length > MaxContentChars + RedactionMargin ? content[..(MaxContentChars + RedactionMargin)] : content;
+        var redacted = SecretRedactor.RedactValue(window, keyIsSecret: false) ?? window;
+        if (redacted.Length <= MaxContentChars) return redacted;
+        var end = char.IsHighSurrogate(redacted[MaxContentChars - 1]) ? MaxContentChars - 1 : MaxContentChars;
+        return redacted[..end];
     }
 
     static string? Text(JsonNode? node) =>

@@ -52,6 +52,26 @@ public class ClaudePlanReadTests {
     }
 
     [Test]
+    public async Task Redacts_a_secret_in_the_content_it_sends() {
+        const string token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+        var read = ClaudePlanRead.Parse(Payload(content: $"# Plan\nexport GITHUB_TOKEN={token}"))!;
+
+        await Assert.That(read.Content).StartsWith("# Plan");
+        await Assert.That(read.Content).DoesNotContain(token);
+    }
+
+    [Test]
+    public async Task Redacts_a_secret_that_straddles_the_cut() {
+        const string token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        var content = new string('x', ClaudePlanRead.MaxContentChars - 30) + " " + token + " tail";
+
+        var read = ClaudePlanRead.Parse(Payload(content: content))!;
+
+        await Assert.That(read.Content).DoesNotContain("ghp_abcdefghij");
+    }
+
+    [Test]
     public async Task Never_splits_a_surrogate_pair_at_the_cut() {
         var content = new string('x', ClaudePlanRead.MaxContentChars - 1) + "😀" + "tail";
 

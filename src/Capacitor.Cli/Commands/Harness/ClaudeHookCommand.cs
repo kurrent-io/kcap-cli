@@ -63,8 +63,10 @@ public sealed class ClaudeHookCommand(
         );
     }
 
-    /// <summary>The plan-read hook blocks the agent's Read, so it gets a fraction of the usual ceiling.</summary>
-    static readonly TimeSpan PlanReadCeiling = TimeSpan.FromSeconds(2);
+    /// <summary>The <c>timeout</c> <c>kcap/hooks/hooks.json</c> gives the plan-read entry: it blocks the
+    /// agent's Read, so it is shorter than the other events', and <see cref="HookBudget.Safety"/> comes
+    /// out of it.</summary>
+    static readonly TimeSpan PlanReadCeiling = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// <c>kcap hook --claude --plan-read</c>: a synchronous PostToolUse on <c>Read</c>, separate from
