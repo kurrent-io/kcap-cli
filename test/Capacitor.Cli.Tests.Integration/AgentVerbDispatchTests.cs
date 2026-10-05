@@ -5,8 +5,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// <summary>
 /// `kcap agent …` must reach <c>AgentCommand</c>. Pinned through the real binary because the
 /// dispatch lives in Program.cs's top-level flow, where a guard added ahead of the switch can
-/// shadow the whole group without failing a single unit test — which is exactly what happened
-/// when the retired-verb tombstone and this command group landed in the same release.
+/// shadow the whole group without failing a single unit test.
 ///
 /// Every case asserts a string only <c>AgentCommand</c> emits. Asserting merely "not the
 /// tombstone" would pass for any other pre-dispatch guard that exits 1 (the missing-server gate
@@ -70,7 +69,7 @@ public class AgentVerbDispatchTests {
         var (_, stderr, exitCode) = await RunCli("agent status");
 
         await Assert.That(exitCode).IsEqualTo(1);
-        await Assert.That(stderr).Contains("kcap daemon status");
+        await Assert.That(stderr).Contains("kcap daemon status");
     }
 
     [Test]
