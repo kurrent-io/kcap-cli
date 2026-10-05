@@ -57,15 +57,17 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
-    public async Task DaemonConnect_serializes_branch_base_ref_support_with_a_snake_case_name() {
+    public async Task DaemonConnect_serializes_its_capability_flags_with_snake_case_names() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
         await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        conn.OnSendRawInput += _ => Task.CompletedTask;
 
         var json = System.Text.Json.JsonSerializer.Serialize(
             conn.BuildDaemonConnect("mac", [], [], null), CapacitorJsonContext.Default.DaemonConnect);
 
         await Assert.That(json).Contains("\"supports_branch_base_ref\":true");
+        await Assert.That(json).Contains("\"supports_raw_input\":true");
     }
 
     [Test]

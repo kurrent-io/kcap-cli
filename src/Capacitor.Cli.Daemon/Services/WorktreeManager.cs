@@ -246,6 +246,7 @@ public partial class WorktreeManager(
                     await WithWorktreeMetadataGate(repoPath, time, () =>
                         RunGit(repoPath, GitTimeout, time, noHooks,
                             "worktree", "add", "--no-checkout", "-B", branch, worktreePath, baseRef));
+                    LogWorktreeBase(worktreePath, baseRef, "local commit");
                     var local = new WorktreeInfo(worktreePath, branch, repoPath);
                     await StripOrRollBackAsync(local);
 
@@ -257,6 +258,7 @@ public partial class WorktreeManager(
                     await WithWorktreeMetadataGate(repoPath, time, () =>
                         RunGit(repoPath, GitTimeout, time, noHooks,
                             "worktree", "add", "--no-checkout", "-B", branch, worktreePath, branchHead));
+                    LogWorktreeBase(worktreePath, baseRef, "local branch");
                     var fromBranch = new WorktreeInfo(worktreePath, branch, repoPath);
                     await StripOrRollBackAsync(fromBranch);
 
@@ -281,6 +283,7 @@ public partial class WorktreeManager(
                 await WithWorktreeMetadataGate(repoPath, time, () =>
                     RunGit(repoPath, GitTimeout, time, noHooks,
                         "worktree", "add", "--no-checkout", "-B", branch, worktreePath, fetchedRef));
+                LogWorktreeBase(worktreePath, baseRef, "origin fetch");
                 var fetched = new WorktreeInfo(worktreePath, branch, repoPath, FetchedRef: fetchedRef);
                 await StripOrRollBackAsync(fetched);
 
@@ -1715,5 +1718,8 @@ public partial class WorktreeManager(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to clean up {Path}")]
     partial void LogCleanupFailed(Exception ex, string path);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Worktree {Path} starts from {BaseRef} via {Source}")]
+    partial void LogWorktreeBase(string path, string baseRef, string source);
 
 }

@@ -3,9 +3,9 @@ using System.Text;
 namespace Capacitor.Cli.Daemon.Pty.Unix;
 
 public sealed class UnixPtyProcess : IPtyProcess {
-    readonly int                     _masterFd;
+    readonly PtyMasterHandle         _master;
     readonly CancellationTokenSource _cts = new();
-    bool                             _disposed;
+    int                              _disposed;
 
     public int     Pid           { get; }
     public bool    HasExited     { get; private set; }
@@ -20,7 +20,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
 
     UnixPtyProcess(int masterFd, int childPid, string startIdentity, TimeProvider time) {
         _time         = time;
-        _masterFd     = masterFd;
+        _master       = new(masterFd);
         Pid           = childPid;
         StartIdentity = startIdentity;
         _reader       = new(masterFd, childPid, _cts.Token);
@@ -216,18 +216,19 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
     }
 
-    public Task WriteAsync(string input) {
-        var bytes = Encoding.UTF8.GetBytes(input);
+    internal int MasterFdForTest => (int)_master.DangerousGetHandle();
 
-        return Task.Run(() => UnixPtyInterop.write(_masterFd, bytes, bytes.Length));
-    }
+    public Task WriteAsync(string input) => WriteAsync(Encoding.UTF8.GetBytes(input));
 
+    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go.</summary>
     public Task WriteAsync(byte[] data) {
-        return Task.Run(() => UnixPtyInterop.write(_masterFd, data, data.Length));
+        if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
+
+        return Task.Run(() => _master.TryUse(fd => UnixPtyInterop.write(fd, data, data.Length)));
     }
 
     public void Resize(ushort cols, ushort rows) {
-        UnixPtyInterop.SetWinSize(_masterFd, rows, cols);
+        _master.TryUse(fd => UnixPtyInterop.SetWinSize(fd, rows, cols));
     }
 
     public void SendInterrupt() {
@@ -321,11 +322,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
     }
 
     public async ValueTask DisposeAsync() {
-        if (_disposed) {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) {
             return;
         }
-
-        _disposed = true;
 
         await _cts.CancelAsync();
 
@@ -334,7 +333,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
 
         await _reader.Stopped;
-        UnixPtyInterop.close(_masterFd);
+        _master.Dispose();
         _cts.Dispose();
     }
 }

@@ -29,7 +29,14 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
     }
 
     public Task SendUserInputAsync(string  text) => Task.CompletedTask;
-    public Task SendSpecialKeyAsync(string key) => Task.CompletedTask;
+    public List<string> SpecialKeys { get; } = [];
+
+    public Task SendSpecialKeyAsync(string key) {
+        lock (SpecialKeys) SpecialKeys.Add(key);
+
+        return Task.CompletedTask;
+    }
+
     public List<byte[]> RawInputs       { get; } = [];
     public bool         ThrowOnRawInput { get; init; }
 

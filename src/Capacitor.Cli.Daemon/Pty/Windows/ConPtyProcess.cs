@@ -482,20 +482,17 @@ public sealed class ConPtyProcess : IPtyProcess {
         }
     }
 
-    public Task WriteAsync(string input) {
-        var bytes = Encoding.UTF8.GetBytes(input);
+    public Task WriteAsync(string input) => WriteAsync(Encoding.UTF8.GetBytes(input));
 
-        return Task.Run(() => {
-                _inputStream.Write(bytes, 0, bytes.Length);
-                _inputStream.Flush();
-            }
-        );
-    }
-
+    /// <summary>A no-op once disposal has begun: input for a closing pseudo console has nowhere to go.</summary>
     public Task WriteAsync(byte[] data) {
+        if (Volatile.Read(ref _disposed)) return Task.CompletedTask;
+
         return Task.Run(() => {
-                _inputStream.Write(data, 0, data.Length);
-                _inputStream.Flush();
+                try {
+                    _inputStream.Write(data, 0, data.Length);
+                    _inputStream.Flush();
+                } catch (ObjectDisposedException) { }
             }
         );
     }

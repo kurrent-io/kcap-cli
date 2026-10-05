@@ -36,8 +36,65 @@ public class SendRawInputTests {
     [Test]
     public async Task Ignores_an_unknown_agent() {
         await using var orch = Build();
+        var             fake = new FakeHostedAgentRuntime("claude", emitsTerminalOutput: true);
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "a-1", fake);
 
         await orch.HandleSendRawInputForTest(Cmd("nope", Convert.ToBase64String("x"u8)));
+
+        await Assert.That(fake.RawInputs).IsEmpty();
+    }
+
+    /// <summary>Teardown keeps the agent registered while it disposes the runtime, so each of these
+    /// states is reachable by a keystroke that arrives during it.</summary>
+    static (AgentOrchestrator Orch, FakeHostedAgentRuntime Fake, AgentInstance Agent) BuildClosing(string state) {
+        var orch  = Build();
+        var fake  = new FakeHostedAgentRuntime("claude", emitsTerminalOutput: true);
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "a-1", fake);
+
+        switch (state) {
+            case "cleanup": AgentOrchestratorHarness.BeginCleanup(agent); break;
+            case "reap":    AgentOrchestratorHarness.ClaimReap(agent); break;
+            default:        fake.ExitGate.SetResult(); break;
+        }
+
+        return (orch, fake, agent);
+    }
+
+    [Test]
+    [Arguments("cleanup")]
+    [Arguments("reap")]
+    [Arguments("exited")]
+    public async Task Writes_no_raw_input_to_an_agent_that_is_closing(string state) {
+        var (orch, fake, agent) = BuildClosing(state);
+        await using var _ = orch;
+
+        await orch.HandleSendRawInputForTest(Cmd(agent.Id, Convert.ToBase64String("ls\r"u8)));
+
+        await Assert.That(fake.RawInputs).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("cleanup")]
+    [Arguments("reap")]
+    [Arguments("exited")]
+    public async Task Sends_no_special_key_to_an_agent_that_is_closing(string state) {
+        var (orch, fake, agent) = BuildClosing(state);
+        await using var _ = orch;
+
+        await orch.HandleSendSpecialKeyForTest(agent.Id, "escape");
+
+        await Assert.That(fake.SpecialKeys).IsEmpty();
+    }
+
+    [Test]
+    public async Task Sends_a_special_key_to_a_live_agent() {
+        await using var orch  = Build();
+        var             fake  = new FakeHostedAgentRuntime("claude", emitsTerminalOutput: true);
+        var             agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "a-1", fake);
+
+        await orch.HandleSendSpecialKeyForTest(agent.Id, "escape");
+
+        await Assert.That(fake.SpecialKeys).IsEquivalentTo(["escape"]);
     }
 
     [Test]

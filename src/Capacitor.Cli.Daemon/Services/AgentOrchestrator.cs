@@ -4476,8 +4476,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (agent.IsPrivate) return; // server-origin key ignored for private agents
 
+        if (IsClosingToInput(agent)) return;
+
         await agent.Runtime.SendSpecialKeyAsync(key);
     }
+
+    /// <summary>Teardown keeps the agent in <c>_agents</c> while it disposes the runtime, so a
+    /// keystroke arriving then would otherwise reach a PTY that is closing.</summary>
+    static bool IsClosingToInput(AgentInstance agent) =>
+        agent.IsCleanupStarted || agent.IsReapClaimed || agent.Runtime.HasExited;
 
     async Task HandleSendRawInput(SendRawInputCommand cmd) {
         if (!_agents.TryGetValue(cmd.AgentId, out var agent)) {
@@ -4486,6 +4493,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
 
         if (agent.IsPrivate) return;
+
+        if (IsClosingToInput(agent)) return;
 
         byte[] bytes;
 
@@ -6130,6 +6139,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
 
     internal Task HandleSendRawInputForTest(SendRawInputCommand cmd) => HandleSendRawInput(cmd);
+
+    internal Task HandleSendSpecialKeyForTest(string agentId, string key) => HandleSendSpecialKey(agentId, key);
 
     /// <summary>Test-only: run ONE selected reap exactly as the heartbeat does (claim, then stop only
     /// if the claim was won) — the seam for driving a candidate selected before some racing event.</summary>
