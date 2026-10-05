@@ -101,15 +101,20 @@ sealed class WindowsServiceVerify(
         }
     }
 
+    // Hello and the pid are read separately, so one reading can join a hello from one daemon to the pid
+    // of its replacement. As the launchd engine does, a second reading must name the same pid.
+    async Task<bool> IsReadyAsync(string id, string? expectedVersion) =>
+        await ReadyPidAsync(id, expectedVersion) is { } pid && await ReadyPidAsync(id, expectedVersion) == pid;
+
     // The same four legs the launchd engine requires: a well-formed hello, from this name, on the
     // current protocol and expected version, and from the daemon the task itself runs.
-    async Task<bool> IsReadyAsync(string id, string? expectedVersion) {
+    async Task<int?> ReadyPidAsync(string id, string? expectedVersion) {
         var h = await hello(id, PollInterval * 4);
-        if (!h.WellFormed || h.DaemonName != id || h.ProtocolVersion != HelloProtocol.CurrentVersion) return false;
-        if (expectedVersion is not null && h.DaemonVersion != expectedVersion) return false;
+        if (!h.WellFormed || h.DaemonName != id || h.ProtocolVersion != HelloProtocol.CurrentVersion) return null;
+        if (expectedVersion is not null && h.DaemonVersion != expectedVersion) return null;
 
         var jobPid = manager.Query(id).JobPid;
-        return jobPid is not null && jobPid == validatedDaemonPid(id);
+        return jobPid is not null && jobPid == validatedDaemonPid(id) ? jobPid : null;
     }
 
     async Task<bool> StopConfirmedAsync(string id) {

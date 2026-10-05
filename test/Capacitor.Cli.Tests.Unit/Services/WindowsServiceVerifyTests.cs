@@ -82,6 +82,22 @@ public class WindowsServiceVerifyTests {
     static Func<string, IReadOnlyDictionary<string, string>?> Retired(string? profile) =>
         _ => profile is null ? new Dictionary<string, string>() : new Dictionary<string, string> { ["KCAP_PROFILE"] = profile };
 
+    /// Hello and the pid are separate readings, so a single agreeing reading can pair a hello from one
+    /// daemon with its replacement's pid. A pid file that changes on every read must never be confirmed.
+    [Test]
+    public async Task A_pid_that_changes_between_readings_is_never_confirmed() {
+        var manager = new FakeManager();
+        var reads   = 0;
+        var verify  = new WindowsServiceVerify(Daemons.Store, manager,
+            _ => manager.Running ? (reads++ % 2 == 0 ? DaemonPid : DaemonPid + 1) : null,
+            (_, _) => Task.FromResult(manager.Running ? Hello() : new HelloProbeResult(false, null, null, null)),
+            TimeProvider.System, () => true, ShortBudget);
+
+        var exit = await verify.InstallVerifiedAsync(Spec(), replace: false, expectedVersion: null);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.ReadinessTimeout);
+    }
+
     [Test]
     public async Task A_rename_refuses_to_retire_a_unit_pinned_to_another_profile_and_touches_nothing() {
         var manager = new FakeManager();
