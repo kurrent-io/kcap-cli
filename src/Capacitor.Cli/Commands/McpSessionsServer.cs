@@ -4,12 +4,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
+using Capacitor.Cli.Continuation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
@@ -181,7 +183,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 "get_session_transcript" => await client.GetAsync(BuildTranscriptUrl(baseUrl, arguments)),
                 "get_turn"               => await client.GetAsync(BuildTurnDetailUrl(baseUrl, arguments)),
                 "list_turns"             => await client.GetAsync(BuildTurnsUrl(baseUrl, arguments)),
-                "list_repo_sessions"     => await client.GetAsync(BuildRepoSessionsUrl(baseUrl, arguments, cwdRepoHash)),
+                "list_repo_sessions"     => await client.GetAsync(BuildRepoSessionsUrl(baseUrl, arguments, cwdRepoHash, time)),
                 "list_repo_plans"        => await client.GetAsync(BuildRepoPlansUrl(baseUrl, arguments, cwdRepoHash)),
                 "get_declared_plans"     => await client.GetAsync(BuildDeclaredPlansUrl(baseUrl, arguments, out singlePlan)),
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
@@ -198,8 +200,18 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 return BuildToolResult(id, RepoPlansUnsupportedMessage, isError: true);
             }
 
+            // The repository route answers 200 for a repository it has never seen, and the listing
+            // route takes no repository at all, so a 404 there is a server without the route.
+            if (toolName == "list_repo_sessions" && httpResponse.StatusCode == HttpStatusCode.NotFound && IsAllRepositories(arguments)) {
+                return BuildToolResult(id, SessionListingUnsupportedMessage, isError: true);
+            }
+
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
+            }
+
+            if (toolName == "list_repo_sessions" && IsWindowed(arguments) && !EchoesWindow(body)) {
+                return BuildToolResult(id, TimeFilterUnsupportedMessage, isError: true);
             }
 
             // get_declared_plans by plan_id: wrap the single-plan body so the tool always answers an array.
@@ -276,8 +288,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         }
     }
 
-    /// <summary>The recap and the session's declared plans, fetched together. The plans lookup is
-    /// best-effort: its failure or timeout returns the summary without them.</summary>
+    /// <summary>The recap, the session's declared plans and its work items, fetched together. The
+    /// plans and work-items lookups are best-effort: a failure, timeout or refusal returns the
+    /// summary without them.</summary>
     async Task<string> HandleSessionSummaryAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl) {
         try {
             var sessionId = arguments?["session_id"]?.GetValue<string>()
@@ -285,10 +298,12 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
             var recapUrl = BuildSummaryUrl(baseUrl, sessionId);
             var plansUrl = BuildSessionPlansUrl(baseUrl, sessionId);
+            var itemsUrl = BuildSessionWorkItemsUrl(baseUrl, sessionId);
 
             // The stdio loop is serial, so a stalled lookup would block every later request.
-            using var plansCts  = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
-            var       plansTask = FetchDeclaredPlansAsync(client, plansUrl, plansCts.Token);
+            using var lookupsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
+            var       plansTask  = FetchBestEffortAsync(client, plansUrl, "declared plans", lookupsCts.Token);
+            var       itemsTask  = itemsUrl is null ? Task.FromResult<string?>(null) : FetchBestEffortAsync(client, itemsUrl, "work items", lookupsCts.Token);
             try {
                 using var recap = await client.GetAsync(recapUrl);
                 var       body  = await recap.Content.ReadAsStringAsync();
@@ -301,10 +316,11 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     return BuildToolResult(id, $"Error: HTTP {(int)recap.StatusCode} — {body}", isError: true);
                 }
 
-                return BuildToolResult(id, ProjectRecapToSummary(body, await plansTask));
+                return BuildToolResult(id, ProjectRecapToSummary(body, await plansTask, await itemsTask));
             } finally {
-                plansCts.Cancel();   // a no-op once the lookup finished; otherwise ends it now, before the loop's next request
-                await plansTask;     // never throws: FetchDeclaredPlansAsync catches everything, cancellation included
+                lookupsCts.Cancel();   // a no-op once the lookups finished; otherwise ends them now, before the loop's next request
+                await plansTask;       // never throws: FetchBestEffortAsync catches everything, cancellation included
+                await itemsTask;
             }
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
@@ -313,13 +329,13 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         }
     }
 
-    static async Task<string?> FetchDeclaredPlansAsync(HttpClient client, string url, CancellationToken ct) {
+    static async Task<string?> FetchBestEffortAsync(HttpClient client, string url, string what, CancellationToken ct) {
         try {
             using var response = await client.GetAsync(url, ct);
 
             return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync(ct) : null;
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"kcap mcp sessions: declared plans lookup failed ({ex.GetType().Name}: {ex.Message}); returning the summary without them.");
+            await Console.Error.WriteLineAsync($"kcap mcp sessions: {what} lookup failed ({ex.GetType().Name}: {ex.Message}); returning the summary without them.");
 
             return null;
         }
@@ -328,8 +344,19 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     const string RepoShapeMessage =
         "`repo` must be \"<owner>/<name>\" or a 16-hex repo hash. This tool is repo-scoped, so \"all\" is not accepted.";
 
-    static string ResolveRepoHash(JsonObject? args, string? cwdRepoHash) {
-        var explicitRepo = ReadString(args, "repo", RepoShapeMessage);
+    const string SessionsRepoShapeMessage =
+        "`repo` must be \"<owner>/<name>\", a 16-hex repo hash, or \"all\" for every repository.";
+
+    internal const string TimeFilterUnsupportedMessage =
+        "This server ignores since, until and cursor: the time filter needs a newer server. Nothing is listed, because an unfiltered result would look filtered.";
+
+    internal const string SessionListingUnsupportedMessage =
+        "This server does not list sessions across repositories yet. Pass repo: \"<owner>/<name>\" to list one repository.";
+
+    static readonly string[] CursorReplaces = ["state", "owner", "touching_path", "since", "until", "offset"];
+
+    static string ResolveRepoHash(JsonObject? args, string? cwdRepoHash, string shapeMessage) {
+        var explicitRepo = ReadString(args, "repo", shapeMessage);
         if (string.IsNullOrWhiteSpace(explicitRepo)) explicitRepo = null;
 
         if (explicitRepo is null) {
@@ -339,15 +366,53 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         }
 
         if (!RepoHashHelper.TryParseRepoRef(explicitRepo, out var repoHash))
-            throw new ArgumentException(RepoShapeMessage);
+            throw new ArgumentException(shapeMessage);
 
         return repoHash;
     }
 
-    internal static string BuildRepoSessionsUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
-        var repoHash = ResolveRepoHash(args, cwdRepoHash);
+    internal static bool IsAllRepositories(JsonObject? args) =>
+        TextOf(args, "repo") is { } repo && string.Equals(repo.Trim(), "all", StringComparison.OrdinalIgnoreCase);
 
-        var state = ReadString(args, "state", "`state` must be a string: active, ended or all.") ?? "active";
+    internal static bool IsWindowed(JsonObject? args) =>
+        TextOf(args, "since") is not null || TextOf(args, "until") is not null || TextOf(args, "cursor") is not null;
+
+    /// <summary>A listing from a server that knows the window names the one it applied. A body that
+    /// is no JSON at all is left for the caller to pass through as it is.</summary>
+    internal static bool EchoesWindow(string body) {
+        try {
+            using var doc = JsonDocument.Parse(body);
+
+            return doc.RootElement.Str("since") is not null || doc.RootElement.Str("until") is not null;
+        } catch (JsonException) {
+            return true;
+        }
+    }
+
+    internal static string BuildRepoSessionsUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, TimeProvider time) {
+        var route = IsAllRepositories(args)
+            ? $"{baseUrl}/api/sessions/listing"
+            : $"{baseUrl}/api/repositories/{ResolveRepoHash(args, cwdRepoHash, SessionsRepoShapeMessage)}/sessions";
+
+        var hasLimit = TryReadInt(args, "limit", out var limit);
+
+        if (ReadString(args, "cursor", "`cursor` must be a string.") is { } cursor && !string.IsNullOrWhiteSpace(cursor)) {
+            var replaced = CursorReplaces.Where(key => Sent(args, key)).ToArray();
+
+            if (replaced.Length > 0)
+                throw new ArgumentException(
+                    $"`cursor` continues the listing it came from, filters included. Remove: {string.Join(", ", replaced)}.");
+
+            return $"{route}?cursor={Uri.EscapeDataString(cursor)}" + (hasLimit ? $"&limit={limit}" : "");
+        }
+
+        var since = ReadWhen(args, "since", time);
+        var until = ReadWhen(args, "until", time);
+
+        if (since > until) throw new ArgumentException("`since` is later than `until`.");
+
+        var state = ReadString(args, "state", "`state` must be a string: active, ended or all.")
+         ?? (since is null && until is null ? "active" : "all");
 
         if (state is not ("active" or "ended" or "all"))
             throw new ArgumentException("`state` must be active, ended or all.");
@@ -360,18 +425,45 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         if (ReadString(args, "touching_path", "`touching_path` must be a string.") is { Length: > 0 } touching)
             qs.Add($"touching_path={Uri.EscapeDataString(touching)}");
 
-        if (TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
+        if (since is { } from) qs.Add($"since={Uri.EscapeDataString(WhenParser.Format(from))}");
+
+        if (until is { } to) qs.Add($"until={Uri.EscapeDataString(WhenParser.Format(to))}");
+
+        if (hasLimit) qs.Add($"limit={limit}");
 
         if (TryReadInt(args, "offset", out var offset)) qs.Add($"offset={offset}");
 
-        return $"{baseUrl}/api/repositories/{repoHash}/sessions?" + string.Join("&", qs);
+        return $"{route}?" + string.Join("&", qs);
     }
+
+    static DateTimeOffset? ReadWhen(JsonObject? args, string key, TimeProvider time) {
+        var text = ReadString(args, key, $"`{key}` must be a string: {WhenParser.Forms}.");
+
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        return WhenParser.TryParse(text, time, out var instant, out var error)
+            ? instant
+            : throw new ArgumentException($"`{key}`: {error}.");
+    }
+
+    static string? TextOf(JsonObject? args, string key) =>
+        args?[key] is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text) ? text : null;
+
+    // A blank string or a zero offset is what a client sends for an argument it did not set; anything
+    // else that is present is a filter, whatever its type.
+    static bool Sent(JsonObject? args, string key) =>
+        args?[key] switch {
+            null                                                                => false,
+            JsonValue v when v.TryGetValue(out string? text)                    => !string.IsNullOrWhiteSpace(text),
+            JsonValue v when key == "offset" && v.TryGetValue(out int offset)   => offset != 0,
+            _                                                                   => true
+        };
 
     internal const string RepoPlansUnsupportedMessage =
         "This server does not list a repository's plans yet. Read one session's plans with get_declared_plans instead.";
 
     internal static string BuildRepoPlansUrl(string baseUrl, JsonObject? args, string? cwdRepoHash) {
-        var repoHash = ResolveRepoHash(args, cwdRepoHash);
+        var repoHash = ResolveRepoHash(args, cwdRepoHash, RepoShapeMessage);
 
         var state = ReadString(args, "state", "`state` must be a string: open or all.") ?? "open";
 
@@ -415,6 +507,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
         return $"{baseUrl}/api/sessions/{Uri.EscapeDataString(sessionId)}/plans";
     }
+
+    internal static string? BuildSessionWorkItemsUrl(string baseUrl, string sessionId) =>
+        WorkContextIds.CanonicalSessionId(sessionId) is { } id ? $"{baseUrl}/api/work-items/session/{Uri.EscapeDataString(id)}" : null;
 
     // A non-string JSON value must surface as a validation error, not as the generic internal
     // error the outer guard produces for an InvalidOperationException from GetValue<string>().
@@ -739,7 +834,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     /// Projects a /recap response (RecapEntry[]) into { summary_text, plan, declared_plans? } for agent consumption.
     /// "Latest of type wins" — walks entries in order and keeps the last value for each type.
     /// </summary>
-    internal static string ProjectRecapToSummary(string body, string? plansBody = null) {
+    internal static string ProjectRecapToSummary(string body, string? plansBody = null, string? workItemsBody = null) {
         string? summaryText = null;
         string? plan        = null;
 
@@ -781,9 +876,45 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             sb.Append(declaredPlans);
         }
 
+        if (ProjectWorkItems(workItemsBody) is { } workItems) {
+            sb.Append(",\"work_items\":");
+            sb.Append(workItems);
+        }
+
         sb.Append('}');
 
         return sb.ToString();
+    }
+
+    /// <summary>The session's work items as JSON text, or null when there are none or they could not be read.</summary>
+    internal static string? ProjectWorkItems(string? body) {
+        if (body is null) return null;
+
+        try {
+            if (JsonNode.Parse(body) is not JsonArray items) return null;
+
+            var sb    = new StringBuilder("[");
+            var count = 0;
+
+            foreach (var item in items) {
+                if (item?["work_item_id"] is not JsonValue idValue || !idValue.TryGetValue(out string? workItemId) || workItemId is null) continue;
+
+                var label = item["label"] is JsonValue l && l.TryGetValue(out string? text) && text is not null ? text : workItemId;
+
+                if (count++ > 0) sb.Append(',');
+
+                sb.Append("{\"work_item_id\":");
+                AppendJsonString(sb, workItemId);
+                sb.Append(",\"label\":");
+                AppendJsonString(sb, label);
+                sb.Append(",\"is_primary\":").Append(item["is_primary"] is JsonValue p && p.TryGetValue(out bool primary) && primary ? "true" : "false");
+                sb.Append('}');
+            }
+
+            return count == 0 ? null : sb.Append(']').ToString();
+        } catch {
+            return null;
+        }
     }
 
     /// <summary>The declared-plans pointer as JSON text, or null when there is nothing to show.
@@ -806,9 +937,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 var total      = IntOrZero(progress?["total"]);
                 var totalKnown = IsTrue(progress?["total_known"]);
                 var isComplete = IsTrue(plan["is_complete"]);
-                var finished   = progress?["finished"] is JsonValue sent && sent.TryGetValue(out bool fromServer)
-                    ? fromServer
-                    : totalKnown && completed == total && isComplete;
+                var finished   = DeclaredPlanState.IsFinished(plan);
 
                 if (count++ > 0) sb.Append(',');
 
@@ -881,16 +1010,19 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "list_repo_sessions",
-            "List the sessions on a repository that you are allowed to see, running ones first, ordered by last activity. state defaults to active, so without state: \"all\" (or \"ended\") no finished session appears, and one row back on a busy repo usually means only your own session is running. There is no time filter: the tool cannot answer 'which sessions were running at instant X', and an argument it does not declare (a date range, since, until) is ignored rather than rejected, so a result that looks unfiltered is exactly that. To cover a window, pass state: \"all\" and read started_at / last_activity_at on the rows yourself. Each row carries session_id, owner, vendor, status, access_level, stale, started_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it.",
+            "List the sessions you are allowed to see on a repository, or on every repository with repo: \"all\". Without a time window, state defaults to active and rows are ordered by last activity, running ones first, so no finished session appears unless you pass state: \"all\" or \"ended\", and one row back on a busy repo usually means only your own session is running. With since and/or until the tool lists the sessions worked on in that period: state then defaults to all, rows are ordered by started_at, newest first, and the response echoes the window it applied as since and until. A session is in the window when it started before until and ended at or after since, or, while still open, was last active at or after since. Activity is not checked event by event, so a session that spans the window lists for it even if it was idle inside it. since and until each take an instant ending in Z or an offset (2026-09-27T09:00:00Z), a date (2026-09-27, the start of that day in this machine's time zone) or a duration back from now (36h, 14d, 2w); for one whole day pass that date as since and the next date as until, and pass the same instant as both to list the sessions that spanned it. When the response carries next_cursor there are more rows: call again with cursor set to it, the same repo and optionally limit, and nothing else, because the cursor carries the window, state, owner and touching_path of the page it came from. total counts the whole window, not the rows left. An argument the tool does not declare (from, to, a date range) is ignored rather than rejected. Each row carries session_id, owner, repo, vendor, status, access_level, stale, started_at, ended_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count; repo is the session's primary repository, null when it has none. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it, or to answer what you or the team worked on over a period: owner: \"me\" for your own work, no owner for everyone you can see. Read what a listed session did with get_session_summary.",
             new(
                 "object",
                 new() {
-                    ["repo"]          = new("string",  "Optional: \"<owner>/<name>\" or a 16-hex repo hash. Defaults to the current repo (resolved from cwd at server startup). \"all\" is not accepted; the tool is repo-scoped."),
-                    ["state"]         = new("string",  "Optional: active (default), ended, or all. The default hides every finished session; pass all to see history."),
+                    ["repo"]          = new("string",  "Optional: \"<owner>/<name>\", a 16-hex repo hash, or \"all\" for every repository. Defaults to the current repo (resolved from cwd at server startup)."),
+                    ["state"]         = new("string",  "Optional: active, ended, or all. Defaults to active, or to all when since or until is given."),
                     ["owner"]         = new("string",  "Optional: \"me\" or a canonical user id. Absent means everyone visible."),
                     ["touching_path"] = new("string",  "Optional: substring matched against the stored write-attempt paths as the tool received them."),
+                    ["since"]         = new("string",  "Optional: lists sessions that ended, or while open were last active, at or after this time. An instant ending in Z or an offset, a date (the start of that day in this machine's time zone), or a duration back from now such as 36h, 14d, 2w."),
+                    ["until"]         = new("string",  "Optional: lists sessions that started before this time. Same forms as since."),
+                    ["cursor"]        = new("string",  "Optional: next_cursor from the previous page. Pass it with the same repo and optionally limit, and no other argument."),
                     ["limit"]         = new("integer", "Default 20, max 100."),
-                    ["offset"]        = new("integer", "Default 0, max 500.")
+                    ["offset"]        = new("integer", "Default 0, max 500. Not applied with since or until; page those with cursor.")
                 },
                 []
             ),
@@ -926,7 +1058,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_summary",
-            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Use this to orient yourself before drilling into the full transcript.",
+            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Also lists `work_items` the session is attached to. To take over a session's work items and unfinished plans — continuing a session whose agent is gone — call `continue_session` in kcap-handoff, or run `kcap recap <id> --continue`. Use this to orient yourself before drilling into the full transcript.",
             new(
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },

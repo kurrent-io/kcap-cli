@@ -13,6 +13,7 @@ public partial class RemoteSessionView : UserControl {
 
     public RemoteSessionView() {
         InitializeComponent();
+        TerminalClipboard.Attach(this, TerminalHost);
         TerminalHost.PropertyChanged += (_, e) => {
             if (e.Property == SvcSystems.UI.Terminal.TerminalControl.ModelProperty && TerminalHost.Model is not null
                 && DataContext is RemoteSessionViewModel { IsTerminalActive: true })

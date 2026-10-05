@@ -483,22 +483,33 @@ jobs:
             echo "::error::packaged daemon digest mismatch"; exit 1
           fi
 
+      # Binaries under bin/: the plugin directory is also named kcap, and cannot sit beside the
+      # kcap binary. SetupCommand.ResolvePluginPath finds it at <bin>/../kcap.
       - name: Create release archive
         shell: bash
         run: |
-          mkdir -p archive
-          cp publish/cli/${{ matrix.cli-binary }} archive/
-          cp publish/daemon/${{ matrix.daemon-binary }} archive/
+          mkdir -p archive/bin
+          cp publish/cli/${{ matrix.cli-binary }} archive/bin/
+          cp publish/daemon/${{ matrix.daemon-binary }} archive/bin/
           for ext in so dylib; do
             if [ -f "publish/daemon/libpty_shim.$ext" ]; then
-              cp "publish/daemon/libpty_shim.$ext" archive/
+              cp "publish/daemon/libpty_shim.$ext" archive/bin/
             fi
           done
           if [[ "${{ matrix.rid }}" == osx-* ]]; then
             source scripts/lib/hash.sh
-            echo "${{ steps.daemon-digest.outputs.DIGEST }}" > archive/daemon.sha256
-            sha256_of publish/cli/${{ matrix.cli-binary }} > archive/kcap.sha256
+            echo "${{ steps.daemon-digest.outputs.DIGEST }}" > archive/bin/daemon.sha256
+            sha256_of publish/cli/${{ matrix.cli-binary }} > archive/bin/kcap.sha256
           fi
+          cp -r kcap archive/kcap
+          # Claude Code reads a payload as new only when the plugin version moves. sed, not jq or
+          # node: neither is in the Alpine container.
+          plugin=archive/kcap/.claude-plugin/plugin.json
+          sed -i.bak -E 's/"version": *"[^"]*"/"version": "${{ steps.version.outputs.VERSION }}"/' "$plugin"
+          rm "$plugin.bak"
+          grep -qF '"version": "${{ steps.version.outputs.VERSION }}"' "$plugin" || {
+            echo "::error::could not stamp the plugin version into $plugin"; exit 1; }
+          cp LICENSE.md archive/
           cd archive
           if [ "${{ matrix.rid }}" = "win-x64" ]; then
             7z a ../kcap-${{ matrix.rid }}.zip *
@@ -654,8 +665,21 @@ jobs:
   github-release:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/cli
 
     steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Download all release archives
         uses: actions/download-artifact@v8
         with:
@@ -663,11 +687,113 @@ jobs:
           path: release-artifacts/
           merge-multiple: true
 
+      - name: Build the install manifest
+        shell: bash
+        run: >
+          bash scripts/build-cli-manifest.sh "${{ steps.version.outputs.VERSION }}" "${{ github.sha }}"
+          release-artifacts "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          > kcap-manifest.json
+
+      # A published manifest vouches for the archives already on this release. Rebuilt archives
+      # never match it (signing and archive timestamps), and uploading them would fail every
+      # install from that manifest's channels.
+      - name: Refuse to replace archives a published manifest covers
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY="${{ steps.version.outputs.VERSION }}/manifest.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  cmp -s published.json kcap-manifest.json || {
+                  echo "::error::cli/$KEY already vouches for other archives of this version. Re-run the failed jobs of the run that published it, or cut a new version."
+                  exit 1; } ;;
+            44) ;;
+            *)  exit 1 ;;
+          esac
+
+      - name: Upload the install manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-manifest
+          path: kcap-manifest.json
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           files: release-artifacts/*
           generate_release_notes: true
+
+  # The script installer's manifests, served by kcap-web from the bucket's cli/ prefix. The
+  # archives stay on the GitHub Release: the checksum and the bytes it covers come from two hosts.
+  cli-publish:
+    name: Publish the CLI install manifest
+    needs: github-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Channel promotion is read-compare-write.
+    concurrency:
+      group: cli-publish
+      cancel-in-progress: false
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/cli
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the install manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-manifest
+
+      # A version's manifest is written once. A re-run finds identical bytes and carries on; a
+      # re-cut tag finds different ones and stops before any channel moves.
+      - name: Upload the version manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY="${{ steps.version.outputs.VERSION }}/manifest.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  cmp -s published.json kcap-manifest.json || {
+                  echo "::error::cli/$KEY is already published with different contents"; exit 1; } ;;
+            44) aws s3 cp $R2 kcap-manifest.json "$DEST/$KEY" \
+                  --content-type application/json --cache-control "public, max-age=31536000, immutable" ;;
+            *)  exit 1 ;;
+          esac
+
+      - name: Promote channels
+        shell: bash
+        run: |
+          set -euo pipefail
+          current() { # <channel> — the channel's version, empty when it does not exist yet
+            local rc; set +e; bash scripts/r2-fetch.sh "channels/$1.json" "current-$1.json"; rc=$?; set -e
+            case "$rc" in
+              0)  jq -er .version "current-$1.json" ;;
+              44) echo "" ;;
+              *)  return 1 ;;
+            esac
+          }
+          latest="$(current latest)"; beta="$(current beta)"
+          # Assigned first: a failure inside a for loop's word list does not fail the step.
+          channels="$(bash scripts/promote-cli-channels.sh "${{ steps.version.outputs.VERSION }}" "$latest" "$beta")"
+          for channel in $channels; do
+            aws s3 cp $R2 kcap-manifest.json "$DEST/channels/$channel.json" \
+              --content-type application/json --cache-control "no-cache"
+            echo "cli/channels/$channel.json -> ${{ steps.version.outputs.VERSION }}"
+          done
+
+      - name: Attach the manifest to the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" kcap-manifest.json --clobber
 
   app-macos:
     name: Build and sign the desktop app
@@ -700,7 +826,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p trio/bin && tar xzf trio/kcap-osx-arm64.tar.gz -C trio/bin
+          tar xzf trio/kcap-osx-arm64.tar.gz -C trio
           chmod +x trio/bin/kcap trio/bin/kcap-daemon
           test -f trio/bin/daemon.sha256 && test -f trio/bin/kcap.sha256
 
@@ -806,7 +932,9 @@ jobs:
         run: |
           set -euo pipefail
           DMG="releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg"
-          bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --only-binary :all: --require-hashes -r scripts/dmg/requirements.txt
+          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
           codesign --force --timestamp --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" --keychain "$KEYCHAIN" "$DMG"
           xcrun notarytool submit "$DMG" --keychain-profile kcap-notary --keychain "$KEYCHAIN" --wait --timeout 45m
           xcrun stapler staple "$DMG"
@@ -860,24 +988,7 @@ jobs:
         run: bash scripts/verify-npm-trio.sh "${{ steps.version.outputs.VERSION }}" releases/kcap.sha256 releases/daemon.sha256
 
       - name: Verify immutable objects
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > fetch.sh <<'EOF'
-          #!/usr/bin/env bash
-          ERR="$(aws s3 cp $R2 "$DEST/$1" "$2" 2>&1 >/dev/null)"
-          rc=$?
-          if [ "$rc" -eq 0 ]; then
-            exit 0
-          elif echo "$ERR" | grep -qiE '404|Not Found'; then
-            exit 44
-          else
-            echo "$ERR" >&2
-            exit 1
-          fi
-          EOF
-          chmod +x fetch.sh
-          bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" ./fetch.sh
+        run: bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" scripts/r2-fetch.sh
 
       - name: Upload the feed and packages
         run: >

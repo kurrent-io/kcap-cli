@@ -6,6 +6,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Cursor;
@@ -51,16 +52,20 @@ internal sealed class CursorImportSource : IImportSource {
     readonly CursorMarkers                          _markers;
 
     readonly TimeProvider _time;
+    readonly CursorPaths? _titlePaths;
 
+    /// <param name="titlePaths">Where the session's own title is read from; null reads none.</param>
     public CursorImportSource(
         ConfigRoot                               config,
         string                                   projectsDir,
         string                                   workspaceStorageDir,
         GitProviderRouter                        router,
         TimeProvider                             time,
-        Func<string, Task<RepositoryPayload?>>?  repoDetector                = null
+        Func<string, Task<RepositoryPayload?>>?  repoDetector                = null,
+        CursorPaths?                             titlePaths                  = null
     ) {
         _time                = time;
+        _titlePaths          = titlePaths;
         _config              = config;
         _markers             = new CursorMarkers(config, time);
         _projectsDir         = projectsDir;
@@ -610,6 +615,15 @@ internal sealed class CursorImportSource : IImportSource {
             } catch (SessionImporter.TranscriptDeliveryAbortedException) {
                 return await CloseAndFailAsync();
             }
+        }
+
+        // Best-effort: a cancellation skips it so session-end below still runs.
+        if (_titlePaths is not null) {
+            try {
+                await ImportHarnessTitle.PostFromStoreAsync(
+                    HarnessTitleStores.Cursor(_titlePaths, transcriptPath),
+                    ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, ctx.Progress, ct);
+            } catch (OperationCanceledException) { }
         }
 
         // sessionEnd: same hard-fail contract — if it can't be appended, the

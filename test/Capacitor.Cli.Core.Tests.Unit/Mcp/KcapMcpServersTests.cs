@@ -4,21 +4,21 @@ namespace Capacitor.Cli.Core.Tests.Unit.Mcp;
 
 public class KcapMcpServersTests {
     [Test]
-    public async Task All_contains_the_nine_canonical_servers() {
+    public async Task All_contains_the_ten_canonical_servers() {
         var names = KcapMcpServers.All.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-handoff", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
     public async Task ForCodex_is_the_full_set_including_workitems() {
         var names = KcapMcpServers.ForCodex.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-handoff", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
     public async Task ForCursor_is_the_full_set_including_workitems() {
         var names = KcapMcpServers.ForCursor.Select(s => s.Name).ToArray();
-        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
+        await Assert.That(names).IsEquivalentTo(new[] { "kcap-review", "kcap-sessions", "kcap-flows", "kcap-memory", "kcap-workitems", "kcap-plans", "kcap-handoff", "kcap-artefacts", "kcap-analytics", "kcap-knowledge" });
     }
 
     [Test]
@@ -65,7 +65,7 @@ public class KcapMcpServersTests {
     public async Task Auto_approve_covers_reads_and_own_record_writers_only() {
         var approved = KcapMcpServers.All.Where(s => s.AutoApprove).Select(s => s.Name).ToArray();
         await Assert.That(approved).IsEquivalentTo(new[] {
-            "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-workitems", "kcap-plans"
+            "kcap-review", "kcap-sessions", "kcap-analytics", "kcap-workitems", "kcap-plans", "kcap-handoff"
         });
     }
 

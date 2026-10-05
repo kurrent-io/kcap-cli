@@ -145,7 +145,8 @@
                     CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <StackPanel Spacing="6" HorizontalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center">
-                        <Ellipse Width="8" Height="8" Fill="{StaticResource KcapPurpleBrush}" Classes="pulsing" VerticalAlignment="Center" />
+                        <Ellipse Width="8" Height="8" Fill="{StaticResource KcapPurpleBrush}" Classes="pulsing" VerticalAlignment="Center"
+                                 views:PulseClock.IsActive="{Binding IsStarting}" />
                         <TextBlock x:Name="StartingText" Text="{Binding StartingText}" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                     </StackPanel>
                     <TextBlock Text="The agent appears in the rail as soon as it registers." FontSize="13"

@@ -9,18 +9,21 @@ public sealed class JudgeLedger {
     public JudgeLedger(JudgeLedgerHeader? header, IReadOnlyList<JudgeLedgerPage> pages, IReadOnlyList<JudgeLedgerCall> calls, JudgeLedgerFooter? footer) {
         Header = header; Pages = pages; Calls = calls; Footer = footer;
         var events   = new HashSet<(string, long)>();
+        var citable  = new HashSet<(string, long)>();
         var turns    = new HashSet<(string, int)>();
         var sources  = new HashSet<string>(StringComparer.Ordinal);
         var followed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var p in pages) {
             foreach (var (h, r) in p.Cites) _cites[h] = r;
             foreach (var (s, from, to) in p.Revisions) for (var r = from; r <= to; r++) events.Add((s, r));
+            foreach (var (s, from, to) in p.Citable) for (var r = from; r <= to; r++) citable.Add((s, r));
             foreach (var t in p.Turns) turns.Add(t);
+            foreach (var lane in p.LedgerSources) sources.Add(lane);
             if (p.Source is { } source && p.Tool is "list_turns" or "read_events") sources.Add(source);
             using var args = JsonDocument.Parse(p.ArgsJson);
             if (args.RootElement.Bool("next") == true && args.RootElement.Str("page") is { } continued) followed.Add(continued);
         }
-        DeliveredEvents = events; DeliveredTurns = turns; SourcesWithPage = sources; FollowedHandles = followed;
+        DeliveredEvents = events; CitableEvents = citable; DeliveredTurns = turns; SourcesWithPage = sources; FollowedHandles = followed;
         SourcesRefused  = footer is null ? System.Collections.Frozen.FrozenSet<string>.Empty : footer.SourcesRefused.ToHashSet(StringComparer.Ordinal);
     }
 
@@ -32,6 +35,7 @@ public sealed class JudgeLedger {
     public IReadOnlyDictionary<string, string>        Cites           => _cites;
     public IReadOnlySet<(string Source, long Revision)> DeliveredEvents { get; }
     public IReadOnlySet<(string Source, int Index)>   DeliveredTurns  { get; }
+    public IReadOnlySet<(string Source, long Revision)> CitableEvents { get; }
     public IReadOnlySet<string>                       SourcesWithPage { get; }
     public IReadOnlySet<string>                       FollowedHandles { get; }
     public IReadOnlySet<string>                       SourcesRefused  { get; }
@@ -40,16 +44,23 @@ public sealed class JudgeLedger {
     public long   DeliveredBytes => Footer?.DeliveredBytes ?? Pages.Sum(p => (long)p.Bytes);
     public string? StopReason    => Footer?.StopReason;
 
-    public bool IsDelivered(EvidenceRefText r) => r.Form switch {
-        EvidenceRefForm.Event => DeliveredEvents.Contains((r.SourceId, r.A)),
-        EvidenceRefForm.Range => r.B - r.A < 100_000 && Enumerable.Range(0, (int)(r.B - r.A + 1)).All(i => DeliveredEvents.Contains((r.SourceId, r.A + i))),
-        _                     => DeliveredTurns.Contains((r.SourceId, (int)r.B))
-    };
+    /// <summary>Whether the ref's content reached the judge; a ref a plan_ledger row only showed is not delivered.</summary>
+    public bool IsDelivered(EvidenceRefText r) => IsShown(r, citable: false);
 
-    /// <summary>A handle this ledger minted expands to its ref; a literal ref only when this ledger delivered it.</summary>
+    bool IsShown(EvidenceRefText r, bool citable) {
+        bool Has(string source, long revision) => DeliveredEvents.Contains((source, revision)) || (citable && CitableEvents.Contains((source, revision)));
+        return r.Form switch {
+            EvidenceRefForm.Event => Has(r.SourceId, r.A),
+            EvidenceRefForm.Range => r.B >= r.A && r.B - r.A < 100_000 && Enumerable.Range(0, (int)(r.B - r.A + 1)).All(i => Has(r.SourceId, r.A + i)),
+            _                     => DeliveredTurns.Contains((r.SourceId, (int)r.B))
+        };
+    }
+
+    /// <summary>A handle this ledger minted expands to its ref; a literal ref only when this ledger delivered it or showed
+    /// it for citation.</summary>
     public bool TryExpand(string token, out string canonicalRef) {
         if (_cites.TryGetValue(token, out canonicalRef!)) return true;
-        if (EvidenceRefText.TryParse(token, out var r) && IsDelivered(r)) { canonicalRef = r.ToString(); return true; }
+        if (EvidenceRefText.TryParse(token, out var r) && IsShown(r, citable: true)) { canonicalRef = r.ToString(); return true; }
         canonicalRef = "";
         return false;
     }

@@ -310,6 +310,27 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pty.LastEnv!.ContainsKey("KCAP_RENDERED_AGENT")).IsTrue();
     }
 
+    [Test]
+    public async Task Registered_spawn_reports_the_frame_start_title() {
+        using var tmp = new TempDir();
+
+        var server    = new TripwireServerConnection();
+        var launchers = new Dictionary<string, IHostedAgentLauncher> { ["claude"] = new SpyHostedAgentLauncher("claude", "spy-claude") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new EnvCapturingPtyFactory(), launchers);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        var title = new AgentStartTitle("fix the login redirect", Derived: true);
+        var spawn = FrameCodec.Spawn("claude", WorkLocation.BorrowedCwd, isPrivate: false, tmp.Path, ["fix the login redirect"], 80, 24, title);
+        await orch.HandleLocalSpawnAsync(spawn, client, default);
+
+        await Assert.That(server.RegisteredTitles).IsEquivalentTo(new AgentStartTitle?[] { title });
+    }
+
     // Consent: the owner consent gate lives in HandleLaunchAgentCore (the SERVER-driven launch
     // choke point) only. The local 0600 socket path (kcap agent start -> HandleLocalSpawnAsync)
     // never calls that method, so a deny-default gate must not stop it — that socket is the
@@ -746,7 +767,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -785,7 +806,7 @@ public class AgentOrchestratorLocalAttachTests {
             var server = new CaptureServerConnection();
             orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
             orch.RegisterAgentForTest(new AgentInstance(
-                "agent-xyz", null, "", null, "/tmp/repo", "claude",
+                "agent-xyz", "Fix the flaky test", "", null, "/tmp/repo", "claude",
                 new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/tmp/repo", "", "/tmp/repo"), new CancellationTokenSource()
             ) {
             ActivityClock = new AgentActivityClock(TimeProvider.System),
@@ -795,7 +816,7 @@ public class AgentOrchestratorLocalAttachTests {
             });
 
             var config = new DaemonConfig { Store = daemons.Store, Name = "test", ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath("test");
@@ -807,12 +828,13 @@ public class AgentOrchestratorLocalAttachTests {
             await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
             await using var stream = new NetworkStream(sock, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.List), cts.Token);
+            await FrameCodec.WriteAsync(stream, LocalFrame.ListWithTitles(), cts.Token);
             var resp = await FrameCodec.ReadAsync(stream, cts.Token);
 
             await Assert.That(resp!.Type).IsEqualTo(FrameType.AgentList);
             await Assert.That(resp.Text).Contains("agent-xyz");
             await Assert.That(resp.Text).Contains("Running");
+            await Assert.That(resp.Text).EndsWith("\tFix the flaky test");
         } finally {
             if (orch is not null) await orch.DisposeAsync();
             if (listener is not null) { await listener.StopAsync(CancellationToken.None); listener.Dispose(); }
@@ -832,7 +854,7 @@ public class AgentOrchestratorLocalAttachTests {
             orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
             var config = new DaemonConfig { Store = daemons.Store, Name = daemonName, ServerUrl = "http://127.0.0.1:1" };
-            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), NullLogger<LocalControlServer>.Instance);
+            listener = new LocalControlServer(config, orch, TestCoordinator(daemons.Store), TestConsentIpc(config, daemons.CreateDir("consent")), TestPermissionIpc(), TestStatusIpc(config, orch, server), TestSettingsIpc(config, orch), TestFences.Ipc(config, orch), NullLogger<LocalControlServer>.Instance);
             await listener.StartAsync(cts.Token);
 
             var sockPath = daemons.Store.SocketPath(daemonName);
@@ -887,7 +909,7 @@ public class AgentOrchestratorLocalAttachTests {
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(client, default);
+        await orch.HandleLocalListAsync(withTitles: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -953,6 +975,28 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
 
         // Mirrors the read-only test: an unprotected agent's stdin really does reach the PTY.
+        await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
+    }
+
+    /// A PR-review agent is a dialogue the reviewer types into, unlike a flow participant.
+    [Test]
+    public async Task Attaching_to_a_review_agent_stays_read_write() {
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             pty    = new RecordingPtyProcess();
+        orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review, pty: pty);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("hello"u8.ToArray()), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("rev-1", client, default);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
     }
 
@@ -1055,7 +1099,8 @@ public class AgentOrchestratorLocalAttachTests {
 
         public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
-        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null) { Calls.Add(nameof(AgentRegisteredAsync)); return Task.CompletedTask; }
+        public ConcurrentBag<AgentStartTitle?> RegisteredTitles { get; } = [];
+        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, AgentStartTitle? title = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.CompletedTask; }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
         public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }
@@ -1427,6 +1472,30 @@ public class AgentOrchestratorLocalAttachTests {
         public void Resize(ushort     _, ushort __) { }
         public void SendInterrupt() { }
     }
+    /// The title column only appears when the client asks: an older CLI refuses any table that is
+    /// not 3 or 6 columns wide.
+    [Test]
+    public async Task Local_list_appends_the_title_column_only_on_request() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("titled-1", prompt: "Fix the\tflaky test");
+
+        async Task<string[]> ListAsync(bool withTitles) {
+            using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+            await orch.HandleLocalListAsync(withTitles, client, default);
+            client.WrittenStream.Position = 0;
+            var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+            return reply!.Text.Split('\t');
+        }
+
+        await Assert.That((await ListAsync(withTitles: false)).Length).IsEqualTo(6);
+
+        var cols = await ListAsync(withTitles: true);
+        await Assert.That(cols.Length).IsEqualTo(7);
+        await Assert.That(cols[6]).IsEqualTo("Fix the flaky test");
+    }
+
     [Test]
     public async Task Local_list_neutralises_delimiters_inside_a_free_form_field() {
         // Repo paths and flow roles are free-form and may legally hold a tab or newline. Emitted
@@ -1439,7 +1508,7 @@ public class AgentOrchestratorLocalAttachTests {
             flowRunId: "flow\t7f3a", flowRole: "rev\niewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(client, default);
+        await orch.HandleLocalListAsync(withTitles: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 

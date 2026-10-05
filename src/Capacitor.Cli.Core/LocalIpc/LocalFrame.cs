@@ -24,6 +24,12 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame StopAck(string payload)    => new(FrameType.StopAck)    { Text = payload };
     public static LocalFrame StopV2(bool force, string agentId) => FrameCodec.StopV2(force, agentId);
 
+    public const string ListTitleColumn = "title";
+
+    /// The title column is opt-in: a client that predates it accepts only 3 or 6 columns and
+    /// refuses any other width, and a daemon that predates it ignores the request payload.
+    public static LocalFrame ListWithTitles() => new(FrameType.List) { Text = ListTitleColumn };
+
     /// Constructs any of the consent control frames, whose payload is always UTF-8 JSON
     /// (snake_case via ConsentIpcJsonContext) carried in Text — see ConsentIpc.cs.
     public static LocalFrame ConsentJson(FrameType type, string json) => new(type) { Text = json };
@@ -47,4 +53,6 @@ public sealed record LocalFrame(FrameType Type) {
     /// Constructs a DaemonSettingsPut or DaemonSettingsAck frame, whose payload is UTF-8 JSON
     /// (snake_case via SettingsIpcJsonContext) carried in Text — see SettingsIpc.cs.
     public static LocalFrame SettingsJson(FrameType type, string json) => new(type) { Text = json };
+
+    public static LocalFrame FenceJson(FrameType type, string json) => new(type) { Text = json };
 }

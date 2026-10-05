@@ -1,3 +1,4 @@
+using System.Globalization;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -85,11 +86,19 @@ public class AttachmentTrayTests {
         }
     }
 
+    /// The label reads the same on every machine: the assertions run under a comma-decimal
+    /// culture, where a current-culture format prints "2,3 MB".
     [Test]
     public async Task Size_label_and_image_flag() {
-        await Assert.That(new StagedAttachment("a", "image/png", new byte[512]).SizeLabel).IsEqualTo("512 B");
-        await Assert.That(new StagedAttachment("a", "image/png", new byte[184 * 1024]).SizeLabel).IsEqualTo("184 KB");
-        await Assert.That(new StagedAttachment("a", "text/plain", new byte[(int)(2.3 * 1024 * 1024)]).SizeLabel).IsEqualTo("2.3 MB");
-        await Assert.That(new StagedAttachment("a", "text/plain", new byte[1]).IsImage).IsFalse();
+        var culture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+        try {
+            await Assert.That(new StagedAttachment("a", "image/png", new byte[512]).SizeLabel).IsEqualTo("512 B");
+            await Assert.That(new StagedAttachment("a", "image/png", new byte[184 * 1024]).SizeLabel).IsEqualTo("184 KB");
+            await Assert.That(new StagedAttachment("a", "text/plain", new byte[(int)(2.3 * 1024 * 1024)]).SizeLabel).IsEqualTo("2.3 MB");
+            await Assert.That(new StagedAttachment("a", "text/plain", new byte[1]).IsImage).IsFalse();
+        } finally {
+            CultureInfo.CurrentCulture = culture;
+        }
     }
 }

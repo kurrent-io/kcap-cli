@@ -401,7 +401,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["include_versions"] = new("boolean", "Include the approved version history (default false)."),
             }, ["doc_id"]), McpToolAnnotations.Read),
         new("list_facts",
-            "List retained facts homed at a scope (repo by default: the current repository; project: a project id or slug; org: scope_id empty), newest first. Each fact carries its live cluster's cluster_uid, curation_key and curation: the address and current state a curate_fact_cluster call is built from. cluster_uid filters to one live cluster, including facts born in clusters it absorbed. Provenance is omitted where you cannot see the session it came from. Page with limit and cursor, passing next_cursor back unchanged.",
+            "List retained facts homed at a scope (repo by default: the current repository; project: a project id or slug; org: scope_id empty), newest first. Each fact carries its live cluster's cluster_uid, curation_key and curation: the address and current state a curate_fact_cluster call is built from. cluster_uid filters to one live cluster, including facts born in clusters it absorbed. Provenance is omitted where you cannot see the session it came from. Each fact's sources names where it was learned from among the sources you can see: source_kinds (session_eval, work_item_eval) and the work_items behind its work-item findings, each a work_item_id and its key. Page with limit and cursor, passing next_cursor back unchanged.",
             new("object", new() {
                 ["scope"]       = ScopeProperty,
                 ["scope_id"]    = ScopeIdProperty,
@@ -411,7 +411,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
                 ["cursor"]      = new("string", "next_cursor from the previous page."),
             }, []), McpToolAnnotations.Read),
         new("search_facts",
-            "Find the retained facts nearest a query by meaning, homed at a scope (repo by default). Returns ranked hits with similarity, each carrying cluster_uid, curation_key and curation. 503 search_unavailable when the server has no embedding provider.",
+            "Find the retained facts nearest a query by meaning, homed at a scope (repo by default). Returns ranked hits with similarity, each carrying cluster_uid, curation_key, curation and sources, as list_facts does. 503 search_unavailable when the server has no embedding provider.",
             new("object", new() {
                 ["query"]    = new("string", "What to search for."),
                 ["scope"]    = ScopeProperty,

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Kiro;
@@ -28,13 +29,13 @@ public class KiroCrewParentResolverTests {
 
     void SeedKiroSession(string sessionId, DateTimeOffset createdAt) {
         Tmp.CreateFile(["sessions", "cli", $"{sessionId}.json"],
-            $"{{\"session_id\": \"{sessionId}\", \"created_at\": \"{createdAt.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}");
+            string.Create(CultureInfo.InvariantCulture, $"{{\"session_id\": \"{sessionId}\", \"created_at\": \"{createdAt.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}"));
     }
 
     void SeedSubagent(string file, string? sessionId = Child, string id = "65eed35b") {
         var sessionField = sessionId is null ? "" : $", \"session_id\": \"{sessionId}\"";
         Tmp.CreateFile(["crew", "subagents", id, file],
-            $"{{\"id\": \"{id}\", \"agent\": \"kirocrew-research\", \"parent_session\": \"{Chat}\", \"started\": {ChildStarted}, \"status\": \"running\"{sessionField}}}");
+            $"{{\"id\": \"{id}\", \"agent\": \"kirocrew-research\", \"parent_session\": \"{Chat}\", \"started\": {ChildStarted.ToString(CultureInfo.InvariantCulture)}, \"status\": \"running\"{sessionField}}}");
     }
 
     string? ParentOf(string sessionId) => KiroCrewParentResolver.ParentOf(Crew, SessionsDir, sessionId);

@@ -46,7 +46,10 @@ public static class JudgeLedgerReader {
         [.. e.GetProperty("bodies").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetString()!, a[2].IsNumber ? a[2].GetInt32() : (int?)null))],
         [.. e.GetProperty("detail").EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetInt64(), a[2].GetInt32(), a[3].GetInt32()))],
         e.GetProperty("cites").EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString()!, StringComparer.Ordinal),
-        e.GetProperty("has_next").GetBoolean(), e.Str("next"));
+        e.GetProperty("has_next").GetBoolean(), e.Str("next")) {
+        LedgerSources = e.Arr("ledger_sources") is { } lanes ? [.. lanes.EnumerateArray().Select(l => l.GetString()!)] : [],
+        Citable       = e.Arr("citable") is { } citable ? [.. citable.EnumerateArray().Select(a => (a[0].GetString()!, a[1].GetInt64(), a[2].GetInt64()))] : []
+    };
 
     internal static EvidenceRunBudgets ReadBudgets(JsonElement b) => new(
         b.GetProperty("max_tool_calls").GetInt32(), b.GetProperty("judge_byte_budget_bytes").GetInt64(), b.GetProperty("page_budget_bytes").GetInt32());

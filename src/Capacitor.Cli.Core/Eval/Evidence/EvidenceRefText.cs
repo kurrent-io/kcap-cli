@@ -1,14 +1,19 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 
 namespace Capacitor.Cli.Core.Eval.Evidence;
 
 /// <summary>The server's evidence ref grammar: <c>{source}@{rev}</c>, <c>{source}@{from}-{to}</c>, <c>{source}#g{gen}t{index}</c>,
-/// where the source id is a percent-encoded session or subagent stream name. A malformed string is a false, never an exception.
+/// where the source id is a percent-encoded session or subagent stream name, or a plan lane (<c>PlanLane-{plan id}-{session id}</c>).
+/// A malformed string is a false, never an exception.
 /// For a turn, <see cref="A"/> is the generation and <see cref="B"/> the index; for an event, <see cref="B"/> equals <see cref="A"/>.</summary>
 public readonly record struct EvidenceRefText(string SourceId, EvidenceRefForm Form, long A, long B) {
     const string RootPrefix     = "AgentSession-";
     const string SubagentPrefix = "AgentSubsession-";
+    const string PlanLanePrefix = "PlanLane-";
+
+    static readonly SearchValues<char> LowerHex = SearchValues.Create("0123456789abcdef");
 
     public override string ToString() => Form switch {
         EvidenceRefForm.Event => $"{SourceId}@{A}",
@@ -47,7 +52,7 @@ public readonly record struct EvidenceRefText(string SourceId, EvidenceRefForm F
         return true;
     }
 
-    /// <summary>Percent-decodes a source id and accepts it only when it names a session or subagent stream.</summary>
+    /// <summary>Percent-decodes a source id and accepts it only when it names a session or subagent stream or a plan lane.</summary>
     public static bool TryDecodeSource(string sourceId, out string streamName) {
         streamName = "";
         var bytes = new List<byte>(sourceId.Length);
@@ -61,9 +66,15 @@ public readonly record struct EvidenceRefText(string SourceId, EvidenceRefForm F
         string decoded;
         try { decoded = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes.ToArray()); }
         catch (DecoderFallbackException) { return false; }
-        if (!decoded.StartsWith(RootPrefix, StringComparison.Ordinal) && !decoded.StartsWith(SubagentPrefix, StringComparison.Ordinal)) return false;
+        if (!decoded.StartsWith(RootPrefix, StringComparison.Ordinal) && !decoded.StartsWith(SubagentPrefix, StringComparison.Ordinal) && !IsPlanLane(decoded)) return false;
         streamName = decoded;
         return true;
+    }
+
+    static bool IsPlanLane(string decoded) {
+        if (!decoded.StartsWith(PlanLanePrefix, StringComparison.Ordinal)) return false;
+        var rest = decoded.AsSpan(PlanLanePrefix.Length);
+        return rest.Length > 33 && rest[32] == '-' && !rest[..32].ContainsAnyExcept(LowerHex);
     }
 
     static bool TryNumber(string s, out long value) {

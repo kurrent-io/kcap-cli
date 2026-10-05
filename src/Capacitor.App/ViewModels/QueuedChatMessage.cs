@@ -8,6 +8,8 @@ namespace Capacitor.App.ViewModels;
 /// alone does not mean the runtime has started consuming a prompt queued behind its current turn.
 /// Only the ids are held: the chips themselves live in the tray until a delivery clears them.
 public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset, IReadOnlyList<Guid> attachmentIds) : ReactiveObject {
+    public const string AwaitingPickupNote = "The agent reads it when its current step ends";
+
     public string Text { get; } = text;
     public IReadOnlyList<Guid> AttachmentIds { get; } = attachmentIds;
     internal int ComposerEdits { get; } = composerEdits;
@@ -17,12 +19,32 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     internal bool HasBaseline => _offset.HasValue;
 
     bool _isUnconfirmed;
-    public bool IsUnconfirmed { get => _isUnconfirmed; private set => this.RaiseAndSetIfChanged(ref _isUnconfirmed, value); }
+    public bool IsUnconfirmed {
+        get => _isUnconfirmed;
+        private set {
+            if (_isUnconfirmed == value) return;
+            _isUnconfirmed = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(IsAwaitingPickup));
+        }
+    }
+
+    /// An own send the channel accepted but the transcript has not echoed: the runtime reads a
+    /// prompt queued behind its current turn only when that turn's step ends. A dispatch the server
+    /// has stopped listing was delivered or withdrawn, and only the echo can say which.
+    public bool IsAwaitingPickup => !IsForeign && !IsUnconfirmed && (DispatchId is null || _serverListed);
 
     internal void MarkUnconfirmed() => IsUnconfirmed = true;
 
     /// The server's id for this prompt once it has listed it; null until then.
     internal Guid? DispatchId { get; private set; }
+    bool _serverListed;
+
+    internal void MarkUnlisted() {
+        if (!_serverListed) return;
+        _serverListed = false;
+        this.RaisePropertyChanged(nameof(IsAwaitingPickup));
+    }
     /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
     public bool IsForeign { get; private init; }
 
@@ -31,7 +53,9 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
 
     internal void MarkQueued(Guid dispatchId) {
         DispatchId = dispatchId;
+        _serverListed = true;
         IsUnconfirmed = false;
+        this.RaisePropertyChanged(nameof(IsAwaitingPickup));
     }
 
     internal bool MatchesText(string text) => Normalize(Text) == Normalize(text);

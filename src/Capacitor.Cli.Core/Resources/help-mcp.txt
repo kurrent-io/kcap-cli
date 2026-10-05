@@ -10,13 +10,16 @@ Subcommands:
   sessions                Start the MCP sessions server (stdio) — search and
                           inspect past Kurrent Capacitor sessions.
   flows                   Start the MCP flows server (stdio) — start and manage
-                          review flows from within an agent session.
+                          review flows, and start separate hosted agents,
+                          from within an agent session.
   memory                  Start the MCP memory server (stdio) — team memory
                           tools (search, get, save, update, rescope, archive).
   workitems               Start the MCP workitems server (stdio) — declare and
                           list a session's work-item attachments and structure.
   plans                   Start the MCP plans server (stdio) — declare the plan
                           document and task list a session executes.
+  handoff                 Start the MCP handoff server (stdio) — continue a
+                          session whose agent is gone.
   analytics               Start the MCP analytics server (stdio) — governed
                           read-only SQL over the org's coding-agent analytics.
   artefacts               Start the MCP artefacts server (stdio) — publish a
@@ -42,10 +45,18 @@ Options for judge:
                           (written by kcap eval and the daemon; not for manual use)
 
 mcp sessions:
-  Exposes four tools — search_sessions, get_session_summary,
-  get_session_transcript, get_turn — for agents to search and inspect past
+  Exposes eight tools — search_sessions, list_repo_sessions,
+  get_session_summary, list_turns, get_turn, get_session_transcript,
+  list_repo_plans, get_declared_plans — for agents to search and inspect past
   Kurrent Capacitor sessions. The active repo is resolved from cwd at startup;
   cd into your project before spawning. Requires `kcap login`.
+
+mcp handoff:
+  Exposes one tool, continue_session, which attaches the current session to
+  another session's work items and unfinished plans. Refuses while that
+  session may still be running unless force is passed. The taking-over
+  session defaults to the harness session; current_session_id overrides it.
+  Available on every plan. Requires `kcap login`.
 
 mcp flows:
   Exposes the review-flow and generic-flow tools for agents to start and
@@ -66,6 +77,10 @@ mcp flows:
       close_review_flow      Close a completed review flow.
 
     Generic-flow tools (catalog + dynamic definitions):
+      list_flow_definitions  List the definitions this server can start, with when
+                             to use each and whether agents may offer it unprompted.
+      get_flow_definition    Read one definition's driver guide: what to submit,
+                             how to iterate, when to close.
       start_flow             Start a catalog flow by `definition_id`, or an inline
                              `definition_yaml` dynamic flow. `vendor`/`model` apply to
                              single-participant catalog definitions only (rejected for
@@ -87,6 +102,11 @@ mcp flows:
   `kcap setup` / `kcap plugin install --codex` register it conservatively
   in Codex's config.toml, and the native Codex plugin descriptor includes it.
   The work-launching server is never auto-approved on registration.
+
+  When `kcap-flows` is registered for a harness, the SessionStart hook lists the
+  catalogue flows an operator marked `offer: proactive`, so the agent can offer
+  them at the right moment. Nothing is listed against a server that predates
+  flow guidance.
 
 mcp memory:
   Exposes six tools — search_memories, get_memory, save_memory, update_memory,
@@ -131,8 +151,11 @@ mcp workitems:
                                 defaults to this checkout; limit default 5,
                                 max 20).
       declare_loose_end        Record one concrete piece of unfinished work
-                                (text) in the user's next-work ledger; the
-                                server refuses none-class text.
+                                (text) in the user's next-work ledger, with an
+                                optional subject issue key; the server refuses
+                                none-class text and flags a subject already
+                                closed in the tracker. work_item_id or
+                                standalone says which item it belongs under.
       declare_work_breakdown   Declare that a work item is broken into parts
                                 (parent_id + part_ids); idempotent, one parent
                                 per part, every item visible to the caller.
@@ -164,6 +187,15 @@ mcp workitems:
       close_loose_end          Mark a finished loose end done (loose_end_id);
                                 a later sighting reopens it.
       reopen_loose_end         Undo a close (loose_end_id).
+      list_work_item_evals     List the evaluations of a work item you can
+                                read (work_item_id; pass next_cursor back as
+                                cursor).
+      get_work_item_eval       Read one evaluation run's results and
+                                retrospective (work_item_id, run_id).
+      request_work_item_eval   Queue an evaluation of a work item
+                                (work_item_id; mode process or root_cause).
+      cancel_work_item_eval    Cancel your own still-queued run
+                                (work_item_id, run_id).
 
   Registered for every supported harness by `kcap setup` / `kcap plugin
   install` (Claude Code reads it from the plugin's `.mcp.json`).

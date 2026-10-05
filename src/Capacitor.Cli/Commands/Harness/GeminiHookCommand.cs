@@ -187,9 +187,10 @@ sealed class GeminiHookCommand(
             string?    scopeRoot,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             string?    source,
             TimeSpan   budget) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -201,7 +202,7 @@ sealed class GeminiHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -337,6 +338,7 @@ sealed class GeminiHookCommand(
             scopeRoot: cwd is not null ? GitRepository.FindRoot(cwd) ?? cwd : null,
             disabled: activeProfile?.DisableMemoryIndex is true,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
+            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Gemini, harnesses),
             source: source,
             budget: budget.Remaining);
 
@@ -354,8 +356,7 @@ sealed class GeminiHookCommand(
         // parses hook stdout unconditionally, with the exit code only setting its own `success` flag.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            PlansNudgeEmitter.Resolve(HarnessId.Gemini, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+            SessionNudges.Resolve(HarnessId.Gemini, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Gemini, harnesses));
         result.Write(RenderSessionStartPayload(fragment, workItemsNudge));

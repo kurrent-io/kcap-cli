@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Core.Eval.Evidence;
@@ -14,4 +15,6 @@ public sealed record EvidenceEventEntryDto {
     [JsonPropertyName("output")]       public          string?                    Output      { get; init; }
     [JsonPropertyName("output_body")]  public          EvidenceBodyDescriptorDto? OutputBody  { get; init; }
     [JsonPropertyName("payload_body")] public required EvidenceBodyDescriptorDto  PayloadBody { get; init; }
+    [JsonPropertyName("plan_kind")]    public          string?                    PlanKind    { get; init; }
+    [JsonPropertyName("plan_content")] public          JsonElement?               PlanContent { get; init; }
 }

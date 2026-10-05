@@ -10,4 +10,6 @@ public sealed record EvalEvidenceAdvertisementDto {
     [JsonPropertyName("one_shot_limit_chars")]         public required int    OneShotLimitChars          { get; init; }
     [JsonPropertyName("retrospective_evidence_bytes")] public required int    RetrospectiveEvidenceBytes { get; init; }
     [JsonPropertyName("coverage_policy_version")]      public required string CoveragePolicyVersion      { get; init; }
+    // Absent from a server that cannot hold a scope; the run then renews by resolving again.
+    [JsonPropertyName("scope_holds")]                  public          bool?  ScopeHolds                 { get; init; }
 }

@@ -20,7 +20,7 @@ Use these MCP tools to pull session details on demand:
 
 Budget: at most 6 tool calls. Prefer summary → search → targeted fetch over paging the full trace. If the summary already answers the question, don't call additional tools.
 
-## Question
+{DECLARED_TASKS}## Question
 
 Category: `{CATEGORY}`
 ID: `{QUESTION_ID}`

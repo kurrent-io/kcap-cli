@@ -169,7 +169,8 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             fault = ex;
         }
 
-        if (slot.Request.RetireServiceId is { } retired && outcome is not MutationOutcome.Failed { Reason: "cli_unsupported" }) {
+        if (slot.Request.RetireServiceId is { } retired && outcome is not MutationOutcome.Failed { Reason: "cli_unsupported" }
+            && !RenameRefusal.ChangedNothing(outcome)) {
             lock (_gate) _retiredServiceIds.Add(retired);
         }
 

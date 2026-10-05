@@ -188,7 +188,7 @@ public class DaemonStatusIpcTests {
         var permissionIpc = new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart = RestartCoordinator.ForTest(daemons.Store, daemonName, daemonName, new NoopRestartStrategy(), TimeProvider.System);
-        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
+        var server = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, TestFences.Ipc(config, orchestrator), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(ct);
 
         var sockPath = daemons.Store.SocketPath(daemonName);

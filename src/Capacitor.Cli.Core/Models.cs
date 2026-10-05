@@ -1,9 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Eval.Contracts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
+using Capacitor.Cli.Core.Harness.Titles;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Core.Telemetry;
 
@@ -156,6 +159,23 @@ class WatchState {
     public bool               FullFileScanDone   { get; set; }
     public string?            FirstAssistantText { get; set; }
     public int                EventCount         { get; set; }
+
+    // Non-null only for a top-level session watcher whose vendor keeps a title store the watcher polls.
+    public HarnessTitleTracker? TitleTracker                { get; set; }
+    public DateTimeOffset       LastHarnessTitleRead        { get; set; }
+    public HarnessTitlePost?    LastHarnessTitleAttempted   { get; set; }
+    public DateTimeOffset       LastHarnessTitlePostAttempt { get; set; }
+    // A store read that outlasted its poll's budget; the next poll waits on it rather than start another.
+    public HarnessTitleRead?    HarnessTitleReadInFlight    { get; set; }
+
+    // LLM titling stops for good once a harness title is known to be recorded, since it always wins on the server:
+    // one the server took through /hooks/harness-title, or a transcript line every server records. A line only a
+    // server with harness titles records (InlineHarnessTitleSeen) stops it once that server is known to have them;
+    // an older server records neither it nor a store title sent through set-title, so it must still get a generated one.
+    public bool                 HarnessTitleSeen            { get; set; }
+    public bool                 InlineHarnessTitleSeen      { get; set; }
+    public bool?                ServerRecordsHarnessTitles  { get; set; }
+    public DateTimeOffset       LastHarnessTitleProbe       { get; set; }
 
     // Buffering: hold transcript lines until threshold is reached to avoid polluting
     // the server with short-lived sessions (e.g. <local-command-caveat> prompts)
@@ -322,31 +342,35 @@ record RepoSessionOwnerDto(
     );
 
 record RepoSessionDto(
-        string               SessionId,
-        string?              Slug,
-        string?              Title,
-        RepoSessionOwnerDto? Owner,
-        string?              Vendor,
-        string               Status,
-        string               AccessLevel,
-        bool                 Stale,
-        DateTimeOffset       StartedAt,
-        DateTimeOffset?      EndedAt,
-        DateTimeOffset       LastActivityAt,
-        string?              PrimaryRepoHash,
-        bool                 IsPrimary,
-        string?              Branch,
-        string?              Cwd,
-        string?              LastPrompt,
-        string[]             WriteAttemptPaths,
-        int                  WriteAttemptCount
+        string                    SessionId,
+        string?                   Slug,
+        string?                   Title,
+        RepoSessionOwnerDto?      Owner,
+        string?                   Vendor,
+        string                    Status,
+        string                    AccessLevel,
+        bool                      Stale,
+        DateTimeOffset            StartedAt,
+        DateTimeOffset?           EndedAt,
+        DateTimeOffset            LastActivityAt,
+        string?                   PrimaryRepoHash,
+        bool                      IsPrimary,
+        string?                   Branch,
+        string?                   Cwd,
+        string?                   LastPrompt,
+        string[]                  WriteAttemptPaths,
+        int                       WriteAttemptCount,
+        RepoSessionRepositoryDto? Repo = null
     );
 
 record RepoSessionsResponse(
         List<RepoSessionDto> Items,
         int                  Total,
         int                  Limit,
-        int                  Offset
+        int                  Offset,
+        DateTimeOffset?      Since      = null,
+        DateTimeOffset?      Until      = null,
+        string?              NextCursor = null
     );
 
 // ── Eval command types — see DEV-1433 ─────────────────────────────────────
@@ -419,6 +443,11 @@ public record EvalContextResult {
 
     [JsonPropertyName("compaction")]
     public required EvalContextCompactionSummary Compaction { get; init; }
+
+    // The server judge's declared-task block. A server that predates it sends none, and the prompts then keep the
+    // text they carry without it.
+    [JsonPropertyName("tasks")]
+    public string? Tasks { get; init; }
 }
 
 /// <summary>
@@ -614,6 +643,11 @@ record JudgeFactPayload {
     [JsonPropertyName("applies_to_session_kinds")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string[]? AppliesToSessionKinds { get; init; }
+
+    /// <summary>The scope token the fact was judged under; the server refuses the write once it no longer opens.</summary>
+    [JsonPropertyName("evidence_scope_token")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvidenceScopeToken { get; init; }
 }
 
 public record JudgeFact {
@@ -1056,6 +1090,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeErrorDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceReadErrorDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeHoldCreateRequestDto))]
+[JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceScopeHoldRequestDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceCitationsResponseDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceEventPageDto))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Eval.Evidence.EvidenceTurnPageDto))]
@@ -1075,6 +1111,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(GitCacheEntry))]
 [JsonSerializable(typeof(TranscriptBatch))]
 [JsonSerializable(typeof(SessionTitlePayload))]
+[JsonSerializable(typeof(HarnessTitleHook))]
 [JsonSerializable(typeof(WhatsDonePayload))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareRequest))]
 [JsonSerializable(typeof(Auth.CliPickerPrepareResponse))]
@@ -1669,7 +1706,11 @@ public readonly record struct LaunchAgentCommand(
         // A ClaudePermissionModes token for an interactive Claude launch; the daemon's
         // ClaudePermissionModePolicy fails closed on any other shape. Name-bound and trailing, so
         // old daemons ignore it and old servers never set it.
-        string?           PermissionMode = null
+        string?           PermissionMode = null,
+        // The agent's session start title. TitleDerived marks one cut from the prompt, which a
+        // generated title replaces; otherwise it is the caller's and stays. Null from an older server.
+        string?           Title        = null,
+        bool              TitleDerived = false
     );
 
 /// <summary>Caller-selected Codex launch posture. Valid ONLY for interactive, daemon-owned-worktree
@@ -2227,7 +2268,10 @@ public readonly record struct AgentRegistered(
         // The runtime transport this agent launched on — "pty" | "app-server". The server validates
         // it against its own launch decision and refuses a mismatch. Trailing name-bound field — an
         // older server ignores it, an older daemon never sets it (null there).
-        string? RuntimeTransport = null
+        string? RuntimeTransport = null,
+        // The session's start title, with the same meaning as on LaunchAgentCommand.
+        string? Title        = null,
+        bool    TitleDerived = false
     );
 
 public readonly record struct AgentStatusChanged(

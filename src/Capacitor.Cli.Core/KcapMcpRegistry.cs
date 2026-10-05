@@ -27,6 +27,7 @@ public static class KcapMcpRegistry {
         ["kcap-flows"]     = new("kcap-flows",     ["mcp", "flows"],     true),
         ["kcap-workitems"] = new("kcap-workitems", ["mcp", "workitems"], false),
         ["kcap-plans"]     = new("kcap-plans",     ["mcp", "plans"],     false),
+        ["kcap-handoff"]   = new("kcap-handoff",   ["mcp", "handoff"],   false),
         ["kcap-analytics"] = new("kcap-analytics", ["mcp", "analytics"], false),
         ["kcap-artefacts"] = new("kcap-artefacts", ["mcp", "artefacts"], false),
         ["kcap-knowledge"] = new("kcap-knowledge", ["mcp", "knowledge"], false),
@@ -68,6 +69,11 @@ public static class KcapMcpRegistry {
     /// (never a rejection, never re-emitted) — the server's dynamic-flow policy legitimately lists
     /// it, and every reviewer runtime must agree on that.</summary>
     public const string ReservedResultChannelId = "kcap-flow-result";
+
+    /// <summary>How long a harness with a per-server tool timeout lets one result-channel call run.
+    /// It must exceed the channel's own delivery deadline, or the harness abandons a submit that is
+    /// still riding out a server restart.</summary>
+    public static readonly TimeSpan ReservedResultChannelToolTimeout = TimeSpan.FromSeconds(300);
 
     /// <summary>The ordered catalog of every tool the reserved result channel serves — the single
     /// source of truth. <c>McpFlowResultServer</c>'s <c>tools/list</c>, Copilot's ACP

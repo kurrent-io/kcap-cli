@@ -1,3 +1,4 @@
+using System.Globalization;
 using Capacitor.Cli.Core.Harness.Kiro;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.Kiro;
@@ -165,7 +166,7 @@ public class KiroCrewSessionEndWatchTests {
     public async Task A_sub_agent_is_found_by_a_watch_started_long_after_it_spawned() {
         var spawned = DateTimeOffset.UtcNow.AddHours(-3);
         Tmp.CreateFile(["sessions", "cli", $"{Child}.json"],
-            $"{{\"session_id\": \"{Child}\", \"created_at\": \"{spawned.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}");
+            string.Create(CultureInfo.InvariantCulture, $"{{\"session_id\": \"{Child}\", \"created_at\": \"{spawned.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}"));
         Subagent("state.json", Child);
         Directory.SetLastWriteTimeUtc(Tmp.PathTo("crew", "subagents", "65eed35b"), spawned.UtcDateTime.AddSeconds(-5));
         var watch = Watch(Child);
@@ -188,7 +189,7 @@ public class KiroCrewSessionEndWatchTests {
         await Assert.That(watch.IsFinished()).IsFalse();
 
         Tmp.CreateFile(["sessions", "cli", $"{Child}.json"],
-            $"{{\"session_id\": \"{Child}\", \"created_at\": \"{spawned.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}");
+            string.Create(CultureInfo.InvariantCulture, $"{{\"session_id\": \"{Child}\", \"created_at\": \"{spawned.UtcDateTime:yyyy-MM-ddTHH:mm:ss.ffffffZ}\"}}"));
         Subagent("tombstone.json", Child);
         Directory.SetLastWriteTimeUtc(Tmp.PathTo("crew", "subagents", "65eed35b"), spawned.UtcDateTime.AddSeconds(-5));
 

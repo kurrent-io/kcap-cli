@@ -279,6 +279,23 @@ switch (command) {
         var useRepo    = args.Contains("--repo");
         var usePerTurn = args.Contains("--per-turn");
         var useGetTurn = args.Contains("--get-turn");
+        var useContinue = args.Contains("--continue");
+        var continued   = 0;
+
+        if (useContinue) {
+            var previous = PositionalSessionId(args, valueFlags: ["--get-turn"]);
+
+            if (previous is null || useRepo) {
+                Console.Error.WriteLine("Usage: kcap recap <sessionId> --continue [--force] [--chain] [--full] [--per-turn] [--get-turn <N>]");
+                Console.Error.WriteLine("  --continue needs the id of the session to continue, and does not combine with --repo.");
+
+                return 1;
+            }
+
+            continued = await Run<RecapContinuation>().RunAsync(previous, args.Contains("--force"));
+
+            if (continued == RecapContinuation.Refused) return RecapContinuation.Refused;
+        }
 
         if (useRepo) {
             return await Run<RecapCommand>().HandleRepoRecap();
@@ -289,7 +306,7 @@ switch (command) {
         var recapSessionId = ResolveSessionId(args, valueFlags: ["--get-turn"]);
 
         if (recapSessionId is null) {
-            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [--per-turn] [--get-turn <N>] [sessionId]");
+            Console.Error.WriteLine("Usage: kcap recap [--chain] [--full] [--repo] [--per-turn] [--get-turn <N>] [--continue [--force]] [sessionId]");
             Console.Error.WriteLine("  No session ID provided. Pass one explicitly, or run inside Claude Code / Codex CLI 0.81+.");
             Console.Error.WriteLine("  Use --repo to see recent session summaries for the current repository.");
             Console.Error.WriteLine("  Use --per-turn for a per-turn index, or --get-turn <N> for one turn's transcript.");
@@ -297,11 +314,7 @@ switch (command) {
             return 1;
         }
 
-        if (usePerTurn) {
-            return await Run<RecapCommand>().HandlePerTurnRecap(recapSessionId);
-        }
-
-        if (useGetTurn) {
+        if (useGetTurn && !usePerTurn) {
             var getTurnIdx = args
                 .SkipWhile(a => a != "--get-turn")
                 .Skip(1)
@@ -313,10 +326,16 @@ switch (command) {
                 return 1;
             }
 
-            return await Run<RecapCommand>().HandleGetTurn(recapSessionId, turnIndex);
+            var turnCode = await Run<RecapCommand>().HandleGetTurn(recapSessionId, turnIndex);
+
+            return turnCode != 0 ? turnCode : continued;
         }
 
-        return await Run<RecapCommand>().HandleRecap(recapSessionId, useChain, useFull);
+        var recapCode = usePerTurn
+            ? await Run<RecapCommand>().HandlePerTurnRecap(recapSessionId)
+            : await Run<RecapCommand>().HandleRecap(recapSessionId, useChain, useFull);
+
+        return recapCode != 0 ? recapCode : continued;
     }
     case "sessions":
         return await Run<SessionsCommand>().HandleAsync(args);
@@ -500,6 +519,8 @@ switch (command) {
                 return await Run<McpWorkItemsServer>().RunAsync();
             case "plans":
                 return await Run<McpPlansServer>().RunAsync();
+            case "handoff":
+                return await Run<McpHandoffServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
             case "artefacts":
@@ -860,6 +881,10 @@ switch (command) {
         return 0;
     }
     case "hook": {
+        // Blocks the agent's Read, so it skips the spool drain below.
+        if (args.Contains("--claude") && args.Contains("--plan-read")) {
+            return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));
+        }
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
         // added (removed from their Handle methods so this runs exactly once per invocation) and
@@ -954,6 +979,9 @@ static string? GetArg(string[] arguments, string flag) {
 
 string? ResolveSessionId(string[] args, int skipCount = 1, string[]? valueFlags = null) =>
     ArgParsing.ResolveSessionId(args, skipCount, valueFlags);
+
+string? PositionalSessionId(string[] args, string[]? valueFlags = null) =>
+    ArgParsing.PositionalSessionId(args, valueFlags: valueFlags);
 
 async Task PrintUsage() {
     var text = EmbeddedResources.Load("help-usage.txt");

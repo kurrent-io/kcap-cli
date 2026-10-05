@@ -20,8 +20,15 @@ public static class EvidencePageRenderer {
         ["list_authorizations"] = "authorizations[].authorization_ref"
     };
 
+    /// <summary>Selects the rendering of a first view's plan_ledger section. No judge tool reads or continues a plan ledger, so
+    /// the page it renders names no tool. Each plan's documents and tasks are cited inside it, a task once for its title_ref and
+    /// again for a stated status_ref.</summary>
+    public const string PlanLedgerTool = "read_plan_ledger";
+
     public static JudgeLedgerPage Render(int seq, string handle, string tool, string argsJson, string body) {
-        if (!RowRefFields.TryGetValue(tool, out var path)) throw new ArgumentException($"no page rendering for {tool}", nameof(tool));
+        var planLedger = tool == PlanLedgerTool;
+        string? path = null;
+        if (!planLedger && !RowRefFields.TryGetValue(tool, out path)) throw new ArgumentException($"no page rendering for {tool}", nameof(tool));
         var (array, refPath) = Split(path);
 
         using var doc = JsonDocument.Parse(body);
@@ -35,12 +42,24 @@ public static class EvidencePageRenderer {
         var turns     = new List<(string Source, int Index)>();
         var bodies    = new List<(string Ref, string Field, int? Ordinal)>();
         var detail    = new List<(string Source, long Revision, int Offset, int Length)>();
+        var cited     = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+        var ledgered  = new List<string>();
         (int Offset, int Length)? contentSpan = null;
 
         string Cite(string reference) {
             var cite = JudgeCiteHandles.Row(handle, cites.Count + 1);
             cites[cite] = reference;
             return cite;
+        }
+
+        // a ledger row shows part of an entry (one task of a snapshot, a document without its text), so its ref may be
+        // cited but the entry is not delivered until an events page serves it
+        string Citable(string reference) {
+            if (EvidenceRefText.TryParse(reference, out var r) && r.Form == EvidenceRefForm.Event) {
+                if (!cited.TryGetValue(r.SourceId, out var list)) cited[r.SourceId] = list = [];
+                list.Add(r.A);
+            }
+            return Cite(reference);
         }
 
         using var buffer = new MemoryStream();
@@ -52,6 +71,11 @@ public static class EvidencePageRenderer {
 
             foreach (var property in root.EnumerateObject()) {
                 if (property.NameEquals("next_cursor")) continue;
+
+                if (planLedger && property.NameEquals("plans") && property.Value.IsArray) {
+                    WritePlans(w, property, Citable);
+                    continue;
+                }
 
                 if (array is not null && property.NameEquals(array) && property.Value.IsArray) {
                     w.WriteStartArray(property.Name);
@@ -91,8 +115,45 @@ public static class EvidencePageRenderer {
         }
 
         var text = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
-        return new JudgeLedgerPage(seq, handle, tool, argsJson, isBody ? null : source, text,
-            source is null ? [] : Runs(source, revisions), turns, bodies, detail, cites, next is not null, next);
+        if (planLedger && root.Arr("plans") is { } plans) {
+            foreach (var plan in plans.EnumerateArray())
+                if (plan.Arr("sources") is { } lanes) ledgered.AddRange(lanes.EnumerateArray().Select(l => l.GetString()).OfType<string>());
+        }
+        var runs = planLedger || source is null ? [] : Runs(source, revisions);
+        return new JudgeLedgerPage(seq, handle, planLedger ? "" : tool, argsJson, isBody ? null : source, text, runs, turns, bodies, detail, cites, next is not null, next) {
+            LedgerSources = ledgered,
+            Citable       = [.. cited.SelectMany(c => Runs(c.Key, c.Value))]
+        };
+    }
+
+    static void WritePlans(Utf8JsonWriter w, JsonProperty plans, Func<string, string> citable) {
+        w.WriteStartArray(plans.Name);
+        foreach (var plan in plans.Value.EnumerateArray()) {
+            if (!plan.IsObject) { plan.WriteTo(w); continue; }
+            w.WriteStartObject();
+            foreach (var field in plan.EnumerateObject()) {
+                if (field.NameEquals("documents") && field.Value.IsArray) WriteCitedRows(w, field, "ref", citable);
+                else if (field.NameEquals("tasks") && field.Value.IsArray) WriteCitedRows(w, field, "title_ref", citable);
+                else field.WriteTo(w);
+            }
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+
+    static void WriteCitedRows(Utf8JsonWriter w, JsonProperty rows, string refField, Func<string, string> delivered) {
+        w.WriteStartArray(rows.Name);
+        foreach (var row in rows.Value.EnumerateArray()) {
+            if (!row.IsObject) { row.WriteTo(w); continue; }
+            w.WriteStartObject();
+            if (row.Str(refField) is { } reference) w.WriteString("cite", delivered(reference));
+            foreach (var field in row.EnumerateObject()) {
+                if (field.NameEquals("status_ref") && field.Value.IsString) w.WriteString("status_cite", delivered(field.Value.GetString()!));
+                field.WriteTo(w);
+            }
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
     }
 
     public static JudgeLedgerPage RenderSources(int seq, string handle, string argsJson, IReadOnlyList<EvidenceRunSource> sources, int from) {

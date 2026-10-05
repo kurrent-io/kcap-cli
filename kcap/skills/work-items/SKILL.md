@@ -51,6 +51,7 @@ no breakdown.
 1. **Attach the session to its work item** (if it isn't already). `declare_work_item`
    with exactly one of `issue_key`, `pr_number`, `work_item_id`, or `new_title`.
    Check `get_session_work_items` first if unsure what the session is attached to.
+   Continuing another session's work? `kcap recap <X> --continue` attaches this session to its work items (and plans) in one step.
 2. **Create the part items.** Each part is itself a work item — create one per
    sub-task with `declare_work_item` (`new_title`), keeping the id each returns.
 3. **Declare the breakdown.** `declare_work_breakdown` with `parent_id` and the
@@ -87,6 +88,16 @@ server keys it on the session, the owner and the normalized text, so declaring t
 end twice is a no-op (`created: false`). It refuses text shorter than 12 or longer than
 500 characters and "none"-style phrases — do not declare that there is nothing left.
 Loose ends are the user's; they are never converted into work items by this tool.
+
+Name the issue it is about with an optional `subject` (`PROJ-123`, `#123`, `owner/repo#123`,
+or a GitHub issue URL). When the server fetches it and finds it already closed, the result
+says so and tells you to check the remote before treating the end as unfinished.
+
+The feed files an end under a work item. An end that names an issue goes under that
+issue's item, or stands alone when the issue has none. Otherwise it goes under this
+session's primary item. When that is wrong, say where it belongs: `work_item_id` for a
+known item with no issue of its own, or `standalone: true` when it belongs to none of
+this session's work, such as an issue still to be filed. Set at most one of the two.
 
 When you finish a listed or declared loose end, close it with `close_loose_end`, naming it by
 the `loose_end_id` that `get_next_work`'s evidence or `list_loose_ends` shows. A later sighting
@@ -127,7 +138,7 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `declare_work_item` | exactly one of `issue_key` \| `pr_number` \| `work_item_id` \| `new_title` | Attach the session to a work item (or create one). `session_id` defaults to the current session. |
 | `get_session_work_items` | — | List what the current session is attached to. |
 | `get_next_work` | — | What the user should work on next, ranked, with because-clauses and evidence. `repo_hash` defaults to the current repository; `limit` defaults to 5 (max 20). |
-| `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `session_id` defaults to the current session. |
+| `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `subject` optionally names the issue it is about; `work_item_id` or `standalone` says which item it belongs under. `session_id` defaults to the current session. |
 | `list_loose_ends` | — | List loose ends with their `loose_end_id`: `status` open (default) or closed, `repo_hash` defaults to the current repository, `limit` 20 (max 50), `cursor` from `next_cursor`. |
 | `close_loose_end` | `loose_end_id` | Mark a finished loose end done. `session_id` defaults to the current session. |
 | `reopen_loose_end` | `loose_end_id` | Undo a close. |
@@ -138,6 +149,10 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `get_work_item_topology` | `work_item_id` | Read parent, parts, and dependencies (visibility-scoped). |
 | `merge_work_item` | `work_item_id`, `into_work_item_id` | Merge a duplicate into the survivor (prefer the keyed item as survivor). |
 | `detach_work_item` | `work_item_id` | Detach the session from a wrongly attached item. `session_id` defaults to the current session. |
+| `list_work_item_evals` | `work_item_id` | List the item's evaluation runs you can read, newest first; `cursor` from `next_cursor`. |
+| `get_work_item_eval` | `work_item_id`, `run_id` | Read one run's per-question results, judged requirements and retrospective. |
+| `request_work_item_eval` | `work_item_id` | Queue an evaluation (`mode` `process`, the default, or `root_cause`); returns your still-active run instead of a second one. |
+| `cancel_work_item_eval` | `work_item_id`, `run_id` | Cancel your own run while it is still queued. |
 
 ## Requirements
 

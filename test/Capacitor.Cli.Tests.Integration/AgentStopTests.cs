@@ -136,7 +136,8 @@ public class AgentStopTests {
     [Arguments("a\tRunning\t/repo\tagent", 1)]
     [Arguments("a\tRunning\t/repo\tagent\tflow", 1)]
     [Arguments("a\tRunning\t/repo\tagent\t\t", 0)]
-    [Arguments("a\tRunning\t/repo\tagent\t\t\textra", 1)]
+    [Arguments("a\tRunning\t/repo\tagent\t\t\tFix it", 0)]
+    [Arguments("a\tRunning\t/repo\tagent\t\t\tFix it\textra", 1)]
     [Arguments("a\tRunning\t/repo\nb\tRunning\t/repo\tagent", 1)]
     [Arguments("\tRunning\t/repo", 1)]
     public async Task Stop_all_refuses_the_entire_malformed_table(string table, int expected) {
@@ -157,6 +158,14 @@ public class AgentStopTests {
         await Assert.That(exitCode).IsEqualTo(0);
         await Assert.That(stdout).Contains("flow-1");
         await Assert.That(stdout).Contains("reviewer");
+    }
+
+    [Test]
+    public async Task Agent_list_displays_the_title() {
+        var (stdout, _, exitCode, _) = await RunCliAsync(["ls"], "a\tRunning\t/repo\tagent\t\t\tFix the flaky test");
+        await Assert.That(exitCode).IsEqualTo(0);
+        await Assert.That(stdout).Contains("TITLE");
+        await Assert.That(stdout).Contains("Fix the flaky test");
     }
 
     async Task<(string Stdout, string Stderr, int ExitCode, List<(bool Force, string Id)> Stops)> RunCliAsync(

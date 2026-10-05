@@ -4,9 +4,9 @@ using Capacitor.Cli.Core.Eval;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval;
 
-/// <summary>The legacy requests are pinned to the bytes they had before the evidence route existed: the text prompt (which
-/// never substitutes {TASKS}), the tools prompt, the judge MCP config, the six-tool allowlist, the retrospective prompt and
-/// the verdict schema.</summary>
+/// <summary>The legacy requests are pinned to fixed bytes when the server sends no declared-task block: the text prompt
+/// (which then leaves {TASKS} alone), the tools prompt, the judge MCP config, the six-tool allowlist, the retrospective
+/// prompt and the verdict schema.</summary>
 public class EvalServiceLegacyByteIdentityTests {
     static string Sha(string s) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(s)));
 

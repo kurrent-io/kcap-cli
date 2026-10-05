@@ -337,38 +337,24 @@
                                                                             <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
                                                                                        Classes="rowTitle" IsVisible="{Binding HasTitle}"
                                                                                        Foreground="{StaticResource KcapTextBrush}"
-                                                                                       TextTrimming="CharacterEllipsis"
-                                                                                       ToolTip.Tip="{Binding Primary}" />
-                                                                            <!-- The age sits on the right. Vendor, status and chips stay on the left
+                                                                                       TextTrimming="CharacterEllipsis" />
+                                                                            <!-- The age sits on the right. Vendor, status and machine stay on the left
                                                                                  and wrap rather than overflow the 330px rail. A WrapPanel measures
                                                                                  each child unconstrained, and the age column is measured first, so
-                                                                                 each has a cap. The tips keep the full text. -->
+                                                                                 each has a cap. The row's one tip is the status tip; no child carries
+                                                                                 its own, so hovering anywhere on the row shows the same one. -->
                                                                             <Grid ColumnDefinitions="*,Auto">
                                                                             <WrapPanel VerticalAlignment="Center">
                                                                                 <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
                                                                                         VerticalAlignment="Center" Background="Transparent"
                                                                                         IsVisible="{Binding HasVendor}"
                                                                                         AutomationProperties.Name="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}">
-                                                                                    <ToolTip.Tip>
-                                                                                        <StackPanel Spacing="1">
-                                                                                            <TextBlock Text="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}" />
-                                                                                            <TextBlock Text="{Binding ModelLabel}"
-                                                                                                       Foreground="{StaticResource KcapTextBrush}"
-                                                                                                       IsVisible="{Binding HasModel}" />
-                                                                                        </StackPanel>
-                                                                                    </ToolTip.Tip>
                                                                                     <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
                                                                                                     Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
                                                                                 </Border>
                                                                                 <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160"
+                                                                                                       ToolTip.Tip="{x:Null}"
                                                                                                        Margin="0,0,6,0" VerticalAlignment="Center" />
-                                                                                <Border Classes="railChip" IsVisible="{Binding HasModel}" CornerRadius="999" MaxWidth="150"
-                                                                                        Padding="6,2" Margin="0,0,6,0"
-                                                                                        Background="{StaticResource KcapInfoDimBrush}">
-                                                                                    <TextBlock Text="{Binding ModelLabel}" Classes="railChipLabel"
-                                                                                               Foreground="{StaticResource KcapInfoBrush}"
-                                                                                               TextTrimming="CharacterEllipsis" />
-                                                                                </Border>
                                                                                 <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
                                                                                         Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="100"
                                                                                         CornerRadius="3" Padding="4,2" Margin="0,0,6,0">
@@ -379,7 +365,6 @@
                                                                             </WrapPanel>
                                                                                 <TextBlock Grid.Column="1" Text="{Binding Meta}" Classes="railMeta"
                                                                                            MaxWidth="180" TextTrimming="CharacterEllipsis"
-                                                                                           ToolTip.Tip="{Binding Meta}"
                                                                                            Margin="8,0,0,0" HorizontalAlignment="Right"
                                                                                            Foreground="{StaticResource KcapFaintBrush}" />
                                                                             </Grid>

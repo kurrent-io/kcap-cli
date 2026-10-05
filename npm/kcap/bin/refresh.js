@@ -20,7 +20,8 @@ const fs = require("fs");
 // marker via `--if-installed`, which no-ops unless the user has previously
 // opted in (marker file present OR pre-marker install detected). A vendor entry
 // also refreshes the shared ~/.agents/skills tree, but only tops up one that is
-// already there: `plugin remove --skills` must survive an upgrade.
+// already there: `plugin remove --skills` must survive an upgrade. The daemon
+// entry needs no marker: it acts only on service units that are already installed.
 const REFRESHES = [
   ["plugin", "install", "--skills",  "--if-installed"],
   ["plugin", "install", "--codex",   "--if-installed"],
@@ -32,6 +33,7 @@ const REFRESHES = [
   ["plugin", "install", "--kiro",    "--if-installed"], // Kiro agent hooks (~/.kiro/agents/kcap.json)
   ["plugin", "install", "--antigravity", "--if-installed"], // Antigravity hooks (~/.gemini/config/plugins/kcap)
   ["plugin", "install",              "--if-installed"], // Claude
+  ["daemon", "service", "refresh"],
 ];
 
 // Runs each refresh via the given launcher (an absolute path to kcap.js).
@@ -81,6 +83,7 @@ const PLUGIN_MCP_SERVERS = {
   "kcap-artefacts": "artefacts",
   "kcap-analytics": "analytics",
   "kcap-knowledge": "knowledge",
+  "kcap-handoff":   "handoff",
 };
 
 // A command this patcher may rewrite: the shipped literal "kcap", or an

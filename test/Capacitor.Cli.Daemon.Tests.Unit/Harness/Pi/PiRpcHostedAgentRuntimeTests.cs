@@ -369,6 +369,52 @@ public class PiRpcHostedAgentRuntimeTests {
         await idle.WaitAsync(HangGuard);
     }
 
+    /// <summary>Between writing a prompt and Pi's agent_start the turn is already committed, so a
+    /// caller waiting for idleness — a borrowed snapshot's refresh, which rewrites the files the turn
+    /// reads — must not be let through in that window.</summary>
+    [Test]
+    public async Task A_written_prompt_counts_as_busy_until_its_turn_settles() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await rt.SendUserInputAsync("review this").WaitAsync(HangGuard);
+        var idle = rt.WaitForTurnIdleAsync(CancellationToken.None);
+        await Assert.That(idle.IsCompleted).IsFalse();
+
+        proc.Push(AgentStart);
+        proc.Push(AgentSettled);
+        await idle.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_prompt_pi_refuses_does_not_leave_the_runtime_busy() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        proc.OnWrite = json => {
+            if (!json.Contains("\"type\":\"prompt\"")) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            proc.Push(PromptResponse(doc.RootElement.GetProperty("id").GetString()!, success: false, error: "busy"));
+        };
+
+        await rt.SendUserInputAsync("review this").WaitAsync(HangGuard);
+
+        await rt.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_prompt_that_never_reached_pi_does_not_leave_the_runtime_busy() {
+        var (rt, proc) = NewRuntime();
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        proc.FailWrites = true;
+
+        await Assert.That(async () => await rt.SendUserInputAsync("review this")).Throws<IOException>();
+
+        await Assert.That(rt.WaitForTurnIdleAsync(CancellationToken.None).IsCompleted).IsTrue();
+    }
+
     [Test]
     public async Task An_already_streaming_session_is_busy_from_the_handshake() {
         var (rt, proc) = NewRuntime(stateResponse: GetStateResponse(isStreaming: true));

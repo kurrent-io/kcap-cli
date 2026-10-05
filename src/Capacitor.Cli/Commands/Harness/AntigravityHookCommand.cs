@@ -190,6 +190,7 @@ sealed class AntigravityHookCommand(
         var memoryTask = StartMemoryIndexTask(sessionId, scopeRoot,
             activeProfile?.DisableMemoryIndex is true,
             activeProfile?.DisableSessionGuidelines is true,
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Antigravity, harnesses),
             budget.Remaining);
 
         // Task 6: spawn-before-post. Route through the shared spool-aware poster (which
@@ -217,8 +218,7 @@ sealed class AntigravityHookCommand(
         // re-injects them as another persistent userMessage step.
         var workItemsNudge = IsFirstInvocation(payload)
             ? HarnessNudgeEmitter.Combine(
-                WorkItemsNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-                PlansNudgeEmitter.Resolve(HarnessId.Antigravity, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+                SessionNudges.Resolve(HarnessId.Antigravity, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
                 HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
                 FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Antigravity, harnesses))
             : null;
@@ -299,8 +299,9 @@ sealed class AntigravityHookCommand(
             string?    scopeRoot,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             TimeSpan   budget) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -312,7 +313,7 @@ sealed class AntigravityHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

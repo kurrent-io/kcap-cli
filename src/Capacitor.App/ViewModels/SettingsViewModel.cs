@@ -272,6 +272,11 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             var previous = await _settings.SaveNameAsync(name, _lifetime.Token);
             Message = "Name saved. Restarting the daemon…";
             var outcome = await _runMutation(request!, _lifetime.Token);
+            if (outcome is MutationOutcome.Failed { Reason: { } refusal } && RenameRefusal.ChangedNothing(outcome)) {
+                await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
+                Message = RenameRefusal.Message(refusal, name);
+                return;
+            }
             if (outcome is MutationOutcome.Failed { Reason: "cli_unsupported" }) {
                 await _settings.RestoreNameAsync(name, previous, _lifetime.Token);
                 Message = "The CLI no longer supports renaming. Update kcap and try again; the saved name was restored unless another edit changed it.";

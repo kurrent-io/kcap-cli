@@ -10,7 +10,8 @@ public static class EvidenceFirstViewReader {
     public const string Route = "evidence-first-view";
 
     static readonly IReadOnlyDictionary<string, string> ToolOfKind = new Dictionary<string, string>(StringComparer.Ordinal) {
-        ["turns"] = "list_turns", ["events"] = "read_events", ["calls"] = "list_calls", ["authorizations"] = "list_authorizations"
+        ["turns"] = "list_turns", ["events"] = "read_events", ["calls"] = "list_calls", ["authorizations"] = "list_authorizations",
+        ["plan_ledger"] = EvidencePageRenderer.PlanLedgerTool
     };
 
     /// <summary>The view when it was built, else none. <c>FailedStatus</c> is set only for a 404 or 409, which mean the scope is

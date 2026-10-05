@@ -29,15 +29,23 @@ public class EvalContextCacheTests : IDisposable {
 
     string RunRoot => Tmp.PathTo("runs");
 
+    AdmissionFence? _fence;
+
+    AdmissionFence Fence => _fence ??= new AdmissionFence(Tmp.PathTo("retiring.json"), null, _time, NullLogger<AdmissionFence>.Instance);
+
     int RunDirectories() => Directory.Exists(RunRoot) ? Directory.GetDirectories(RunRoot, EvidenceRunContext.DirectoryPrefix + "*").Length : 0;
 
-    (ServerConnection Connection, EvalContextCache Cache) Daemon() {
+    (ServerConnection Connection, EvalContextCache Cache) Daemon(TimeSpan? heldReleaseDelay = null) {
         const string ad = """{"max_tool_calls":48,"judge_byte_budget_bytes":600000,"page_budget_bytes":65536,"one_shot_limit_chars":400000,"retrospective_evidence_bytes":200000,"coverage_policy_version":"coverage-v2"}""";
-        _stub.Catalog(ad, "[]", """[{"category":"safety","id":"q1","title":"t","question_text":"q","prompt":"P {TRACE_JSON}","prompt_version":"3","needs_tools":false}]""");
+        _stub.Catalog(heldReleaseDelay is null ? ad : ad[..^1] + ",\"scope_holds\":true}", "[]", """[{"category":"safety","id":"q1","title":"t","question_text":"q","prompt":"P {TRACE_JSON}","prompt_version":"3","needs_tools":false}]""");
         var issued   = _time.GetUtcNow();
         var manifest = EvidenceServerStub.Manifest("v1", "tok", null, issued, issued.AddMinutes(30), [EvidenceServerStub.Source(EvidenceServerStub.RootSource, 0, 124_999, 1)]);
         _stub.FreshScope(manifest);
         _stub.CursorPage("tok", manifest);
+        if (heldReleaseDelay is { } delay) {
+            _stub.Route("POST", "evidence-scope/holds", 200, manifest[..^1] + ",\"held\":true}");
+            _stub.Route("DELETE", "evidence-scope/hold", 204, "", delay: delay);
+        }
         _stub.Route("GET", "evidence-turns", 200, EvidenceServerStub.TurnsPage(EvidenceServerStub.RootSource, [(0, 0, 124_999)]));
         _stub.Route("GET", "evidence-calls/summary", 200, EvidenceServerStub.Summary());
         _stub.Route("POST", "evals/v4", 200, "{}");
@@ -46,7 +54,7 @@ public class EvalContextCacheTests : IDisposable {
         var connection = new ServerConnection(config, AuthFixtures.NewTokenStore(Config.Root), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var cache      = new EvalContextCache(_time);
         _ = new EvalRunner(connection, cache, TestHarnesses.Under(Home, TestBinaries.None), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
-            NullLogger<EvalRunner>.Instance, _time) { TempRoot = RunRoot };
+            NullLogger<EvalRunner>.Instance, _time, Fence) { TempRoot = RunRoot };
         return (connection, cache);
     }
 
@@ -57,6 +65,29 @@ public class EvalContextCacheTests : IDisposable {
 
     static PrepareEvalCommand Prepare(string runId) =>
         new(runId, EvidenceServerStub.SessionId, "sonnet", false, null, [new EvalQuestionDto { Category = "safety", Id = "q1", Text = "q1", Prompt = "q1" }]);
+
+    [Test]
+    public async Task A_fenced_daemon_refuses_to_prepare_a_run() {
+        var (connection, cache) = Daemon();
+        await Assert.That(Fence.TryAcquire(() => false, out _)).IsEqualTo(AdmissionFence.AcquireResult.Acquired);
+
+        var result = await connection.PrepareEvalHandler!(Prepare("run-1"));
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(cache.Count).IsEqualTo(0);
+        await Assert.That(RunDirectories()).IsEqualTo(0);
+    }
+
+    /// <summary>A prepared run is daemon-owned work until it is finalized; the rename's busy probe
+    /// reads the cache, which this pins as non-empty after prepare.</summary>
+    [Test]
+    public async Task A_prepared_run_stays_in_the_cache_after_its_admission_ends() {
+        var (connection, cache) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+
+        await Assert.That(cache.Count).IsEqualTo(1);
+        await Assert.That(Fence.TryAcquire(() => cache.Count > 0, out _)).IsEqualTo(AdmissionFence.AcquireResult.Busy);
+    }
 
     [Test]
     public async Task Cancel_removes_the_run_directory() {
@@ -121,6 +152,22 @@ public class EvalContextCacheTests : IDisposable {
         await Assert.That(Directory.Exists(first)).IsFalse();
         await Assert.That(RunDirectoryOf(cache, "run-1")).IsNotEqualTo(first);
         await Assert.That(RunDirectories()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_slow_hold_release_never_holds_up_retiring_the_run() {
+        var (connection, cache) = Daemon(heldReleaseDelay: TimeSpan.FromSeconds(5));
+        await connection.PrepareEvalHandler!(Prepare("run-1"));
+        await Assert.That(_stub.Requests("evidence-scope/holds").Count).IsEqualTo(1);
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        await connection.CancelEvalHandler!(new CancelEvalCommand("run-1"));
+
+        await Assert.That(started.Elapsed).IsLessThan(TimeSpan.FromSeconds(3));
+        await Assert.That(RunDirectories()).IsEqualTo(0);
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (_stub.Requests("evidence-scope/hold").Count == 0 && DateTime.UtcNow < deadline) await Task.Delay(50);
+        await Assert.That(_stub.Requests("evidence-scope/hold").Count).IsEqualTo(1);
     }
 
     [Test]

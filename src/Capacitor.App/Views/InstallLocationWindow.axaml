@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Capacitor.App.Views.InstallLocationWindow"
+        Title="Kurrent Capacitor"
+        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Width="480" SizeToContent="Height"
+        CanResize="False" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource KcapCanvasBrush}"
+        ExtendClientAreaToDecorationsHint="True">
+    <Panel>
+        <Border Height="32" VerticalAlignment="Top" Background="Transparent"
+                PointerPressed="OnChromePointerPressed" />
+
+        <StackPanel Margin="36,52,36,28" Spacing="0">
+            <!-- The move itself, drawn: this app, heading into the Applications folder. -->
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="14">
+                <Border Width="64" Height="64" CornerRadius="14" ClipToBounds="True"
+                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
+                    <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png" Stretch="UniformToFill" />
+                </Border>
+                <Path VerticalAlignment="Center" Width="56" Height="16" Stretch="None"
+                      Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="2"
+                      StrokeLineCap="Round" StrokeJoin="Round"
+                      Data="M2,8 L50,8 M44,2 L50,8 L44,14" />
+                <Grid Width="64" Height="64">
+                    <Path Stretch="None" Fill="{StaticResource KcapInfoBrush}" Opacity="0.55"
+                          Data="M4,14 C4,11.8 5.8,10 8,10 L24,10 L29,15 L56,15 C58.2,15 60,16.8 60,19 L60,50 C60,52.2 58.2,54 56,54 L8,54 C5.8,54 4,52.2 4,50 Z" />
+                    <Path Stretch="None" Fill="{StaticResource KcapInfoBrush}"
+                          Data="M4,23 C4,20.8 5.8,19 8,19 L56,19 C58.2,19 60,20.8 60,23 L60,50 C60,52.2 58.2,54 56,54 L8,54 C5.8,54 4,52.2 4,50 Z" />
+                </Grid>
+            </StackPanel>
+
+            <TextBlock Margin="0,24,0,0" Text="Move to Applications"
+                       HorizontalAlignment="Center" TextAlignment="Center"
+                       FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
+                       Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock x:Name="Explanation" Margin="0,10,0,0" Width="400"
+                       HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                       FontSize="13.5" LineHeight="21"
+                       Foreground="{StaticResource KcapMutedBrush}" />
+
+            <Border x:Name="ErrorPanel" IsVisible="False" Margin="0,18,0,0" Padding="12,9"
+                    CornerRadius="8" BorderThickness="1"
+                    Background="{StaticResource KcapDangerDimBrush}"
+                    BorderBrush="{StaticResource KcapDangerBrush}">
+                <SelectableTextBlock x:Name="ErrorText" TextWrapping="Wrap"
+                                     FontSize="12.5" LineHeight="19"
+                                     Foreground="{StaticResource KcapDangerBrush}" />
+            </Border>
+
+            <StackPanel Margin="0,26,0,0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                <Button x:Name="QuitButton" Content="Quit" Classes="kcapChip" IsCancel="True" />
+                <Button x:Name="MoveButton" Content="Move to Applications" Classes="kcapPrimary" IsDefault="True" />
+            </StackPanel>
+        </StackPanel>
+    </Panel>
+</Window>

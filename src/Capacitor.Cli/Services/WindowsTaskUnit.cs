@@ -57,10 +57,17 @@ static class WindowsTaskUnit {
           + $"`kcap daemon service install`.");
     }
 
-    /// <summary>.cmd wrapper: set the captured env, then exec the daemon (no Environment element in Task XML).</summary>
+    // systemd's RestartSec=5, applied to every relaunch. No burst limit: systemd gives up after five quick
+    // failures, but a Windows task the wrapper abandons stays down until the next logon.
+    internal const int RelaunchPauseSeconds = 5;
+
+    /// <summary>.cmd wrapper: set the captured env, then run and relaunch the daemon (no Environment element in Task XML).</summary>
     public static string Wrapper(ServiceSpec spec) {
         var sb = new StringBuilder();
         sb.Append("@echo off\r\n");
+        // cmd.exe decodes a batch file in the console code page, line by line; switching to UTF-8 before the
+        // first non-ASCII line keeps a path such as C:\Users\José intact. This line and the one above are ASCII.
+        sb.Append("chcp 65001 >nul\r\n");
         // The execution MODE is part of the artifact, not inherited from the machine. Delayed expansion is
         // off by default but can be turned on for every cmd session through the Command Processor registry
         // key, and `!NAME!` expands INSIDE double quotes — so a value like `!PAYLOAD!` survives quoting and
@@ -89,19 +96,23 @@ static class WindowsTaskUnit {
         var args = new[] { "--name", ExecValue("the service id", spec.ServiceId),
                            "--log-file", ExecValue("the log path", spec.LogPath) }
             .Concat(spec.ExtraArgs.Select(a => ExecValue("a daemon argument", a)));
-        // Task Scheduler restarts nothing once the action is running — RestartOnFailure covers only a failed
-        // launch — so the wrapper is the supervisor: any non-zero exit (the daemon's own restart request, a
-        // crash, a negative NTSTATUS) runs it again after systemd's RestartSec, and exit 0 is a deliberate stop.
-        // `if errorlevel N` means ">= N", so a negative code needs its own test.
+        // Task Scheduler's RestartOnFailure covers only a task that fails to start, never the exit code of the
+        // program it ran, so the wrapper relaunches the daemon itself — the same contract as systemd's
+        // Restart=on-failure and launchd's SuccessfulExit=false: exit 0 (a stop, or a deliberate supervised
+        // refusal) ends the task, and any other exit, a requested restart included, relaunches after a pause.
+        // `ping` is the sleep: `timeout` aborts when stdin is redirected, which would also spin.
+        // A variable named ERRORLEVEL — inherited or captured — would shadow cmd's dynamic exit code.
+        sb.Append("set \"ERRORLEVEL=\"\r\n");
         sb.Append(":run\r\n");
         // The headless console has nowhere to show stderr, so a crash's last words go beside the log.
         var stderrPath = ExecValue("the stderr log path", StderrPath(spec.LogPath));
         sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)} 2>>{stderrPath}\r\n");
-        sb.Append("if not errorlevel 0 goto restart\r\n");
-        sb.Append("if errorlevel 1 goto restart\r\n");
-        sb.Append("exit /b 0\r\n");
-        sb.Append(":restart\r\n");
-        sb.Append("ping -n 6 127.0.0.1 >nul\r\n");
+        // EQU, not `if errorlevel`: that tests "at least", and a crash's exit code is negative.
+        sb.Append("if %ERRORLEVEL% EQU 0 exit /b 0\r\n");
+        // By absolute path: the captured PATH need not reach System32, and a sleep that fails to start would
+        // turn the loop into a spin. `call` keeps the line from opening with a quote, which BinaryFromWrapper
+        // reserves for the daemon's exec line.
+        sb.Append($"call \"%SystemRoot%\\System32\\PING.EXE\" -n {RelaunchPauseSeconds + 1} 127.0.0.1 >nul\r\n");
         sb.Append("goto run\r\n");
         return sb.ToString();
     }
@@ -244,16 +255,11 @@ static class WindowsTaskUnit {
     public static string? IdFromTaskName(string taskName) =>
         taskName.StartsWith(Prefix, StringComparison.Ordinal) ? taskName[Prefix.Length..] : null;
 
-    /// <summary>
-    /// The daemon binary the wrapper exec's — the first quoted token of its exec
-    /// line. <c>daemon doctor</c> checks THIS (not the wrapper's own existence),
-    /// since the wrapper can survive while the baked kcap-daemon.exe path is stale.
-    /// Reverses the <c>%%</c> cmd-escaping applied at write time.
-    /// </summary>
-    /// The environment the wrapper sets, read back from its <c>set "K=V"</c> lines with the
-    /// <c>%%</c> escaping reversed — the Windows counterpart of the launchd plist's EnvironmentVariables.
     public static string StderrPath(string logPath) => Path.ChangeExtension(logPath, ".stderr.log");
 
+    /// The environment the wrapper sets, read back from its <c>set "K=V"</c> lines with the
+    /// <c>%%</c> escaping reversed — the Windows counterpart of the launchd plist's EnvironmentVariables.
+    /// <c>set "K="</c> unsets <c>K</c> in cmd, so it is not part of the environment.
     public static Dictionary<string, string> EnvFromWrapper(string wrapperText) {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var raw in wrapperText.Split('\n')) {
@@ -261,12 +267,18 @@ static class WindowsTaskUnit {
             if (!line.StartsWith("set \"", StringComparison.Ordinal) || !line.EndsWith('"')) continue;
             var body = line[5..^1];
             var eq = body.IndexOf('=');
-            if (eq <= 0) continue;
+            if (eq <= 0 || eq == body.Length - 1) continue;
             env[body[..eq].Replace("%%", "%")] = body[(eq + 1)..].Replace("%%", "%");
         }
         return env;
     }
 
+    /// <summary>
+    /// The daemon binary the wrapper exec's — the first quoted token of its exec
+    /// line. <c>daemon doctor</c> checks THIS (not the wrapper's own existence),
+    /// since the wrapper can survive while the baked kcap-daemon.exe path is stale.
+    /// Reverses the <c>%%</c> cmd-escaping applied at write time.
+    /// </summary>
     public static string? BinaryFromWrapper(string wrapperText) {
         var line = wrapperText.Split('\n').Select(l => l.Trim()).LastOrDefault(l => l.StartsWith('"'));
         if (line is null) return null;

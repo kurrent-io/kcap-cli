@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -508,7 +509,7 @@ public static partial class EvalService {
             // raw catalog text.
             var prompt = BuildToolsQuestionPrompt(
                 ctx.ToolsPromptTemplate, ctx.SessionId, ctx.EvalRunId,
-                question with { Prompt = question.RawText ?? question.Prompt }, patterns);
+                question with { Prompt = question.RawText ?? question.Prompt }, patterns, ctx.ContextResult.Tasks);
 
             var commandPath = ResolveJudgeCommandPath();
             var mcpConfig   = BuildJudgeMcpConfig(commandPath, ctx.SessionId, baseUrl);
@@ -531,7 +532,7 @@ public static partial class EvalService {
             );
         } else {
             // The catalog's server-rendered prompt, with the runtime placeholders filled and any {CACHE_BOUNDARY} stripped.
-            var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson);
+            var prompt = BuildTextQuestionPrompt(question, ctx.SessionId, ctx.EvalRunId, ctx.TraceJson, ctx.ContextResult.Tasks);
 
             outcome = await ClaudeCliRunner.RunDetailedAsync(
                 prompt,
@@ -722,7 +723,8 @@ public static partial class EvalService {
 
     /// <summary>V4 finalize: aggregates <paramref name="assessments"/> and
     /// <paramref name="failures"/>, runs the retrospective only when at least one question was
-    /// assessed, and persists through <see cref="PersistAggregateV4Async"/>.</summary>
+    /// assessed, and persists through <see cref="PersistAggregateV4Async"/>. With no assessment but at least one failure it
+    /// persists a failure-only record and ends in <see cref="IEvalObserver.OnFailed"/>, never OnFinished.</summary>
     public static async Task<SessionEvalCompletedPayloadV4?> FinalizeAsync(
             EvalContext                            ctx,
             HttpClient                             httpClient,
@@ -735,6 +737,10 @@ public static partial class EvalService {
             CancellationToken                      ct
         ) {
         if (assessments.Count == 0) {
+            if (failures.Count > 0)
+                return await PersistFailureOnlyAsync(httpClient, baseUrl, ctx.EncodedSessionId,
+                    Aggregate(assessments, failures, ctx.EvalRunId, model, ctx.Questions), observer, time, ct);
+
             observer.OnFailed("all judge invocations failed");
 
             return null;
@@ -770,6 +776,25 @@ public static partial class EvalService {
         if (!ok) return null;
 
         observer.OnFinished(aggregate);
+
+        return aggregate;
+    }
+
+    /// <summary>Records a run whose every question failed, then reports it through
+    /// <see cref="IEvalObserver.OnFailed"/>: it is persisted, but it is not a finished evaluation.</summary>
+    static async Task<SessionEvalCompletedPayloadV4?> PersistFailureOnlyAsync(
+            HttpClient                    httpClient,
+            string                        baseUrl,
+            string                        encodedSessionId,
+            SessionEvalCompletedPayloadV4 aggregate,
+            IEvalObserver                 observer,
+            TimeProvider                  time,
+            CancellationToken             ct,
+            string?                       scopeToken = null
+        ) {
+        if (!await PersistAggregateV4Async(httpClient, baseUrl, encodedSessionId, aggregate, observer, time, ct, scopeToken)) return null;
+
+        observer.OnFailed(aggregate.Summary);
 
         return aggregate;
     }
@@ -898,6 +923,8 @@ public static partial class EvalService {
     /// failures and evidence coverage). Public seam for the daemon's wire-format contract test,
     /// mirroring <see cref="PersistAggregateV3Async"/>.
     /// </summary>
+    /// <param name="scopeToken">The evidence scope the aggregate was judged under; a 404, or a 409 naming
+    /// <c>scope_moved</c>, is then that scope refusing the write, reported as a moved scope.</param>
     public static async Task<bool> PersistAggregateV4Async(
             HttpClient                    httpClient,
             string                        baseUrl,
@@ -905,14 +932,19 @@ public static partial class EvalService {
             SessionEvalCompletedPayloadV4 aggregate,
             IEvalObserver                 observer,
             TimeProvider                  time,
-            CancellationToken             ct
+            CancellationToken             ct,
+            string?                       scopeToken = null
         ) {
         var       postUrl     = $"{baseUrl}/api/sessions/{encodedSessionId}/evals/v4";
-        var       payloadJson = JsonSerializer.Serialize(aggregate, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV4);
+        var       payloadJson = JsonSerializer.Serialize(aggregate with { EvidenceScopeToken = scopeToken }, CapacitorJsonContext.Default.SessionEvalCompletedPayloadV4);
         using var httpContent = new StringContent(payloadJson, Encoding.UTF8, "application/json");
 
         try {
             using var postResp = await httpClient.PostWithRetryAsync(postUrl, httpContent, time, ct: ct);
+            if (scopeToken is not null && await IsScopeRefusalAsync(postResp, ct)) {
+                observer.OnFailed(EvidenceScopeMovedReason);
+                return false;
+            }
             if (!postResp.IsSuccessStatusCode) {
                 observer.OnFailed($"failed to persist eval result: HTTP {(int)postResp.StatusCode}");
                 return false;
@@ -962,20 +994,34 @@ public static partial class EvalService {
 
     /// <summary>Text-path prompt: the catalog rendered prompt with runtime placeholders
     /// filled and any residual {CACHE_BOUNDARY} stripped (the server runner fills it;
-    /// the CLI judge has no cache boundary).</summary>
+    /// the CLI judge has no cache boundary). With <paramref name="tasks"/> the placeholders are filled in one
+    /// pass, so task text and the trace are never rescanned; without it the prompt keeps its literal <c>{TASKS}</c>.</summary>
     public static string BuildTextQuestionPrompt(
-            EvalQuestionDto question, string sessionId, string evalRunId, string traceJson
+            EvalQuestionDto question, string sessionId, string evalRunId, string traceJson, string? tasks = null
         ) =>
-        question.Prompt
-            .Replace("{CACHE_BOUNDARY}", "")
-            .Replace("{SESSION_ID}",  sessionId)
-            .Replace("{EVAL_RUN_ID}", evalRunId)
-            .Replace("{CATEGORY}",    question.Category)
-            .Replace("{QUESTION_ID}", question.Id)
-            .Replace("{TRACE_JSON}",  traceJson);
+        tasks is null
+            ? question.Prompt
+                .Replace("{CACHE_BOUNDARY}", "")
+                .Replace("{SESSION_ID}",  sessionId)
+                .Replace("{EVAL_RUN_ID}", evalRunId)
+                .Replace("{CATEGORY}",    question.Category)
+                .Replace("{QUESTION_ID}", question.Id)
+                .Replace("{TRACE_JSON}",  traceJson)
+            : EvidencePromptBlocks.Render(question.Prompt, new Dictionary<string, string>(StringComparer.Ordinal) {
+                ["{CACHE_BOUNDARY}"] = "", ["{SESSION_ID}"] = sessionId, ["{EVAL_RUN_ID}"] = evalRunId, ["{CATEGORY}"] = question.Category,
+                ["{QUESTION_ID}"] = question.Id, ["{TRACE_JSON}"] = traceJson, ["{TASKS}"] = tasks
+            });
+
+    /// <summary>The tools template's declared-task section, rendered at <c>{DECLARED_TASKS}</c> only when the server
+    /// sent a block, so a prompt built without one is unchanged.</summary>
+    internal const string DeclaredTasksSection =
+        "## Declared tasks\n\n"
+      + "The agent's own declared task list for the plan this session worked on, when one exists, with each task's status as this "
+      + "session recorded it; \"status not attributed\" means this session never set one. When a task list is declared, judge "
+      + "completion against it rather than against prose alone.\n\n";
 
     /// <summary>
-    /// Builds the tools-enabled per-question prompt (DEV-1486). Mirrors the
+    /// Builds the tools-enabled per-question prompt. Mirrors the
     /// text-path <see cref="BuildTextQuestionPrompt"/> but omits <c>{TRACE_JSON}</c>
     /// — the judge pulls session details on demand via MCP instead of reading
     /// them from an embedded compacted trace.
@@ -985,9 +1031,16 @@ public static partial class EvalService {
             string          sessionId,
             string          evalRunId,
             EvalQuestionDto question,
-            string          knownPatterns
+            string          knownPatterns,
+            string?         tasks = null
         ) =>
-        template
+        tasks is not null
+            ? EvidencePromptBlocks.Render(template, new Dictionary<string, string>(StringComparer.Ordinal) {
+                ["{DECLARED_TASKS}"] = DeclaredTasksSection + tasks + "\n\n", ["{SESSION_ID}"] = sessionId, ["{EVAL_RUN_ID}"] = evalRunId,
+                ["{CATEGORY}"] = question.Category, ["{QUESTION_ID}"] = question.Id, ["{QUESTION_TEXT}"] = question.Prompt, ["{KNOWN_PATTERNS}"] = knownPatterns
+            })
+            : template
+            .Replace("{DECLARED_TASKS}", "")
             .Replace("{SESSION_ID}",     sessionId)
             .Replace("{EVAL_RUN_ID}",    evalRunId)
             .Replace("{CATEGORY}",       question.Category)
@@ -1498,7 +1551,9 @@ public static partial class EvalService {
         var judged          = stamped.Count;
         var total           = judged + failures.Count;
 
-        var summary = $"Evaluated {judged}/{total} questions across {byCategory.Count} categories. "
+        var summary = judged == 0 && failures.Count > 0
+            ? FailureOnlySummary(failures)
+            : $"Evaluated {judged}/{total} questions across {byCategory.Count} categories. "
             + $"{assessedCount} assessed, {unassessedCount} not assessed. "
             + (overall is { } o ? $"Overall: {o}/5 ({VerdictForScore(o)})." : "Overall: not scored.");
 
@@ -1516,6 +1571,22 @@ public static partial class EvalService {
             CoveragePolicyVersion = CoveragePolicyVersion
         };
     }
+
+    /// <summary>"Not evaluated: all 3 questions failed (spend_budget ×2, judge_timeout ×1)" — the server builds the same
+    /// summary for a failure-only run it records itself.</summary>
+    public static string FailureOnlySummary(IReadOnlyList<EvalQuestionFailure> failures) {
+        var codes = string.Join(", ", FailureCodeCounts(failures).Select(c => $"{c.Code} ×{c.Count.ToString(CultureInfo.InvariantCulture)}"));
+
+        return $"Not evaluated: all {failures.Count.ToString(CultureInfo.InvariantCulture)} questions failed ({codes})";
+    }
+
+    /// <summary>Each code present in <paramref name="failures"/> with its count, most frequent first, then by code.</summary>
+    public static IReadOnlyList<(string Code, int Count)> FailureCodeCounts(IEnumerable<EvalQuestionFailure> failures) =>
+        [.. failures
+            .GroupBy(f => f.Code, StringComparer.Ordinal)
+            .Select(g => (Code: g.Key, Count: g.Count()))
+            .OrderByDescending(c => c.Count)
+            .ThenBy(c => c.Code, StringComparer.Ordinal)];
 
     static int CategoryOrderFromTaxonomy(string category, IReadOnlyList<EvalQuestionDto> questions) {
         var idx  = 0;
@@ -1726,14 +1797,17 @@ public static partial class EvalService {
             string[]?         appliesToSessionKinds,
             IEvalObserver     observer,
             TimeProvider      time,
-            CancellationToken ct
+            CancellationToken ct,
+            string?           scopeToken       = null,
+            Action?           onScopeRefused   = null
         ) {
         var payload = new JudgeFactPayload {
             Category              = category,
             Fact                  = fact,
             SourceEvalRunId       = evalRunId,
             AppliesToVendors      = appliesToVendors,
-            AppliesToSessionKinds = appliesToSessionKinds
+            AppliesToSessionKinds = appliesToSessionKinds,
+            EvidenceScopeToken    = scopeToken
         };
 
         var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.JudgeFactPayload);
@@ -1741,6 +1815,12 @@ public static partial class EvalService {
 
         try {
             using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/api/sessions/{encodedSessionId}/judge-facts", content, time, ct: ct);
+            if (scopeToken is not null && await IsScopeRefusalAsync(resp, ct)) {
+                observer.OnInfo($"fact for category {category} not retained: {EvidenceScopeMovedReason}");
+                onScopeRefused?.Invoke();
+
+                return false;
+            }
             if (!resp.IsSuccessStatusCode) {
                 observer.OnInfo($"failed to retain fact for category {category}: HTTP {(int)resp.StatusCode}");
 
@@ -1751,6 +1831,19 @@ public static partial class EvalService {
         } catch (HttpRequestException ex) {
             observer.OnInfo($"failed to retain fact for category {category}: {ex.Message}");
 
+            return false;
+        }
+    }
+
+    /// <summary>A 404 means the token no longer opens for this caller; a 409 is a scope refusal only when it names
+    /// <c>scope_moved</c>, since the fact route answers 409 for a session not yet projected or without a repository.</summary>
+    static async Task<bool> IsScopeRefusalAsync(HttpResponseMessage resp, CancellationToken ct) {
+        if (resp.StatusCode == System.Net.HttpStatusCode.NotFound) return true;
+        if (resp.StatusCode != System.Net.HttpStatusCode.Conflict) return false;
+        try {
+            using var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            return body.RootElement.Str("code") == "scope_moved";
+        } catch (JsonException) {
             return false;
         }
     }

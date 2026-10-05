@@ -129,6 +129,31 @@ public class SettingsViewModelTests {
         await Assert.That(vm.Message!).Contains("CLI no longer supports");
     });
 
+    /// <summary>The CLI refused before touching either service, so the saved name must not point at
+    /// another profile's service and editing stays open.</summary>
+    [Test]
+    [Arguments("target_occupied", "already installed")]
+    [Arguments("target_unknown", "Could not tell")]
+    [Arguments("agents_active", "Wait for it to finish")]
+    [Arguments("fence_unsupported", "Restart the daemon")]
+    [Arguments("fence_unavailable", "couple of minutes")]
+    public Task A_refusal_that_changed_nothing_restores_the_name_and_says_so(string reason, string message) =>
+        AvaloniaSession.RunOnUiAsync(async () => {
+            var store = Seed();
+            var relaunches = 0;
+            using var vm = Make(store, Connected(),
+                run: (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(30, reason, RecoverySurface.Attention)),
+                relaunch: _ => { relaunches++; return Task.FromResult(true); });
+            vm.Name = "renamed";
+            await vm.RenameCommand.Execute();
+            await Assert.That(store.Load().Name).IsEqualTo("daemon-a");
+            await Assert.That(relaunches).IsEqualTo(0);
+            await Assert.That(vm.Message!).Contains(message);
+            await Assert.That(vm.Message!).Contains("nothing was changed", StringComparison.OrdinalIgnoreCase);
+            await Assert.That(vm.Message!).DoesNotContain("Daemon renamed");
+            await Assert.That(vm.CanEdit).IsTrue();
+        });
+
     [Test]
     public Task Editing_gates_commands_without_saving() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = Seed();

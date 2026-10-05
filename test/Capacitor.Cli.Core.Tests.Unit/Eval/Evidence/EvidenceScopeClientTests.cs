@@ -127,6 +127,19 @@ public class EvidenceScopeClientTests : IDisposable {
     }
 
     [Test]
+    public async Task A_fresh_resolution_opts_into_plan_lanes_and_a_cursor_reopen_carries_only_the_cursor() {
+        ServeScope();
+        var client = Client(new FakeTimeProvider(S0));
+        await client.ResolveAsync(CancellationToken.None);
+        await client.ReopenAsync(CancellationToken.None);
+
+        var queries = _stub.Requests("evidence-scope").Select(e => e.RequestMessage.Query!).ToList();
+        await Assert.That(queries.Count).IsEqualTo(2);
+        await Assert.That(queries[0]["include_plans"].Single()).IsEqualTo("true");
+        await Assert.That(queries[1].ContainsKey("include_plans")).IsFalse();
+    }
+
+    [Test]
     public async Task Every_manifest_page_is_followed_and_an_eleventh_page_fails() {
         _stub.FreshScope(EvidenceServerStub.Manifest("v1", "tok-1", "c1", S0, S0.AddMinutes(30), [EvidenceServerStub.Source(EvidenceServerStub.RootSource, 0, 9, 2)]));
         _stub.CursorPage("c1", EvidenceServerStub.Manifest("v1", "tok-1", "c2", S0, S0.AddMinutes(30), [EvidenceServerStub.Source("AgentSubsession-x-a1", 0, 3, null, "subagent")]));

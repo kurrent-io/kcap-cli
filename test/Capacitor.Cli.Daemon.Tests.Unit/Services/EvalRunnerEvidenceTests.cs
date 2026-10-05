@@ -51,7 +51,8 @@ public class EvalRunnerEvidenceTests : IDisposable {
         var cache      = new EvalContextCache(TimeProvider.System);
         var probe      = claude is null ? TestBinaries.None : BinaryProbe.Searching(claude.BinDirectory);
         var runner = new EvalRunner(connection, cache, TestHarnesses.Under(Home, probe), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
-            NullLogger<EvalRunner>.Instance, time ?? TimeProvider.System) {
+            NullLogger<EvalRunner>.Instance, time ?? TimeProvider.System,
+            new AdmissionFence(Path.Combine(RunRoot, "retiring.json"), null, TimeProvider.System, NullLogger<AdmissionFence>.Instance)) {
             QuestionPhaseBudget = question ?? EvidencePhaseTimeouts.DaemonQuestion,
             FinalizePhaseBudget = finalize ?? EvidencePhaseTimeouts.DaemonFinalize,
             TempRoot            = RunRoot
@@ -233,6 +234,26 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await Assert.That(NoRunDirectory()).IsTrue();
     }
 
+    /// <summary>The server refuses the fact because its scope no longer opens: the daemon writes nothing more and its
+    /// finalize answers failure, naming the moved scope.</summary>
+    [Test]
+    public async Task A_fact_the_server_refuses_for_its_scope_fails_the_finalize_with_no_eval_posted() {
+        Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
+        Serve(1);
+        _stub.Route("POST", "judge-facts", 409, """{"error":"moved","code":"scope_moved"}""", priority: 1);
+        using var claude = Claude(Verdict("a recurring pattern"));
+        var (_, connection, _) = Daemon(claude);
+        await connection.PrepareEvalHandler!(Prepare());
+        var question = await connection.RunQuestionV2Handler!(Question());
+
+        var finalize = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [question.Assessment!], [], "sonnet"));
+
+        await Assert.That(finalize.Success).IsFalse();
+        await Assert.That(JsonDocument.Parse(_stub.Requests("judge-facts").Single().RequestMessage.Body!).RootElement.GetProperty("evidence_scope_token").GetString()).IsEqualTo("tok");
+        await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+        await Assert.That(NoRunDirectory()).IsTrue();
+    }
+
     [Test]
     public async Task A_scope_moved_at_the_retrospective_posts_neither_the_fact_nor_the_eval() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
@@ -316,7 +337,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
     }
 
     [Test]
-    public async Task One_assessed_and_one_iteration_cap_persist_together_and_all_failed_posts_nothing() {
+    public async Task One_assessed_and_one_iteration_cap_persist_together_and_all_failed_persists_a_failed_run() {
         Skip.When(OperatingSystem.IsWindows(), "the fake claude is a POSIX shell script");
         Serve(1);
         using var claude = Claude(Verdict());
@@ -335,7 +356,28 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await connection.PrepareEvalHandler!(Prepare());
         var none = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [], [cap with { QuestionId = "q1" }], "sonnet"));
         await Assert.That(none.Success).IsFalse();
-        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(1);
+        await Assert.That(none.Error).IsEqualTo("the failed run was persisted: Not evaluated: all 1 questions failed (iteration_cap ×1)");
+        await Assert.That(_stub.Requests("evals/v4").Count).IsEqualTo(2);
+        using var failed = JsonDocument.Parse(_stub.Requests("evals/v4")[1].RequestMessage.Body!);
+        await Assert.That(failed.RootElement.GetProperty("categories").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(failed.RootElement.GetProperty("coverage_policy_version").GetString()).IsEqualTo("coverage-v2");
+    }
+
+    [Test]
+    public async Task A_legacy_finalize_whose_every_question_failed_persists_the_failed_run_and_answers_failure() {
+        Serve(1, advertised: false);
+        _stub.Route("GET", "eval-context", 200, LegacyContext);
+        var (_, connection, _) = Daemon();
+        await connection.PrepareEvalHandler!(Prepare());
+
+        var result = await connection.FinalizeEvalV2Handler!(new FinalizeEvalV2Command("run-1", [],
+            [new EvalQuestionFailure { Category = "safety", QuestionId = "q1", Code = EvalFailureCodes.JudgeTimeout }], "sonnet"));
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(result.Error).IsEqualTo("the failed run was persisted: Not evaluated: all 1 questions failed (judge_timeout ×1)");
+        using var payload = JsonDocument.Parse(_stub.Requests("evals/v4").Single().RequestMessage.Body!);
+        await Assert.That(payload.RootElement.GetProperty("categories").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(payload.RootElement.GetProperty("coverage_policy_version").GetString()).IsEqualTo("coverage-v1");
     }
 
     [Test]

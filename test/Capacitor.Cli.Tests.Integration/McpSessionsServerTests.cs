@@ -215,7 +215,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("list_repo_plans")).IsTrue();
             await Assert.That(names.Contains("get_declared_plans")).IsTrue();
 
-            // Hard gates: the routing cue, the query shape that can actually hit, and the two
+            // Hard gates: the routing cue, the query shape that can actually hit, and the
             // facts about list_repo_sessions that otherwise read as a broken filter.
             var searchDesc = tools.First(t => t?["name"]?.GetValue<string>() == "search_sessions")!["description"]!.GetValue<string>();
             await Assert.That(searchDesc).Contains("before grepping the code or git log");
@@ -224,7 +224,8 @@ public class McpSessionsServerTests : IDisposable {
 
             var listDesc = tools.First(t => t?["name"]?.GetValue<string>() == "list_repo_sessions")!["description"]!.GetValue<string>();
             await Assert.That(listDesc).Contains("defaults to active");
-            await Assert.That(listDesc).Contains("no time filter");
+            await Assert.That(listDesc).Contains("next_cursor");
+            await Assert.That(listDesc).Contains("idle inside it");
         } finally {
             await ShutdownAsync(proc);
         }
@@ -248,6 +249,76 @@ public class McpSessionsServerTests : IDisposable {
 
             await Assert.That(response["result"]?["isError"]).IsNull();
             await Assert.That(text).Contains("\"session_id\":\"s-1\"");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task List_repo_sessions_with_a_period_across_repositories_returns_the_page() {
+        const string page =
+            """{"items":[{"session_id":"s-9","slug":null,"title":"Ship the window","owner":null,"vendor":"claude","status":"ended","access_level":"full","stale":false,"started_at":"2026-09-20T09:00:00+00:00","ended_at":"2026-09-20T11:00:00+00:00","last_activity_at":"2026-09-20T11:00:00+00:00","primary_repo_hash":"x","is_primary":true,"branch":"main","cwd":"/w","last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0,"repo":{"hash":"x","owner":"acme","name":"widgets"}}],"total":2,"limit":20,"offset":0,"since":"2026-09-14T00:00:00+00:00","until":null,"next_cursor":"eyJ2IjoxfQ"}""";
+
+        _server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet()
+                .WithParam("since", "2026-09-14T00:00:00Z").WithParam("state", "all").WithParam("owner", "me"))
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(page));
+
+        using var proc = SpawnMcpServer();
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var arguments = JsonNode.Parse("""{"repo":"all","since":"2026-09-14T00:00:00Z","owner":"me"}""")!.AsObject();
+            var response  = await SendRequest(proc, ToolsCallRequest(2, "list_repo_sessions", arguments));
+            var text      = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(text).Contains("\"session_id\":\"s-9\"");
+            await Assert.That(text).Contains("\"next_cursor\":\"eyJ2IjoxfQ\"");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task List_repo_sessions_on_a_server_that_ignores_the_period_is_a_tool_error() {
+        using var repo = CwdRepo("acme", "widgets");
+        var       hash = RepoHashHelper.ComputeRepoHash("acme", "widgets");
+
+        _server.Given(Request.Create().WithPath($"/api/repositories/{hash}/sessions").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"items":[{"session_id":"s-1","slug":null,"title":"Fix","owner":null,"vendor":"claude","status":"active","access_level":"full","stale":false,"started_at":"2026-09-02T09:00:00+00:00","ended_at":null,"last_activity_at":"2026-09-02T10:00:00+00:00","primary_repo_hash":null,"is_primary":true,"branch":"main","cwd":"/w","last_prompt":null,"write_attempt_paths":[],"write_attempt_count":0}],"total":1,"limit":20,"offset":0}"""));
+
+        using var proc = SpawnMcpServer(workingDirectory: repo.Path);
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var arguments = JsonNode.Parse("""{"since":"14d"}""")!.AsObject();
+            var response  = await SendRequest(proc, ToolsCallRequest(2, "list_repo_sessions", arguments));
+            var text      = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).Contains("needs a newer server");
+            await Assert.That(text).DoesNotContain("s-1");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task List_repo_sessions_across_repositories_on_an_older_server_is_a_tool_error() {
+        _server.Given(Request.Create().WithPath("/api/sessions/listing").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        using var proc = SpawnMcpServer();
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var arguments = JsonNode.Parse("""{"repo":"all"}""")!.AsObject();
+            var response  = await SendRequest(proc, ToolsCallRequest(2, "list_repo_sessions", arguments));
+            var text      = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]?.GetValue<bool>()).IsTrue();
+            await Assert.That(text).Contains("does not list sessions across repositories yet");
         } finally {
             await ShutdownAsync(proc);
         }
@@ -364,6 +435,26 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(response["result"]?["isError"]).IsNull();
             await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
             await Assert.That(projected.ContainsKey("declared_plans")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
+    public async Task Get_session_summary_omits_work_items_when_the_plan_forbids_them() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"type":"whats_done","content":"did X"}]"""));
+        _server.Given(Request.Create().WithPath("/api/work-items/session/abc").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(403).WithBody("""{"code":"work_items_not_in_plan"}"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response  = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var projected = JsonNode.Parse(response["result"]!["content"]![0]!["text"]!.GetValue<string>())!.AsObject();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+            await Assert.That(projected.ContainsKey("work_items")).IsFalse();
         } finally {
             await ShutdownAsync(proc);
         }

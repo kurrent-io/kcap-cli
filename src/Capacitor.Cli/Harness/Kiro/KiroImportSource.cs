@@ -7,6 +7,8 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Harness.Kiro;
@@ -286,7 +288,7 @@ internal sealed class KiroImportSource : IImportSource {
 
         if (anchors.Count > 0) {
             enrichedTemp = Path.Combine(Path.GetTempPath(), $"kcap-kiro-usage-{classification.SessionId}-{Guid.NewGuid():N}.jsonl");
-            var enriched = (await File.ReadAllLinesAsync(transcriptPath, ct))
+            var enriched = File.ReadLinesShared(transcriptPath)
                 .Select(l => string.IsNullOrWhiteSpace(l) ? l : KiroUsage.EnrichLine(l, anchors));
             await File.WriteAllLinesAsync(enrichedTemp, enriched, ct);
             sendPath = enrichedTemp;
@@ -311,12 +313,15 @@ internal sealed class KiroImportSource : IImportSource {
             catch { /* best effort */ }
         }
 
-        // Forward Kiro's own session title (best-effort — a title miss must not
-        // fail the import).
+        // Forward Kiro's own session title, waiting out the server's projection lag
+        // (best-effort — a title miss must not fail the import).
         if (classification.SourceMeta!.TryGetValue("Title", out var titleObj)
          && titleObj is string title
          && !string.IsNullOrWhiteSpace(title)) {
-            await PostSetTitleAsync(ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId, title, ct);
+            await ImportHarnessTitle.PostAsync(
+                ctx.HttpClient, _time, ctx.BaseUrl, classification.SessionId,
+                new HarnessTitlePost(title, HarnessTitleKind.Auto, null),
+                ctx.Progress, ct);
         }
 
         var endOk = await PostSyntheticHookAsync(
@@ -369,28 +374,12 @@ internal sealed class KiroImportSource : IImportSource {
         }
     }
 
-    static async Task PostSetTitleAsync(HttpClient client, TimeProvider time, string baseUrl, string sessionId, string title, CancellationToken ct) {
-        if (title.Length > 120) title = title[..120];
-
-        var payload = new JsonObject {
-            ["session_id"] = sessionId,
-            ["title"]      = title,
-        };
-
-        try {
-            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-            using var _       = await client.PostWithRetryAsync($"{baseUrl}/hooks/set-title", content, time, ct: ct);
-        } catch {
-            // Best effort.
-        }
-    }
-
     static DateTimeOffset? TryGetLastWriteUtc(string path) {
         try { return File.GetLastWriteTimeUtc(path); } catch { return null; }
     }
 
-    static string SafeReadText(string path) {
-        try { return File.Exists(path) ? File.ReadAllText(path) : ""; }
+    internal static string SafeReadText(string path) {
+        try { return File.Exists(path) ? File.ReadAllTextShared(path) : ""; }
         catch { return ""; }
     }
 
@@ -474,7 +463,7 @@ internal sealed record KiroSessionMeta(string? Cwd, string? Title, string? Model
     public static KiroSessionMeta? TryRead(string jsonPath) {
         try {
             if (!File.Exists(jsonPath)) return null;
-            if (JsonNode.Parse(File.ReadAllText(jsonPath)) is not JsonObject root) return null;
+            if (JsonNode.Parse(File.ReadAllTextShared(jsonPath)) is not JsonObject root) return null;
 
             return new KiroSessionMeta(
                 Cwd:       root["cwd"]?.GetValue<string>(),
