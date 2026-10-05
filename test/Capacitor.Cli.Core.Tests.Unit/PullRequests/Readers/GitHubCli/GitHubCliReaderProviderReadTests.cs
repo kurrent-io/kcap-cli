@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 
 namespace Capacitor.Cli.Core.Tests.Unit.PullRequests.Readers.GitHubCli;
@@ -310,5 +311,43 @@ public class GitHubCliReaderProviderReadTests {
         await Assert.That(read.FetchedAt).IsEqualTo(fetchedAt);
         await Assert.That(read.Data!.SnapshotStartedAt).IsEqualTo(fetchedAt);
         await Assert.That(read.Data.SnapshotCompletedAt).IsEqualTo(fetchedAt);
+    }
+
+    /// <summary>Disposing the provider at app teardown ends an in-flight shared fetch as a typed read, never an exception.</summary>
+    [Test]
+    public async Task Disposing_the_provider_mid_fetch_ends_the_read_as_tool_failed() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.WhenPending(["pr", "view"], new TaskCompletionSource<ProcessResult>());
+        await h.Provider.ProbeAsync(false, default);
+        var overview = h.Provider.OverviewAsync("session", Subject, default);
+        var checks = h.Provider.PageAsync<PullRequestCheckDto>("session", Subject, "checks", null, null, null, default);
+        h.Provider.Dispose();
+        var overviewRead = await overview.WaitAsync(TimeSpan.FromSeconds(10));
+        var checksRead = await checks.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(overviewRead.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
+        await Assert.That(overviewRead.Reason).IsEqualTo("tool_failed");
+        await Assert.That(checksRead.Kind).IsEqualTo(PullRequestReadKind.Unavailable);
+        await Assert.That(checksRead.Reason).IsEqualTo("tool_failed");
+    }
+
+    [Test]
+    public async Task A_read_after_the_provider_is_disposed_fails_without_spawning_gh() {
+        using var h = await Ready(Tmp);
+        var calls = h.Process.Calls.Count;
+        h.Provider.Dispose();
+        var read = await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(read.Reason).IsEqualTo("tool_failed");
+        await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
+    }
+
+    [Test]
+    public async Task A_cancelled_caller_still_sees_its_own_cancellation() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.WhenPending(["pr", "list"], new TaskCompletionSource<ProcessResult>());
+        await h.Provider.ProbeAsync(false, default);
+        using var cts = new CancellationTokenSource();
+        var discover = h.Provider.DiscoverAsync(new PullRequestRepository("github", "github.com", "example", "repo", "hash"), "feature", cts.Token);
+        await cts.CancelAsync();
+        await Assert.That(async () => await discover).Throws<OperationCanceledException>();
     }
 }

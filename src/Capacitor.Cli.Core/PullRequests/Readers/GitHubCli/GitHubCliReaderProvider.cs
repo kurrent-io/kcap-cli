@@ -247,5 +247,6 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
 
     public static string Repo(string host, string owner, string name) => $"{host}/{owner}/{name}";
 
-    public void Dispose() => _probeGate.Dispose();
+    // Owns the runner: disposing cancels its in-flight gh runs. _probeGate is left alone so a probe racing teardown can still release it.
+    public void Dispose() => cli.Dispose();
 }

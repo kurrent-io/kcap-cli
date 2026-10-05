@@ -20,7 +20,7 @@ internal sealed class FakeGhProcessRunner : IProcessRunner {
         Calls.Add((fileName, args, options));
         if (StartFailure is not null) throw StartFailure;
         foreach (var (prefix, reply) in _replies)
-            if (args.Length >= prefix.Length && prefix.SequenceEqual(args.Take(prefix.Length)) || prefix.All(args.Contains)) return reply();
+            if (args.Length >= prefix.Length && prefix.SequenceEqual(args.Take(prefix.Length)) || prefix.All(args.Contains)) return reply().WaitAsync(ct);
         return Task.FromResult(new ProcessResult(1, "", "unscripted: " + string.Join(' ', args), false));
     }
 
