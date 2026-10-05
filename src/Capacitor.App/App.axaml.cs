@@ -30,7 +30,6 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
-using ReactiveUI.Reactive;
 
 namespace Capacitor.App;
 
