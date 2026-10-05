@@ -38,8 +38,18 @@ sealed class McpFlowResultServer(
     const int MaxAttempts = 5;
     static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(3);
 
-    // E-0: the server no longer reads the transcript — markers deliver
-    // nothing, so the only useful guidance on failure is to retry the tool itself.
+    // An uncoded 502/503/504 or a transport failure is the server restarting. These delays sum to
+    // about three minutes, which outlasts a rolling restart. No retry starts that could run past the
+    // deadline, which keeps the call under the harness's tool timeout
+    // (KcapMcpRegistry.ReservedResultChannelToolTimeout). Resending is safe: results dedupe by round
+    // token, messages by message_id.
+    static readonly TimeSpan[] UnavailableBackoff =
+        new[] { 1, 2, 4, 8, 16, 30, 30, 30, 30, 30 }.Select(s => TimeSpan.FromSeconds(s)).ToArray();
+    static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(20);
+    internal static readonly TimeSpan DeliveryDeadline = TimeSpan.FromSeconds(240);
+
+    // The server does not read the transcript, so a marker delivers nothing; the only useful
+    // guidance on failure is to retry the tool itself.
     const string FallbackHint =
         "Retry this tool call — it is the ONLY delivery channel. Do NOT fall back to FINDINGS:/NO FINDINGS markers in your reply: the server does not read the transcript, so a marker delivers nothing.";
 
@@ -241,57 +251,105 @@ sealed class McpFlowResultServer(
         var body = new SubmitReviewerResultDto(agentId, roundToken, kind, kind == "findings" ? findings : null);
         var url  = submitUrlOverride ?? $"{apiRoot.TrimEnd('/')}/api/flows/reviewer/result";
 
-        for (var attempt = 1; attempt <= MaxAttempts; attempt++) {
-            using var response = await client.PostAsync(
-                url, JsonContent.Create(body, McpJsonContext.Default.SubmitReviewerResultDto));
-            var responseBody = await response.Content.ReadAsStringAsync();
+        // Launch race: the server's flow-assignment/round events may not be projected yet when a
+        // fast reviewer submits.
+        var reply = await PostRetryingAsync(
+            client, url, () => JsonContent.Create(body, McpJsonContext.Default.SubmitReviewerResultDto),
+            delay, code => code is "no_active_flow" or "no_open_round");
 
-            if (response.IsSuccessStatusCode)
-                return ("Result recorded. You may end your reply now.", false);
+        using var response = reply.Response;
 
-            if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
+        if (response is null)
+            return ($"Error: the Capacitor server is unreachable ({reply.Failure}).\n{FallbackHint}", true);
 
-            var errorNode = TryParse(responseBody);
-            var code      = errorNode?["error"]?.GetValue<string>();
-            var message   = errorNode?["message"]?.GetValue<string>() ?? responseBody;
+        if (response.IsSuccessStatusCode)
+            return ("Result recorded. You may end your reply now.", false);
 
-            if (code is "no_active_flow" or "no_open_round") {
-                // Launch race: the server's flow-assignment/round events may not be projected
-                // yet when a fast reviewer submits. Retry inside the tool call.
-                if (attempt < MaxAttempts) {
-                    await delay(RetryDelay);
-                    continue;
-                }
-                return ($"Error: {message}\n{FallbackHint}", true);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+            return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
+
+        return reply.Code switch {
+            "no_active_flow" or "no_open_round" => ($"Error: {reply.Message}\n{FallbackHint}", true),
+            // No retry hint: the round is already closed, so the result must be discarded, never redelivered.
+            "stale_round_token" => ($"Error: {reply.Message}", true),
+            // Retrying inside this tool call cannot outlast a read-model rebuild.
+            "server_catching_up" => ($"Error: {reply.Message}\n{McpFlowsServer.ServerCatchingUpGuidance}", true),
+            _ => ($"Error: HTTP {(int)response.StatusCode} — {reply.Message}\n{FallbackHint}", true)
+        };
+    }
+
+    /// <summary>POSTs a fresh body per attempt until the server answers with something other than
+    /// restart noise or a coded refusal <paramref name="isRace"/> names, within the retry budgets.
+    /// No retry of either kind starts unless it can finish inside <see cref="DeliveryDeadline"/>.
+    /// A null response means the restart window was spent; <c>Failure</c> then says what the last
+    /// attempt saw.</summary>
+    async Task<(HttpResponseMessage? Response, string? Code, string Message, string? Failure)> PostRetryingAsync(
+            HttpClient           client,
+            string               url,
+            Func<HttpContent>    content,
+            Func<TimeSpan, Task> delay,
+            Func<string?, bool>  isRace,
+            CancellationToken    ct = default
+        ) {
+        var started     = time.GetTimestamp();
+        var races       = 0;
+        var unavailable = 0;
+
+        while (true) {
+            HttpResponseMessage? response = null;
+            string?              failure;
+
+            try {
+                using var timeout = new CancellationTokenSource(AttemptTimeout, time);
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+
+                response = await client.PostAsync(url, content(), attempt.Token);
+                failure  = null;
+            } catch (HttpRequestException ex) {
+                failure = ex.Message;
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                failure = "the request timed out";
             }
 
-            if (code == "stale_round_token")
-                // Deliberately NO retry hint: a stale round token means this round is already
-                // closed — the result must be discarded, never redelivered (spec-review round 2
-                // finding; the round-token guard).
-                return ($"Error: {message}", true);
+            if (response is not null && !response.IsSuccessStatusCode && response.StatusCode != HttpStatusCode.Unauthorized) {
+                var text    = await response.Content.ReadAsStringAsync(ct);
+                var error   = TryParse(text);
+                var code    = error?["error"]?.GetValue<string>();
+                var message = error?["message"]?.GetValue<string>() ?? text;
 
-            if (code == "server_catching_up")
-                // Retrying inside this tool call cannot outlast a read-model rebuild; surface the
-                // guidance and let the agent decide.
-                return ($"Error: {message}\n{McpFlowsServer.ServerCatchingUpGuidance}", true);
+                // A coded 503 is the server answering, not a proxy in front of a restarting one.
+                if (code is null && (int)response.StatusCode is 502 or 503 or 504) {
+                    failure = $"HTTP {(int)response.StatusCode}";
+                } else if (isRace(code) && ++races < MaxAttempts && FitsDeadline(RetryDelay)) {
+                    response.Dispose();
+                    await delay(RetryDelay);
+                    continue;
+                } else {
+                    return (response, code, message, null);
+                }
+            }
 
-            return ($"Error: HTTP {(int)response.StatusCode} — {message}\n{FallbackHint}", true);
+            if (failure is null) return (response, null, "", null);
+
+            response?.Dispose();
+
+            if (unavailable == UnavailableBackoff.Length || !FitsDeadline(UnavailableBackoff[unavailable]))
+                return (null, null, "", failure);
+
+            await delay(UnavailableBackoff[unavailable++]);
         }
 
-        return ("Error: unreachable", true); // loop always returns
+        bool FitsDeadline(TimeSpan nextDelay) =>
+            time.GetElapsedTime(started) + nextDelay + AttemptTimeout <= DeliveryDeadline;
 
         static JsonObject? TryParse(string s) {
             try { return JsonNode.Parse(s)?.AsObject(); } catch { return null; }
         }
     }
 
-    /// <summary> E-c: validation + POST + retry policy for the participant's out-of-band
-    /// note to the driver. Mirrors SubmitCoreAsync's structure. <paramref name="messageId"/> is
-    /// generated ONCE per tool call (by the caller's default) and reused across every retry
-    /// attempt below, so the server can dedupe a redelivered POST instead of recording the same
-    /// note twice. Injectable so tests can pin a stable id. Never throws for expected failures.
+    /// <summary>Validation + POST + retry policy for the participant's out-of-band note to the
+    /// driver. <paramref name="messageId"/> is generated once per tool call and reused by every
+    /// attempt, so the server can dedupe a redelivered POST. Never throws for expected failures.
     /// </summary>
     internal async Task<(string Text, bool IsError)> SendMessageCoreAsync(
             HttpClient           client,
@@ -314,49 +372,32 @@ sealed class McpFlowResultServer(
         var body = new SendFlowMessageDto(agentId, messageId ?? Guid.NewGuid().ToString("N"), text);
         var url  = messageUrlOverride ?? $"{apiRoot.TrimEnd('/')}/api/flows/participant/message";
 
-        for (var attempt = 1; attempt <= MaxAttempts; attempt++) {
-            using var response = await client.PostAsync(
-                url, JsonContent.Create(body, McpJsonContext.Default.SendFlowMessageDto));
+        // Launch race or a concurrent writer on the same flow's fold; every attempt carries the same
+        // message_id, so a redelivered POST dedupes instead of double-recording.
+        var reply = await PostRetryingAsync(
+            client, url, () => JsonContent.Create(body, McpJsonContext.Default.SendFlowMessageDto),
+            delay, code => code is "no_active_flow" or "concurrent_update");
 
-            if (response.IsSuccessStatusCode)
-                return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);
+        using var response = reply.Response;
 
-            if (response.StatusCode == HttpStatusCode.Unauthorized)
-                return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
+        if (response is null)
+            // No retry hint: a new call mints a new message_id, so a send that landed unanswered
+            // would reach the driver twice.
+            return ($"Error: the Capacitor server is unreachable ({reply.Failure}). The message may or may not have reached the flow driver; sending it again could deliver it twice.", true);
 
-            var responseBody = await response.Content.ReadAsStringAsync();
-            var errorNode    = TryParse(responseBody);
-            var code         = errorNode?["error"]?.GetValue<string>();
-            var message      = errorNode?["message"]?.GetValue<string>() ?? responseBody;
+        if (response.IsSuccessStatusCode)
+            return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);
 
-            if (code is "no_active_flow" or "concurrent_update") {
-                // Launch race or a concurrent writer on the same flow's fold — retry with the
-                // SAME message_id so a redelivered POST dedupes instead of double-recording.
-                if (attempt < MaxAttempts) {
-                    await delay(RetryDelay);
-                    continue;
-                }
-                return ($"Error: {message}", true);
-            }
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+            return (await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), true);
 
-            if (code == "run_closed")
-                // Terminal: the flow is already closed, so there is no driver left to deliver
-                // this message to. No retry — unlike no_active_flow, more attempts can't help.
-                return ($"Error: {message}", true);
-
-            if (code == "server_catching_up")
-                // Retrying inside this tool call cannot outlast a read-model rebuild; surface the
-                // guidance and let the agent decide.
-                return ($"Error: {message}\n{McpFlowsServer.ServerCatchingUpGuidance}", true);
-
-            return ($"Error: HTTP {(int)response.StatusCode} — {message}", true);
-        }
-
-        return ("Error: unreachable", true); // loop always returns
-
-        static JsonObject? TryParse(string s) {
-            try { return JsonNode.Parse(s)?.AsObject(); } catch { return null; }
-        }
+        return reply.Code switch {
+            "no_active_flow" or "concurrent_update" => ($"Error: {reply.Message}", true),
+            // Terminal: the flow is closed, so there is no driver left to deliver this message to.
+            "run_closed" => ($"Error: {reply.Message}", true),
+            "server_catching_up" => ($"Error: {reply.Message}\n{McpFlowsServer.ServerCatchingUpGuidance}", true),
+            _ => ($"Error: HTTP {(int)response.StatusCode} — {reply.Message}", true)
+        };
     }
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>

@@ -898,6 +898,29 @@ sealed class SetupCommand(
                     .ShowDefaultValue());
         }
 
+        // Built from the profile login stored the token under: discovery may have switched it after startup.
+        var snapshot   = await AppConfig.LoadProfileConfig(config);
+        var loggedInto   = new ProfileContext(
+            new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
+
+        while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
+              + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
+              + "The server refuses a second daemon with the same name.[/]");
+
+            if (noPrompt) {
+                await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+
+                return 1;
+            }
+
+            daemonName = AnsiConsole.Prompt(
+                new TextPrompt<string>("Daemon name:")
+                    .DefaultValue($"{daemonName}-{MachineSlug()}")
+                    .ShowDefaultValue());
+        }
+
         await Console.Out.WriteLineAsync();
 
         // Save config
@@ -1505,6 +1528,25 @@ sealed class SetupCommand(
         }
     }
 
+    async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
+            string serverUrl, ProfileContext loggedInto, string daemonName) {
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl, loggedInto);
+            using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
+
+            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, config);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    static string MachineSlug() {
+        var slug = new string(Environment.MachineName.ToLowerInvariant()
+            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+
+        return slug.Length > 0 ? slug : "2";
+    }
+
     /// <inheritdoc cref="ChosenServerHttp.For"/>
     internal ServiceProvider HttpForChosenServer(string serverUrl, ProfileContext? chosen = null) =>
         chosenHttp.For(serverUrl, chosen);
@@ -1524,7 +1566,7 @@ sealed class SetupCommand(
         IReadOnlyList<IImportSource> all = [
             new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
             new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
-            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time),
+            new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time, titlePaths: cursor),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
             new KiroImportSource(config, harnesses.Of<KiroHarness>().Paths.SessionsDir, harnesses.Of<KiroHarness>().Crew, router, time),

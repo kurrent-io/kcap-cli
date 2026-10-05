@@ -83,6 +83,14 @@ public class KiroImportSourceImportTests : IDisposable {
         var resolved = ImportCommand.ResolveRoutedOutcomeForCounting(
             classified[0].Status, result.Outcome, result.SentChildContent);
         await Assert.That(resolved).IsNull();
+
+        // /hooks/harness-title is unstubbed (bare 404 → RouteMissing), so the title falls back to
+        // /hooks/set-title (stubbed above) — but the harness-title attempt still carries the kind
+        // Kiro always forwards (its own store carries no user-named distinction).
+        var titleAttempt = _server.FindLogEntries(Request.Create().WithPath("/hooks/harness-title").UsingPost());
+        await Assert.That(titleAttempt.Count).IsEqualTo(1);
+        var titleBody = System.Text.Json.Nodes.JsonNode.Parse(titleAttempt[0].RequestMessage.Body!)!;
+        await Assert.That(titleBody["kind"]!.GetValue<string>()).IsEqualTo("auto");
     }
 
     /// <summary>The server takes a bounded batch of children per session-start, so a Crew chat with more

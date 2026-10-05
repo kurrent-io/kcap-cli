@@ -69,10 +69,11 @@ public static partial class EvalService {
         var root = tempRoot ?? Path.GetTempPath();
         EvidenceRunContext.SweepStale(root, time, observer.OnInfo);
         var context  = EvidenceRunContext.Create(evalRunId, root);
+        var scope    = new EvidenceScopeClient(httpClient, baseUrl, sessionId, time, holds: ad.ScopeHolds == true);
         var prepared = false;
         try {
-            var scope  = new EvidenceScopeClient(httpClient, baseUrl, sessionId, time);
             var status = await scope.ResolveAsync(ct);
+            if (scope.HoldRefused) observer.OnInfo("the server could not hold this evidence scope; a session that grows during the run can end it");
             if (status != EvidenceScopeStatus.Ok) {
                 observer.OnFailed(status switch {
                     EvidenceScopeStatus.NotVisible => "session not found or not visible",
@@ -113,6 +114,8 @@ public static partial class EvalService {
             };
         } finally {
             if (!prepared) {
+                await scope.DisposeAsync();
+                if (scope.ReleaseFailure is { } failure) observer.OnInfo(failure);
                 try { await context.DisposeAsync(); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { observer.OnInfo($"could not remove {context.RunDirectory}: {e.Message}"); }
             }
@@ -301,13 +304,16 @@ public static partial class EvalService {
             IReadOnlyList<EvalQuestionFailure> failures, string model, IEvalObserver observer, TimeProvider time, CancellationToken ct) {
         if (assessments.Count == 0) {
             setup.Context.DiscardRetainedFacts();
-            observer.OnFailed("all judge invocations failed");
-            return null;
+            if (failures.Count == 0) {
+                observer.OnFailed("all judge invocations failed");
+                return null;
+            }
+            if (await setup.Scope.EnsureScopeAsync(EvidenceScopeClient.PreDrainHeadroom, ct) == EvidenceScopeStatus.Moved) return ScopeMoved(setup, observer);
+            return await PersistFailureOnlyAsync(httpClient, baseUrl, setup.EncodedSessionId, EvidenceAggregate(setup, assessments, failures, model), observer, time, ct,
+                setup.Scope.State!.Token);
         }
 
-        var aggregate = Aggregate(assessments, failures, setup.EvalRunId, model, setup.Questions) with {
-            FactsUsed = [], CoveragePolicyVersion = EvidenceCoveragePolicyVersion, EvidenceScopeVersion = setup.Scope.State!.ScopeVersion
-        };
+        var aggregate = EvidenceAggregate(setup, assessments, failures, model);
 
         EvalRetrospectiveV2? retrospective = null;
         var clean = true;
@@ -333,22 +339,35 @@ public static partial class EvalService {
             observer.OnInfo($"retained facts discarded: the pre-drain admission check failed ({setup.Scope.LastError ?? admitted.ToString()})");
             clean = false;
         }
+        // The writes name the scope they were judged under, so the server refuses them once it no longer opens; a
+        // refused fact ends the run before anything else is written.
+        var scopeToken = setup.Scope.State!.Token;
+        var refused    = false;
         if (clean)
-            await setup.Context.DrainRetainedFactsAsync((category, fact, token) => PostJudgeFactAsync(httpClient, baseUrl, setup.EncodedSessionId, category, fact.Fact,
-                setup.EvalRunId, fact.AppliesToVendors, fact.AppliesToSessionKinds, observer, time, token), observer, ct);
+            await setup.Context.DrainRetainedFactsAsync((category, fact, token) => refused ? Task.FromResult(false)
+                : PostJudgeFactAsync(httpClient, baseUrl, setup.EncodedSessionId, category, fact.Fact, setup.EvalRunId, fact.AppliesToVendors,
+                    fact.AppliesToSessionKinds, observer, time, token, scopeToken, () => refused = true), observer, ct);
         else
             setup.Context.DiscardRetainedFacts();
+        if (refused) return ScopeMoved(setup, observer);
 
-        if (!await PersistAggregateV4Async(httpClient, baseUrl, setup.EncodedSessionId, aggregate, observer, time, ct)) return null;
+        if (!await PersistAggregateV4Async(httpClient, baseUrl, setup.EncodedSessionId, aggregate, observer, time, ct, scopeToken)) return null;
         observer.OnFinished(aggregate);
         return aggregate;
     }
 
-    /// <summary>Deletes the run directory, logging rather than throwing when it cannot be removed.</summary>
+    /// <summary>Releases the scope's hold and deletes the run directory, reporting rather than throwing when either fails.</summary>
     public static async Task DisposeSetupAsync(EvidenceRunSetup setup, IEvalObserver observer) {
         try { await setup.DisposeAsync(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { observer.OnInfo($"could not remove {setup.Context.RunDirectory}: {e.Message}"); }
+        if (setup.Scope.ReleaseFailure is { } failure) observer.OnInfo(failure);
     }
+
+    static SessionEvalCompletedPayloadV4 EvidenceAggregate(EvidenceRunSetup setup, IReadOnlyList<EvalQuestionAssessment> assessments,
+            IReadOnlyList<EvalQuestionFailure> failures, string model) =>
+        Aggregate(assessments, failures, setup.EvalRunId, model, setup.Questions) with {
+            FactsUsed = [], CoveragePolicyVersion = EvidenceCoveragePolicyVersion, EvidenceScopeVersion = setup.Scope.State!.ScopeVersion
+        };
 
     static SessionEvalCompletedPayloadV4? ScopeMoved(EvidenceRunSetup setup, IEvalObserver observer) {
         setup.Context.DiscardRetainedFacts();

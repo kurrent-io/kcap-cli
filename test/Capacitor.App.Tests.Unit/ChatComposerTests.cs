@@ -200,10 +200,19 @@ public class ChatComposerTests {
     [Test]
     public async Task Participant_notice_mirrors_the_daemon_protection_reason() {
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true))).IsEqualTo("");
-        await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "review"))).IsEqualTo("review agent");
+        await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "review"))).IsEqualTo("");
         await Assert.That(ChatTabViewModel.ParticipantNotice(
             Agent("a", "claude", true, kind: "review-flow") with { FlowRunId = "f1" })).IsEqualTo("review-flow agent (flow f1)");
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "sidekick"))).IsEqualTo("sidekick agent");
+    }
+
+    /// A review agent takes text but no files: both daemon lanes refuse its attachments, so offering
+    /// the picker would upload files only for the send to fail.
+    [Test]
+    public async Task Only_a_plain_agent_takes_attachments() {
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true), ended: false).TakesAttachments).IsTrue();
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true, kind: "review"), ended: false).TakesAttachments).IsFalse();
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true, kind: "review-flow"), ended: false).TakesAttachments).IsFalse();
     }
 
     /// Thread identity: the hint's own change lands on the UI thread even when the terminal's

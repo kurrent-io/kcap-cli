@@ -21,7 +21,8 @@
     "subagent_completed": ["payload"],
     "interrupt_issued": ["payload"],
     "interrupt_resolved": ["payload"],
-    "other": ["payload"]
+    "other": ["payload"],
+    "plan_entry": ["payload", "text"]
   },
   "shared_body_key_fields": ["arguments", "call"],
   "row_ref_fields": {

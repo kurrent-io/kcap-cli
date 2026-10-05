@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
+using Capacitor.Cli.Core.Http;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -213,7 +214,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _tokens          = tokens;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
-        _eventQueue      = new(config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient());
+
+        // A refused bearer is logged with its expiry and the server's error code on both lanes that
+        // carry it, so a 401 can be told apart from a lapsed token without the server's log.
+        void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+
+        _eventQueue = new(
+            config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
+            new HttpClient(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() }));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
@@ -224,6 +232,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
                         return resolution.Tokens?.AccessToken;
                     };
+                    options.HttpMessageHandlerFactory = inner =>
+                        new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
+                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
+                        context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
                 }
             )
             .WithAutomaticReconnect(new RetryPolicy())
@@ -854,14 +866,31 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     internal virtual Task SendRepoPathsAsync(string[] repoPaths)
         => _hub.InvokeAsync("DaemonUpdateRepoPaths", repoPaths, cancellationToken: _ct);
 
+    /// <summary>Pushes a locally generated title through the same <c>UpdateTitle</c> hub method
+    /// the watcher uses for its own LLM-refined titles — the arity is frozen, so the four token
+    /// counts and the model are always sent as null/zero from here.</summary>
+    internal virtual async Task<bool> UpdateTitleAsync(string sessionId, string title, CancellationToken ct) {
+        try {
+            await _hub.InvokeAsync("UpdateTitle", sessionId, title, null, 0L, 0L, 0L, 0L, cancellationToken: ct);
+            return true;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "UpdateTitle send failed for session {SessionId}", sessionId);
+            return false;
+        }
+    }
+
     // Outgoing messages to server
     public virtual Task AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null)
+            string? runtimeTransport = null, AgentStartTitle? title = null)
         => _hub.InvokeAsync(
             "AgentRegistered",
-            new AgentRegistered(agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport),
+            new AgentRegistered(
+                agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
+                title?.Text, title?.Derived ?? false),
             cancellationToken: _ct);
 
     /// <summary>

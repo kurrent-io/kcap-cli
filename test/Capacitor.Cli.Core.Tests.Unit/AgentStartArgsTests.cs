@@ -91,4 +91,71 @@ public class AgentStartArgsTests {
         await Assert.That(AgentStartArgs.Parse(["claude", "--name", "dev"]).Error).IsNotNull();
         await Assert.That(AgentStartArgs.Parse(["claude", "--detached"]).Error).IsNotNull();
     }
+
+    [Test]
+    public async Task Title_flag_is_parsed_and_becomes_an_explicit_start_title() {
+        var a = AgentStartArgs.Parse(["claude", "--title", "Fix login", "--", "fix the login redirect"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("Fix login");
+        await Assert.That(a.StartTitle).IsEqualTo(new AgentStartTitle("Fix login", Derived: false));
+    }
+
+    [Test]
+    public async Task Without_a_title_the_prompt_gives_a_derived_start_title() {
+        var a = AgentStartArgs.Parse(["claude", "--", "--model", "opus", "fix the login redirect"]);
+
+        await Assert.That(a.Title).IsNull();
+        await Assert.That(a.StartTitle).IsEqualTo(new AgentStartTitle("fix the login redirect", Derived: true));
+    }
+
+    [Test]
+    public async Task Title_flag_requires_a_value() {
+        var a = AgentStartArgs.Parse(["claude", "--title"]);
+
+        await Assert.That(a.Error).IsEqualTo("--title requires a value");
+    }
+
+    [Test]
+    public async Task Title_flag_followed_by_another_flag_is_an_error() {
+        var a = AgentStartArgs.Parse(["claude", "--title", "--private"]);
+
+        await Assert.That(a.Error).IsEqualTo("--title requires a value");
+        await Assert.That(a.Title).IsNull();
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("   ")]
+    public async Task Blank_title_is_an_error(string blank) {
+        var a = AgentStartArgs.Parse(["claude", "--title", blank]);
+
+        await Assert.That(a.Error).IsEqualTo("--title must not be blank");
+        await Assert.That(a.Title).IsNull();
+    }
+
+    [Test]
+    public async Task Title_in_equals_form_may_start_with_a_dash() {
+        var a = AgentStartArgs.Parse(["claude", "--title=-WIP- fix"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("-WIP- fix");
+    }
+
+    [Test]
+    public async Task Title_in_spaced_form_may_start_with_a_dash() {
+        var a = AgentStartArgs.Parse(["claude", "--title", "-WIP- fix", "--private"]);
+
+        await Assert.That(a.Error).IsNull();
+        await Assert.That(a.Title).IsEqualTo("-WIP- fix");
+        await Assert.That(a.Private).IsTrue();
+    }
+
+    [Test]
+    public async Task Empty_equals_form_title_is_an_error() {
+        var a = AgentStartArgs.Parse(["claude", "--title="]);
+
+        await Assert.That(a.Error).IsEqualTo("--title must not be blank");
+        await Assert.That(a.Title).IsNull();
+    }
 }

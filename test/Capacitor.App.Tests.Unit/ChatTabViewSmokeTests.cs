@@ -37,6 +37,7 @@ public class ChatTabViewSmokeTests {
     const string UserLine = """{"type":"user","message":{"role":"user","content":"hello"}}""";
     const string AssistantLinkLine = """{"type":"assistant","message":{"content":[{"type":"text","text":"See [docs](https://example.com/docs) now."}]}}""";
     const string ToolCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
+    const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
     const string ToolResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
     const string ToolErrorLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}""";
     static readonly TimeSpan CrDelay = TimeSpan.FromMilliseconds(150);
@@ -488,9 +489,11 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.IsVisible).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "queued follow-up")).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsFalse();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsTrue();
             host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Completed" });
             host.Settle();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
             await host.AppendLinesAndTickAsync(path, UserLine.Replace("hello", "queued follow-up"));
             await Assert.That(banner.IsVisible).IsFalse();
             await host.CloseAsync();
@@ -816,6 +819,27 @@ public class ChatTabViewSmokeTests {
             await Assert.That(glyph.Foreground).IsSameReferenceAs(Brush(isError: false));
             await Assert.That(host.View.GetVisualDescendants().OfType<Border>()
                 .Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(0);
+            // A pill that is not shown must not be on the clock either: an idle marker that still
+            // ticks keeps the timer, and the window's render pass, alive for nothing.
+            await Assert.That(host.View.GetVisualDescendants().OfType<Visual>().Any(PulseClock.GetIsActive)).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    /// Reasoning is plain muted text under its own chip, not Markdown: it reads like the terminal's
+    /// bullet and costs no document layout.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_thinking_row_renders_its_text_under_a_thinking_chip() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("think.jsonl", [ThinkingLine]));
+            await Assert.That(host.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(new[] { nameof(AssistantThinkingItem) });
+
+            var blocks = host.View.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).ToList();
+            await Assert.That(blocks.Select(t => t.Text)).Contains("Thinking");
+            var body = blocks.Single(t => t.Text == "weighing it");
+            await Assert.That(body.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await host.CloseAsync();
         });
     }
@@ -833,6 +857,7 @@ public class ChatTabViewSmokeTests {
             var pulse = ToolRows(host.View)[0].GetVisualDescendants().OfType<Border>()
                 .Single(b => b.Classes.Contains("toolRunning") && b.IsVisible);
             await Assert.That(pulse.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapWarningBrush"));
+            await Assert.That(PulseClock.GetIsActive(pulse)).IsTrue();
             var detail = ToolRows(host.View)[0].GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.IsEffectivelyVisible && t.Text == "ls -la");
             await Assert.That(detail.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
@@ -1601,8 +1626,11 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
             var queued = host.View.FindControl<Border>("QueuedMessagesBanner")!;
-            var note = host.View.FindControl<StackPanel>("ChatActivityNote")!;
+            var note = host.View.FindControl<TextBlock>("ChatActivityNote")!;
             var composer = host.View.FindControl<Border>("ComposerCard")!;
+            var band = host.View.FindControl<Border>("ComposerBand")!;
+            foreach (Control part in new Control[] { banner, queued, note, composer })
+                await Assert.That(part.GetVisualAncestors().Contains(band)).IsTrue().Because($"{part.Name} belongs in the composer band");
             await Assert.That(banner.IsVisible).IsFalse();
             await Assert.That(Grid.GetRow(banner)).IsLessThan(Grid.GetRow(queued));
             await Assert.That(Grid.GetRow(queued)).IsLessThan(Grid.GetRow(note));

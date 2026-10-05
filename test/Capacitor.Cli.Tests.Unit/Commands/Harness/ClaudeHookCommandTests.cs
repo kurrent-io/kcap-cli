@@ -396,6 +396,51 @@ public class ClaudeHookCommandTests {
         await Assert.That(stdout).Contains("Team memory");
     }
 
+    const string ProactiveCatalog = """{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}""";
+
+    [Test, NotInParallel]
+    public async Task session_start_offers_proactive_flows_when_kcap_flows_is_registered() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+        fx.RegisterClaudeMcpServer("kcap-flows");
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout).Contains("Flows you may offer");
+        await Assert.That(stdout).Contains("- code-review: After a change is complete.");
+    }
+
+    [Test, NotInParallel]
+    public async Task without_the_flows_mcp_server_flows_are_neither_requested_nor_offered() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
+        await Assert.That(stdout).DoesNotContain("Flows you may offer");
+    }
+
+    [Test, NotInParallel]
+    public async Task with_memory_disabled_the_flows_offer_still_arrives() {
+        using var absent = new TempDir();
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisableMemoryIndex = true }) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+        fx.RegisterClaudeMcpServer("kcap-flows");
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (_, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(absent)}}","source":"startup"}"""));
+
+        await Assert.That(stdout).Contains("Flows you may offer");
+        await Assert.That(fx.MemoryIndexRequested).IsFalse();
+    }
+
     [Test, NotInParallel]
     public async Task session_start_with_an_empty_memory_index_array_emits_nothing() {
         // CompleteWithoutContext disposition (a successful, empty fetch) — with no lessons/nudge
@@ -564,6 +609,172 @@ public class ClaudeHookCommandTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stdout).IsEqualTo("");
         await Assert.That(fx.SpoolFiles.Any()).IsTrue(); // still durably spooled for retry
+    }
+
+    [Test, NotInParallel]
+    public async Task session_start_states_the_session_id_when_no_nudge_carries_it() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-flows");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout).Contains("Kurrent Capacitor session id:");
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains($"Kurrent Capacitor session id: `{sid}`.");
+    }
+
+    [Test, NotInParallel]
+    public async Task session_start_leaves_the_session_id_line_out_when_the_work_items_nudge_carries_the_id() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains("## Work items");
+        await Assert.That(ctx).Contains($"`{sid}`");
+        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
+    }
+
+    /// <summary>Pins that a memory index far past Claude Code's context cap is what gets trimmed, not
+    /// the plans nudge: the index alone must exceed the cap, otherwise this proves nothing.</summary>
+    [Test, NotInParallel]
+    public async Task session_start_keeps_the_plans_nudge_when_the_memory_index_overflows_the_context_cap() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var entries = Enumerable.Range(0, 150).Select(i => new JsonObject {
+            ["memory_id"] = $"m{i}", ["slug"] = $"slug-{i}", ["audience"] = "team",
+            ["description"] = new string('d', 200), ["kind"] = "project",
+        });
+        fx.MemoryIndexBody = new JsonArray([.. entries]).ToJsonString();
+        var fullIndex = MemoryIndexEmitter.BuildFragment(JsonNode.Parse(fx.MemoryIndexBody), disabled: false)!;
+        await Assert.That(fullIndex.Length).IsGreaterThan(SessionStartAdditionalContext.MaxContextChars);
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("## Team memory");
+        await Assert.That(ctx.IndexOf("## Plans", StringComparison.Ordinal))
+            .IsLessThan(ctx.IndexOf("## Team memory", StringComparison.Ordinal));
+    }
+
+    /// <summary>Pins that guidelines rendered ahead of the plans nudge cannot crowd it out, and that
+    /// guidelines over the cap keep their head rather than vanishing.</summary>
+    [Test, NotInParallel]
+    public async Task session_start_keeps_the_plans_nudge_and_the_guidelines_head_when_guidelines_overflow_the_cap() {
+        var clusters = Enumerable.Range(0, 150).Select(i => new JsonObject {
+            ["text"] = $"guideline {i} " + new string('g', 100), ["category"] = "agent_guidance",
+        });
+        using var fx = new Fixture(Config.Root) {
+            RespondJson = new JsonObject { ["top_clusters"] = new JsonArray([.. clusters]) }.ToJsonString()
+        };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+
+        await Assert.That(exit).IsEqualTo(0);
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("- guideline 0 ");
+        await Assert.That(ctx).DoesNotContain("- guideline 149 ");
+    }
+
+    static string PlanReadPayload(string sid, string path, string content = "# Plan\n- [ ] one") =>
+        new JsonObject {
+            ["hook_event_name"] = "PostToolUse", ["session_id"] = sid, ["cwd"] = "/repo", ["tool_name"] = "Read",
+            ["tool_input"]      = new JsonObject { ["file_path"] = path },
+            ["tool_response"]   = new JsonObject { ["type"] = "text", ["file"] = new JsonObject { ["filePath"] = path, ["content"] = content } },
+        }.ToJsonString();
+
+    static int PlanReadPosts(Fixture fx) => fx.Sent.Count(s => s.StartsWith("/hooks/plan-read|", StringComparison.Ordinal));
+
+    [Test]
+    public async Task plan_read_hands_the_server_nudge_to_the_agent_once_per_document() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"nudge":"declare it"}""" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+        var payload = PlanReadPayload(sid, "/repo/docs/plans/x.md");
+
+        var first = new StringWriter();
+        await fx.PlanReadAsync(payload, first);
+        var second = new StringWriter();
+        await fx.PlanReadAsync(payload, second);
+
+        var output = JsonNode.Parse(first.ToString())!["hookSpecificOutput"]!;
+        await Assert.That(output["hookEventName"]!.GetValue<string>()).IsEqualTo("PostToolUse");
+        await Assert.That(output["additionalContext"]!.GetValue<string>()).IsEqualTo("declare it");
+        await Assert.That(second.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(1);
+
+        var posted = JsonNode.Parse(fx.Sent.Single(s => s.StartsWith("/hooks/plan-read|", StringComparison.Ordinal)).Split('|', 2)[1])!;
+        await Assert.That(posted["session_id"]!.GetValue<string>()).IsEqualTo(sid.Replace("-", ""));
+        await Assert.That(posted["path"]!.GetValue<string>()).IsEqualTo("/repo/docs/plans/x.md");
+        await Assert.That(posted["content"]!.GetValue<string>()).IsEqualTo("# Plan\n- [ ] one");
+    }
+
+    [Test]
+    public async Task plan_read_asks_again_after_an_empty_answer() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var payload = PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.md");
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(payload, stdout);
+        await fx.PlanReadAsync(payload, stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task plan_read_never_asks_about_a_file_that_is_not_markdown() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"nudge":"declare it"}""" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.cs"), stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task plan_read_stays_silent_when_kcap_plans_is_not_registered() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"nudge":"declare it"}""" };
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.md"), stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task plan_read_honours_the_plans_nudge_opt_out() {
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisablePlansNudge = true }) { RespondJson = """{"nudge":"declare it"}""" };
+        fx.RegisterClaudeMcpServer("kcap-plans");
+
+        var stdout = new StringWriter();
+        await fx.PlanReadAsync(PlanReadPayload(Guid.NewGuid().ToString(), "/repo/docs/plans/x.md"), stdout);
+
+        await Assert.That(stdout.ToString()).IsEqualTo("");
+        await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
     }
 
     const string NextWorkAck =
@@ -1132,6 +1343,29 @@ public class ClaudeHookCommandTests {
         await Assert.That(fx.SpoolFiles.Any()).IsFalse();
     }
 
+    /// <summary>A subagent that ends on a tool call (SubagentHandback) has no final text, so Claude
+    /// omits the key; the server requires it and would reject the stop.</summary>
+    [Test]
+    public async Task subagent_stop_without_last_assistant_message_posts_an_empty_one() {
+        using var fx = new Fixture(Config.Root);
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}""");
+
+        var posted = JsonNode.Parse(PostedBody(fx, "/hooks/subagent-stop"))!;
+        await Assert.That(posted["last_assistant_message"]?.GetValue<string>()).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task subagent_stop_keeps_the_last_assistant_message_it_was_given() {
+        using var fx = new Fixture(Config.Root);
+        await fx.HandleAsync($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp","last_assistant_message":"done"}""");
+
+        var posted = JsonNode.Parse(PostedBody(fx, "/hooks/subagent-stop"))!;
+        await Assert.That(posted["last_assistant_message"]?.GetValue<string>()).IsEqualTo("done");
+    }
+
+    static string PostedBody(Fixture fx, string path) =>
+        fx.Sent.Single(s => s.StartsWith(path + "|", StringComparison.Ordinal))[(path.Length + 1)..];
+
     [Test]
     public async Task subagent_stop_without_agent_id_is_not_spooled() {
         // No agent_id → no SubagentCompleted to deliver → unchanged shared-path behavior (no spool).
@@ -1178,6 +1412,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(files.Count).IsEqualTo(1);
         var content = await File.ReadAllTextAsync(files[0]);
         await Assert.That(content).Contains("\"route\":\"subagent-stop\"");
+        await Assert.That(content).Contains("last_assistant_message");
     }
 
     [Test]
@@ -1455,6 +1690,9 @@ public class ClaudeHookCommandTests {
         public HttpStatusCode MemoryIndexStatus { get; set; } = HttpStatusCode.OK;
         public TimeSpan       MemoryIndexDelay  { get; set; } = TimeSpan.Zero;
 
+        public string FlowDefinitionsBody { get; set; } = """{"definitions":[]}""";
+        public int FlowDefinitionsRequestCount => _memoryServer.LogEntries.Count(e => e.RequestMessage.Path == "/api/flows/definitions");
+
         /// <summary>Every request the stub server saw, for a test asserting that none arrived.</summary>
         public int ServerRequestCount => _memoryServer.LogEntries.Count;
 
@@ -1511,6 +1749,13 @@ public class ClaudeHookCommandTests {
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin), stdout);
         }
 
+        /// <summary>One plan-read hook invocation, posting through the stub client.</summary>
+        public Task<int> PlanReadAsync(string stdin, TextWriter stdout) {
+            StubMemoryServer();
+            return new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+                .HandlePlanReadCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client), stdout);
+        }
+
         /// <summary>Registered per call, not in the constructor, so a test can set the body, status
         /// or delay after building the fixture. "None" auth keeps the real client construction off
         /// the token store.</summary>
@@ -1525,6 +1770,10 @@ public class ClaudeHookCommandTests {
             if (MemoryIndexDelay > TimeSpan.Zero) response = response.WithDelay(MemoryIndexDelay);
 
             _memoryServer.Given(Request.Create().WithPath("/api/memories/index").UsingGet()).RespondWith(response);
+
+            _memoryServer.Given(Request.Create().WithPath("/api/flows/definitions").UsingGet())
+                .RespondWith(Response.Create().WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json").WithBody(FlowDefinitionsBody));
         }
 
         /// <summary>Installs the kcap plugin under the fixture's home with a bundled .mcp.json naming

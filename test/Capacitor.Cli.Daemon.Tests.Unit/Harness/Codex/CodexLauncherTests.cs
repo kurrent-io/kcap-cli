@@ -251,10 +251,13 @@ public class CodexLauncherTests {
         var enabled = args.Where(a => a.StartsWith("mcp_servers.", StringComparison.Ordinal)
                                    && !a.Contains(".enabled=false")).ToArray();
         await Assert.That(enabled.All(a => a.StartsWith("mcp_servers.kcap-flow-result.", StringComparison.Ordinal))).IsTrue();
-        await Assert.That(enabled.Length).IsEqualTo(4);
+        await Assert.That(enabled.Length).IsEqualTo(5);
 
         // Force-enabled regardless of anything the user's own config may say.
         await Assert.That(args).Contains("mcp_servers.kcap-flow-result.enabled=true");
+
+        // Codex must outlast the channel's own retry deadline rather than abandon a submit mid-restart.
+        await Assert.That(args).Contains("mcp_servers.kcap-flow-result.tool_timeout_sec=300");
 
         var command = enabled.Single(a => a.Contains(".command="));
         await Assert.That(command).Contains("/opt/kcap");
@@ -783,6 +786,7 @@ public class CodexLauncherTests {
             "-c", "mcp_servers.kcap-flow-result.command=\"/opt/kcap\"",
             "-c", "mcp_servers.kcap-flow-result.args=[\"mcp\",\"flow-result\"]",
             "-c", "mcp_servers.kcap-flow-result.env={KCAP_URL=\"https://t.example\",KCAP_FLOW_AGENT_ID=\"agent-xyz\"}",
+            "-c", "mcp_servers.kcap-flow-result.tool_timeout_sec=300",
             "-m", "gpt-5.3-codex",
             "--no-alt-screen"
         ];

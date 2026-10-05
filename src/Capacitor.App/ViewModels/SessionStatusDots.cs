@@ -8,7 +8,7 @@ public static class SessionStatusDots {
     /// The daemon's finished-turn verdict, for an agent the user can answer: a flow participant
     /// between rounds waits on the flow, so nothing here may describe it as waiting on the user.
     public static bool WaitsOnUser(AgentStatusDto dto) =>
-        dto.AwaitingInput == true && !AgentActionService.IsProtectedKind(dto.Kind);
+        dto.AwaitingInput == true && AgentActionService.AcceptsTypedInput(dto.Kind);
 
     /// Failed, waiting on the user, or a usage-limit question. A pending permission is the other source.
     public static bool NeedsAttention(AgentStatusDto dto) =>
@@ -16,7 +16,7 @@ public static class SessionStatusDots {
 
     /// The merged-row twins of the two rules above, for rail rows from either lane.
     public static bool WaitsOnUser(AgentRow row) =>
-        row.AwaitingInput == true && !AgentActionService.IsProtectedKind(row.Kind);
+        row.AwaitingInput == true && AgentActionService.AcceptsTypedInput(row.Kind);
 
     public static bool NeedsAttention(AgentRow row) =>
         row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);
@@ -29,7 +29,7 @@ public static class SessionStatusDots {
     /// The short word every session surface shows. Detail lives on <see cref="Present"/>.
     public static string Label(AgentStatusDto dto) =>
         Present(dto.Status, dto.AwaitingInput, WaitsOnUser(dto), dto.LiveSubagents,
-            pending: false, UsageLimitSummary(dto.UsageLimit), launchStage: null, elapsed: null, sessionId: null).Label;
+            pending: false, UsageLimitSummary(dto.UsageLimit), launchStage: null, elapsed: null).Label;
 
     public static string Label(AgentRow row) => ForRow(row, pending: false).Label;
 
@@ -38,17 +38,18 @@ public static class SessionStatusDots {
             row.Status, row.AwaitingInput, WaitsOnUser(row), row.LiveSubagents, pending,
             UsageLimitSummary(row.UsageLimit),
             row.Origin == AgentOrigin.Pending ? LaunchStages.Label(row.LaunchStage) : null,
-            elapsed: null, sessionId: row.SessionId ?? row.Id,
+            elapsed: null,
             requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
-            model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null);
+            model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null,
+            harness: string.IsNullOrEmpty(row.Vendor) ? null : HostedHarnessCatalog.LabelFor(row.Vendor));
 
     /// First match wins, so two surfaces cannot draw different marks for the same facts.
     /// <paramref name="usageLimitSummary"/> is set only for a question the user must answer.
     public static AgentStatusPresentation Present(
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
-            string? usageLimitSummary, string? launchStage, string? elapsed, string? sessionId,
+            string? usageLimitSummary, string? launchStage, string? elapsed,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
-            string? model = null) {
+            string? model = null, string? harness = null) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
@@ -78,6 +79,7 @@ public static class SessionStatusDots {
             : kind == AgentStatusKind.Answer ? "An answer is expected"
             : label;
         var facts = new List<AgentStatusFact> { new(sentence, "Status") };
+        Add(facts, harness, "Harness");
         Add(facts, model, "Model");
         Add(facts, usageLimitSummary, "Usage limit");
         if (pending && kind != AgentStatusKind.Answer) Add(facts, "Pending response");
@@ -86,7 +88,6 @@ public static class SessionStatusDots {
         if (liveSubagents is int live and > 0)
             Add(facts, $"{live} subagent{(live == 1 ? "" : "s")} running");
         if (kind == AgentStatusKind.Starting && sentence == "Starting") Add(facts, launchStage, "Launch");
-        Add(facts, sessionId, "Session");
         Add(facts, requester, "Requester");
         Add(facts, borrowedFrom, "Borrowed from");
         return new AgentStatusPresentation(kind, label, FormatTip(facts),

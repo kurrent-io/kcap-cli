@@ -8,10 +8,11 @@ using Capacitor.Cli.Local;
 
 namespace Capacitor.Cli.Commands;
 
-/// One row of the daemon's agent table (`id\tstatus\trepo\tkind\tflowRunId\tflowRole` on the
-/// wire). A daemon older than #379 sends only the first three; the rest default.
+/// One row of the daemon's agent table (`id\tstatus\trepo\tkind\tflowRunId\tflowRole\ttitle` on
+/// the wire). An older daemon sends only the first three or six columns; the rest default, and a
+/// null title means the daemon sent no title column.
 internal readonly record struct AgentRow(
-    string Id, string Status, string Repo, string Kind, string FlowRunId, string FlowRole);
+    string Id, string Status, string Repo, string Kind, string FlowRunId, string FlowRole, string? Title = null);
 
 /// <summary>
 /// `kcap agent start|ls|stop|attach` — drive daemon-hosted agents from the local
@@ -90,7 +91,7 @@ internal sealed class AgentCommand(
         var sock = store.SocketPath(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows);
+        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows, parsed.StartTitle);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)
@@ -328,14 +329,34 @@ internal sealed class AgentCommand(
             return 0;
         }
 
-        Console.WriteLine($"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} REPO");
-        foreach (var a in agents) {
-            var flow = a.FlowRunId.Length > 0 ? $"  [flow {a.FlowRunId}]" : "";
-            var role = a.FlowRole.Length > 0 ? $"  [{a.FlowRole}]" : "";
-            Console.WriteLine($"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {a.Repo}{flow}{role}");
-        }
+        foreach (var line in FormatAgentTable(agents)) Console.WriteLine(line);
 
         return 0;
+    }
+
+    /// The title goes last: it is the widest free-form column, so the repo column is padded to
+    /// its longest value instead. Free-form cells come from launch prompts and repo paths, so
+    /// control characters are stripped before they reach the terminal.
+    internal static IEnumerable<string> FormatAgentTable(IReadOnlyList<AgentRow> agents) {
+        static string RepoCell(AgentRow a) {
+            var flow = a.FlowRunId.Length > 0 ? $"  [flow {a.FlowRunId}]" : "";
+            var role = a.FlowRole.Length > 0 ? $"  [{a.FlowRole}]" : "";
+
+            return HttpClientExtensions.StripControlCharacters($"{a.Repo}{flow}{role}");
+        }
+
+        if (agents.All(a => a.Title is null)) {
+            yield return $"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} REPO";
+            foreach (var a in agents) yield return $"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {RepoCell(a)}";
+
+            yield break;
+        }
+
+        var repoWidth = Math.Max("REPO".Length, agents.Max(a => RepoCell(a).Length));
+
+        yield return $"{"AGENT",-34} {"STATUS",-10} {"KIND",-12} {"REPO".PadRight(repoWidth)} TITLE";
+        foreach (var a in agents)
+            yield return $"{a.Id,-34} {a.Status,-10} {a.Kind,-12} {RepoCell(a).PadRight(repoWidth)} {HttpClientExtensions.StripControlCharacters(a.Title)}".TrimEnd();
     }
 
     /// <summary>
@@ -349,7 +370,7 @@ internal sealed class AgentCommand(
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
             await using var stream = new NetworkStream(socket, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.List), default);
+            await FrameCodec.WriteAsync(stream, LocalFrame.ListWithTitles(), default);
             var resp = await FrameCodec.ReadAsync(stream, default);
 
             if (resp is null) {
@@ -372,14 +393,14 @@ internal sealed class AgentCommand(
 
             if (resp.Text.Length == 0) return [];
 
-            // Older daemons send 3 columns; current ones send 6. Shifted columns can hide a
+            // Older daemons send 3 or 6 columns; current ones send 7. Shifted columns can hide a
             // protected kind, and an empty id would turn a targeted stop into stop-all.
             string[] rows = [.. resp.Text.Split('\n').Where(l => l.Length > 0)];
 
             if (rows.Any(l => {
                     var cells = l.Split('\t');
 
-                    return cells.Length is not (3 or 6) || string.IsNullOrWhiteSpace(cells[0]);
+                    return cells.Length is not (3 or 6 or 7) || string.IsNullOrWhiteSpace(cells[0]);
                 })) {
                 await Console.Error.WriteLineAsync(
                     "kcap: daemon sent a malformed agent table (unexpected column count or empty id); refusing to act on it");
@@ -501,7 +522,8 @@ internal sealed class AgentCommand(
             p.Length > 2 ? p[2] : "",
             p.Length > 3 && p[3].Length > 0 ? p[3] : "agent",
             p.Length > 4 ? p[4] : "",
-            p.Length > 5 ? p[5] : "");
+            p.Length > 5 ? p[5] : "",
+            p.Length > 6 ? p[6] : null);
     }
 
     /// <summary>A full agent id as minted by `Guid.NewGuid().ToString("N")`.</summary>

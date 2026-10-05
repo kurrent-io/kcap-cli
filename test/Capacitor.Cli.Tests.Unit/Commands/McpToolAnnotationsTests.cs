@@ -14,6 +14,7 @@ public class McpToolAnnotationsTests {
         ("kcap-memory",         McpMemoryServer.BuildToolsList()),
         ("kcap-workitems",      McpWorkItemsServer.BuildToolsList()),
         ("kcap-plans",          McpPlansServer.BuildToolsList()),
+        ("kcap-handoff",        McpHandoffServer.BuildToolsList()),
         ("kcap-artefacts",      McpArtefactsServer.BuildToolsList()),
         ("kcap-knowledge",      McpKnowledgeServer.BuildToolsList()),
         ("kcap-flows",          McpFlowsServer.BuildToolsList()),
@@ -49,6 +50,7 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-memory", "search_memories").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "list_reviewer_vendors").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "list_flow_definitions").Annotations.ReadOnlyHint).IsTrue();
+        await Assert.That(Tool("kcap-flows", "get_flow_definition").Annotations.ReadOnlyHint).IsTrue();
 
         var declare = Tool("kcap-plans", "declare_plan_document").Annotations;
         await Assert.That(declare.ReadOnlyHint).IsFalse();
@@ -69,11 +71,18 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-workitems", "list_loose_ends").Annotations).IsEqualTo(McpToolAnnotations.Read);
         await Assert.That(Tool("kcap-workitems", "close_loose_end").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
         await Assert.That(Tool("kcap-workitems", "reopen_loose_end").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
+        await Assert.That(Tool("kcap-workitems", "list_work_item_evals").Annotations).IsEqualTo(McpToolAnnotations.Read);
+        await Assert.That(Tool("kcap-workitems", "get_work_item_eval").Annotations).IsEqualTo(McpToolAnnotations.Read);
+        // A settled run lets the next request queue another.
+        await Assert.That(Tool("kcap-workitems", "request_work_item_eval").Annotations).IsEqualTo(McpToolAnnotations.Additive);
+        await Assert.That(Tool("kcap-workitems", "cancel_work_item_eval").Annotations).IsEqualTo(McpToolAnnotations.Destructive);
         // A status read acknowledges the pending messages it rendered, so it is not a pure read.
         await Assert.That(Tool("kcap-flows", "get_flow_status").Annotations.ReadOnlyHint).IsFalse();
         await Assert.That(Tool("kcap-flows", "get_review_flow_status").Annotations.ReadOnlyHint).IsFalse();
         // A hosted agent acts on its own once launched.
         await Assert.That(Tool("kcap-flows", "start_review_flow").Annotations.OpenWorldHint).IsTrue();
+        await Assert.That(Tool("kcap-flows", "start_agent").Annotations).IsEqualTo(McpToolAnnotations.Launch);
+        await Assert.That(Tool("kcap-flows", "list_start_agent_options").Annotations).IsEqualTo(McpToolAnnotations.Read);
     }
 
     [Test]

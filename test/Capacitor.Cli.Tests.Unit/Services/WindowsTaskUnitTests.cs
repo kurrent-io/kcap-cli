@@ -24,6 +24,36 @@ public class WindowsTaskUnitTests {
         await Assert.That(cmd).Contains("\"C:\\kcap\\kcap-daemon.exe\" --name \"laptop\" --log-file \"C:\\Users\\u\\.config\\kcap\\daemon-laptop.log\" \"--max-agents\" \"8\"");
     }
 
+    /// <summary>Task Scheduler never relaunches on an exit code, so the wrapper must: the daemon runs inside a
+    /// loop that only a clean exit leaves, and every other exit — a requested restart too — pauses first, so a
+    /// daemon that keeps exiting cannot spin.</summary>
+    [Test]
+    public async Task Wrapper_relaunches_the_daemon_until_it_exits_cleanly() {
+        var lines = WindowsTaskUnit.Wrapper(Spec()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        var loop  = Array.IndexOf(lines, ":run");
+        var exec  = Array.FindIndex(lines, l => l.StartsWith("\"C:\\kcap\\kcap-daemon.exe\"", StringComparison.Ordinal));
+
+        await Assert.That(loop).IsGreaterThan(0);
+        await Assert.That(lines[loop - 1]).IsEqualTo("set \"ERRORLEVEL=\"");
+        await Assert.That(lines[(loop + 1)..]).IsEquivalentTo(new[] {
+            lines[exec],
+            "if %ERRORLEVEL% EQU 0 exit /b 0",
+            $"call \"%SystemRoot%\\System32\\PING.EXE\" -n {WindowsTaskUnit.RelaunchPauseSeconds + 1} 127.0.0.1 >nul",
+            "goto run",
+        }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    /// <summary>`if errorlevel N` means "at least N", which a crash's negative exit code fails; and `timeout`
+    /// aborts when stdin is redirected. Either would end or spin the loop.</summary>
+    [Test]
+    public async Task Wrapper_tests_for_an_exact_zero_and_sleeps_with_ping() {
+        var wrapper = WindowsTaskUnit.Wrapper(Spec());
+
+        await Assert.That(wrapper.Contains("if errorlevel", StringComparison.OrdinalIgnoreCase)).IsFalse();
+        await Assert.That(wrapper.Contains("if not errorlevel", StringComparison.OrdinalIgnoreCase)).IsFalse();
+        await Assert.That(wrapper.Contains("timeout", StringComparison.OrdinalIgnoreCase)).IsFalse();
+    }
+
     [Test]
     public async Task Wrapper_doubles_percent_in_values() {
         var spec = Spec() with { Environment = new Dictionary<string, string> { ["X"] = "50%done" } };

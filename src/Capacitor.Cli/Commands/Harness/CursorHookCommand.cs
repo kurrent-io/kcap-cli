@@ -528,12 +528,11 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var workItemsNudge = WorkItemsNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
-            var plansNudge     = PlansNudgeEmitter.Resolve(HarnessId.Cursor, sessionId, nudgeProfile?.DisablePlansNudge is true, harnesses);
+            var sessionNudges  = SessionNudges.Resolve(HarnessId.Cursor, sessionId, nudgeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
             var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
             var firstRunNotice = FirstRunNoticeEmitter.Resolve(nudgeProfile?.DisableFirstRunNotice is true, config, HarnessId.Cursor, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
-                HarnessNudgeEmitter.Combine(workItemsNudge, plansNudge, harnessNudge, firstRunNotice));
+                HarnessNudgeEmitter.Combine(sessionNudges, harnessNudge, firstRunNotice));
         } catch {
             // Fail-open per design: any exception (budget cancellation,
             // transcript-file IO race, JSON quirk we missed) must never crash Cursor's agent
@@ -582,7 +581,8 @@ public sealed class CursorHookCommand(
         var activeProfile      = profiles.Effective;
         var disabled           = activeProfile?.DisableMemoryIndex is true;
         var guidelinesDisabled = activeProfile?.DisableSessionGuidelines is true;
-        if (disabled && guidelinesDisabled) return null;
+        var flowsDisabled      = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Cursor, harnesses);
+        if (disabled && guidelinesDisabled && flowsDisabled) return null;
 
         try {
             // The injected clock, the same one the lease store below runs on: a hook run has exactly
@@ -615,7 +615,7 @@ public sealed class CursorHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true, SessionLifecycleReason.New,
                     CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, workspaceRoot, disabled, memBudget, memCts.Token,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

@@ -441,6 +441,26 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     [Test]
+    public async Task Get_session_summary_omits_work_items_when_the_plan_forbids_them() {
+        _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""[{"type":"whats_done","content":"did X"}]"""));
+        _server.Given(Request.Create().WithPath("/api/work-items/session/abc").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(403).WithBody("""{"code":"work_items_not_in_plan"}"""));
+
+        using var proc = SpawnMcpServer();
+        try {
+            var response  = await SendRequest(proc, ToolsCallRequest(4, "get_session_summary", new JsonObject { ["session_id"] = "abc" }));
+            var projected = JsonNode.Parse(response["result"]!["content"]![0]!["text"]!.GetValue<string>())!.AsObject();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(projected["summary_text"]!.GetValue<string>()).IsEqualTo("did X");
+            await Assert.That(projected.ContainsKey("work_items")).IsFalse();
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    [Test]
     public async Task Get_session_summary_reports_a_failing_recap_even_when_plans_succeed() {
         _server.Given(Request.Create().WithPath("/api/sessions/abc/recap").WithParam("chain", "false").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(500).WithBody("boom"));

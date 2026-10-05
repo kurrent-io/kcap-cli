@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Services;
@@ -41,6 +42,7 @@ sealed class DaemonServiceCommands(
             "stop"      => await verbs.Stop(),
             "ensure"    => await verbs.Ensure(rest),
             "status"    => rest.Contains("--json") ? await verbs.StatusJson() : await verbs.Status(),
+            "refresh"   => await verbs.Refresh(),
             _           => Usage(),
         };
     }
@@ -87,6 +89,62 @@ sealed class DaemonServiceCommands(
             throw new ArgumentException($"--max-agents must be 0 (unlimited) or a positive integer (got '{maxAgentsFlag}').");
 
         return ["--max-agents", maxAgents.ToString()];
+    }
+
+    /// <summary>Short of the npm refresh wrapper's 60s kill, so the last reload it starts can finish.</summary>
+    static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(55);
+
+    /// <summary>
+    /// Brings every installed launchd job up to the unit this version writes. It runs after each
+    /// update, unattended, so a daemon hosting agents is never restarted: it is left for a later run.
+    /// </summary>
+    internal async Task<int> Refresh() {
+        if (manager is not LaunchdServiceManager launchd) return 0;
+
+        var failed  = 0;
+        var started = time.GetTimestamp();
+        TimeSpan TimeLeft() => RefreshDeadline - time.GetElapsedTime(started);
+
+        foreach (var serviceId in launchd.ListInstalled()) {
+            if (TimeLeft() < LaunchdServiceManager.RefreshCtlTimeout) {
+                await Console.Out.WriteLineAsync("Out of time; the remaining daemons are checked on the next update.");
+                break;
+            }
+
+            var outcome = launchd.RefreshProcessType(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error);
+
+            switch (outcome) {
+                case ProcessTypeRefresh.Reloaded:
+                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded to run at standard priority.");
+                    break;
+                case ProcessTypeRefresh.Deferred:
+                    await Console.Out.WriteLineAsync(
+                        $"Daemon '{serviceId}': busy, so its priority change waits for the next update.");
+                    break;
+                case ProcessTypeRefresh.Unverified:
+                    await Console.Out.WriteLineAsync(
+                        $"Daemon '{serviceId}': launchd's state could not be read, so the check waits for the next update.");
+                    break;
+                case ProcessTypeRefresh.Failed:
+                    await Console.Error.WriteLineAsync($"Daemon '{serviceId}': {error}");
+                    failed++;
+                    break;
+            }
+        }
+
+        return failed == 0 ? 0 : 1;
+    }
+
+    /// <summary>True only when the daemon accepted a restart it applies only while idle.</summary>
+    bool RequestIdleRestart(string serviceId) {
+        try {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
+            var reply = DaemonRestartClient.RequestAsync(store, serviceId, "now", cts.Token).GetAwaiter().GetResult();
+
+            return reply is { Type: Core.LocalIpc.FrameType.RestartAck, Text: "restarting" };
+        } catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException) {
+            return false;
+        }
     }
 
     internal async Task<int> Install(string[] args, bool startNow) {
@@ -659,7 +717,7 @@ sealed class DaemonServiceCommands(
     }
 
     static int Usage() {
-        Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|ensure|status> [--name N]");
+        Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|ensure|status|refresh> [--name N]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]");
         Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/version/ownership and rolls back on failure");
@@ -673,6 +731,7 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("  ensure [--name N] [--profile P] [--json]   Install-or-start from a fresh status read");
         Console.Error.WriteLine("                          (bakes the born-prompt consent seed; gate refusals emit recovery_surface=)");
         Console.Error.WriteLine("  status [--name N] [--json]   Show installed/running state (--json for machine-readable output)");
+        Console.Error.WriteLine("  refresh                Update installed units to this version's format; reloads only idle daemons");
         return 1;
     }
 }

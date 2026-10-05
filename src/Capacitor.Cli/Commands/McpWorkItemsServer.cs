@@ -191,6 +191,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             if (toolName is "dismiss_next_work" or "restore_next_work")
                 nextWorkRepoHash = McpToolArguments.OptionalString(arguments, "repo_hash") ?? await cwdRepoHash();
 
+            // A headers-first read leaves the body outside HttpClient's timeout, so one deadline bounds both.
+            using var evalDeadline = IsWorkItemEvalTool(toolName) ? new CancellationTokenSource(NextWorkRequestDeadline, time) : null;
+            var       evalToken    = evalDeadline?.Token ?? CancellationToken.None;
+
             using var httpResponse = toolName switch {
                 "declare_work_item"      => await client.PostAsync($"{baseUrl}/api/work-items/declare", ToJsonContent(BuildDeclareBody(arguments))),
                 "get_session_work_items" => await client.GetAsync(BuildSessionUrl(baseUrl, arguments)),
@@ -225,8 +229,26 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "detach_work_item"       => await client.PostAsync(
                     ItemUrl(baseUrl, arguments, "work_item_id", "detach"), ToJsonContent(BuildDetachBody(arguments))),
 
+                "list_work_item_evals"   => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
+                    WorkItemEvalToolResults.ListSuffix(McpToolArguments.OptionalString(arguments, "cursor"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
+                "get_work_item_eval"     => await client.GetAsync(ItemUrl(baseUrl, arguments, "work_item_id",
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"))), HttpCompletionOption.ResponseHeadersRead, evalToken),
+                "request_work_item_eval" => await PostHeadersFirstAsync(client, ItemUrl(baseUrl, arguments, "work_item_id", "evals/runs"),
+                    new StringContent(WorkItemEvalToolResults.RequestBody(McpToolArguments.OptionalString(arguments, "mode")), Encoding.UTF8, "application/json"), evalToken),
+                "cancel_work_item_eval"  => await PostHeadersFirstAsync(client, ItemUrl(baseUrl, arguments, "work_item_id",
+                    WorkItemEvalToolResults.RunSuffix(McpToolArguments.OptionalString(arguments, "run_id"), "cancel")), ToJsonContent(new JsonObject()), evalToken),
+
                 _                        => throw new ArgumentException($"Unknown tool: {toolName}")
             };
+
+            if (IsWorkItemEvalTool(toolName)) {
+                if (httpResponse.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+                var bytes = await BoundedHttpContent.ReadAsync(httpResponse.Content, WorkItemEvalToolResults.MaxResponseBytes, evalToken);
+                if (bytes is null) return BuildToolResult(id, WorkItemEvalToolResults.TooLargeMessage, isError: true);
+                var (text, isError) = WorkItemEvalToolResults.Render(toolName, httpResponse.StatusCode, Encoding.UTF8.GetString(bytes));
+                return BuildToolResult(id, text, isError);
+            }
 
             var body = await httpResponse.Content.ReadAsStringAsync();
 
@@ -245,7 +267,11 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
+            if (toolName == "declare_loose_end") return BuildToolResult(id, FormatDeclareLooseEndResult(body));
+
             return BuildToolResult(id, body);
+        } catch (OperationCanceledException) when (IsWorkItemEvalTool(toolName)) {
+            return BuildToolResult(id, WorkItemEvalToolResults.DeadlineMessage, isError: true);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -544,6 +570,15 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         value.Length is >= 1 and <= 1024
      && value.All(c => c is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_' or '-');
 
+    /// <summary>PostAsync buffers the whole reply before returning; this leaves the body to the bounded read.</summary>
+    static async Task<HttpResponseMessage> PostHeadersFirstAsync(HttpClient client, string url, HttpContent content, CancellationToken ct) {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+
+    static bool IsWorkItemEvalTool(string toolName) =>
+        toolName is "list_work_item_evals" or "get_work_item_eval" or "request_work_item_eval" or "cancel_work_item_eval";
+
     static bool IsNextWorkTargetTool(string toolName) =>
         toolName is "dismiss_next_work" or "restore_next_work" or "list_dismissed_next_work";
 
@@ -772,8 +807,38 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         new() { ["session_id"] = McpSessionId.Resolve(args) };
 
     // Text bounds and the none-class rule stay the server's, so its 400 names the real reason.
-    internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) =>
-        new() { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
+    internal static JsonObject BuildDeclareLooseEndBody(JsonObject? args) {
+        var body = new JsonObject { ["session_id"] = McpSessionId.Resolve(args), ["text"] = McpToolArguments.RequireString(args, "text") };
+
+        if (McpToolArguments.OptionalString(args, "subject") is { } subject) body["subject"] = subject;
+        if (McpToolArguments.OptionalString(args, "work_item_id") is { } workItem) body["work_item_id"] = workItem;
+        if (McpToolArguments.OptionalBool(args, "standalone") is true) body["standalone"] = true;
+
+        return body;
+    }
+
+    /// <summary>The declare response is always valid JSON. When the server reports the subject
+    /// already settled in the tracker, a <c>guidance</c> string is added alongside
+    /// <c>declaration_id</c> so the agent checks the remote instead of treating the item as live; any
+    /// other <c>subject_state</c>, or a body that does not parse as a JSON object, passes through
+    /// unchanged.</summary>
+    internal static string FormatDeclareLooseEndResult(string body) {
+        JsonNode? node;
+        try {
+            node = JsonNode.Parse(body);
+        } catch (JsonException) {
+            return body;
+        }
+
+        if (node is not JsonObject obj) return body;
+        if (obj["subject_state"] is not JsonValue stateValue || !stateValue.TryGetValue<string>(out var state) || state != "settled")
+            return body;
+
+        obj["guidance"] = "The subject issue is already closed in the tracker. Check the remote (fetch origin) "
+            + "before treating this as unfinished; if it is done, close the loose end with close_loose_end.";
+
+        return obj.ToJsonString();
+    }
 
     /// <summary>The session is optional context for the server, so a close outside any harness session
     /// still goes through.</summary>
@@ -906,8 +971,11 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             }, []), McpToolAnnotations.Read),
 
         new("get_next_work",
-            "What the user should work on next, ranked: others waiting on them first, then their own "
-          + "unfinished work (work items, interrupted sessions, loose ends), then new backlog. Each row "
+            "What the user should work on next: work others are waiting on, the user's own unfinished "
+          + "work (work items, interrupted sessions, loose ends) and new backlog. Rows take turns by the "
+          + "signal behind them, one row per signal per pass, in an order that depends on whether others "
+          + "work alongside the user: if they do, teammates blocked on the user, review requests and "
+          + "interrupted sessions lead; if not, loose ends and unfinished work items lead. Each row "
           + "carries a because-clause, evidence, and a target_key to pass to dismiss_next_work if the "
           + "user turns it down. Read this before proposing new work; prefer finishing a listed item "
           + "over starting something new.",
@@ -922,6 +990,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
           + "plain text; do not declare 'none'. Requires a session: the current kcap-hooked one by default.",
             new("object", new() {
                 ["text"]       = new("string", "The unfinished work, as one plain-text sentence; the server accepts 12-500 characters after normalizing whitespace and case."),
+                ["subject"]    = new("string", "The issue this loose end is about (PROJ-123, #123, owner/repo#123 or a GitHub issue URL). Name it when the end is a specific issue: the end then sits under that issue's work item, never this session's."),
+                ["work_item_id"] = new("string", "The work item this loose end belongs to, when it has no issue of its own. Overrides the subject's item."),
+                ["standalone"] = new("boolean", "True when the end belongs to none of this session's work items, such as an issue still to be filed. Not with work_item_id."),
                 ["session_id"] = new("string", "Session id to declare against. Defaults to the session this server runs in when omitted.")
             }, ["text"]), McpToolAnnotations.Upsert),
 
@@ -1036,6 +1107,37 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             "Undo close_loose_end: put a closed loose end back in the user's next work.",
             new("object", new() {
                 ["loose_end_id"] = new("string", "The closed end's loose_end_id, as list_loose_ends with status closed shows it.")
-            }, ["loose_end_id"]), McpToolAnnotations.Upsert)
+            }, ["loose_end_id"]), McpToolAnnotations.Upsert),
+
+        new("list_work_item_evals",
+            "List the evaluations of a work item you can read, newest first, with each run's run_id, mode, state "
+          + "and counts. A run you may not read is absent. Pass next_cursor back as cursor for the next page.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The work item whose evaluations to list."),
+                ["cursor"]       = new("string", "The next_cursor from a previous page.")
+            }, ["work_item_id"]), McpToolAnnotations.Read),
+
+        new("get_work_item_eval",
+            "Read one evaluation run of a work item: each question's outcome, score, finding and cited evidence, the "
+          + "requirements the completion question judged, and the run's retrospective.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The evaluated work item."),
+                ["run_id"]       = new("string", "The run_id from list_work_item_evals or request_work_item_eval.")
+            }, ["work_item_id", "run_id"]), McpToolAnnotations.Read),
+
+        new("request_work_item_eval",
+            "Queue an evaluation of a work item across its sessions. While your own run of the item is still queued "
+          + "or running, the server returns that run instead of queuing another.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The work item to evaluate."),
+                ["mode"]         = new("string", "process (default) or root_cause.")
+            }, ["work_item_id"]), McpToolAnnotations.Additive),
+
+        new("cancel_work_item_eval",
+            "Cancel your own evaluation run while it is still queued. A run that already started cannot be cancelled.",
+            new("object", new() {
+                ["work_item_id"] = new("string", "The evaluated work item."),
+                ["run_id"]       = new("string", "The queued run's run_id.")
+            }, ["work_item_id", "run_id"]), McpToolAnnotations.Destructive)
     ];
 }

@@ -3,7 +3,8 @@ using Capacitor.Cli.Core.Eval.Evidence;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Eval.Evidence;
 
-/// <summary>A resolved arguments body nests under its own call's <c>arguments</c>, never as a sibling of <c>calls</c>.</summary>
+/// <summary>A resolved arguments body nests under its own call's <c>arguments</c>, never as a sibling of <c>calls</c>; a plan
+/// entry keeps its kind and inline content.</summary>
 public class EvidenceTraceAssemblerTests : IDisposable {
     readonly EvidenceServerStub _stub = new();
     readonly HttpClient _http = new();
@@ -147,5 +148,20 @@ public class EvidenceTraceAssemblerTests : IDisposable {
         await Assert.That(trace.Fits).IsFalse();
         await Assert.That(trace.FailedStatus).IsEqualTo(200);
         await Assert.That(trace.Reads).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_plan_entry_carries_its_kind_and_inline_content_into_the_trace() {
+        var entry = $$$"""{"ref":"{{{Root}}}@0","revision":0,"event_type":"PlanTasksDeclared","kind":"plan_entry","payload_body":{"field":"payload","ordinal":null,"bytes":40,"ref":"{{{Root}}}@0"},"plan_kind":"tasks","plan_content":{"tasks":[{"id":"t1","title":"Wr\u00eete"}]}}""";
+        _stub.Route("GET", "evidence-events", 200, EvidenceServerStub.EventsPage(Root, [entry]));
+
+        var trace = await Assembler().AssembleAsync(Source(0), 400_000, CancellationToken.None);
+
+        await Assert.That(trace.Fits).IsTrue();
+        var written = JsonDocument.Parse(trace.TraceJson).RootElement[0].GetProperty("entries")[0];
+        await Assert.That(written.GetProperty("plan_kind").GetString()).IsEqualTo("tasks");
+        await Assert.That(written.GetProperty("plan_content").GetProperty("tasks")[0].GetProperty("title").GetString()).IsEqualTo("Wr\u00eete");
+        await Assert.That(trace.TraceJson.All(char.IsAscii)).IsTrue();
+        await Assert.That(_stub.Requests("evidence-body")).IsEmpty();
     }
 }

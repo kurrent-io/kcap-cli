@@ -219,6 +219,7 @@ public partial class App : Application {
     public override void Initialize() {
         AvaloniaXamlLoader.Load(this);
         LineSelection.Install();
+        ToolTipFocusGate.Install();
         // Here, not later: Avalonia exports the app menu right after Initialize, substituting its own
         // "About Avalonia" when there is none.
         NativeMenu.SetMenu(this, _appMenu.Menu);
@@ -382,51 +383,11 @@ public partial class App : Application {
 
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit) {
         var where = kind switch {
-            InstallLocationKind.DmgVolume   => "It is running from the disk image.",
-            InstallLocationKind.Translocated => "It is running from a temporary location.",
-            _                                => "It is not in the Applications folder.",
+            InstallLocationKind.DmgVolume   => "Kurrent Capacitor is running from the disk image.",
+            InstallLocationKind.Translocated => "Kurrent Capacitor is running from a temporary location.",
+            _                                => "Kurrent Capacitor is not in your Applications folder.",
         };
-        var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.OrangeRed, IsVisible = false };
-        var moveButton = new Button { Content = "Move to Applications", IsDefault = true };
-        var quitButton = new Button { Content = "Quit", IsCancel = true };
-        moveButton.Click += async (_, _) => {
-            moveButton.IsEnabled = false;
-            try {
-                var outcome = await move();
-                if (!outcome.Moved) {
-                    error.Text = outcome.Error;
-                    error.IsVisible = true;
-                    moveButton.IsEnabled = true;
-                }
-            } catch (Exception ex) {
-                error.Text = ex.Message;
-                error.IsVisible = true;
-                moveButton.IsEnabled = true;
-            }
-        };
-        quitButton.Click += (_, _) => quit();
-
-        var window = new Window {
-            Title = "Kurrent Capacitor",
-            Icon = ProductIcon.WindowIcon,
-            Width = 460,
-            Height = 220,
-            CanResize = false,
-            Content = new StackPanel {
-                Margin = new Thickness(24),
-                Spacing = 12,
-                Children = {
-                    new TextBlock { Text = "Move Kurrent Capacitor to your Applications folder to continue.", FontWeight = FontWeight.Bold, TextWrapping = TextWrapping.Wrap },
-                    new TextBlock { Text = $"{where} The command-line tool and the background service need a permanent location.", TextWrapping = TextWrapping.Wrap },
-                    error,
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { quitButton, moveButton } },
-                },
-            },
-        };
-        // The titlebar close / Cmd+W leaves no other path to shutdown — OnExplicitShutdown means
-        // Avalonia never ends the process on its own just because the last window closed.
-        window.Closed += (_, _) => quit();
-        return window;
+        return new InstallLocationWindow(where, move, quit);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the

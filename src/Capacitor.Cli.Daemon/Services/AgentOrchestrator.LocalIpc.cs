@@ -10,9 +10,10 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Local-socket entry points invoked by <see cref="LocalControlServer"/>.
 internal partial class AgentOrchestrator {
     /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table.</summary>
-    public Task HandleLocalListAsync(Stream stream, CancellationToken ct) {
+    public Task HandleLocalListAsync(bool withTitles, Stream stream, CancellationToken ct) {
         var lines = _agents.Values.Select(a =>
-            $"{a.Id}\t{a.Status}\t{Cell(a.RepoPath)}\t{KindText(a.Kind)}\t{Cell(a.FlowRunId)}\t{Cell(a.FlowRole)}");
+            $"{a.Id}\t{a.Status}\t{Cell(a.RepoPath)}\t{KindText(a.Kind)}\t{Cell(a.FlowRunId)}\t{Cell(a.FlowRole)}"
+            + (withTitles ? $"\t{Cell(a.ResolvedTitle ?? a.Title)}" : ""));
 
         return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines) }, ct);
     }
@@ -241,8 +242,11 @@ internal partial class AgentOrchestrator {
         if (Encoding.UTF8.GetByteCount(text) > InputWire.MaxTextBytes)
             return Refuse(SendTextReasons.TooLarge, $"text exceeds {InputWire.MaxTextBytes} bytes");
         if (!_agents.TryGetValue(agentId, out var agent)) return Refuse(SendTextReasons.NoSuchAgent, $"no agent {agentId}");
-        if (agent.Kind != LaunchKind.Default) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
+        if (!AcceptsTypedInput(agent.Kind)) return Refuse(SendTextReasons.ProtectedKind, ProtectionReason(agent));
         if (agent.Status is "Starting" or "Completed" or "Failed") return Refuse(SendTextReasons.NotRunning, $"agent is {agent.Status}");
+        // A quit becomes a daemon-side stop, which for a review agent would skip the confirmed Stop.
+        if (agent.Kind != LaunchKind.Default && !agent.Runtime.EmitsTerminalOutput && IsQuitCommand(text))
+            return Refuse(SendTextReasons.ProtectedKind, $"{ProtectionReason(agent)}: use Stop to end it");
 
         // Named refusals rather than the delivery core's one drop token: the composer shows the
         // wording to the person who picked the files, and can keep their text to retry without them.
@@ -288,7 +292,17 @@ internal partial class AgentOrchestrator {
     /// owned worktree (<c>--worktree</c>) or the user's borrowed cwd (default in-place).
     /// </summary>
     public async Task HandleLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows) = FrameCodec.Spawn(spawn);
+        using var admission = _admission.TryAdmit();
+        if (admission is null) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error("This daemon is being renamed; start the agent on the renamed daemon."), ct);
+            return;
+        }
+
+        await HandleAdmittedLocalSpawnAsync(spawn, stream, ct);
+    }
+
+    async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -351,6 +365,7 @@ internal partial class AgentOrchestrator {
                 // missing the day this path grows an ACP runtime.
                 ActivityClock  = CreateActivityClock(),
                 IsPrivate      = isPrivate,
+                StartTitle     = startTitle,
                 Work           = work,
                 McpConfigPath  = built.McpConfigPath,
                 CurrentCols    = cols,
@@ -398,10 +413,14 @@ internal partial class AgentOrchestrator {
                 $"{agentId} is a hosted {agent.Runtime.Vendor} agent — it has no terminal to attach to. "
               + "Drive it from the dashboard."), ct);
 
-        // A review or flow agent is addressed through the flow protocol, never by typing at it,
-        // so the daemon — not the client — decides this attach carries no input.
-        return AttachClientLoopAsync(agent, stream, ct, readOnly: agent.Kind != LaunchKind.Default);
+        // The daemon, not the client, decides whether this attach carries input.
+        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind));
     }
+
+    /// A PR-review agent is a dialogue the reviewer types into; a flow participant is driven only
+    /// through the flow protocol. Any other kind fails safe as read-only. Stop protection is a
+    /// separate rule: both review kinds still need --force to stop.
+    internal static bool AcceptsTypedInput(LaunchKind kind) => kind is LaunchKind.Default or LaunchKind.Review;
 
     /// Human-readable "why is this read-only/refused", carried on the AttachedReadOnly frame and
     /// the not-live StopV2 refusal below (which reads the same kind from a persisted PID record

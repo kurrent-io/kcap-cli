@@ -345,6 +345,8 @@ internal sealed partial class CodexLauncher(
         args.Add($"mcp_servers.{name}.args=[{TomlString("mcp")},{TomlString("flow-result")}]");
         args.Add("-c");
         args.Add($"mcp_servers.{name}.env={{{ProfileOverrides.UrlVar}={TomlString(config.ServerUrl)},KCAP_FLOW_AGENT_ID={TomlString(ctx.AgentId)}}}");
+        args.Add("-c");
+        args.Add($"mcp_servers.{name}.tool_timeout_sec={(long)KcapMcpRegistry.ReservedResultChannelToolTimeout.TotalSeconds}");
         AddAppServerApprovalMode(args, name, appServer);
     }
 

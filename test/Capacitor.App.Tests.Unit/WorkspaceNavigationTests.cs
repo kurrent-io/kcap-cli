@@ -96,6 +96,25 @@ public class WorkspaceNavigationTests {
         };
     }
 
+    /// The chat tab opens first, so the terminal starts hidden and is shown only while its tab is
+    /// the active one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_terminal_surface_is_shown_only_while_its_tab_is_active() {
+        await RunOnUiAsync(async () => {
+            var nav = NewNav();
+            await OpenAttachedAsync(nav, "a1");
+            var workspace = (WorkspaceViewModel)nav.Vm.CurrentWorkspace!;
+            await Assert.That(workspace.Terminal.SurfaceShown).IsFalse();
+
+            await workspace.ShowTerminalCommand.Execute();
+            await Assert.That(workspace.Terminal.SurfaceShown).IsTrue();
+
+            await workspace.ShowChatCommand.Execute();
+            await Assert.That(workspace.Terminal.SurfaceShown).IsFalse();
+        });
+    }
+
     /// Opens a workspace whose terminal has actually attached — the only state in which a teardown
     /// can be proven by DetachAsync/DisposeAsync on the scripted client.
     static async Task<FakeTerminalAttachClient> OpenAttachedAsync(Nav nav, string agentId) {

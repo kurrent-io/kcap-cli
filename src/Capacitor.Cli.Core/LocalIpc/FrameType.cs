@@ -9,7 +9,7 @@ public enum FrameType : byte {
     Stdin   = 3,
     Resize  = 4,
     Detach  = 5,
-    List    = 6,   // request the daemon's agent list (for `kcap agent ls`)
+    List    = 6,   // request the daemon's agent list (for `kcap agent ls`); Text = "title" asks for the title column
     Restart = 7,   // request restart-after-update (Text = "when-idle"|"now"|"force")
     Stop    = 8,   // stop an agent (Text = agent id; empty = every agent this daemon hosts)
     StopV2  = 10,  // stop with a force flag (see FrameCodec.StopV2); supersedes Stop
@@ -34,12 +34,17 @@ public enum FrameType : byte {
     DaemonSettingsPut = 23, // Text = DaemonSettingsPutDto JSON
     // Composer input with attachments — one-shot; acked on SendTextAck when the delivery settles.
     SendTextWithAttachments = 24, // Text = SendTextWithAttachmentsDto JSON
+    // Rename fence — long-lived: acquire holds the fence for the connection's life; commit and abort
+    // follow on the same connection. Every reply is AdmissionFenceAck.
+    AdmissionFenceAcquire = 25, // Text = AdmissionFenceAcquireDto JSON
+    AdmissionFenceCommit  = 26,
+    AdmissionFenceAbort   = 27,
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
     Exited    = 66,
     Error     = 67,
-    AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole` line per agent
+    AgentList = 68, // UTF-8 table payload: one `id\tstatus\trepo\tkind\tflowRunId\tflowRole[\ttitle]` line per agent
     RestartAck = 69, // acknowledgement for Restart (Text = short status)
     StopAck    = 70, // Text = one `id\tstatus` line per agent: "stopped", "skipped", "failed", or "missing".
                     // StopV2 reports "missing" only when neither a live agent nor a PID record exists.
@@ -55,4 +60,5 @@ public enum FrameType : byte {
     PermissionAck      = 79, // Text = PermissionAckDto JSON, reply to PermissionResolve
     SendTextAck = 80, // Text = SendTextAckDto JSON, reply to SendText
     DaemonSettingsAck = 81, // Text = DaemonSettingsAckDto JSON, reply to DaemonSettingsPut
+    AdmissionFenceAck = 82, // Text = AdmissionFenceAckDto JSON, reply to every fence frame
 }

@@ -83,10 +83,19 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
             observer, time, questions: questions
         );
 
+        return Report(result, sessionId, baselineWriteFailed: baseline is { WriteFailed: true });
+    }
+
+    internal static int Report(SessionEvalCompletedPayloadV4? result, string sessionId, bool baselineWriteFailed) {
         if (result is null) return 1;
 
+        if (result.IsFailureOnly) {
+            RenderFailed(result, sessionId);
+            return 1;
+        }
+
         Render(result, sessionId);
-        return baseline is { WriteFailed: true } ? 1 : 0;
+        return baselineWriteFailed ? 1 : 0;
     }
 
     public async Task<int> HandleListQuestions() {
@@ -162,6 +171,25 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
         output.WriteLine(agg.OverallScore is { } overall
             ? $"  Overall: {overall}/5  [{EvalService.VerdictForScore(overall)}]"
             : $"  Overall: not scored ({agg.AssessedQuestions}/{agg.JudgedQuestions} assessed)");
+        output.WriteLine($"  {agg.Summary}");
+        output.WriteLine();
+    }
+
+    internal static void RenderFailed(SessionEvalCompletedPayloadV4 agg, string sessionId) {
+        var output = Console.Out;
+        output.WriteLine();
+        output.WriteLine($"Eval results for session {sessionId}");
+        output.WriteLine($"Model: {agg.JudgeModel}   Run: {agg.EvalRunId}");
+        output.WriteLine(new string('─', 72));
+        output.WriteLine();
+        output.WriteLine($"  Evaluation failed: {agg.FailedQuestions.Count} of {agg.TotalQuestions} questions not judged");
+        foreach (var (code, count) in EvalService.FailureCodeCounts(agg.FailedQuestions))
+            output.WriteLine($"    {code} ×{count}");
+        output.WriteLine();
+        foreach (var f in agg.FailedQuestions)
+            output.WriteLine($"    ✗ {f.QuestionId,-26} {f.Code}");
+        output.WriteLine();
+        output.WriteLine(new string('─', 72));
         output.WriteLine($"  {agg.Summary}");
         output.WriteLine();
     }

@@ -234,6 +234,25 @@ public class LaunchAgentCommandWireFormatTests {
     }
 
     [Test]
+    public async Task Title_fields_bind_from_snake_case_and_default_when_absent() {
+        var legacy = JsonSerializer.Deserialize(
+            """{"agent_id":"a1","model":"m","repo_path":"/r","vendor":"claude"}""", CapacitorJsonContext.Default.LaunchAgentCommand);
+        await Assert.That(legacy.Title).IsNull();
+        await Assert.That(legacy.TitleDerived).IsFalse();
+
+        var cmd = new LaunchAgentCommand(
+            AgentId: "a1", Prompt: "fix it", Model: "m", Effort: null, RepoPath: "/r", Tools: null, AttachmentIds: null,
+            Vendor: "claude", Title: "Fix it", TitleDerived: true);
+        var json = JsonSerializer.Serialize(cmd, ServerWireOptions);
+        await Assert.That(json).Contains("\"title\":\"Fix it\"");
+        await Assert.That(json).Contains("\"title_derived\":true");
+
+        var back = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.LaunchAgentCommand);
+        await Assert.That(back.Title).IsEqualTo("Fix it");
+        await Assert.That(back.TitleDerived).IsTrue();
+    }
+
+    [Test]
     public async Task Requester_fields_roundtrip_and_default_null_when_absent() {
         // Old-server payload without the new fields → nulls (wire compat).
         var legacyJson = """{"agent_id":"a1","model":"m","repo_path":"/r","vendor":"claude"}""";

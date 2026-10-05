@@ -88,6 +88,16 @@ public sealed class JudgeLedgerWriter : IDisposable {
         w.WriteEndObject();
         w.WriteBoolean("has_next", p.HasNext);
         WriteNullable(w, "next", p.Next);
+        if (p.LedgerSources.Count > 0) {
+            w.WriteStartArray("ledger_sources");
+            foreach (var lane in p.LedgerSources) w.WriteStringValue(lane);
+            w.WriteEndArray();
+        }
+        if (p.Citable.Count > 0) {
+            w.WriteStartArray("citable");
+            foreach (var (s, from, to) in p.Citable) { w.WriteStartArray(); w.WriteStringValue(s); w.WriteNumberValue(from); w.WriteNumberValue(to); w.WriteEndArray(); }
+            w.WriteEndArray();
+        }
     }
 
     internal static void WriteBudgets(Utf8JsonWriter w, EvidenceRunBudgets b) {

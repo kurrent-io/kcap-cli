@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -115,7 +116,8 @@ public class McpWorkItemsServerTests {
             "get_work_item_topology",
             "merge_work_item", "detach_work_item",
             "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
-            "list_loose_ends", "close_loose_end", "reopen_loose_end"
+            "list_loose_ends", "close_loose_end", "reopen_loose_end",
+            "list_work_item_evals", "get_work_item_eval", "request_work_item_eval", "cancel_work_item_eval"
         });
     }
 
@@ -162,6 +164,63 @@ public class McpWorkItemsServerTests {
         var body = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Add the retry test"}"""));
 
         await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1","text":"Add the retry test"}""");
+    }
+
+    [Test]
+    public async Task Loose_end_body_carries_an_optional_subject() {
+        var body = McpWorkItemsServer.BuildDeclareLooseEndBody(
+            Args("""{"session_id":"s1","text":"Fix the fixtures","subject":"#1250"}"""));
+
+        await Assert.That(body["subject"]!.GetValue<string>()).IsEqualTo("#1250");
+    }
+
+    [Test]
+    public async Task Loose_end_body_carries_an_optional_target() {
+        var item  = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","work_item_id":"wi-1"}"""));
+        var alone = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","standalone":true}"""));
+
+        await Assert.That(item["work_item_id"]!.GetValue<string>()).IsEqualTo("wi-1");
+        await Assert.That(alone["standalone"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task Loose_end_body_omits_a_false_standalone() {
+        var body = McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","standalone":false}"""));
+
+        await Assert.That(body.ContainsKey("standalone")).IsFalse();
+    }
+
+    [Test]
+    public async Task Loose_end_body_rejects_a_non_boolean_standalone() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Fix the fixtures","standalone":"yes"}""")))
+            .Throws<ArgumentException>()
+            .WithMessageContaining("'standalone' must be a boolean");
+    }
+
+    [Test]
+    public async Task A_settled_subject_adds_a_guidance_field_and_stays_valid_json() {
+        var text = McpWorkItemsServer.FormatDeclareLooseEndResult(
+            """{"declaration_id":"d","created":true,"subject":"github:o/r#1","subject_state":"settled"}""");
+
+        using var doc = JsonDocument.Parse(text);
+        await Assert.That(doc.RootElement.GetProperty("declaration_id").GetString()).IsEqualTo("d");
+        await Assert.That(doc.RootElement.GetProperty("guidance").GetString()).Contains("already closed");
+    }
+
+    [Test]
+    public async Task An_open_or_absent_subject_state_leaves_the_result_unchanged() {
+        const string open = """{"declaration_id":"d","created":true,"subject":"github:o/r#1","subject_state":"open"}""";
+        const string none  = """{"declaration_id":"d","created":true}""";
+
+        await Assert.That(McpWorkItemsServer.FormatDeclareLooseEndResult(open)).IsEqualTo(open);
+        await Assert.That(McpWorkItemsServer.FormatDeclareLooseEndResult(none)).IsEqualTo(none);
+    }
+
+    [Test]
+    public async Task A_non_object_body_passes_through_unchanged() {
+        const string arrayBody = """[1,2,3]""";
+
+        await Assert.That(McpWorkItemsServer.FormatDeclareLooseEndResult(arrayBody)).IsEqualTo(arrayBody);
     }
 
     [Test]
@@ -266,11 +325,17 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
+    public async Task Loose_end_body_rejects_a_non_string_subject_as_a_field_error() {
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareLooseEndBody(Args("""{"session_id":"s1","text":"Add the retry test","subject":123}""")))
+            .Throws<ArgumentException>().WithMessageContaining("subject");
+    }
+
+    [Test]
     public async Task Declare_loose_end_requires_text_and_defaults_the_session() {
         var tool = McpWorkItemsServer.BuildToolsList().Single(t => t.Name == "declare_loose_end");
 
         await Assert.That(tool.InputSchema.Required).IsEquivalentTo(new[] { "text" });
-        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "session_id" });
+        await Assert.That(tool.InputSchema.Properties.Keys).IsEquivalentTo(new[] { "text", "subject", "work_item_id", "standalone", "session_id" });
     }
 
     [Test]

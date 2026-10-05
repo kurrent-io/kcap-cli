@@ -6,6 +6,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
@@ -287,6 +288,48 @@ public class TerminalTabViewModelTests {
             await Assert.That(vm.Surface).IsNotSameReferenceAs(surface1);
             var surface2 = (FakeTerminalSurface)vm.Surface!;
             await Assert.That(surface2.Fed.Count(t => t == "AB")).IsEqualTo(1);
+        });
+    }
+
+    /// The control re-lays out every row it draws on each feed, so while nobody is looking the
+    /// chunks are held and fed once a second as one piece.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Output_while_the_surface_is_hidden_is_held_and_fed_once_a_second() {
+        await RunOnUiAsync(async () => {
+            var (_, _, time, vm, client) = await BuildConnectingAsync();
+            var surface = (FakeTerminalSurface)vm.Surface!;
+            vm.SurfaceShown = false;
+
+            await client.TriggerOutput("AB"u8.ToArray());
+            await client.TriggerOutput("CD"u8.ToArray());
+            await Assert.That(surface.Fed).IsEmpty();
+
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "ABCD" }, CollectionOrdering.Matching);
+
+            await client.TriggerOutput("EF"u8.ToArray());
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "ABCD" }, CollectionOrdering.Matching);
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "ABCD", "EF" }, CollectionOrdering.Matching);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Showing_the_surface_feeds_the_held_output_before_anything_newer() {
+        await RunOnUiAsync(async () => {
+            var (_, _, _, vm, client) = await BuildConnectingAsync();
+            var surface = (FakeTerminalSurface)vm.Surface!;
+            vm.SurfaceShown = false;
+            await client.TriggerOutput("AB"u8.ToArray());
+            await Assert.That(surface.Fed).IsEmpty();
+
+            vm.SurfaceShown = true;
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "AB" }, CollectionOrdering.Matching);
+
+            await client.TriggerOutput("CD"u8.ToArray());
+            await Assert.That(surface.Fed).IsEquivalentTo(new[] { "AB", "CD" }, CollectionOrdering.Matching);
         });
     }
 

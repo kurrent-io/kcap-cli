@@ -17,6 +17,11 @@ public sealed class AssistantTextItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
+/// The model's reasoning, shown as plain text in the assistant column.
+public sealed class AssistantThinkingItem(string text) : ChatItemViewModel {
+    public string Text { get; } = text;
+}
+
 /// System-attributed text — a finished background task, a reconnect note — never anyone's speech.
 public sealed class SystemNoteItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;

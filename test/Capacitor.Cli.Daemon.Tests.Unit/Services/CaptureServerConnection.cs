@@ -116,11 +116,15 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// order — proves initial and reconnect re-registration report the same value.</summary>
     public List<(string AgentId, string? Transport)> AgentRegisteredTransports { get; } = [];
 
+    /// <summary>The start title echoed on each registration, in call order.</summary>
+    public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
+
     public override async Task AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null) {
+        string? runtimeTransport = null, AgentStartTitle? title = null) {
         AgentRegisteredCallCount++;
+        lock (AgentRegisteredTitles) AgentRegisteredTitles.Add((agentId, title));
         lock (AcpCallOrder) AcpCallOrder.Add($"register:{agentId}");
         lock (AgentRegisteredCalls) AgentRegisteredCalls.Add((agentId, model));
         lock (AgentRegisteredPostures) AgentRegisteredPostures.Add((agentId, sandboxPolicy, approvalPolicy));

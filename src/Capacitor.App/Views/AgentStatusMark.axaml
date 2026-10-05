@@ -41,7 +41,7 @@
         <!-- The ring's stroke is centered on its edge, so a margin keeps it inside the box. -->
         <Panel x:Name="Glyph" Classes="glyph" DockPanel.Dock="Left" Margin="0,0,5,0"
                VerticalAlignment="Center" ClipToBounds="False"
-               Classes.pulsing="{Binding Pulses}">
+               Classes.pulsing="{Binding Pulses}" views:PulseClock.IsActive="{Binding Pulses}">
             <Ellipse Stretch="Uniform" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5" Margin="1"
                      HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsPulse}" />
             <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"

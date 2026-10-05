@@ -39,7 +39,7 @@ public class DaemonSettingsIpcTests {
         var statusIpc   = new DaemonStatusIpc(config, orchestrator, server, notifier, TimeProvider.System);
         var settingsIpc = new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance);
         var restart     = RestartCoordinator.ForTest(config.Store, config.Name, "test", new NoopRestartStrategy(), TimeProvider.System);
-        var control     = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, NullLogger<LocalControlServer>.Instance);
+        var control     = new LocalControlServer(config, orchestrator, restart, consentIpc, permissionIpc, statusIpc, settingsIpc, TestFences.Ipc(config, orchestrator), NullLogger<LocalControlServer>.Instance);
         await control.StartAsync(ct);
 
         var sockPath = config.Store.SocketPath(config.Name);

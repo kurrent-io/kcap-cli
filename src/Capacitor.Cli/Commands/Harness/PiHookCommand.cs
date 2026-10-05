@@ -161,6 +161,7 @@ sealed class PiHookCommand(
             ? StartMemoryIndexTask(file, scopeRoot,
                 activeProfile?.DisableMemoryIndex is true,
                 activeProfile?.DisableSessionGuidelines is true,
+                SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Pi, harnesses),
                 budget.Remaining,
                 reason)
             : Task.FromResult<string?>(null);
@@ -176,8 +177,7 @@ sealed class PiHookCommand(
         // gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            WorkItemsNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisableWorkItemsNudge is true, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            PlansNudgeEmitter.Resolve(HarnessId.Pi, sessionId, activeProfile?.DisablePlansNudge is true, harnesses),
+            SessionNudges.Resolve(HarnessId.Pi, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Pi, harnesses));
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);
@@ -320,9 +320,10 @@ sealed class PiHookCommand(
             string?  scopeRoot,
             bool     disabled,
             bool     guidelinesDisabled,
+            bool     flowsDisabled,
             TimeSpan budget,
             string?  reason = null) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(file) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -334,7 +335,7 @@ sealed class PiHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(file, reason),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }

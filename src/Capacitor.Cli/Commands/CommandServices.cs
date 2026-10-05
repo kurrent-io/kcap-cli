@@ -107,6 +107,7 @@ public static class CommandServices {
         services.AddTransient<ProfileCommand>();
         services.AddTransient<ProjectsCommand>();
         services.AddTransient<RecapCommand>();
+        services.AddTransient<RecapContinuation>();
         services.AddTransient<RemapCommand>();
         services.AddTransient<ReportVersionCommand>();
         services.AddTransient<ReposCommand>();
@@ -125,6 +126,7 @@ public static class CommandServices {
         services.AddTransient<McpSessionsServer>();
         services.AddTransient<McpWorkItemsServer>();
         services.AddTransient<McpPlansServer>();
+        services.AddTransient<McpHandoffServer>();
         services.AddTransient<McpAnalyticsServer>();
         services.AddTransient<McpArtefactsServer>();
         services.AddTransient<McpKnowledgeServer>();

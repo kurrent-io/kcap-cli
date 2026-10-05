@@ -13,4 +13,6 @@ public sealed record EvidenceScopeManifestDto {
     // Absent from a server that predates the wire lifetime; the scope client then assumes the 30-minute artifact.
     [JsonPropertyName("issued_at")]          public          DateTimeOffset?         IssuedAt          { get; init; }
     [JsonPropertyName("expires_at")]         public          DateTimeOffset?         ExpiresAt         { get; init; }
+    // True for a held scope, false when the server refused a requested hold, absent otherwise.
+    [JsonPropertyName("held")]               public          bool?                   Held              { get; init; }
 }
