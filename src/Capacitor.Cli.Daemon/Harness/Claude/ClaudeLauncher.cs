@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -350,25 +351,11 @@ internal sealed partial class ClaudeLauncher(
         else Directory.CreateSymbolicLink(worktreeProjDir, sourceProjDir);
     }
 
-    /// A symlink on Windows needs Developer Mode or elevation, so the link was refused ("A required
-    /// privilege is not held") and the agent lost the project's memory and permissions. A directory
+    /// A symlink on Windows needs Developer Mode or elevation, so the link is refused ("A required
+    /// privilege is not held") and the agent loses the project's memory and permissions. A directory
     /// junction needs neither, and .NET reads and deletes it as the link it is.
-    internal static void CreateJunction(string link, string target) {
-        var psi = new ProcessStartInfo("cmd.exe") {
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-        };
-        foreach (var a in new[] { "/d", "/c", "mklink", "/J", link, target }) psi.ArgumentList.Add(a);
-
-        using var process = Process.Start(psi) ?? throw new IOException("could not start cmd.exe to create a junction");
-        var error = process.StandardError.ReadToEnd();
-        process.StandardOutput.ReadToEnd();
-        process.WaitForExit();
-        if (process.ExitCode != 0 || !Directory.Exists(link))
-            throw new IOException($"mklink /J failed for '{link}': {error.Trim()}");
-    }
+    [SupportedOSPlatform("windows")]
+    internal static void CreateJunction(string link, string target) => WindowsJunction.Create(link, target);
 
     /// <summary>
     /// Removes the ~/.claude/projects/{worktree-path-hash} symlink if it exists.

@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using TUnit.Core.Enums;
 
@@ -7,7 +8,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
 /// directory is linked to the source's with a junction instead. The cleanup relies on .NET seeing
 /// it as a link: a delete must remove the link and leave the project's memory alone.
 public class ClaudeProjectJunctionTests {
-    [Test, RunOn(OS.Windows)]
+    [Test, RunOn(OS.Windows), SupportedOSPlatform("windows")]
     public async Task A_junction_links_the_project_directory_and_deletes_as_a_link() {
         using var tmp = new TempDir("junction");
         var target = tmp.CreateDir("source-project");
@@ -24,5 +25,20 @@ public class ClaudeProjectJunctionTests {
 
         await Assert.That(Directory.Exists(link)).IsFalse();
         await Assert.That(File.Exists(Path.Combine(target, "memory.md"))).IsTrue();
+    }
+
+    /// Paths are taken literally: through cmd, an ampersand would end the command and run the rest,
+    /// and `%TEMP%` would expand into another directory.
+    [Test, RunOn(OS.Windows), SupportedOSPlatform("windows")]
+    public async Task A_path_with_shell_metacharacters_is_linked_literally() {
+        using var tmp = new TempDir("junction");
+        var target = tmp.CreateDir("source & %TEMP% project");
+        tmp.CreateFile(["source & %TEMP% project", "memory.md"], "remember");
+        var link = tmp.PathTo("worktree & %TEMP% project");
+
+        ClaudeLauncher.CreateJunction(link, target);
+
+        await Assert.That(File.ReadAllText(Path.Combine(link, "memory.md"))).IsEqualTo("remember");
+        await Assert.That(new DirectoryInfo(link).LinkTarget).IsEqualTo(target);
     }
 }
