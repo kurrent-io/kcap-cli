@@ -5,9 +5,26 @@ using Capacitor.Cli.Core;
 namespace Capacitor.Cli.Services;
 
 sealed class WindowsScheduledTaskServiceManager(
-        ConfigRoot config, UnitFileWriter? writeUnit = null, Func<string, int?>? daemonPid = null) : IServiceManager {
+        ConfigRoot                                                   config,
+        UnitFileWriter?                                              writeUnit    = null,
+        Func<string, int?>?                                          daemonPid    = null,
+        Func<string[], (int ExitCode, string StdOut, string StdErr)>? schtasks     = null,
+        Func<IReadOnlyDictionary<int, WindowsProcessEntry>>?         processTable = null,
+        Func<int, string?>?                                          killTree     = null) : IServiceManager {
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
     readonly Func<string, int?> _daemonPid = daemonPid ?? (id => DaemonPidProbe.ValidatedPid(DaemonStore.FromEnvironment(), id));
+    readonly Func<string[], (int ExitCode, string StdOut, string StdErr)> _schtasks = schtasks ?? (args => ServiceProcess.Run("schtasks", args));
+    readonly Func<IReadOnlyDictionary<int, WindowsProcessEntry>> _processTable = processTable ?? Snapshot;
+    readonly Func<int, string?> _killTree = killTree ?? KillTree;
+
+    static IReadOnlyDictionary<int, WindowsProcessEntry> Snapshot() =>
+        OperatingSystem.IsWindows() ? WindowsProcessTable.Snapshot() : new Dictionary<int, WindowsProcessEntry>();
+
+    void CheckSchtasks(string[] args) {
+        var (code, _, err) = _schtasks(args);
+        if (code != 0)
+            throw new InvalidOperationException($"schtasks {string.Join(' ', args)} failed (exit {code}): {err.Trim()}");
+    }
 
     public string Describe() => "Windows Scheduled Task";
 
@@ -47,9 +64,7 @@ sealed class WindowsScheduledTaskServiceManager(
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         var state = WindowsTaskUnit.StatusFromQuery(code, stdout);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
-        var jobPid = state == ServiceState.Running && OperatingSystem.IsWindows()
-            ? TaskOwnedPid(_daemonPid(serviceId), WindowsProcessTable.Snapshot())
-            : null;
+        var jobPid = state == ServiceState.Running ? TaskOwnedPid(_daemonPid(serviceId), _processTable()) : null;
         return new ServiceQuery(probe, File.Exists(wrapper), state, bin, jobPid);
     }
 
@@ -92,11 +107,17 @@ sealed class WindowsScheduledTaskServiceManager(
     public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, startNow: true);
 
     // Deleting a task leaves its running instance alone, so the wrapper and daemon are ended first — the
-    // same "removed means stopped" launchd and systemd give.
+    // same "removed means stopped" launchd and systemd give. A daemon that survives keeps the task and
+    // wrapper, so it is still reported and a retry can stop it.
     public bool Uninstall(string serviceId, out string? error) {
-        ServiceProcess.Run("schtasks", WindowsTaskUnit.EndArgs(serviceId));
-        KillDaemon(serviceId);
-        ServiceProcess.Run("schtasks", WindowsTaskUnit.DeleteArgs(serviceId));
+        var owned = TaskOwnedDaemon(serviceId);
+        _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        if (owned is { } pid && _killTree(pid) is { } killError) {
+            error = killError;
+            return false;
+        }
+
+        _schtasks(WindowsTaskUnit.DeleteArgs(serviceId));
         var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
         if (File.Exists(wrapper)) File.Delete(wrapper);
         error = null;
@@ -111,15 +132,20 @@ sealed class WindowsScheduledTaskServiceManager(
 
     /// `schtasks /End` ends the wrapper, which is what stops the restart loop, but it does not reliably take
     /// the daemon with it: a daemon the wrapper restarted outlives its console host. So the daemon is stopped
-    /// by its validated pid once the loop that would restart it is gone.
+    /// by pid once the loop that would restart it is gone.
     public bool Stop(string serviceId, out string? error) {
-        ServiceProcess.Check("schtasks", WindowsTaskUnit.EndArgs(serviceId));
-        error = KillDaemon(serviceId);
+        var owned = TaskOwnedDaemon(serviceId);
+        CheckSchtasks(WindowsTaskUnit.EndArgs(serviceId));
+        error = owned is { } pid ? _killTree(pid) : null;
         return error is null;
     }
 
-    string? KillDaemon(string serviceId) {
-        if (_daemonPid(serviceId) is not { } pid || pid == Environment.ProcessId) return null;
+    /// Read before `/End`: once the task's console host is gone nothing ties the daemon to the task, and a
+    /// daemon the user started by hand under the same name must survive a service stop.
+    int? TaskOwnedDaemon(string serviceId) =>
+        TaskOwnedPid(_daemonPid(serviceId), _processTable()) is { } pid && pid != Environment.ProcessId ? pid : null;
+
+    static string? KillTree(int pid) {
         try {
             using var process = Process.GetProcessById(pid);
             process.Kill(entireProcessTree: true);
