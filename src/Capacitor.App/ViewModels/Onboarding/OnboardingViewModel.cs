@@ -33,7 +33,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool SkipVisible => _index < Steps.Count - 1;
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
-    bool Navigating {
+    internal bool Navigating {
         get => _navigating;
         set => this.RaiseAndSetIfChanged(ref _navigating, value);
     }

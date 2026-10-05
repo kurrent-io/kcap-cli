@@ -280,9 +280,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
-        var canRefreshWork = this.WhenAnyValue(x => x.CurrentWorkspace)
-            .Select(CanRefreshOpenWork)
-            .Switch()
+        var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
+            .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         RefreshWorkCommand = ReactiveCommand.Create(RefreshOpenWork, canRefreshWork);
         CanOpenFeedback     = openFeedback is not null;
