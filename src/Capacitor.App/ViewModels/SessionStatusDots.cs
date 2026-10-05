@@ -8,7 +8,7 @@ public static class SessionStatusDots {
     /// The daemon's finished-turn verdict, for an agent the user can answer: a flow participant
     /// between rounds waits on the flow, so nothing here may describe it as waiting on the user.
     public static bool WaitsOnUser(AgentStatusDto dto) =>
-        dto.AwaitingInput == true && !AgentActionService.IsProtectedKind(dto.Kind);
+        dto.AwaitingInput == true && AgentActionService.AcceptsTypedInput(dto.Kind);
 
     /// Failed, waiting on the user, or a usage-limit question. A pending permission is the other source.
     public static bool NeedsAttention(AgentStatusDto dto) =>
@@ -16,7 +16,7 @@ public static class SessionStatusDots {
 
     /// The merged-row twins of the two rules above, for rail rows from either lane.
     public static bool WaitsOnUser(AgentRow row) =>
-        row.AwaitingInput == true && !AgentActionService.IsProtectedKind(row.Kind);
+        row.AwaitingInput == true && AgentActionService.AcceptsTypedInput(row.Kind);
 
     public static bool NeedsAttention(AgentRow row) =>
         row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);

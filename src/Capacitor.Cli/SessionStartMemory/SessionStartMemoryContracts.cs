@@ -44,17 +44,18 @@ internal sealed record SessionStartMemoryIndexResponse(
     [property: JsonPropertyName("entries")] SessionStartMemoryEntry[]? Entries,
     [property: JsonPropertyName("projects")] SessionStartMemoryProject[]? Projects);
 
+/// <summary>Each lane has its own opt-out. The guidelines and flows flags default to off so a memory-only
+/// construction stays memory-only.</summary>
 internal sealed record SessionStartMemoryContextRequest(
     string BaseUrl,
     string? Cwd,
     bool Disabled,
     TimeSpan Budget,
     CancellationToken CancellationToken,
-    // the guidelines lane's opt-out (disable_session_guidelines), independent of the
-    // memory lane's Disabled (disable_memory_index). Additive with a default so the Claude
-    // memory-only construction — which never runs the guidelines lane — compiles untouched and
-    // stays guidelines-off. The eight non-Claude adapters set it explicitly from activeProfile.
-    bool GuidelinesDisabled = true);
+    bool GuidelinesDisabled = true,
+    bool FlowsDisabled = true) {
+    public bool AllLanesDisabled => Disabled && GuidelinesDisabled && FlowsDisabled;
+}
 
 internal sealed record SessionStartMemoryContextResult(
     SessionStartMemoryDisposition Disposition,
