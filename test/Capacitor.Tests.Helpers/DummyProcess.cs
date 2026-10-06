@@ -32,7 +32,38 @@ public sealed class DummyProcess : IDisposable {
             foreach (var (k, v) in env)
                 psi.Environment[k] = v;
 
-        return new DummyProcess(Process.Start(psi) ?? throw new InvalidOperationException("failed to start dummy process"));
+        var proc = Process.Start(psi) ?? throw new InvalidOperationException("failed to start dummy process");
+
+        if (OperatingSystem.IsLinux()) WaitUntilExeced(proc);
+
+        return new DummyProcess(proc);
+    }
+
+    /// <summary>
+    /// <c>Process.Start</c> returns while the child is still inside <c>execve</c>: <c>vfork</c>
+    /// releases the parent before the kernel publishes the new image, and until then
+    /// <c>/proc/{pid}/environ</c> reads empty, so an env-marker read sees no marker at all. A
+    /// <c>cmdline</c> naming sleep proves the new image is in place; <c>environ</c> is published
+    /// after it, so it is checked second.
+    /// </summary>
+    static void WaitUntilExeced(Process proc) {
+        var deadline = Stopwatch.StartNew();
+
+        while (deadline.Elapsed < TimeSpan.FromSeconds(10)) {
+            if (proc.HasExited) return;
+
+            try {
+                var argv0 = File.ReadAllText($"/proc/{proc.Id}/cmdline").Split('\0')[0];
+
+                if (Path.GetFileName(argv0) == "sleep" && File.ReadAllText($"/proc/{proc.Id}/environ").Length > 0) return;
+            } catch (IOException) {
+                return;
+            }
+
+            Thread.Sleep(1);
+        }
+
+        throw new InvalidOperationException($"dummy process {proc.Id} did not finish exec within 10s");
     }
 
     public void Kill() {
