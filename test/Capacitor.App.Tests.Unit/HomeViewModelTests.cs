@@ -434,7 +434,7 @@ public class HomeViewModelTests {
         });
     }
 
-    /// An untouched launcher sends no posture, so a daemon that predates the field still accepts it.
+    /// An untouched launcher sends no posture, so a daemon without posture support still accepts it.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Codex_posture_defaults_to_the_daemons_own_pair_which_sends_nothing() {

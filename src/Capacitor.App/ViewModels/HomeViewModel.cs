@@ -1407,9 +1407,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             ? mode
             : null;
 
-    /// Null for any vendor but codex, and for the daemon's own default pair: an unchanged launcher
-    /// sends nothing, so a daemon that predates the posture field still accepts it. Both halves go
-    /// together once either differs — the daemon rejects a partial posture.
+    /// Null for any vendor but codex, and for the daemon's own default pair, so an untouched
+    /// launcher sends no posture and a daemon without posture support still accepts the launch.
+    /// Both halves go together once either differs — the daemon rejects a partial posture.
     internal static CodexLaunchPosture? CodexPostureFor(string vendor, string sandbox, string approval) =>
         HostedHarnessCatalog.SupportsCodexPosture(vendor)
      && !(string.Equals(sandbox, HostedHarnessCatalog.DefaultCodexSandbox, StringComparison.Ordinal)
