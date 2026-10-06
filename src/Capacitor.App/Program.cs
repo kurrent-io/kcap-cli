@@ -28,9 +28,7 @@ internal static class Program
         NativeDesktopNotificationSink.Configure(AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .With(new AvaloniaNativePlatformOptions {
-                RenderingMode = [
-                    AvaloniaNativeRenderingMode.Metal, AvaloniaNativeRenderingMode.OpenGl, AvaloniaNativeRenderingMode.Software,
-                ],
+                RenderingMode = MacRenderingOrder.Resolve(Environment.GetEnvironmentVariable(MacRenderingOrder.EnvVar)),
             })
             .UseReactiveUI(_ => { })
             .LogToTrace());
