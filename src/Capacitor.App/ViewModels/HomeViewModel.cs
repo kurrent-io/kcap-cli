@@ -168,6 +168,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         set => this.RaiseAndSetIfChanged(ref _selectedPermissionMode, value);
     }
 
+    string _selectedCodexSandbox = HostedHarnessCatalog.DefaultCodexSandbox;
+    /// Kept across vendor changes; CodexPostureFor decides whether it rides a given launch.
+    public string SelectedCodexSandbox {
+        get => _selectedCodexSandbox;
+        set => this.RaiseAndSetIfChanged(ref _selectedCodexSandbox, value);
+    }
+
+    string _selectedCodexApproval = HostedHarnessCatalog.DefaultCodexApproval;
+    public string SelectedCodexApproval {
+        get => _selectedCodexApproval;
+        set => this.RaiseAndSetIfChanged(ref _selectedCodexApproval, value);
+    }
+
     string _goal = "";
     int _goalEdits;
     /// Every real edit bumps _goalEdits: a launch clears only the goal it captured, and only while
@@ -1129,6 +1142,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var draft = new LaunchDraft(
             SelectedMachine, RemoteMachineSelected, SelectedRepoPath, SelectedVendor, Goal, _goalEdits,
             SelectedModel, SelectedEffort, PermissionModeFor(SelectedVendor, SelectedPermissionMode),
+            CodexPostureFor(SelectedVendor, SelectedCodexSandbox, SelectedCodexApproval),
             Tray.Snapshot(), Tray.Generation);
 
         if (draft.Files.Count > 0 && !CanAttachFor(draft)) {
@@ -1181,7 +1195,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var request = new LaunchRequest(
             draft.Machine, draft.RepoPath, draft.Vendor, draft.Goal, draft.Model, draft.Effort,
-            draft.PermissionMode, attachmentIds);
+            draft.PermissionMode, attachmentIds, draft.CodexPosture);
         // Captured BEFORE the call, never after: the whole point is to notice a navigation that
         // changed WHILE the launch was in flight.
         var generation = _navigationGeneration?.Invoke() ?? 0;
@@ -1392,6 +1406,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         HostedHarnessCatalog.SupportsPermissionMode(vendor)
      && !string.Equals(mode, ClaudePermissionModes.Manual, StringComparison.Ordinal)
             ? mode
+            : null;
+
+    /// Null for any vendor but codex, and for the daemon's own default pair: an unchanged launcher
+    /// sends nothing, so a daemon that predates the posture field still accepts it. Both halves go
+    /// together once either differs — the daemon rejects a partial posture.
+    internal static CodexLaunchPosture? CodexPostureFor(string vendor, string sandbox, string approval) =>
+        HostedHarnessCatalog.SupportsCodexPosture(vendor)
+     && !(string.Equals(sandbox, HostedHarnessCatalog.DefaultCodexSandbox, StringComparison.Ordinal)
+       && string.Equals(approval, HostedHarnessCatalog.DefaultCodexApproval, StringComparison.Ordinal))
+            ? new CodexLaunchPosture(sandbox, approval)
             : null;
 
     /// An id that matches nothing degrades gracefully in the workspace ("session not found" with

@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -430,6 +431,45 @@ public class HomeViewModelTests {
             await vm.ChooseHarnessAsync("claude");
             await vm.StartCommand.Execute();
             await Assert.That(launch.Last!.PermissionMode).IsEqualTo("bypassPermissions");
+        });
+    }
+
+    /// An untouched launcher sends no posture, so a daemon that predates the field still accepts it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Codex_posture_defaults_to_the_daemons_own_pair_which_sends_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var vm = Build(out var launch, out _, path);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.ChooseHarnessAsync("codex");
+            await vm.StartCommand.Execute();
+            await Assert.That(launch.Last!.CodexPosture).IsNull();
+        });
+    }
+
+    /// Changing either half sends both — the daemon rejects a partial posture — and only for codex.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_chosen_codex_posture_is_sent_whole_and_for_codex_only() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var vm = Build(out var launch, out _, path);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.ChooseHarnessAsync("codex");
+            vm.SelectedCodexApproval = "never";
+            await vm.StartCommand.Execute();
+            await Assert.That(launch.Last!.CodexPosture).IsEqualTo(new CodexLaunchPosture("workspace-write", "never"));
+
+            vm.SelectedCodexSandbox = "read-only";
+            await vm.StartCommand.Execute();
+            await Assert.That(launch.Last!.CodexPosture).IsEqualTo(new CodexLaunchPosture("read-only", "never"));
+
+            await vm.ChooseHarnessAsync("claude");
+            await vm.StartCommand.Execute();
+            await Assert.That(launch.Last!.CodexPosture).IsNull();
         });
     }
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -74,6 +75,23 @@ public class LaunchRequestTests {
     public async Task Blank_permission_mode_is_omitted() {
         var json = Payload(new LaunchRequest("kcap-dev", "/repo", "claude", "go", PermissionMode: "  "));
         await Assert.That(json.TryGetProperty("permission_mode", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task Codex_posture_is_carried_as_a_sandbox_and_approval_object() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "codex", "go",
+            CodexPosture: new CodexLaunchPosture("read-only", "never")));
+        var posture = json.GetProperty("codex_posture");
+
+        await Assert.That(posture.EnumerateObject().Select(p => p.Name).ToArray()).IsEquivalentTo(["sandbox", "approval"]);
+        await Assert.That(posture.GetProperty("sandbox").GetString()).IsEqualTo("read-only");
+        await Assert.That(posture.GetProperty("approval").GetString()).IsEqualTo("never");
+    }
+
+    [Test]
+    public async Task No_codex_posture_is_sent_as_null() {
+        var json = Payload(new LaunchRequest("kcap-dev", "/repo", "codex", "go"));
+        await Assert.That(json.GetProperty("codex_posture").IsNull).IsTrue();
     }
 
     [Test]
