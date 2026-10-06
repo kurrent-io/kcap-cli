@@ -5,9 +5,10 @@
              x:Class="Capacitor.App.Views.Onboarding.HistoryPaneView"
              x:DataType="vm:HistoryStepViewModel">
     <StackPanel Spacing="14">
+        <TextBlock Classes="frNote" IsVisible="{Binding ImportStarted}"
+                   Text="This import has already started. It continues in the background after setup. Your original files stay on this machine." />
         <Border Classes="frCard">
             <StackPanel Spacing="12">
-                <!-- Discovery reads every harness's history off disk; it can take a few seconds. -->
                 <StackPanel Spacing="14" IsVisible="{Binding Looking}">
                     <StackPanel Orientation="Horizontal" Spacing="14">
                         <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource FrAccentWashBrush}">
@@ -37,7 +38,6 @@
                            IsVisible="{Binding EmptyMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
                 <StackPanel IsVisible="{Binding HasRepos}">
-                    <!-- From: informational, not a control. -->
                     <Border Classes="frRowRule" Padding="0,0,0,9">
                         <StackPanel Orientation="Horizontal" Spacing="14">
                             <TextBlock Classes="frMicro" Text="FROM" VerticalAlignment="Center" />
@@ -72,7 +72,7 @@
                         </Grid>
                     </Border>
 
-                    <ItemsControl x:Name="OwnerGroups" ItemsSource="{Binding Groups}">
+                    <ItemsControl x:Name="OwnerGroups" ItemsSource="{Binding Groups}" IsEnabled="{Binding !ImportStarted}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:HistoryOwnerGroup">
                                 <Border Classes="frRowRule">
@@ -83,6 +83,7 @@
                                                 <TextBlock Classes="frSignal" Text="{Binding SignalLine}" />
                                             </StackPanel>
                                             <views:ImportTrack Grid.Column="1" x:Name="OwnerTrack" VerticalAlignment="Center"
+                                                               AutomationProperties.Name="{Binding Owner, StringFormat='History access for {0}'}"
                                                                Stop="{Binding Stop, Mode=TwoWay}" />
                                         </Grid>
                                         <ItemsControl ItemsSource="{Binding Repos}">
@@ -95,6 +96,7 @@
                                                             <TextBlock Classes="frSignal" Text="{Binding SignalLine}" />
                                                         </StackPanel>
                                                         <views:ImportTrack Grid.Column="1" x:Name="RepoTrack" VerticalAlignment="Center"
+                                                                           AutomationProperties.Name="{Binding Slug, StringFormat='History access for {0}'}"
                                                                            Stop="{Binding Stop, Mode=TwoWay}" />
                                                     </Grid>
                                                 </DataTemplate>
@@ -110,10 +112,12 @@
                                IsVisible="{Binding UnmatchedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
 
-                <!-- How far back. -->
+                <TextBlock Classes="frNote" IsVisible="{Binding HasRepos}"
+                           Text="Shared uses your recording privacy setting for new imports. Only me keeps imported history private. Skip doesn't import it." />
+
                 <StackPanel Spacing="8" IsVisible="{Binding HasRepos}" Margin="0,4,0,0">
                     <TextBlock Classes="frMicro" Text="HOW MUCH HISTORY" />
-                    <ItemsControl x:Name="WindowOptions" ItemsSource="{Binding Windows}">
+                    <ItemsControl x:Name="WindowOptions" ItemsSource="{Binding Windows}" IsEnabled="{Binding !ImportStarted}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <UniformGrid Rows="1" ColumnSpacing="6" />
@@ -137,11 +141,12 @@
                 <Border Classes="frCallout" IsVisible="{Binding TitlingOffered}" Margin="0,4,0,0">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
                         <CheckBox x:Name="TitleLocallyCheckBox" Classes="frCheck" VerticalAlignment="Top" Margin="0,1,0,0"
-                                  IsChecked="{Binding TitleLocally, Mode=TwoWay}" />
+                                  IsChecked="{Binding TitleLocally, Mode=TwoWay}" IsEnabled="{Binding !ImportStarted}"
+                                  AutomationProperties.Name="Name sessions using my agent and quota" />
                         <StackPanel Grid.Column="1" Spacing="3">
                             <TextBlock Classes="frLabel" FontSize="13" Text="Name these sessions as they import" />
                             <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
-                                       Text="Your server can't title sessions, so this uses your own agent and quota. Untitled sessions stay searchable; titles just make them easier to recognise." />
+                                       Text="Uses your own agent and quota to generate titles. Untitled sessions stay searchable; titles make them easier to recognise." />
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -152,7 +157,7 @@
                         Foreground="{StaticResource FrMutedBrush}" /><Run Text=" or " /><Run Text="excluded_repos" FontFamily="{StaticResource FrMonoFont}"
                         Foreground="{StaticResource FrMutedBrush}" /><Run Text=" in your configuration." />
                 </TextBlock>
-                <Button x:Name="RepoSettingsDocsButton" Classes="frLink" HorizontalAlignment="Left" Content="REPOSITORY SETTINGS IN THE DOCS →"
+                <Button x:Name="RepoSettingsDocsButton" Classes="frLink" HorizontalAlignment="Left" Content="Repository settings in the docs →"
                         Click="OnDocsClick" IsVisible="{Binding HasRepos}" Margin="0,-6,0,0" />
             </StackPanel>
         </Border>

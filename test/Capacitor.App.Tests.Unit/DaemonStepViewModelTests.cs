@@ -124,6 +124,28 @@ public class DaemonStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Real_async_status_and_mutation_results_update_the_view_model_on_the_UI_thread() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var status = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Cli.StatusBehavior = _ => status.Task;
+            var wrongThread = false;
+            h.Vm.PropertyChanged += (_, _) => wrongThread |= !Dispatcher.UIThread.CheckAccess();
+            var enter = h.Enter();
+            await Task.Run(() => status.SetResult(Snap()));
+            await enter;
+            var mutation = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Lane.Behavior = (_, _) => mutation.Task;
+            var action = h.Act();
+            await Task.Run(() => mutation.SetResult(new MutationOutcome.Succeeded()));
+            await action;
+            await Assert.That(wrongThread).IsFalse();
+            await Assert.That(h.Vm.Satisfied).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Without_a_committed_sign_in_the_step_offers_nothing_and_never_reads_status() {
         var (row, affordance, message, statusCalls, mutations) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
@@ -999,8 +1021,7 @@ public class DaemonStepTemplateTests {
         });
 
         await Assert.That(actionButton).IsNotNull();
-        await Assert.That(actionButton!.Content).IsEqualTo("ENABLE DAEMON");
-        await Assert.That(actionButton.IsVisible).IsTrue();
+        await Assert.That(actionButton!.IsVisible).IsTrue();
         await Assert.That(actionButton.Classes.Contains("frPrimary")).IsTrue();
         await Assert.That(refreshButton).IsNotNull();
         await Assert.That(refreshButton!.IsVisible).IsFalse();

@@ -38,6 +38,9 @@
                       IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNull}}">
                     <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Background="Transparent"
                           PointerPressed="OnChromePointerPressed">
+                        <TextBlock Text="{Binding HistoryImportStatus}" IsVisible="{Binding HistoryImportVisible}"
+                                   FontSize="12" Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" Margin="0,0,16,0" />
                         <!-- Daemon recovery sits in LauncherPaneView's connection banner (same
                              place as sign-in), not here in the chrome. -->
 

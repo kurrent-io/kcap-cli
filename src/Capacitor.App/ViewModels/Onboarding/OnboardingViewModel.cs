@@ -13,6 +13,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
     bool _closed;
     bool _navigating;
 
+    internal bool Closed => _closed;
+
     public IReadOnlyList<IWizardStep> Steps { get; }
 
     /// Wizard-first mode builds no tray and no main window, so the outcome consumer's Status/
@@ -43,6 +45,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => _index > 0;
+    public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
 
     /// The workspace list's own actions share the footer line with Back.
     public bool TenantActionsVisible => Current is SignInStepViewModel { TenantChoicePending: true };
@@ -69,12 +72,16 @@ public sealed class OnboardingViewModel : ReactiveObject {
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     internal bool Navigating {
         get => _navigating;
-        set => this.RaiseAndSetIfChanged(ref _navigating, value);
+        set {
+            this.RaiseAndSetIfChanged(ref _navigating, value);
+            this.RaisePropertyChanged(nameof(CanGoNext));
+        }
     }
 
     public ReactiveCommand<Unit, Unit> BackCommand { get; }
     public ReactiveCommand<Unit, Unit> NextCommand { get; }
     public ReactiveCommand<Unit, Unit> SkipCommand { get; }
+    public ReactiveCommand<Unit, Unit> FinishLaterCommand { get; }
 
     /// Fires once per logical close: the Done step's finish, or the window closing.
     public event Action? CloseRequested;
@@ -84,13 +91,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     public OnboardingViewModel(
             IEnumerable<IWizardStep> steps, CancellationToken shutdownToken = default,
-            WizardLifecycleSurface? surface = null) {
+            WizardLifecycleSurface? surface = null, WizardStepId? startAt = null) {
         _shutdownToken = shutdownToken;
         Surface = surface;
-        Steps = steps.Where(s => s.Applicable).ToList();
+        var applicable = steps.Where(s => s.Applicable).ToList();
+        Steps = applicable;
         if (Steps.Count == 0) throw new ArgumentException("at least one applicable step is required", nameof(steps));
 
-        Current = Steps[0];
+        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : 0;
+        Current = Steps[_index];
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
         var idle = this.WhenAnyValue(x => x.Navigating).Select(busy => !busy);
@@ -99,7 +108,9 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
         BackCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Back), canBack);
         SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip), canSkip);
-        NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next), idle);
+        NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next),
+            this.WhenAnyValue(x => x.CanGoNext));
+        FinishLaterCommand = ReactiveCommand.Create(RequestClose, idle);
 
         if (surface is not null) {
             surface.WhenAnyValue(x => x.StatusText)
@@ -117,7 +128,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
             case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
             case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
-                or nameof(IWizardStep.ShowsOwnPrimary):
+                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue):
                 RestateActions();
                 break;
             case nameof(SignInStepViewModel.TenantPickerVisible)
@@ -130,6 +141,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void RestateActions() {
+        this.RaisePropertyChanged(nameof(CanGoNext));
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
@@ -146,6 +158,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     internal void RequestClose() {
         if (_closed) return;
         _closed = true;
+        this.RaisePropertyChanged(nameof(CanGoNext));
         CloseRequested?.Invoke();
     }
 
@@ -156,7 +169,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// this run (an inapplicable step was filtered out at construction).
     /// </summary>
     internal bool TryGoTo(WizardStepId id) {
-        if (_navigating) return false;
+        if (_navigating || _closed) return false;
 
         var target = -1;
         for (var i = 0; i < Steps.Count && target < 0; i++) {
@@ -173,7 +186,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     async Task NavigateAsync(WizardNavigation direction) {
-        if (_navigating) return; // defense in depth — canExecute already blocks a bound button
+        if (_navigating || _closed) return;
         Navigating = true;
         try {
             if (!await SafeCanLeaveAsync(Current, direction)) return;

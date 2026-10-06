@@ -35,6 +35,8 @@ public interface IWizardStep {
     /// The page is showing its own filled action. The footer Next stays secondary until that action is done.
     bool ShowsOwnPrimary => false;
 
+    bool CanContinue => true;
+
     Task OnEnterAsync(CancellationToken ct);
 
     /// False vetoes the navigation and holds the current step.

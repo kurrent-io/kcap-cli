@@ -69,12 +69,12 @@ public class PluginCommandToolsOnlyTests {
     }
 
     [Test]
-    public async Task Fresh_tools_only_install_says_capture_was_not_installed() {
+    public async Task Tools_only_install_discloses_that_capture_is_unchanged() {
         var stdout = new StringWriter();
 
         await Assert.That(await Run(Env(stdout: stdout), "plugin", "install", "--cursor", "--tools-only")).IsEqualTo(0);
 
-        await Assert.That(stdout.ToString()).Contains("Cursor capture not installed (--tools-only)");
+        await Assert.That(stdout.ToString()).Contains("Cursor capture unchanged (--tools-only)");
         await Assert.That(stdout.ToString()).DoesNotContain("hooks installed");
     }
 

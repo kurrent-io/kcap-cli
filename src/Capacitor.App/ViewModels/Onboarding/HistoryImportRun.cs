@@ -76,12 +76,14 @@ public sealed partial class HistoryImportRun : ReactiveObject {
         var anyFailed = false;
         try {
             foreach (var pass in passes) {
+                _cts.Token.ThrowIfCancellationRequested();
                 var result = await cli.ImportAsync(pass, OnLine, _cts.Token).ConfigureAwait(false);
-                anyFailed |= result.ExitCode != 0;
+                anyFailed |= result.ExitCode != 0 || result.TimedOut;
                 _post(() => PassesDone++);
             }
 
-            _post(() => State = anyFailed ? ImportRunState.Failed : ImportRunState.Finished);
+            _cts.Token.ThrowIfCancellationRequested();
+            _post(() => State = anyFailed || Failed > 0 ? ImportRunState.Failed : ImportRunState.Finished);
         } catch (OperationCanceledException) {
             _post(() => State = ImportRunState.Cancelled);
         } catch (Exception ex) {
@@ -94,13 +96,14 @@ public sealed partial class HistoryImportRun : ReactiveObject {
         Log.Add(line.Text);
         if (Log.Count > LogLimit) Log.RemoveAt(0);
 
-        if (Totals().Match(line.Text) is { Success: true } m) {
-            Imported += int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
-            Failed   += int.Parse(m.Groups[3].Value, System.Globalization.CultureInfo.InvariantCulture);
+        if (Totals().Match(line.Text.Trim()) is { Success: true } m &&
+            int.TryParse(m.Groups[1].Value, out var imported) && int.TryParse(m.Groups[3].Value, out var failed)) {
+            Imported = (int)Math.Min(int.MaxValue, (long)Imported + imported);
+            Failed = (int)Math.Min(int.MaxValue, (long)Failed + failed);
         }
     });
 
     // Each pass closes with this line; it is the only count the run prints that is not a diagnostic.
-    [GeneratedRegex(@"(\d+) imported · (\d+) skipped · (\d+) failed")]
+    [GeneratedRegex(@"^(\d+) imported · (\d+) skipped · (\d+) failed$")]
     private static partial Regex Totals();
 }

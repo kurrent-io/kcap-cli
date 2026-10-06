@@ -39,13 +39,14 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public string Title =>
         Imported          ? "Your work so far"
         : CapturePromised ? "From now on, your agents remember"
-        :                   "Nothing is being recorded yet";
+        :                   "No new recording connections";
 
     public string Lede =>
-        Import is null           ? $"Capacitor keeps what your coding agents do on {_current.MachineName}, and gives them tools to search it back — so the next time you hit something, what you already worked out is there to find."
+        Import is null && !CapturePromised ? "Setup hasn't added recording connections. Any connections you already had are unchanged. You can connect more harnesses whenever you're ready."
+        : Import is null         ? $"Capacitor keeps what your coding agents do on {_current.MachineName}, and gives them tools to search it back — so the next time you hit something, what you already worked out is there to find."
         : Import.Running         ? "What has landed is already searchable, and the rest is still uploading in the background."
         : Import.Imported > 0    ? "Your agents can search all of it — ask one what you have already tried, and it looks here first."
-        :                          "Nothing has landed yet. It may still be uploading — this fills in on its own.";
+        :                          "No sessions were uploaded. Your history is still on this machine.";
 
     public bool ShowsFigures => Import is not null;
 
@@ -62,24 +63,25 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string RepositoriesValue => Import?.Repositories.ToString(CultureInfo.CurrentCulture) ?? "—";
 
-    public string RepositoriesCaption => Running ? "keeps uploading after you open Capacitor" : "imported from this machine";
+    public string RepositoriesCaption => Running ? "keeps uploading after you open Capacitor" : "selected from this machine";
 
     public string RepositoriesUnit => Import is { Repositories: 1 } ? "repository" : "repositories";
 
     /// The landed count only moves when a pass ends, so the bar shows passes rather than inventing sessions.
     public double ProgressValue => Import is { Passes: > 0 } run ? 100.0 * run.PassesDone / run.Passes : 0;
 
-    public bool FailedVisible => Import is { Running: false, Failed: > 0 };
+    public bool FailedVisible => Import is { State: ImportRunState.Failed or ImportRunState.Cancelled } or { Running: false, Failed: > 0 };
 
-    public string FailedTitle => Import is { Failed: 1 } ? "1 session failed to upload" : $"{Import?.Failed ?? 0} sessions failed to upload";
+    public string FailedTitle => Import is { Failed: 0 } ? "History import did not finish"
+        : Import is { Failed: 1 } ? "1 session failed to upload" : $"{Import?.Failed ?? 0} sessions failed to upload";
 
     public string FailedBody =>
-        $"{(Import is { Failed: 1 } ? "It is" : "They are")} still on {_current.MachineName}. Run kcap import to try again.";
+        $"Your history is still on {_current.MachineName}. Go back to History to retry, or run kcap import later.";
 
     public bool NothingToCountVisible => Import is null && CapturePromised;
 
     public string? FooterLine =>
-        _current.Recording.Count == 0 ? "Turn on a harness in Settings to start recording."
+        _current.Recording.Count == 0 ? "Connect a harness from Help and support → Set up Capacitor."
         : Import is null              ? "kcap import brings your existing history over whenever you want."
         :                               null;
 
@@ -93,7 +95,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string DaemonLine => _current.DaemonRunning
         ? $"Running as a service on {_current.MachineName}. It is reachable now, and after a restart."
-        : "The daemon is not running yet. Turn it on from Settings.";
+        : "The daemon is not running yet. Reopen setup from Help and support, or run kcap setup in your terminal.";
 
     public bool WorkspaceVisible => !string.IsNullOrEmpty(_current.WorkspaceUrl);
 

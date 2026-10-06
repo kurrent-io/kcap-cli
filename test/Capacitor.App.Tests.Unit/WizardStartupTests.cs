@@ -802,9 +802,8 @@ public class WizardStartupTests {
 
     // ── the Done step's facts ──────────────────────────────────────────────────
 
-    /// Before anything committed, Done says nothing records and offers no workspace to open.
     [Test]
-    public async Task Done_reads_an_unfinished_setup_as_nothing_recorded() {
+    public async Task Done_does_not_claim_existing_connections_were_removed() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
@@ -812,7 +811,7 @@ public class WizardStartupTests {
             var done = graph.Steps.OfType<DoneStepViewModel>().Single();
             await done.OnEnterAsync(CancellationToken.None);
 
-            await Assert.That(done.Title).IsEqualTo("Nothing is being recorded yet");
+            await Assert.That(done.Capture).IsEmpty();
             await Assert.That(done.WorkspaceVisible).IsFalse();
             await Assert.That(done.ShowsFigures).IsFalse();
 

@@ -102,7 +102,7 @@
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
             <TextBlock Classes="frNote" VerticalAlignment="Center"
                        Text="Agents you already have open pick this up when they next start." />
-            <Button Grid.Column="1" x:Name="OpenWorkspaceButton" Classes="frLink" Content="OPEN YOUR WORKSPACE →"
+            <Button Grid.Column="1" x:Name="OpenWorkspaceButton" Classes="frLink" Content="Open your workspace →"
                     Command="{Binding OpenWorkspaceCommand}" IsVisible="{Binding WorkspaceVisible}" />
         </Grid>
     </StackPanel>

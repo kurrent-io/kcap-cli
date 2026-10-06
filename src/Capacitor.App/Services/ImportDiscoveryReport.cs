@@ -12,7 +12,13 @@ public sealed record ImportDiscoveryReport(
     /// Null for output that is not the report — an older CLI, or a crash mid-write.
     public static ImportDiscoveryReport? Parse(string json) {
         try {
-            return JsonSerializer.Deserialize(json, ImportDiscoveryReportJson.Default.ImportDiscoveryReport);
+            var report = JsonSerializer.Deserialize(json, ImportDiscoveryReportJson.Default.ImportDiscoveryReport);
+            if (report?.Repos is null || report.UnmatchedSessions < 0 ||
+                report.Repos.Any(r => r is null || string.IsNullOrWhiteSpace(r.Owner) ||
+                    string.IsNullOrWhiteSpace(r.Name) || r.Sessions < 0 ||
+                    r.Windows?.Any(w => w is null || w.Sessions < 0) == true) ||
+                report.Windows?.Any(w => w is null || w.Sessions < 0) == true) return null;
+            return report with { Windows = report.Windows ?? [] };
         } catch (JsonException) {
             return null;
         }

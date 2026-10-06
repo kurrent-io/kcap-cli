@@ -59,6 +59,18 @@ public class WizardCompositionHappyPathTests {
     const string ServerUrl   = "https://acme.example";
 
     [Test]
+    public async Task Resuming_an_authenticated_setup_starts_at_connections_without_signing_in_again() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
+            await graph.ViewModel.PendingEnterForTesting;
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Harnesses);
+            await Assert.That(graph.Steps.OfType<SignInStepViewModel>().Single().Satisfied).IsTrue();
+            await Assert.That(graph.Auth.Current).IsNull();
+        });
+    }
+
+    [Test]
     public async Task Fresh_machine_paste_sign_in_reaches_a_correct_done_summary() {
         WizardCompositionFixtures.WriteConfig(Config.Root,
             new ProfileConfig { ActiveProfile = ProfileName, Profiles = new() { [ProfileName] = new Profile() } });

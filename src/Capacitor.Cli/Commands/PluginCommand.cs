@@ -118,7 +118,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         args.Contains(ToolsOnlyFlag) || refreshOnly && !captureInstalled;
 
     Task NoteCaptureSkippedAsync(string vendor) =>
-        env.Stdout.WriteLineAsync($"{vendor} capture not installed (--tools-only): its sessions are not recorded.");
+        env.Stdout.WriteLineAsync($"{vendor} capture unchanged (--tools-only): no recording hooks were added or removed.");
 
     async Task<int> Remove(string[] args) {
         if (HasConflictingTargets(args)) {

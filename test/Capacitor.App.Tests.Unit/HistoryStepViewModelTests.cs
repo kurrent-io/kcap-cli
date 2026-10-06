@@ -149,7 +149,7 @@ public class HistoryStepViewModelTests {
 
         await Assert.That(h.Vm.Run!.Imported).IsEqualTo(24);
         await Assert.That(h.Vm.Run!.Failed).IsEqualTo(2);
-        await Assert.That(h.Vm.Run!.State).IsEqualTo(ImportRunState.Finished);
+        await Assert.That(h.Vm.Run!.State).IsEqualTo(ImportRunState.Failed);
     }
 
     [Test]
@@ -170,7 +170,7 @@ public class HistoryStepViewModelTests {
 
         await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHarness);
         await Assert.That(h.Cli.DiscoverCalls).IsEmpty();
-        await Assert.That(h.Vm.NextLabel).IsEqualTo("Carry on");
+        await Assert.That(h.Vm.CanContinue).IsTrue();
         await Assert.That(h.Vm.Skippable).IsFalse();
     }
 
@@ -232,11 +232,46 @@ public class HistoryStepViewModelTests {
 
         await h.Vm.OnEnterAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
         var looking = h.Vm.Looking;
+        await Assert.That(h.Vm.CanContinue).IsFalse();
+        await Assert.That(h.Vm.Skippable).IsTrue();
+        await Assert.That(await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None)).IsFalse();
+        await Assert.That(h.Cli.ImportCallCount).IsEqualTo(0);
         gate.SetResult(Report());
         await h.Vm.Discovery;
 
         await Assert.That(looking).IsTrue();
         await Assert.That(h.Vm.HasRepos).IsTrue();
+    }
+
+    [Test]
+    public async Task Removing_the_scope_cancels_old_discovery_and_drops_its_result() {
+        var h = new Harness(Report());
+        var gate = new TaskCompletionSource<ImportDiscoveryReport?>();
+        h.Cli.DiscoverBehavior = _ => gate.Task;
+        await h.Vm.OnEnterAsync(CancellationToken.None);
+        var oldDiscovery = h.Vm.Discovery;
+        h.Scope = [];
+        await h.Vm.OnEnterAsync(CancellationToken.None);
+        gate.SetResult(Report());
+        await oldDiscovery;
+        await Assert.That(h.Vm.State).IsEqualTo(HistoryState.NoHarness);
+        await Assert.That(h.Vm.Groups).IsEmpty();
+        await Assert.That(h.Vm.Windows).IsEmpty();
+        await Assert.That(h.Vm.SelectedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Import_timeout_is_a_retryable_failure_even_with_zero_exit_code() {
+        var h = new Harness(Report());
+        h.Cli.ImportBehavior = (_, _, _) => Task.FromResult(new StreamingResult(0, true, []));
+        await h.EnterAsync();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+        await Assert.That(h.Vm.Run.State).IsEqualTo(ImportRunState.Failed);
+        await Assert.That(h.Vm.ImportStarted).IsFalse();
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run.Completion;
+        await Assert.That(h.Cli.ImportCallCount).IsEqualTo(2);
     }
 
     [Test]

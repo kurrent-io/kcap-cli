@@ -210,9 +210,8 @@
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource FrAccentBrush}" />
         <Setter Property="Padding" Value="0,6" />
-        <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />
-        <Setter Property="FontSize" Value="11" />
-        <Setter Property="LetterSpacing" Value="1.1" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="LetterSpacing" Value="0" />
     </Style>
     <Style Selector="Button.frLink /template/ ContentPresenter#PART_ContentPresenter,
                      Button.frLink:disabled /template/ ContentPresenter#PART_ContentPresenter">
@@ -263,8 +262,8 @@
          sits the square between a name and the line under it. -->
     <Style Selector="CheckBox.frCheck">
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
-        <Setter Property="MinWidth" Value="0" />
-        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="MinWidth" Value="24" />
+        <Setter Property="MinHeight" Value="24" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
@@ -409,6 +408,9 @@
                      ListBox.frList ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource FrAccentWashBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="Path.frChoiceMark">
+        <Setter Property="IsVisible" Value="False" />
     </Style>
     <Style Selector="ListBox.frList ListBoxItem:selected Path.frChoiceMark,
                      ListBox.frList ListBoxItem:selected:pointerover Path.frChoiceMark">

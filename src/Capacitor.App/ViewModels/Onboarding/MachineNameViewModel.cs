@@ -48,6 +48,11 @@ public sealed class MachineNameViewModel : ReactiveObject {
 
     /// False, with <see cref="Message"/> set, when the profile could not be written.
     public async Task<bool> SaveAsync(CancellationToken ct) {
+        var name = DaemonName;
+        if (string.IsNullOrWhiteSpace(name)) {
+            Message = "Enter a name for this machine.";
+            return false;
+        }
         try {
             await ConfigMutator.MutateAsync(_config, c => {
                 var resolvedName = _resolveProfileName?.Invoke();
@@ -57,11 +62,11 @@ public sealed class MachineNameViewModel : ReactiveObject {
                 var profile    = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
                 profile = profile with {
-                    Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = DaemonName }
+                    Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = name }
                 };
 
                 return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [activeName] = profile } };
-            }, ct).ConfigureAwait(false);
+            }, ct).ConfigureAwait(true);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             Message = $"Could not save the machine name: {ex.Message}";
 

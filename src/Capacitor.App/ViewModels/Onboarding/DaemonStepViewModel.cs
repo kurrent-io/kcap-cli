@@ -99,8 +99,6 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         _terminalPathAsync              = terminalPathAsync;
         _time                           = time;
 
-        // Classification resumes off the UI thread. ReactiveCommand does not move a supplied
-        // canExecute onto the dispatcher, and Avalonia rejects that IsEnabled write.
         var idle = this.WhenAnyValue(x => x.Busy, busy => !busy)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         ActionCommand  = ReactiveCommand.CreateFromTask(RunActionAsync,
@@ -134,11 +132,15 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _satisfied, value);
             this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
+            this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(NameEditable));
         }
     }
 
     /// Enable / Start is the filled action until the service is running. Continue stays secondary.
     public bool ShowsOwnPrimary => !Satisfied && ActionLabel is not null;
+    public bool CanContinue => Satisfied && !Busy;
+    public bool NameEditable => !Busy && !Satisfied;
 
     public DaemonRow Row {
         get => _row;
@@ -171,6 +173,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _busy, value);
             this.RaisePropertyChanged(nameof(RefreshVisible));
+            this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(NameEditable));
         }
     }
 
@@ -210,15 +214,15 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         _classifyCts?.Cancel();
         _actionCts?.Cancel();
 
-        await AwaitQuietlyAsync(_classifyRun).ConfigureAwait(false);
-        await AwaitQuietlyAsync(_actionRun).ConfigureAwait(false);
+        await AwaitQuietlyAsync(_classifyRun).ConfigureAwait(true);
+        await AwaitQuietlyAsync(_actionRun).ConfigureAwait(true);
 
         return true;
     }
 
     static async Task AwaitQuietlyAsync(Task? task) {
         if (task is null) return;
-        try { await task.ConfigureAwait(false); }
+        try { await task.ConfigureAwait(true); }
         catch (OperationCanceledException) { /* leaving mid-work is not a failure */ }
         catch (Exception ex) { Console.Error.WriteLine($"kcap: wizard daemon step failed unexpectedly: {ex.Message}"); }
     }
@@ -258,8 +262,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             }
 
             _request = request!;
-            var snapshot = await ReadStatusAsync(ct).ConfigureAwait(false);
-            await ClassifySnapshotAsync(snapshot, ct).ConfigureAwait(false);
+            var snapshot = await ReadStatusAsync(ct).ConfigureAwait(true);
+            await ClassifySnapshotAsync(snapshot, ct).ConfigureAwait(true);
             WithdrawUnitWritingOfferWithoutBinary(snapshot);
         } catch (OperationCanceledException) {
             // left the step (or shutting down) mid-classification — nothing to surface
@@ -278,11 +282,11 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     /// grandchild that outlives a force-quit must not wedge the step forever.
     async Task<ServiceSnapshot?> ReadStatusAsync(CancellationToken ct) {
         for (var poll = 0; ; poll++) {
-            var snapshot = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false);
+            var snapshot = await _cli.ServiceStatusAsync(ct).ConfigureAwait(true);
             if (snapshot is null || !snapshot.TxnActive || poll >= MaxTxnPolls) return snapshot;
 
             Message = TxnWaitingMessage;
-            await Task.Delay(TxnPollInterval, _time, ct).ConfigureAwait(false);
+            await Task.Delay(TxnPollInterval, _time, ct).ConfigureAwait(true);
         }
     }
 
@@ -306,7 +310,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         }
 
         if (snapshot.DaemonPid is { } daemonPid) {
-            await ClassifyLiveDaemonAsync(snapshot, daemonPid, ct).ConfigureAwait(false);
+            await ClassifyLiveDaemonAsync(snapshot, daemonPid, ct).ConfigureAwait(true);
             return;
         }
 
@@ -334,7 +338,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task ClassifyLiveDaemonAsync(ServiceSnapshot snapshot, int daemonPid, CancellationToken ct) {
-        _evidence = await _observation.ObserveAsync(_request!, ct).ConfigureAwait(false);
+        _evidence = await _observation.ObserveAsync(_request!, ct).ConfigureAwait(true);
         var matched = IdentityMatches(_evidence, _request!);
         var owned   = snapshot.JobPid is not null && snapshot.JobPid == snapshot.DaemonPid;
 
@@ -343,7 +347,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
                 snapshot.TxnMarker ? $"{AlreadyEnabledMessage} {StaleMarkerNote}" : AlreadyEnabledMessage,
                 DaemonAffordance.None);
             Satisfied = true;
-            await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(false);
+            await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(true);
             return;
         }
 
@@ -404,33 +408,32 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task RunActionCoreAsync(CancellationToken ct) {
-        // The request names the daemon, so a changed name is saved and the row read again under it
-        // before anything is installed.
-        if (Machine is { } machine && machine.DaemonName != _savedName) {
-            if (!await machine.SaveAsync(ct).ConfigureAwait(false)) {
-                Status = machine.Message;
-                return;
-            }
-
-            _savedName = machine.DaemonName;
-            await ClassifyAsync(ct).ConfigureAwait(false);
-            if (Satisfied || Affordance == DaemonAffordance.None) return;
-        }
-
         Busy = true;
         try {
+            if (Machine is { } machine && machine.DaemonName != _savedName) {
+                var name = machine.DaemonName;
+                if (!await machine.SaveAsync(ct).ConfigureAwait(true)) {
+                    Status = machine.Message;
+                    return;
+                }
+
+                _savedName = name;
+                await ClassifyAsync(ct).ConfigureAwait(true);
+                if (Satisfied || Affordance == DaemonAffordance.None) return;
+                Busy = true;
+            }
             switch (Affordance) {
                 case DaemonAffordance.Install:
-                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(false);
+                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(true);
                     break;
                 case DaemonAffordance.Start:
-                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(false);
+                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(true);
                     break;
                 case DaemonAffordance.Takeover:
-                    await RunConsentedReplaceAsync(LifecyclePrompt.KindTakeover, ct).ConfigureAwait(false);
+                    await RunConsentedReplaceAsync(LifecyclePrompt.KindTakeover, ct).ConfigureAwait(true);
                     break;
                 case DaemonAffordance.Repair:
-                    await RunConsentedReplaceAsync(LifecyclePrompt.KindRepair, ct).ConfigureAwait(false);
+                    await RunConsentedReplaceAsync(LifecyclePrompt.KindRepair, ct).ConfigureAwait(true);
                     break;
             }
         } catch (OperationCanceledException) {
@@ -445,38 +448,38 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     // The ONLY dialog this step opens: consent BEFORE a unit rewrite, with the takeover
     // disclosure. Outcome presentation belongs to the channel consumer, never to this waiter.
     async Task RunConsentedReplaceAsync(string kind, CancellationToken ct) {
-        var pathDegraded = await _terminalPathAsync(ct).ConfigureAwait(false) is null;
+        var pathDegraded = await _terminalPathAsync(ct).ConfigureAwait(true) is null;
         var prompt = new LifecyclePrompt(
             kind, null, null, pathDegraded, DaemonLifecycleController.TakeoverDisclosure);
 
-        if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
+        if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(true)) {
             Status = TakeoverDeclinedMessage;
             // Decline leaves the step visibly incomplete — but the flip protects the owner
             // regardless of which process hosts an identity-MATCHED daemon.
-            if (Row == DaemonRow.ManualIdentityMatch) await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(false);
+            if (Row == DaemonRow.ManualIdentityMatch) await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(true);
             return;
         }
 
-        await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
+        await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
     }
 
     async Task RunMutationAsync(MutationVerb verb, CancellationToken ct) {
         var request = _request! with { Verb = verb };
-        var outcome = await _runMutation(request, ct).ConfigureAwait(false);
+        var outcome = await _runMutation(request, ct).ConfigureAwait(true);
 
         // The lane's own outcome IS the predicate — never a status snapshot read afterwards.
         Status = OutcomeStatus(verb, outcome);
         if (outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) return;
 
         Satisfied = true;
-        _evidence = await _observation.ObserveAsync(request, ct).ConfigureAwait(false);
-        if (IdentityMatches(_evidence, request)) await ApplyPendingClaimAsync(request, _evidence).ConfigureAwait(false);
+        _evidence = await _observation.ObserveAsync(request, ct).ConfigureAwait(true);
+        if (IdentityMatches(_evidence, request)) await ApplyPendingClaimAsync(request, _evidence).ConfigureAwait(true);
     }
 
     /// Reads the live policy first because the put replaces it wholesale, and stays untokened so leaving the step awaits rather than cancels mid-claim.
     async Task ApplyPendingClaimAsync(MutationRequest request, ObservedEvidence? evidence) {
         try {
-            await ApplyPendingClaimCoreAsync(request, evidence).ConfigureAwait(false);
+            await ApplyPendingClaimCoreAsync(request, evidence).ConfigureAwait(true);
         } catch (Exception ex) {
             Status = Append(Status, ClaimFailedMessage); // claim retained for the post-wizard coordinator
             Console.Error.WriteLine($"kcap: wizard daemon step consent flip failed unexpectedly: {ex.Message}");
@@ -484,7 +487,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task ApplyPendingClaimCoreAsync(MutationRequest request, ObservedEvidence? evidence) {
-        var pending = await Task.Run(_claims.Pending).ConfigureAwait(false);
+        var pending = await Task.Run(_claims.Pending).ConfigureAwait(true);
         var claim = pending.FirstOrDefault(
             c => c.Profile == request.Profile && c.CanonicalServer == request.CanonicalServer);
         if (claim is null) return;
@@ -496,7 +499,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
         ConsentAckDto ack;
         try {
-            var policy = await _ops.GetConsentPolicyAsync(CancellationToken.None).ConfigureAwait(false);
+            var policy = await _ops.GetConsentPolicyAsync(CancellationToken.None).ConfigureAwait(true);
             // Seeding respects an operator's deny: it is stricter than prompt, so the flip is inert here.
             if (policy.Default == "deny") {
                 Status = Append(Status, ClaimAlreadyStricterMessage);
@@ -504,7 +507,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             }
 
             var put = new ConsentPolicyPutV2Dto(request.DaemonName, claim.CanonicalServer, policy with { Default = "prompt" });
-            ack = await _ops.PutConsentPolicyV2Async(put, CancellationToken.None).ConfigureAwait(false);
+            ack = await _ops.PutConsentPolicyV2Async(put, CancellationToken.None).ConfigureAwait(true);
         } catch (LocalControlOpsException) {
             Status = Append(Status, ClaimFailedMessage); // claim retained for the post-wizard coordinator
             return;
@@ -515,7 +518,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
 
-        await Task.Run(() => _claims.TryConsume(claim, ResolveCanonical, request.DaemonName)).ConfigureAwait(false);
+        await Task.Run(() => _claims.TryConsume(claim, ResolveCanonical, request.DaemonName)).ConfigureAwait(true);
     }
 
     (string Profile, string Server, string DaemonName) ResolveCanonical() =>

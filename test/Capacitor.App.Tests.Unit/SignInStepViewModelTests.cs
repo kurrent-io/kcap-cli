@@ -464,8 +464,8 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Backing_out_of_the_tenant_list_resolves_the_pick_with_nothing() {
-        var (satisfied, status) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task Cancelling_the_tenant_list_restores_a_retryable_sign_in_without_an_error() {
+        var (satisfied, status, retry, picker, error) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Connect.Choice = ConnectChoice.Discover;
             h.Operation = async (_, ct) => {
@@ -480,11 +480,14 @@ public class SignInStepViewModelTests {
             await h.Vm.CancelTenantCommand.Execute().ToTask();
             await exec;
 
-            return (h.Vm.Satisfied, h.Vm.Status);
+            return (h.Vm.Satisfied, h.Vm.Status, h.Vm.ShowPrimaryAction, h.Vm.TenantPickerVisible, h.Vm.StatusIsError);
         });
 
         await Assert.That(satisfied).IsFalse();
-        await Assert.That(status).IsEqualTo("Sign-in failed."); // the façade's own "No tenant selected."
+        await Assert.That(status).IsEqualTo("Sign-in cancelled.");
+        await Assert.That(retry).IsTrue();
+        await Assert.That(picker).IsFalse();
+        await Assert.That(error).IsFalse();
     }
 
     // ── create sub-flow ──────────────────────────────────────────────────────
@@ -733,7 +736,7 @@ public class SignInStepViewModelTests {
     [Arguments(WizardNavigation.Back)]
     [Arguments(WizardNavigation.Skip)]
     [Arguments(WizardNavigation.Next)]
-    public async Task Leaving_before_the_boundary_cancels_the_attempt_and_is_allowed(WizardNavigation direction) {
+    public async Task Leaving_before_the_boundary_cancels_the_attempt_but_cannot_advance_unsigned(WizardNavigation direction) {
         var (canLeave, satisfied, status, isError, runs) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Connect.Choice = ConnectChoice.Discover;
@@ -756,7 +759,7 @@ public class SignInStepViewModelTests {
             return (allowed, h.Vm.Satisfied, h.Vm.Status, h.Vm.StatusIsError, h.Runs);
         });
 
-        await Assert.That(canLeave).IsTrue();
+        await Assert.That(canLeave).IsEqualTo(direction == WizardNavigation.Back);
         await Assert.That(satisfied).IsFalse();
         await Assert.That(status).IsEqualTo("Sign-in cancelled.");
         await Assert.That(isError).IsFalse();

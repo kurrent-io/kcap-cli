@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -18,7 +19,7 @@ public sealed class ImportTrack : Control {
     const double TrackWidth = 228;
     const double Thumb      = 13;
     const double Ring       = 9;
-    const double Height_    = 20;
+    const double Height_    = 32;
 
     IBrush IdleBrush   => Brush("FrRailIdleBrush");
     IBrush StopBrush   => Brush("FrRailStopBrush");
@@ -42,6 +43,13 @@ public sealed class ImportTrack : Control {
     static double X(int stop) => Thumb / 2 + stop * (TrackWidth - Thumb) / 2;
 
     protected override Size MeasureOverride(Size availableSize) => new(TrackWidth, Height_);
+    protected override AutomationPeer OnCreateAutomationPeer() => new ImportTrackAutomationPeer(this);
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
+        base.OnPropertyChanged(change);
+        if (change.Property == StopProperty && ControlAutomationPeer.FromElement(this) is ImportTrackAutomationPeer peer)
+            peer.NotifyStopChanged(change.GetOldValue<int>(), change.GetNewValue<int>());
+    }
 
     public override void Render(DrawingContext context) {
         var y = Height_ / 2;
@@ -77,6 +85,8 @@ public sealed class ImportTrack : Control {
 
     protected override void OnPointerPressed(PointerPressedEventArgs e) {
         base.OnPointerPressed(e);
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        Focus();
         SetFromPointer(e.GetPosition(this).X);
         e.Pointer.Capture(this);
         e.Handled = true;

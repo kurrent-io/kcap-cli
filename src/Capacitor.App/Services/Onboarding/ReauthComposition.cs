@@ -11,7 +11,7 @@ internal sealed record ReauthGraph(SignInStepViewModel SignIn, WizardAuthService
     /// and its run awaited (CanLeaveAsync never vetoes), then the driver is quiesced so nothing
     /// commits after the window is gone.
     public async Task CloseAsync(CancellationToken ct) {
-        await SignIn.CanLeaveAsync(WizardNavigation.Next, ct).ConfigureAwait(true);
+        await SignIn.CanLeaveAsync(WizardNavigation.Back, ct).ConfigureAwait(true);
         await Auth.QuiescedAsync().ConfigureAwait(true);
     }
 }

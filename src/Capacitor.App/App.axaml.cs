@@ -202,6 +202,7 @@ public partial class App : Application {
     Task? _reauthSettle;
     bool _shutdownStarted;
     bool _shutdownConfirmed;
+    bool _setupRestarting;
     // 0 = normal shutdown. Set to 1 on a startup failure so the DEFERRED shutdown path (Cmd+Q /
     // platform shutdown while the error window is showing — OnShutdownRequested ->
     // DisposeAndShutdownAsync) still reports failure, instead of TryShutdown()'s platform
@@ -281,8 +282,9 @@ public partial class App : Application {
             // An incomplete gate builds NO daemon graph at all — the wizard owns
             // the app until it closes, and the graph is then built against a FRESH resolution,
             // because the wizard is exactly what may have changed the answer.
-            if (gate is GateResult.Incomplete) {
-                laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles);
+            if (ShouldShowWizard(gate, desktop.Args)) {
+                laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles,
+                    alreadyAuthenticated: gate is GateResult.Complete);
                 if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
                 (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _time, _shutdown.Token);
             }
@@ -358,7 +360,12 @@ public partial class App : Application {
         var kind = InstallLocation.Classify(root, _userHome.Path);
         if (InstallLocation.Passes(kind)) return false;
 
-        var mover = new ApplicationsMover(new ProcessRunner(_time), ApplicationsMover.PromoteExclusive);
+        var name = Path.GetFileName(root!);
+        var userApps = Path.Combine(_userHome.Path, "Applications");
+        var apps = !Directory.Exists(Path.Combine("/Applications", name)) && Directory.Exists(Path.Combine(userApps, name))
+            ? userApps : "/Applications";
+        var mover = new ApplicationsMover(new ProcessRunner(_time), ApplicationsMover.PromoteExclusive, apps,
+            swap: ApplicationsMover.SwapAtomic, isRunning: InstalledAppRunning);
         // Shutdown(0) closes this window as a side effect, which the window's own Closed handler
         // below turns back into a Quit call — this flag is what keeps that reentry from calling
         // Shutdown twice, whichever of the three paths (Quit, a successful move, or the titlebar
@@ -374,24 +381,45 @@ public partial class App : Application {
             move: async () => {
                 var outcome = await mover.MoveAsync(root!, _shutdown.Token);
                 if (outcome.Moved) {
-                    Process.Start(new ProcessStartInfo("open") { ArgumentList = { "-n", outcome.InstalledPath! }, UseShellExecute = false });
+                    var launched = Process.Start(new ProcessStartInfo("open") { ArgumentList = { outcome.InstalledPath! }, UseShellExecute = false });
+                    if (launched is null) return new MoveOutcome(false, outcome.InstalledPath, "Could not open Capacitor. Open the copy in Applications.");
+                    using (launched) {
+                        await launched.WaitForExitAsync(_shutdown.Token);
+                        if (launched.ExitCode != 0)
+                            return new MoveOutcome(false, outcome.InstalledPath, "Could not open Capacitor. Open the copy in Applications.");
+                    }
                     Quit();
                 }
                 return outcome;
             },
-            quit: Quit);
+            quit: Quit, plan: mover.Inspect(root!));
         desktop.MainWindow = window;
         window.Show();
         return true;
     }
 
-    internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit) {
+    static bool InstalledAppRunning(string root) {
+        var executable = Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor");
+        foreach (var process in Process.GetProcessesByName("Kurrent Capacitor")) {
+            using (process) {
+                try {
+                    if (process.Id != Environment.ProcessId && process.MainModule?.FileName == executable) return true;
+                } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
+                    return true; // Do not replace a copy whose running state cannot be verified.
+                }
+            }
+        }
+        return false;
+    }
+
+    internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
+            ApplicationsInstallPlan? plan = null) {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "Kurrent Capacitor is running from the disk image.",
             InstallLocationKind.Translocated => "Kurrent Capacitor is running from a temporary location.",
             _                                => "Kurrent Capacitor is not in your Applications folder.",
         };
-        return new InstallLocationWindow(where, move, quit);
+        return new InstallLocationWindow(where, move, quit, plan);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the
@@ -402,6 +430,9 @@ public partial class App : Application {
             ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, TimeProvider time,
             CancellationToken ct) =>
         EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env, time).EvaluateAsync, ct);
+
+    internal static bool ShouldShowWizard(GateResult gate, string[]? args) =>
+        gate is GateResult.Incomplete || args?.Contains("--setup", StringComparer.Ordinal) == true;
 
     // The steady-state graph, over the resolution the gate was evaluated on (never a second resolve).
     void BuildDaemonGraph(
@@ -635,7 +666,9 @@ public partial class App : Application {
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, adopt: TakeAdoptableWindow())),
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, adopt: TakeAdoptableWindow(),
+                requestSetup: () => _ = RestartForSetupAsync(desktop),
+                historyImport: _historyImport?.Run)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -680,6 +713,7 @@ public partial class App : Application {
             ? () => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier, lifecycle.PhaseClosed)
             : null;
         ConfigureSettingsMenu(openSettings);
+        _appMenu.SetSetupAction(() => _ = RestartForSetupAsync(desktop));
 
         // LAST, deliberately: anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
@@ -695,6 +729,33 @@ public partial class App : Application {
     }
 
     internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
+
+    async Task RestartForSetupAsync(IClassicDesktopStyleApplicationLifetime desktop) {
+        if (_setupRestarting || _shutdownStarted) return;
+        _setupRestarting = true;
+        try {
+            if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window,
+                new LifecyclePrompt(LifecyclePrompt.KindSetup, null, null, false,
+                    "Capacitor will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."), _shutdown.Token)) {
+                _setupRestarting = false;
+                return;
+            }
+            var executable = Environment.ProcessPath ?? throw new InvalidOperationException("The app's executable could not be found.");
+            var start = new ProcessStartInfo(executable) { UseShellExecute = false };
+            if (Path.GetFileNameWithoutExtension(executable) == "dotnet")
+                start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
+            start.ArgumentList.Add("--setup");
+            desktop.Exit += (_, _) => {
+                try { Process.Start(start); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}"); }
+            };
+            desktop.TryShutdown();
+        } catch (Exception ex) {
+            _setupRestarting = false;
+            Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}");
+            _coordinator?.Window?.Notifier?.Notify("Could not reopen setup. Please try again.");
+        }
+    }
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled) {
@@ -890,7 +951,7 @@ public partial class App : Application {
     // false means the lane outran the handoff cap and the graph must close its auto-actions.
     async Task<bool> RunWizardModeAsync(
             IClassicDesktopStyleApplicationLifetime desktop, DaemonMutationLane lane, OutcomeChannel channel,
-            IProcessRunner runner, ILoginShellProbe probe, ProfileContext? profiles) {
+            IProcessRunner runner, ILoginShellProbe probe, ProfileContext? profiles, bool alreadyAuthenticated) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
@@ -932,7 +993,8 @@ public partial class App : Application {
             ShimTarget: shimTarget,
             DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv)?.DaemonName,
             Time: _time,
-            ShutdownToken: _shutdown.Token));
+            ShutdownToken: _shutdown.Token,
+            AlreadyAuthenticated: alreadyAuthenticated));
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
@@ -1029,6 +1091,7 @@ public partial class App : Application {
         void OnCloseRequested() => closed.TrySetResult();
 
         wizard.CloseRequested += OnCloseRequested;
+        if (wizard.Closed) closed.TrySetResult();
         await using var registration = ct.Register(() => closed.TrySetResult());
         try {
             await closed.Task.ConfigureAwait(true);
@@ -1191,7 +1254,8 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
-            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null, MainWindow? adopt = null) {
+            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null, MainWindow? adopt = null,
+            Action? requestSetup = null, HistoryImportRun? historyImport = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1239,7 +1303,7 @@ public partial class App : Application {
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction);
+            settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport);
         var window = adopt ?? new MainWindow();
         window.DataContext = vm;
         window.Notifier = notifier;
@@ -1800,7 +1864,7 @@ public partial class App : Application {
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
-                applyOnExit: () => _updates?.ApplyPendingOnExit());
+                applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });
         } else {
             await DisposeLifecycleAndServiceAsync();
             _shutdownConfirmed = true;

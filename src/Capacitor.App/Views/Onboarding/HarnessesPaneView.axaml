@@ -12,7 +12,7 @@
 
                 <TextBlock Classes="frBody" IsVisible="{Binding NoneFound}">
                     <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}"
-                        Foreground="{StaticResource KcapTextBrush}" /><Run Text=". Capacitor records the harnesses you already run, so there is nothing to connect yet — install one and come back to Settings." />
+                        Foreground="{StaticResource KcapTextBrush}" /><Run Text=". Install a harness, then reopen setup from Help and support." />
                 </TextBlock>
 
                 <!-- The table: one row per detected harness, record and tools in fixed cells. -->
@@ -41,17 +41,17 @@
                                                 <TextBlock Classes="frSignal" Text="installing…" IsVisible="{Binding Installing}" />
                                                 <TextBlock Classes="frSignal" Text="✓ turned on" Foreground="{StaticResource KcapSuccessBrush}"
                                                            IsVisible="{Binding Succeeded}" />
-                                                <Button x:Name="HarnessRetryButton" Classes="frSecondary frCompact" Content="RETRY"
+                                                <Button x:Name="HarnessRetryButton" Classes="frSecondary frCompact" Content="Retry"
                                                         Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
                                             </StackPanel>
                                             <CheckBox Grid.Row="0" Grid.Column="2" x:Name="RecordCheckBox" Classes="frCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).Idle}"
+                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Record, Mode=TwoWay}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}" />
                                             <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="frCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).Idle}"
+                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Give {0} Capacitor tools'}" />
                                             <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -79,7 +79,8 @@
                         <Run Text="Applies to sessions recorded on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}"
                             Foreground="{StaticResource KcapTextBrush}" /><Run Text=". Sessions can still be shared or hidden individually." />
                     </TextBlock>
-                    <ItemsControl x:Name="VisibilityOptions" ItemsSource="{x:Static vm:HarnessesStepViewModel.VisibilityOptions}">
+                    <ItemsControl x:Name="VisibilityOptions" ItemsSource="{x:Static vm:HarnessesStepViewModel.VisibilityOptions}"
+                                  IsEnabled="{Binding Idle}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:VisibilityOption">
                                 <RadioButton Classes="frOption" GroupName="Visibility" Margin="0,0,0,2"
@@ -99,7 +100,8 @@
                 <Border Classes="frCallout" IsVisible="{Binding ProviderKeyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
                         <CheckBox x:Name="ProviderKeyCheckBox" Classes="frCheck" VerticalAlignment="Top" Margin="0,1,0,0"
-                                  IsChecked="{Binding UseProviderApiKey, Mode=TwoWay}" />
+                                  IsChecked="{Binding UseProviderApiKey, Mode=TwoWay}" IsEnabled="{Binding Idle}"
+                                  AutomationProperties.Name="Use my provider API keys for titles and summaries" />
                         <StackPanel Grid.Column="1" Spacing="3">
                             <TextBlock Classes="frLabel" FontSize="13" Text="Use these API keys for kcap's own calls" />
                             <TextBlock Classes="frDetail">
@@ -122,7 +124,7 @@
                                        Text="Harness hooks run that command by name. Turning them on waits until this machine can find it." />
                             <WrapPanel Orientation="Horizontal" ItemSpacing="10" LineSpacing="6" Margin="0,3,0,0">
                                 <Button x:Name="PathFixButton" Classes="frPrimary frCompact"
-                                        Content="{Binding PathFix.ActionLabel, Converter={x:Static views:UpperCase.Instance}}"
+                                        Content="{Binding PathFix.ActionLabel}"
                                         Command="{Binding PathFix.InstallCommand}" />
                                 <TextBlock x:Name="PathFixMessageText" Classes="frDetail" Text="{Binding PathFix.Message}" VerticalAlignment="Center"
                                            IsVisible="{Binding PathFix.Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -146,7 +148,10 @@
         </Border>
 
         <TextBlock Classes="frNote" IsVisible="{Binding DeclineVisible}"
-                   Text="Nothing is selected, so there is nothing to turn on. Not now means nothing is recorded and your agents keep starting from scratch. You can turn capture on or off at any time." />
+                   Text="No new connections selected. Reopen setup from Help and support whenever you're ready." />
+        <TextBlock Classes="frNote" IsVisible="{Binding ConnectionsSaved}"
+                   Text="These connection choices are saved. Use kcap plugin remove in your terminal to disconnect a harness." />
+        <TextBlock Classes="frNote" Text="Setup adds connections; it doesn't remove existing ones. Unchecking a box leaves that part of an existing connection unchanged." />
         <TextBlock Classes="frNote" IsVisible="{Binding !DeclineVisible}">
             <Run Text="Then you can ask " /><Run Text="“have I hit this before?”" Foreground="{StaticResource FrMutedBrush}" /><Run Text=" or " /><Run Text="“what did I change in the importer last week?”" Foreground="{StaticResource FrMutedBrush}" />
         </TextBlock>

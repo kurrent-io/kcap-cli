@@ -11,7 +11,7 @@
                 <TextBlock Classes="frMicro" Text="NAME" />
                 <TextBlock Classes="frDetail" Text="How this machine appears when you start an agent on it from somewhere else." />
                 <TextBox x:Name="DaemonNameBox" Classes="frField" Text="{Binding Machine.DaemonName, Mode=TwoWay}"
-                         IsEnabled="{Binding !Satisfied}" />
+                         IsEnabled="{Binding NameEditable}" AutomationProperties.Name="Machine name" />
             </StackPanel>
 
             <Border Classes="frDivider" IsVisible="{Binding Machine, Converter={x:Static ObjectConverters.IsNotNull}}" />
@@ -32,10 +32,10 @@
 
                 <StackPanel Orientation="Horizontal" Spacing="12">
                     <Button x:Name="DaemonActionButton" Classes="frPrimary frCompact"
-                            Content="{Binding ActionLabel, Converter={x:Static views:UpperCase.Instance}}"
+                            Content="{Binding ActionLabel}"
                             Command="{Binding ActionCommand}"
                             IsVisible="{Binding ShowsOwnPrimary}" />
-                    <Button x:Name="DaemonRefreshButton" Classes="frSecondary frCompact" Content="CHECK AGAIN"
+                    <Button x:Name="DaemonRefreshButton" Classes="frSecondary frCompact" Content="Check again"
                             Command="{Binding RefreshCommand}" IsVisible="{Binding RefreshVisible}" />
                 </StackPanel>
 

@@ -7,12 +7,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// <summary>
-/// Runs ONE façade operation for the staged intent and renders its structured progress: notices,
-/// the browser fallback URL, the device code, the tenant list, and the create-workspace prompts.
-/// Nothing starts on entry — the step has an explicit Sign in action, because the operation is the
-/// only thing on the wizard that reaches the network. Cancellation is never rendered as a failure.
-/// </summary>
+/// Sign-in and workspace creation share one cancellable auth attempt.
 public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     internal const int LogLimit = 200;
 
@@ -53,6 +48,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     readonly string?                 _committedDetail;
     readonly TimeProvider            _time;
     readonly Func<Func<string, CancellationToken, Task<AvailabilityResponse?>>?> _provisionerCheck;
+    string? _workspace;
+    public string ConnectionStatus => Uri.TryCreate(_workspace, UriKind.Absolute, out var uri)
+        ? $"Connected to {uri.Host}" : "Connected to your workspace";
 
     readonly UiQuestion<ProvisionMode> _mode    = new();
     readonly UiQuestion<string?>       _orgName = new();
@@ -137,8 +135,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         bridges.Progress.DeviceCodeReceived += (code, verificationUri, prefilled) => {
             DeviceCode      = StripClipboardNote(code);
             VerificationUri = verificationUri;
-            // Raw here, stripped above: the chip is what the user reads, the log records what was
-            // actually reported - including the clipboard note. Pinned by the view-model tests.
             Append(prefilled
                 ? $"Check the code shown is {code} at {verificationUri}"
                 : $"Enter the code {code} at {verificationUri}");
@@ -174,7 +170,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             ConfirmVisible = true;
         }, () => ConfirmVisible = false, ct);
         provisioner.PollProgress = (attempt, max) =>
-            _post(() => ProvisioningProgress = $"Still setting up — checked {attempt} of {max} times.");
+            _post(() => ProvisioningProgress = "Your workspace is still being prepared…");
 
         SignInCommand = ReactiveCommand.CreateFromTask(SignInAsync);
 
@@ -188,7 +184,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         OpenVerificationUriCommand = ReactiveCommand.Create(() => Open(VerificationUri));
 
         ConfirmTenantCommand = ReactiveCommand.Create(() => CommitTenant(SelectedTenant));
-        CancelTenantCommand  = ReactiveCommand.Create(() => CommitTenant(null));
+        CancelTenantCommand = ReactiveCommand.Create(() => {
+            _tenantChoiceMade = true;
+            this.RaisePropertyChanged(nameof(TenantChoicePending));
+            _attempt?.Cancel();
+        });
 
         // Unofferable rather than declinable: a blank submit must never end the whole run.
         var hasWorkspace = this.WhenAnyValue(x => x.ExistingWorkspaceInput, input => !string.IsNullOrWhiteSpace(input));
@@ -258,7 +258,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     /// Sign-in has its own actions on the page. Next stays hidden until it commits, and while a
     /// quarantine notice is still up.
     public bool OwnsPrimaryAction => !Satisfied || QuarantineNotice is not null;
-
     public bool Skippable => false;
 
     public ConnectChoiceViewModel Connect => _connect;
@@ -322,11 +321,13 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _statusIsError, value);
             this.RaisePropertyChanged(nameof(PrimaryActionLabel));
+            this.RaisePropertyChanged(nameof(WorkAccountLabel));
         }
     }
 
     /// "Try again" after a failure so the primary action is not another "Sign in" next to the title.
     public string PrimaryActionLabel => StatusIsError ? "Try again" : "Sign in";
+    public string WorkAccountLabel => StatusIsError ? "Try again" : "Continue with work account";
 
     /// The last error line the façade rendered. Detail behind the generic failure headline.
     public string? StatusDetail {
@@ -490,6 +491,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         return Task.CompletedTask;
     }
 
+    internal void RestoreCommitted() {
+        Satisfied = true;
+        SetStatus("Connected to your workspace", isError: false);
+    }
+
     /// <summary>
     /// A live attempt is cancelled, and the RUN — not just the attempt — is awaited:
     /// pre-boundary that ends it with nothing durable, past the boundary the operation still
@@ -508,7 +514,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             }
         }
 
-        return direction == WizardNavigation.Back || QuarantineNotice is null;
+        return direction == WizardNavigation.Back || Satisfied && QuarantineNotice is null;
     }
 
     /// The command's body, reachable directly so a re-entrant call can be asserted as a no-op.
@@ -552,9 +558,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
         _attempt = null;
         Apply(result);
-        // A pick stays on the list. Dropping it here would flash the sign-in card, then a
-        // dedicated success page.
-        if (!TenantPickerVisible) HidePrompts();
+        if (!Satisfied || !TenantPickerVisible) HidePrompts();
         ClearTransient();
         Busy = false;
         await SurfaceQuarantineAsync().ConfigureAwait(true);
@@ -573,6 +577,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
                 break;
             case AuthResult.Committed committed:
+                _workspace = committed.CanonicalServer;
+                this.RaisePropertyChanged(nameof(ConnectionStatus));
                 Satisfied = true;
                 SetStatus(CommittedStatus(committed), isError: false, _committedDetail);
 

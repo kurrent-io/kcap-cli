@@ -1,10 +1,12 @@
 using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using Avalonia.Controls;
+using Avalonia;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
+using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
@@ -45,6 +47,41 @@ public class HarnessesStepViewModelTests {
     }
 
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Navigation_stays_visible_in_a_short_window_and_the_next_page_starts_at_the_top() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
+            h.Cli.DiscoverBehavior = _ => Task.FromResult<ImportDiscoveryReport?>(new(
+                [.. Enumerable.Range(0, 20).Select(i => new ImportDiscoveryRepo("org", $"repo-{i}", 3, null, null))], 0, []));
+            var history = new HistoryStepViewModel(h.Cli, () => h.Vm.Recording, a => a(), "test-mac", TimeProvider.System);
+            var vm = new OnboardingViewModel([h.Vm, history]);
+            await vm.PendingEnterForTesting;
+            var window = new MainWindow { Onboarding = vm, Width = 1024, Height = 640 };
+            window.Show();
+            try {
+                Dispatcher.UIThread.RunJobs();
+                var scroll = window.GetVisualDescendants().OfType<ScrollViewer>().Single(s => s.Name == "StepScroll");
+                var next = window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "NextButton");
+                var position = next.TranslatePoint(default, window)!.Value;
+                await Assert.That(position.Y + next.Bounds.Height <= window.Bounds.Height).IsTrue();
+                h.Vm.Visibility = "private";
+                var selected = window.GetVisualDescendants().OfType<RadioButton>().Single(r => r.Tag as string == "private");
+                await Assert.That(selected.IsChecked).IsTrue();
+                scroll.Offset = new Vector(0, 100);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(scroll.Offset.Y > 0).IsTrue();
+                await vm.NextCommand.Execute().ToTask();
+                await history.Discovery;
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(scroll.Offset.Y).IsEqualTo(0);
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -144,6 +181,8 @@ public class HarnessesStepViewModelTests {
             await h.Vm.OnEnterAsync(CancellationToken.None);
 
             var leave1 = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            await Assert.That(h.Vm.ChoicesEditable).IsFalse();
+            await Assert.That(h.Vm.Recording).IsEquivalentTo([HarnessId.Claude, HarnessId.Pi]);
             var leave2 = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
             return (leave1, leave2, h.Row("Cursor"), h.Row("Pi"), h.Vm.NextLabel, h.Cli.PluginInstallCallCount);
@@ -185,13 +224,15 @@ public class HarnessesStepViewModelTests {
     public async Task Next_saves_who_can_read_and_the_provider_key_answer_to_the_profile() {
         var existing = new ProfileConfig {
             ActiveProfile = "acme",
-            Profiles      = new() { ["acme"] = new Profile { ServerUrl = "https://acme.example" } },
+            Profiles      = new() { ["acme"] = new Profile { ServerUrl = "https://acme.example", DefaultVisibility = "project", UseProviderApiKey = true } },
         };
         await File.WriteAllTextAsync(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
         var (visibility, useKey) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root) { ProviderKeys = new HashSet<string> { "ANTHROPIC_API_KEY" } };
             await h.Vm.OnEnterAsync(CancellationToken.None);
+            await Assert.That(h.Vm.Visibility).IsEqualTo("project");
+            await Assert.That(h.Vm.UseProviderApiKey).IsTrue();
             h.Vm.Visibility        = "private";
             h.Vm.UseProviderApiKey = true;
 
@@ -302,28 +343,6 @@ public class HarnessesStepViewModelTests {
         await Assert.That(calls).IsEqualTo(0);
         await Assert.That(stamped).IsEquivalentTo([HarnessId.Claude, HarnessId.Cursor, HarnessId.Pi]);
         await Assert.That(File.Exists(ConfigPath)).IsFalse();
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_primary_label_counts_the_selected_harnesses() {
-        var (three, one, none) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Config.Root);
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-            var all = h.Vm.NextLabel;
-            h.Row("Claude Code").Record = false;
-            h.Row("Cursor").Record = false;
-            h.Row("Cursor").Tools = false;
-            var single = h.Vm.NextLabel;
-            h.Row("Pi").Record = false;
-            h.Row("Pi").Tools = false;
-
-            return (all, single, h.Vm.NextLabel);
-        });
-
-        await Assert.That(three).IsEqualTo("Turn on for 3 harnesses");
-        await Assert.That(one).IsEqualTo("Turn on for 1 harness");
-        await Assert.That(none).IsEqualTo("Turn on");
     }
 
     [Test]

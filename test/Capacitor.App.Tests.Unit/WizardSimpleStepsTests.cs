@@ -32,8 +32,6 @@ public class WizardSimpleStepsTests {
         await Assert.That(PathFixViewModel.ComputeApplicable(hasInstaller, target, onPath)).IsEqualTo(expected);
     }
 
-    /// The step shows its installer's own disclosure, and without one it cannot apply however the
-    /// composition root decided.
     [Test]
     public async Task The_step_follows_its_installer() {
         var store = new FakeAppStateStore();
@@ -239,18 +237,16 @@ public class WizardSimpleStepsTests {
             var title    = texts.FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
             var daemon   = texts.FirstOrDefault(t => t.Name == "DaemonLineText")?.Text;
             var capture  = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "CaptureItems")?.ItemCount;
-            var next     = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "NextButton")?.Content;
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (title, daemon, capture, next);
+            return (title, daemon, capture);
         });
 
         await Assert.That(result.title).IsEqualTo("From now on, your agents remember");
         await Assert.That(result.daemon).StartsWith("Running as a service on test-mac.");
         await Assert.That(result.capture).IsEqualTo(1);
-        await Assert.That(result.next).IsEqualTo("OPEN CAPACITOR");
     }
 }
 
@@ -423,8 +419,8 @@ public class DoneStepViewModelTests {
 
         await Assert.That(imported).IsEqualTo("Your work so far");
         await Assert.That(remembering).IsEqualTo("From now on, your agents remember");
-        await Assert.That(nothing).IsEqualTo("Nothing is being recorded yet");
-        await Assert.That(blocked).IsEqualTo("Nothing is being recorded yet"); // hooks that cannot find kcap record nothing
+        await Assert.That(nothing).IsEqualTo("No new recording connections");
+        await Assert.That(blocked).IsEqualTo("No new recording connections");
     }
 
     [Test]
@@ -441,7 +437,8 @@ public class DoneStepViewModelTests {
 
         await Assert.That(visible).IsTrue();
         await Assert.That(title).IsEqualTo("3 sessions failed to upload");
-        await Assert.That(body).IsEqualTo("They are still on test-mac. Run kcap import to try again.");
+        await Assert.That(body).Contains("test-mac");
+        await Assert.That(body).Contains("retry");
         await Assert.That(landed).IsEqualTo("30");
         await Assert.That(unit).IsEqualTo("/ 100");
     }

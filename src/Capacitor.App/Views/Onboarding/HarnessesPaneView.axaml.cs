@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Capacitor.App.ViewModels.Onboarding;
@@ -7,11 +8,15 @@ namespace Capacitor.App.Views.Onboarding;
 public partial class HarnessesPaneView : UserControl {
     public HarnessesPaneView() => InitializeComponent();
 
-    // The options are a static list, so each radio carries its value and the page's one answer
-    // lives on the view model rather than in a per-option flag.
     void OnVisibilityLoaded(object? sender, RoutedEventArgs e) {
-        if (sender is RadioButton { Tag: string value } radio && DataContext is HarnessesStepViewModel vm)
-            radio.IsChecked = vm.Visibility == value;
+        if (sender is not RadioButton { Tag: string value } radio || DataContext is not HarnessesStepViewModel vm) return;
+        var subscription = vm.WhenAnyValue(x => x.Visibility).Subscribe(selected => radio.IsChecked = selected == value);
+        EventHandler<VisualTreeAttachmentEventArgs>? detach = null;
+        detach = (_, _) => {
+            subscription.Dispose();
+            radio.DetachedFromVisualTree -= detach;
+        };
+        radio.DetachedFromVisualTree += detach;
     }
 
     void OnVisibilityChecked(object? sender, RoutedEventArgs e) {

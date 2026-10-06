@@ -26,24 +26,24 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     internal static readonly IReadOnlyList<string> ProviderKeys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"];
 
-    readonly IKcapCli                                                          _cli;
+    readonly IKcapCli _cli;
     readonly Func<CancellationToken, Task<IReadOnlyDictionary<HarnessId, DetectedAgent>>> _detect;
-    readonly Func<IReadOnlySet<HarnessId>>                                      _declined;
-    readonly Func<CancellationToken, Task<IReadOnlySet<string>?>>               _providerKeys;
-    readonly ConfigRoot                                                         _config;
-    readonly Func<string?>?                                                     _resolveProfileName;
-    readonly Action<IEnumerable<HarnessId>>                                     _stampOffered;
+    readonly Func<IReadOnlySet<HarnessId>> _declined;
+    readonly Func<CancellationToken, Task<IReadOnlySet<string>?>> _providerKeys;
+    readonly ConfigRoot _config;
+    readonly Func<string?>? _resolveProfileName;
+    readonly Action<IEnumerable<HarnessId>> _stampOffered;
+    readonly CancellationToken _shutdownToken;
 
-    bool    _detected;
-    bool    _declinedAll;
-    bool    _installed;
-    bool    _busy;
-    bool    _satisfied;
-    string  _visibility = "org_public";
-    bool    _useProviderApiKey;
+    bool _detected;
+    bool _installed;
+    bool _busy;
+    bool _satisfied;
+    string _visibility = "org_public";
+    bool _useProviderApiKey;
     string? _providerKeyNotice;
     string? _message;
-    Task?   _inFlight;
+    Task? _inFlight;
 
     public HarnessesStepViewModel(
             IKcapCli cli,
@@ -54,16 +54,17 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             PathFixViewModel? pathFix,
             Func<CancellationToken, Task<IReadOnlySet<string>?>> providerKeys,
             string machineName,
-            Func<string?>? resolveProfileName = null) {
-        _cli                = cli;
-        _detect             = detect;
-        _declined           = declined;
-        _stampOffered       = stampOffered;
-        _config             = config;
-        _providerKeys       = providerKeys;
+            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default) {
+        _cli = cli;
+        _detect = detect;
+        _declined = declined;
+        _stampOffered = stampOffered;
+        _config = config;
+        _providerKeys = providerKeys;
         _resolveProfileName = resolveProfileName;
-        PathFix             = pathFix;
-        MachineName         = machineName;
+        _shutdownToken = shutdownToken;
+        PathFix = pathFix;
+        MachineName = machineName;
 
         if (pathFix is not null)
             pathFix.WhenAnyValue(x => x.Fixed).Subscribe(resolved => {
@@ -78,11 +79,11 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     internal const string PathRequiredMessage =
         "Fix the terminal command on this step before turning harnesses on.";
 
-    public WizardStepId Id         => WizardStepId.Harnesses;
-    public string       Title      => "Connect Capacitor to your harnesses";
-    public string       Eyebrow    => "Your harnesses";
-    public bool         Applicable => true;
-    public string       SkipLabel  => "Not now";
+    public WizardStepId Id => WizardStepId.Harnesses;
+    public string Title => "Connect Capacitor to your harnesses";
+    public string Eyebrow => "Your harnesses";
+    public bool Applicable => true;
+    public string SkipLabel => "Not now";
 
     public string Lede =>
         "Sessions record themselves from now on, and each harness gets tools to search your past work — " +
@@ -130,10 +131,15 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _busy, value);
             this.RaisePropertyChanged(nameof(Idle));
+            this.RaisePropertyChanged(nameof(ChoicesEditable));
+            this.RaisePropertyChanged(nameof(CanContinue));
         }
     }
 
     public bool Idle => !Busy;
+    public bool ChoicesEditable => Idle && !_installed;
+    public bool ConnectionsSaved => _installed;
+    public bool CanContinue => _detected && Idle;
 
     public bool Satisfied {
         get => _satisfied;
@@ -148,51 +154,68 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public int SelectedCount => Rows.Count(r => r.Selected);
 
-    /// The harnesses this machine records, once the page has been answered: none after Not now.
-    public IReadOnlyList<HarnessId> Recording => _declinedAll ? [] : [.. Rows.Where(r => r.Record).Select(r => r.Id)];
+    public IReadOnlyList<HarnessId> Recording => [.. Rows.Where(r => r.Record && r.Succeeded).Select(r => r.Id)];
 
     public string? NextLabel =>
-        _installed                 ? "Continue"
-        : !CliAvailable            ? "Continue"
-        : SelectedCount == 0       ? "Turn on"
-        : SelectedCount == 1       ? "Turn on for 1 harness"
-        :                            $"Turn on for {SelectedCount} harnesses";
+        _installed ? "Continue"
+        : !CliAvailable ? "Continue"
+        : SelectedCount == 0 ? "Continue"
+        : SelectedCount == 1 ? "Turn on for 1 harness"
+        : $"Turn on for {SelectedCount} harnesses";
 
     public bool DeclineVisible => SelectedCount == 0 && Rows.Count > 0;
 
     public async Task OnEnterAsync(CancellationToken ct) {
         if (_detected) return; // re-entering must not stomp the user's choices
+        Busy = true;
+        try {
 
-        IReadOnlyDictionary<HarnessId, DetectedAgent> detected;
-        try { detected = await _detect(ct).ConfigureAwait(true); }
-        catch (OperationCanceledException) { return; }
+            IReadOnlyDictionary<HarnessId, DetectedAgent> detected;
+            try { detected = await _detect(ct).ConfigureAwait(true); } catch (OperationCanceledException) { return; } catch (Exception ex) {
+                Message = $"Could not check your harnesses: {ex.Message}. Go back and try again, or continue setup later.";
+                return;
+            }
 
-        var declined = _declined();
-        var idle     = this.WhenAnyValue(x => x.Busy, busy => !busy);
-        Rows = [.. AgentVendors.All
+            try {
+                var config = await AppConfig.LoadProfileConfig(_config, ct).ConfigureAwait(true);
+                var profileName = _resolveProfileName?.Invoke() ?? config.ActiveProfile;
+                if (config.Profiles.GetValueOrDefault(profileName ?? ProfileConfig.DefaultName) is { } profile) {
+                    Visibility = profile.DefaultVisibility;
+                    UseProviderApiKey = profile.UseProviderApiKey;
+                }
+            } catch (Exception ex) {
+                Message = $"Could not read your settings: {ex.Message}. Go back and try again.";
+                return;
+            }
+
+            var declined = _declined();
+            var idle = this.WhenAnyValue(x => x.Busy, busy => !busy);
+            Rows = [.. AgentVendors.All
             .Where(v => detected.ContainsKey(v.Id))
             .Select(v => new HarnessRowViewModel(v, detected[v.Id], declined.Contains(v.Id), RetryOneAsync, idle))];
 
-        foreach (var row in Rows) {
-            row.WhenAnyValue(x => x.Selected, x => x.Record).Subscribe(_ => RestateSelection());
+            foreach (var row in Rows) {
+                row.WhenAnyValue(x => x.Selected, x => x.Record).Subscribe(_ => RestateSelection());
+            }
+
+            var missing = AgentVendors.All.Where(v => !detected.ContainsKey(v.Id)).Select(v => v.Label).ToList();
+            NotFoundLine = missing.Count == 0 ? null : "Not found: " + string.Join(", ", missing);
+            _detected = true;
+
+            this.RaisePropertyChanged(nameof(Rows));
+            this.RaisePropertyChanged(nameof(NotFoundLine));
+            this.RaisePropertyChanged(nameof(NoneFound));
+            RestateSelection();
+
+            await ReadProviderKeysAsync(ct).ConfigureAwait(true);
+        } finally {
+            Busy = false;
         }
-
-        var missing = AgentVendors.All.Where(v => !detected.ContainsKey(v.Id)).Select(v => v.Label).ToList();
-        NotFoundLine = missing.Count == 0 ? null : "Not found: " + string.Join(", ", missing);
-        _detected    = true;
-
-        this.RaisePropertyChanged(nameof(Rows));
-        this.RaisePropertyChanged(nameof(NotFoundLine));
-        this.RaisePropertyChanged(nameof(NoneFound));
-        RestateSelection();
-
-        await ReadProviderKeysAsync(ct).ConfigureAwait(true);
     }
 
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
         if (_inFlight is { } run) {
-            try { await run.ConfigureAwait(true); }
-            catch (Exception ex) { Console.Error.WriteLine($"kcap: wizard harness install failed unexpectedly: {ex.Message}"); }
+            try { await run.ConfigureAwait(true); } catch (Exception ex) { Console.Error.WriteLine($"kcap: wizard harness install failed unexpectedly: {ex.Message}"); }
         }
 
         if (direction == WizardNavigation.Back) return true;
@@ -205,8 +228,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         }
 
         _stampOffered(Rows.Select(r => r.Id));
-        _declinedAll = direction == WizardNavigation.Skip;
-        if (_declinedAll) return true;
+        if (direction == WizardNavigation.Skip) return true;
+        if (!_detected) return false;
 
         if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
         if (_installed || !CliAvailable) return true;
@@ -214,6 +237,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         await (_inFlight = InstallSelectedAsync()).ConfigureAwait(true);
         _installed = true;
         this.RaisePropertyChanged(nameof(NextLabel));
+        this.RaisePropertyChanged(nameof(ChoicesEditable));
+        this.RaisePropertyChanged(nameof(ConnectionsSaved));
 
         // Stay only when a selected row failed, so its Retry is on screen. A clean install leaves.
         return Rows.All(r => !r.Selected || !r.Failed);
@@ -223,7 +248,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         try {
             await ConfigMutator.MutateAsync(_config, c => {
                 var resolvedName = _resolveProfileName?.Invoke();
-                var activeName   = resolvedName is not null && c.Profiles.ContainsKey(resolvedName)
+                var activeName = resolvedName is not null && c.Profiles.ContainsKey(resolvedName)
                     ? resolvedName
                     : string.IsNullOrWhiteSpace(c.ActiveProfile) ? "default" : c.ActiveProfile;
                 var profile = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
@@ -251,7 +276,10 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     async Task InstallSelectedAsync() {
         Busy = true;
         try {
-            foreach (var row in Rows.Where(r => r.Selected).ToList()) await InstallOneAsync(row).ConfigureAwait(true);
+            foreach (var row in Rows.Where(r => r.Selected).ToList()) {
+                _shutdownToken.ThrowIfCancellationRequested();
+                await InstallOneAsync(row).ConfigureAwait(true);
+            }
         } finally {
             Busy = false;
         }
@@ -265,24 +293,23 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     async Task RetryCoreAsync(HarnessRowViewModel row) {
         Busy = true;
-        try { await InstallOneAsync(row).ConfigureAwait(true); }
-        finally { Busy = false; }
+        try { await InstallOneAsync(row).ConfigureAwait(true); } finally { Busy = false; }
     }
 
     async Task InstallOneAsync(HarnessRowViewModel row) {
-        row.Status  = AgentInstallStatus.Installing;
+        row.Status = AgentInstallStatus.Installing;
         row.Message = null;
 
         try {
-            var result = await _cli.PluginInstallAsync(row.Flag, CancellationToken.None, row.InstallOptions).ConfigureAwait(true);
-            if (result.ExitCode == 0) {
+            var result = await _cli.PluginInstallAsync(row.Flag, _shutdownToken, row.InstallOptions).ConfigureAwait(true);
+            if (result.ExitCode == 0 && !result.TimedOut) {
                 row.Status = AgentInstallStatus.Succeeded;
             } else {
-                row.Status  = AgentInstallStatus.Failed;
+                row.Status = AgentInstallStatus.Failed;
                 row.Message = string.IsNullOrWhiteSpace(result.Stderr) ? $"Install failed (exit {result.ExitCode})." : result.Stderr.Trim();
             }
         } catch (Exception ex) {
-            row.Status  = AgentInstallStatus.Failed;
+            row.Status = AgentInstallStatus.Failed;
             row.Message = ex.Message;
         }
 
@@ -292,21 +319,19 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     async Task ReadProviderKeysAsync(CancellationToken ct) {
         IReadOnlySet<string>? set;
-        try { set = await _providerKeys(ct).ConfigureAwait(true); }
-        catch (OperationCanceledException) { return; }
-        catch (Exception ex) {
+        try { set = await _providerKeys(ct).ConfigureAwait(true); } catch (OperationCanceledException) { return; } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: provider key probe failed: {ex.Message}");
             return;
         }
 
         var anthropic = set?.Contains("ANTHROPIC_API_KEY") == true && Rows.Any(r => r.Id == HarnessId.Claude);
-        var openai    = set?.Contains("OPENAI_API_KEY") == true && Rows.Any(r => r.Id == HarnessId.Codex);
+        var openai = set?.Contains("OPENAI_API_KEY") == true && Rows.Any(r => r.Id == HarnessId.Codex);
 
         ProviderKeyNotice = (anthropic, openai) switch {
-            (true, true)  => "ANTHROPIC_API_KEY and OPENAI_API_KEY are set in your terminal.",
+            (true, true) => "ANTHROPIC_API_KEY and OPENAI_API_KEY are set in your terminal.",
             (true, false) => "ANTHROPIC_API_KEY is set in your terminal.",
             (false, true) => "OPENAI_API_KEY is set in your terminal.",
-            _             => null,
+            _ => null,
         };
     }
 
@@ -326,7 +351,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         return async ct => {
             var terminalPath = await probe.TerminalPathAsync(ct).ConfigureAwait(false);
-            var searched     = terminalPath is null ? harnesses : harnesses.Searching(BinaryProbe.Searching(terminalPath));
+            var searched = terminalPath is null ? harnesses : harnesses.Searching(BinaryProbe.Searching(terminalPath));
 
             // A snapshot rather than the live registry: rows are built once and must not move under
             // the user while they are choosing.

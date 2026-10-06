@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.ComponentModel;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
@@ -59,6 +60,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(HasRepos));
             this.RaisePropertyChanged(nameof(EmptyMessage));
             this.RaisePropertyChanged(nameof(Skippable));
+            this.RaisePropertyChanged(nameof(CanContinue));
             this.RaisePropertyChanged(nameof(TitlingOffered));
             Restate();
         }
@@ -70,7 +72,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     /// The one line an empty arm says instead of a list.
     public string? EmptyMessage => State switch {
         HistoryState.NoHarness =>
-            $"Capacitor is not recording any harness on {MachineName}, so there is no history to bring over. Turn one on and run kcap import when you want it.",
+            "No recording connections were added in this setup. Go back to connect a harness, or use kcap import in your terminal to import history later.",
         HistoryState.NoHistory =>
             $"There is no history on {MachineName} to bring over, so there is nothing to do here. Everything from now on is recorded as it happens.",
         HistoryState.OnlyUnmatched =>
@@ -103,18 +105,35 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public int SelectedCount => Groups.SelectMany(g => g.Repos).Count(r => r.Level != ImportLevel.Skip);
 
     public string? NextLabel =>
-        !HasRepos || SelectedCount == 0 ? "Carry on"
+        Looking                        ? "Looking for history…"
+        : Run is { State: ImportRunState.Running or ImportRunState.Finished } ? "Continue"
+        : !HasRepos || SelectedCount == 0 ? "Continue"
         : SelectedCount == 1            ? "Import 1 repository"
         :                                 $"Import {SelectedCount} repositories";
 
-    public bool Skippable => HasRepos;
+    public bool Skippable => !ImportStarted && (HasRepos || Looking);
+    public bool CanContinue => !Looking;
 
     public bool DeclineVisible => HasRepos;
+    public bool ImportStarted => Run is { State: ImportRunState.Running or ImportRunState.Finished };
 
     /// The import this page started, for the pages after it to report on.
     public HistoryImportRun? Run {
         get => _run;
-        private set => this.RaiseAndSetIfChanged(ref _run, value);
+        private set {
+            if (_run is not null) _run.PropertyChanged -= OnRunChanged;
+            this.RaiseAndSetIfChanged(ref _run, value);
+            if (_run is not null) _run.PropertyChanged += OnRunChanged;
+            OnRunChanged(this, new PropertyChangedEventArgs(nameof(HistoryImportRun.State)));
+        }
+    }
+
+    void OnRunChanged(object? sender, PropertyChangedEventArgs e) {
+        if (e.PropertyName != nameof(HistoryImportRun.State)) return;
+        this.RaisePropertyChanged(nameof(ImportStarted));
+        this.RaisePropertyChanged(nameof(Skippable));
+        this.RaisePropertyChanged(nameof(NextLabel));
+        this.RaisePropertyChanged(nameof(Satisfied));
     }
 
     IReadOnlyList<HarnessId> FromHarnesses { get; set; } = [];
@@ -128,6 +147,15 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         if (_discoveredFor is not null && _discoveredFor.SequenceEqual(scope) && State != HistoryState.Unreadable)
             return Task.CompletedTask;
 
+        _discovery?.Cancel();
+        _discovery?.Dispose();
+        _discovery = null;
+        Groups = [];
+        _windows.Clear();
+        _unmatched = 0;
+        this.RaisePropertyChanged(nameof(Groups));
+        this.RaisePropertyChanged(nameof(Windows));
+        this.RaisePropertyChanged(nameof(UnmatchedNote));
         _discoveredFor = scope;
         FromHarnesses  = scope;
         FromLabels     = [.. scope.Select(HarnessRegistry.LabelOf)];
@@ -140,12 +168,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         }
 
         State = HistoryState.Looking;
-        _discovery?.Cancel();
-        _discovery?.Dispose();
         var cts = _discovery = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        // Not awaited: the shell holds its buttons until entry returns, and Carry on must stay
-        // pressable while the disk is read.
         Discovery = DiscoverAsync(scope, cts.Token);
 
         return Task.CompletedTask;
@@ -226,6 +250,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        if (direction == WizardNavigation.Next && Looking) return Task.FromResult(false);
         // One import at a time; one that failed or was stopped can be started again.
         if (direction == WizardNavigation.Next && HasRepos && SelectedCount > 0
             && Run is not { State: ImportRunState.Running or ImportRunState.Finished }) StartImport();
@@ -250,8 +275,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         var expected = selected.Sum(r => r.SessionsSince(window.Since) ?? 0);
         var caption  = window.Since is null ? "from your whole history" : $"from the {window.Label.ToLowerInvariant()}";
         var run      = new HistoryImportRun(expected, selected.Count, caption, passes.Count, _post);
-        run.Start(_cli, passes);
         Run = run;
+        run.Start(_cli, passes);
         this.RaisePropertyChanged(nameof(Satisfied));
     }
 

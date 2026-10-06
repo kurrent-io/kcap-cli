@@ -27,7 +27,7 @@
                     </ItemsControl>
                     <TextBlock Classes="frNote">
                         <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
-                            Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Every choice can be changed later in Settings." />
+                            Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor, or run kcap setup in your terminal." />
                     </TextBlock>
                 </StackPanel>
             </Border>
@@ -60,11 +60,15 @@
         <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
                  Fill="{StaticResource FrBloomBrush}" IsHitTestVisible="False" />
 
+        <Grid RowDefinitions="*,Auto">
         <ScrollViewer x:Name="StepScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Width="620" HorizontalAlignment="Center" Margin="32,72,32,56" Spacing="26">
+            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,60,32,24" Spacing="26">
                 <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
                     <Path Data="{x:Static views:OnboardingPaneView.Wordmark}" Fill="{StaticResource KcapTextBrush}"
                           Height="18" Stretch="Uniform" HorizontalAlignment="Left" />
+                    <Button Grid.Column="1" Classes="frQuiet" Content="Finish later"
+                            Command="{Binding FinishLaterCommand}"
+                            ToolTip.Tip="Continue setup from Help and support in Capacitor" />
                 </Grid>
 
                 <StackPanel Spacing="14">
@@ -76,23 +80,25 @@
                 </StackPanel>
 
                 <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
-
-                <StackPanel Spacing="10">
-                    <!-- Back stays on the left. The right group is Skip, then the forward button. -->
+            </StackPanel>
+        </ScrollViewer>
+        <Border Grid.Row="1" Background="{StaticResource KcapCanvasBrush}"
+                BorderBrush="{StaticResource FrDividerBrush}" BorderThickness="0,1,0,0">
+                <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="10">
                     <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
-                        <Button x:Name="BackButton" Classes="frSecondary" Content="BACK"
+                        <Button x:Name="BackButton" Classes="frSecondary" Content="Back"
                                 Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
                         <Button Grid.Column="2" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
-                                Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
+                                Content="{Binding SkipLabel}"
                                 IsVisible="{Binding SkipVisible}" />
-                        <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="frSecondary" Content="CANCEL"
+                        <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="frSecondary" Content="Cancel"
                                 Command="{Binding CancelTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
-                        <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="frPrimary" Content="CONTINUE"
+                        <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="frPrimary" Content="Continue"
                                 Command="{Binding ConfirmTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
                         <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
                                 Classes.frPrimary="{Binding NextIsPrimary}"
                                 Classes.frSecondary="{Binding NextIsSecondary}"
-                                Content="{Binding NextLabel, Converter={x:Static views:UpperCase.Instance}}"
+                                Content="{Binding NextLabel}"
                                 IsVisible="{Binding NextVisible}" />
                     </Grid>
 
@@ -102,8 +108,8 @@
                     <TextBlock x:Name="LifecycleAttentionText" Classes="frError" Text="{Binding Surface.AttentionText}"
                                IsVisible="{Binding ShowLifecycleAttention}" />
                 </StackPanel>
-            </StackPanel>
-        </ScrollViewer>
+        </Border>
+        </Grid>
 
         <!-- The pane covers the window's own drag strip. -->
         <Border Height="40" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />

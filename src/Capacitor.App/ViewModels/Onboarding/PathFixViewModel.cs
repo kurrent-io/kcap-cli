@@ -65,8 +65,10 @@ public sealed class PathFixViewModel : ReactiveObject {
         Busy    = true;
         Message = Disclosure;
         try {
-            await ClaimOfferedOnceAsync().ConfigureAwait(false);
-            Apply(await _installer.InstallAsync(_target, CancellationToken.None).ConfigureAwait(false));
+            await ClaimOfferedOnceAsync().ConfigureAwait(true);
+            Apply(await _installer.InstallAsync(_target, CancellationToken.None).ConfigureAwait(true));
+        } catch (Exception ex) {
+            Message = $"Could not install the terminal command: {ex.Message}. Try again.";
         } finally {
             _attempted = true;
             this.RaisePropertyChanged(nameof(ActionLabel));

@@ -204,6 +204,19 @@ public class OnboardingViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Finishing_later_closes_navigation_and_a_late_close_waiter_does_not_hang() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Harnesses), new FakeWizardStep(WizardStepId.Done)]);
+            await vm.PendingEnterForTesting;
+            await vm.FinishLaterCommand.Execute().ToTask();
+            await AppUnderTest.WaitForWizardCloseAsync(vm, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+            await Assert.That(vm.CanGoNext).IsFalse();
+            await Assert.That(vm.TryGoTo(WizardStepId.Done)).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Window_close_raises_CloseRequested() {
         var closeCount = await AvaloniaSession.DispatchAsync(async () => {
             var connect = new FakeWizardStep(WizardStepId.Welcome);

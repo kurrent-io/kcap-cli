@@ -68,7 +68,8 @@ internal sealed record WizardGraphOptions(
     string?                                                                      ShimTarget,
     string?                                                                      DefaultDaemonName,
     TimeProvider                                                                 Time,
-    CancellationToken                                                            ShutdownToken);
+    CancellationToken                                                            ShutdownToken,
+    bool                                                                         AlreadyAuthenticated = false);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
@@ -113,8 +114,9 @@ internal static class WizardComposition {
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time);
-        var pathFix  = options.ShimApplicable
-            ? new PathFixViewModel(options.ShimInstaller, options.AppState, options.ShimTarget)
+        if (options.AlreadyAuthenticated) signIn.RestoreCommitted();
+        var pathFix  = options.ShimApplicable && options.ShimInstaller is { } installer
+            ? new PathFixViewModel(installer, options.AppState, options.ShimTarget)
             : null;
         // The name persists to the same fresh identity the daemon step gates on, falling back to ActiveProfile.
         var machineName = new MachineNameViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
@@ -130,7 +132,7 @@ internal static class WizardComposition {
             options.Root, pathFix,
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
             machine,
-            () => options.ResolveIdentity()?.Profile);
+            () => options.ResolveIdentity()?.Profile, options.ShutdownToken);
         var history = new HistoryStepViewModel(
             cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time);
         var daemon = new DaemonStepViewModel(
@@ -161,7 +163,8 @@ internal static class WizardComposition {
         }, options.UrlOpener);
         IWizardStep[] steps = [welcome, signIn, harnesses, history, daemon, done];
 
-        var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface);
+        var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface,
+            startAt: options.AlreadyAuthenticated ? WizardStepId.Harnesses : null);
 
         return new WizardGraph(wizard, auth, steps, history, connect);
     }
