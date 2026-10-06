@@ -374,12 +374,13 @@ public class WizardStartupTests {
 
         var consumer = AppUnderTest.ConsumeMutationOutcomesAsync(
             channel, surface, WizardFixtures.NeverRunMutation, WizardFixtures.FixedTerminalPath("/usr/bin"),
-            () => null, cts.Token);
+            () => null, cts.Token, AppUnderTest.WizardAttentionCopyFor);
 
         channel.Enqueue(WizardFixtures.Envelope("internal_error"));
         await WizardFixtures.WaitUntilAsync(() => surface.AttentionText is not null, what: "the wizard-surface presentation");
 
-        await Assert.That(surface.AttentionText).IsEqualTo(AppUnderTest.AttentionCopyFor("internal_error")!);
+        await Assert.That(surface.AttentionText).IsEqualTo(AppUnderTest.WizardAttentionCopyFor("internal_error")!);
+        await Assert.That(surface.AttentionText!).DoesNotContain("Start daemon");
 
         await cts.CancelAsync();
         await consumer.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1052,16 +1053,53 @@ public class WizardStartupTests {
             surface.Attention("a daemon mutation needs attention (some_token)");
             Dispatcher.UIThread.RunJobs();
 
-            var text = window.GetVisualDescendants().OfType<TextBlock>()
-                .FirstOrDefault(t => t.Name == "LifecycleAttentionText")?.Text;
+            var block = window.GetVisualDescendants().OfType<TextBlock>()
+                .FirstOrDefault(t => t.Name == "LifecycleAttentionText");
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return text;
+            return (Text: block?.Text, IsVisible: block?.IsVisible ?? false);
         });
 
-        await Assert.That(rendered).IsEqualTo("a daemon mutation needs attention (some_token)");
+        await Assert.That(rendered.Text).IsEqualTo("a daemon mutation needs attention (some_token)");
+        // Welcome has no daemon action, so the bound line stays hidden.
+        await Assert.That(rendered.IsVisible).IsFalse();
+    }
+
+    [Test]
+    public async Task The_attention_line_shows_on_the_daemon_step_and_hides_after_back() {
+        var (onDaemon, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
+            var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
+            var wizard = new OnboardingViewModel(
+                [new FakeWizardStep(WizardStepId.Import), new FakeWizardStep(WizardStepId.Daemon)],
+                surface: surface);
+            var window = new MainWindow { Onboarding = wizard };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            await wizard.PendingEnterForTesting;
+
+            await wizard.NextCommand.Execute().ToTask();
+            Dispatcher.UIThread.RunJobs();
+
+            surface.Attention(AppUnderTest.WizardAttentionCopyFor("verify_viability")!);
+            Dispatcher.UIThread.RunJobs();
+
+            bool Visible() => window.GetVisualDescendants().OfType<TextBlock>()
+                .First(t => t.Name == "LifecycleAttentionText").IsVisible;
+            var shown = Visible();
+
+            await wizard.BackCommand.Execute().ToTask();
+            Dispatcher.UIThread.RunJobs();
+            var hidden = Visible();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (shown, hidden);
+        });
+
+        await Assert.That(onDaemon).IsTrue();
+        await Assert.That(afterBack).IsFalse();
     }
 
     [Test]

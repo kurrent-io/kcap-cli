@@ -44,6 +44,13 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => _index > 0;
 
+    /// The outcome lines name the daemon step's own action. Other pages have no such button.
+    public bool ShowLifecycleStatus =>
+        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.StatusText);
+
+    public bool ShowLifecycleAttention =>
+        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.AttentionText);
+
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     internal bool Navigating {
         get => _navigating;
@@ -79,6 +86,13 @@ public sealed class OnboardingViewModel : ReactiveObject {
         SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip), canSkip);
         NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next), idle);
 
+        if (surface is not null) {
+            surface.WhenAnyValue(x => x.StatusText)
+                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleStatus)));
+            surface.WhenAnyValue(x => x.AttentionText)
+                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleAttention)));
+        }
+
         PendingEnterForTesting = SafeEnterAsync(Current);
     }
 
@@ -95,6 +109,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
+        this.RaisePropertyChanged(nameof(ShowLifecycleAttention));
     }
 
     /// Idempotent — a Done-finish close and the window's own Closing event both route here.

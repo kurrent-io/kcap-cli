@@ -943,7 +943,8 @@ public partial class App : Application {
         // single-owner while no tray or main window exists. No CLI version to disclose here —
         // wizard mode builds no lifecycle controller to have probed one.
         _ = ConsumeMutationOutcomesAsync(
-            channel, surface, lane.RunAsync, probe.TerminalPathAsync, () => null, _shutdown.Token);
+            channel, surface, lane.RunAsync, probe.TerminalPathAsync, () => null, _shutdown.Token,
+            WizardAttentionCopyFor);
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
         var quiesced = await HandoffAfterWizardAsync(
@@ -1397,7 +1398,8 @@ public partial class App : Application {
     internal static async Task ConsumeMutationOutcomesAsync(
             OutcomeChannel channel, ILifecycleSurface surface,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct) {
+            Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
+            Func<string, string?>? attentionCopy = null) {
         var declinedTakeoverPairs = new HashSet<(MutationRequest Request, string Token)>();
         try {
             await foreach (var lease in channel.ConsumeAsync(ct)) {
@@ -1405,7 +1407,7 @@ public partial class App : Application {
                 try {
                     await PresentOutcomeAsync(
                             surface, lease.Envelope, runMutation, terminalPathAsync, cliVersion, ct, declinedTakeoverPairs,
-                            () => presented = true)
+                            () => presented = true, attentionCopy)
                         .ConfigureAwait(false);
                     lease.Ack(); // ran to completion — whether or not anything needed showing
                 } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
@@ -1426,7 +1428,8 @@ public partial class App : Application {
             ILifecycleSurface surface, OutcomeEnvelope envelope,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
-            HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null) {
+            HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null,
+            Func<string, string?>? attentionCopy = null) {
         if (envelope.Request.RetireServiceId is not null &&
             envelope.Outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) {
             surface.Attention(SettingsRenameMessage.For(envelope.Request, envelope.Outcome));
@@ -1480,7 +1483,7 @@ public partial class App : Application {
                 break;
             case RecoverySurface.Attention:
             case RecoverySurface.Storage: {
-                if (AttentionCopyFor(named) is { } copy) {
+                if ((attentionCopy ?? AttentionCopyFor)(named) is { } copy) {
                     surface.Attention(copy);
                 } else {
                     // Opaque tokens are for the log — a bare "needs attention (token)" banner helps nobody.
@@ -1538,6 +1541,14 @@ public partial class App : Application {
 
         _ => null,
     };
+
+    /// The launcher sentences name that window's Start daemon button. The wizard's retry control
+    /// is whichever action the daemon step is showing, so those sentences keep the fact and drop the button.
+    internal static string? WizardAttentionCopyFor(string token) =>
+        AttentionCopyFor(token)?
+            .Replace("Press Start daemon to try again.", "Try again from this step.", StringComparison.Ordinal)
+            .Replace("Press Start daemon to repair.", "Try again from this step.", StringComparison.Ordinal)
+            .Replace("then press Start daemon.", "then try again from this step.", StringComparison.Ordinal);
 
     // Only these AttentionSkew tokens route to Takeover; every other AttentionSkew/AttentionRepair stays Attention.
     static readonly HashSet<string> TakeoverRoutedSkewTokens = ["missing_capability_consent_3", "daemon_below_floor", "pre_slice_evidence"];
