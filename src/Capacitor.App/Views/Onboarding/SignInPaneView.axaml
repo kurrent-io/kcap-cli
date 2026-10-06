@@ -83,7 +83,7 @@
             </StackPanel>
         </Border>
 
-        <!-- 2+ workspaces -->
+        <!-- 2+ workspaces. Continue and Cancel share the footer line with Back. -->
         <Border Classes="frCard" IsVisible="{Binding TenantPickerVisible}">
             <StackPanel Spacing="14">
                 <TextBlock Classes="frMicro" Text="WORKSPACES FOR YOUR ACCOUNT" />
@@ -91,19 +91,20 @@
                          SelectedItem="{Binding SelectedTenant, Mode=TwoWay}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="auth:DiscoveredTenant">
-                            <StackPanel Spacing="2">
-                                <TextBlock Classes="frLabel" Text="{Binding Label}" />
-                                <TextBlock Classes="frSignal" Text="{Binding Origin}" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Classes="frLabel" Text="{Binding Label}" />
+                                    <TextBlock Classes="frSignal" Text="{Binding Origin}" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <Path Grid.Column="1" Classes="frChoiceMark" VerticalAlignment="Center"
+                                      Width="14" Height="14" Stretch="Uniform"
+                                      Fill="{StaticResource FrAccentBrush}"
+                                      Data="M5.5 10.586 1.707 6.793A1 1 0 0 0 .293 8.207l4.5 4.5a1 1 0 0 0 1.414 0l11-11A1 1 0 0 0 15.793.293L5.5 10.586Z"
+                                      IsVisible="False" />
+                            </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-                <StackPanel Orientation="Horizontal" Spacing="12">
-                    <Button x:Name="ConfirmTenantButton" Classes="frPrimary" Content="CONTINUE"
-                            Command="{Binding ConfirmTenantCommand}" />
-                    <Button x:Name="CancelTenantButton" Classes="frSecondary" Content="CANCEL"
-                            Command="{Binding CancelTenantCommand}" />
-                </StackPanel>
             </StackPanel>
         </Border>
 

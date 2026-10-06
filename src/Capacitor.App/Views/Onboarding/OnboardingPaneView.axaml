@@ -85,6 +85,10 @@
                         <Button Grid.Column="2" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
                                 Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
                                 IsVisible="{Binding SkipVisible}" />
+                        <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="frSecondary" Content="CANCEL"
+                                Command="{Binding CancelTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="frPrimary" Content="CONTINUE"
+                                Command="{Binding ConfirmTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
                         <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
                                 Classes.frPrimary="{Binding NextIsPrimary}"
                                 Classes.frSecondary="{Binding NextIsSecondary}"

@@ -289,10 +289,20 @@
         <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
         <Setter Property="Background" Value="{StaticResource FrAccentBrush}" />
     </Style>
+    <!-- The theme lays the mark out in a 32px row. Pull it into the 16px square or the box clips it. -->
+    <Style Selector="CheckBox.frCheck /template/ Viewbox">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
     <Style Selector="CheckBox.frCheck:checked /template/ Path#CheckGlyph,
-                     CheckBox.frCheck:checked:pointerover /template/ Path#CheckGlyph">
+                     CheckBox.frCheck:checked:pointerover /template/ Path#CheckGlyph,
+                     CheckBox.frCheck:checked:pressed /template/ Path#CheckGlyph">
         <Setter Property="Fill" Value="{StaticResource FrAccentOnBrush}" />
+        <Setter Property="Data" Value="M5.5 10.586 1.707 6.793A1 1 0 0 0 .293 8.207l4.5 4.5a1 1 0 0 0 1.414 0l11-11A1 1 0 0 0 15.793.293L5.5 10.586Z" />
         <Setter Property="Width" Value="10" />
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="CheckBox.frCheck:disabled">
         <Setter Property="Opacity" Value="0.5" />
@@ -396,6 +406,10 @@
                      ListBox.frList ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource FrAccentWashBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+    </Style>
+    <Style Selector="ListBox.frList ListBoxItem:selected Path.frChoiceMark,
+                     ListBox.frList ListBoxItem:selected:pointerover Path.frChoiceMark">
+        <Setter Property="IsVisible" Value="True" />
     </Style>
 
     <!-- The 20px ring the page turns while it waits on something it cannot measure. -->
