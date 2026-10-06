@@ -44,6 +44,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => _index > 0;
 
+    /// The workspace list's own actions share the footer line with Back.
+    public bool TenantActionsVisible => Current is SignInStepViewModel { TenantPickerVisible: true };
+
+    public System.Windows.Input.ICommand? ConfirmTenantCommand =>
+        Current is SignInStepViewModel signIn ? signIn.ConfirmTenantCommand : null;
+
+    public System.Windows.Input.ICommand? CancelTenantCommand =>
+        Current is SignInStepViewModel signIn ? signIn.CancelTenantCommand : null;
+
     /// One filled button per screen. Next is that button on a step with no action of its own, and
     /// once the step's own action has finished. While the action is on screen, Next is secondary.
     public bool NextIsPrimary => !Current.ShowsOwnPrimary;
@@ -111,6 +120,11 @@ public sealed class OnboardingViewModel : ReactiveObject {
                 or nameof(IWizardStep.ShowsOwnPrimary):
                 RestateActions();
                 break;
+            case nameof(SignInStepViewModel.TenantPickerVisible):
+                this.RaisePropertyChanged(nameof(TenantActionsVisible));
+                this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
+                this.RaisePropertyChanged(nameof(CancelTenantCommand));
+                break;
         }
     }
 
@@ -122,6 +136,9 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(NextIsSecondary));
         this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
         this.RaisePropertyChanged(nameof(ShowLifecycleAttention));
+        this.RaisePropertyChanged(nameof(TenantActionsVisible));
+        this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
+        this.RaisePropertyChanged(nameof(CancelTenantCommand));
     }
 
     /// Idempotent — a Done-finish close and the window's own Closing event both route here.
