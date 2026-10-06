@@ -1013,6 +1013,54 @@ public class DaemonStepTemplateTests {
         await Assert.That(messageText).IsEqualTo(DaemonStepViewModel.RequiresSignInMessage);
     }
 
+    /// The status read resumes off the UI thread, after the button is already bound and disabled.
+    /// The re-enable has to cross the dispatcher; otherwise Check again and Enable stay dead.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_background_status_result_reenables_the_bound_buttons() {
+        var (refreshEnabled, actionEnabled) = await AvaloniaSession.DispatchAsync(async () => {
+            var refresh = await ShowUntilStatusAsync(null, "DaemonRefreshButton");
+            var action  = await ShowUntilStatusAsync(
+                new ServiceSnapshot("kcap-daemon", false, "not_installed", null, "/opt/kcap/kcap-daemon", null, null, false, false),
+                "DaemonActionButton");
+            return (refresh, action);
+        });
+
+        await Assert.That(refreshEnabled).IsTrue();
+        await Assert.That(actionEnabled).IsTrue();
+    }
+
+    /// Shows the pane while status is still in flight, then completes that read off the UI thread.
+    static async Task<bool> ShowUntilStatusAsync(ServiceSnapshot? snapshot, string buttonName) {
+        using var temp = new TempClaims();
+        var gate = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var step = new DaemonStepViewModel(
+            new FakeKcapCli { StatusBehavior = _ => gate.Task },
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            () => ("default", "https://example.test", "kcap-daemon"),
+            new NeverObserved(), new ScriptedLocalControlOps(), temp.Claims,
+            () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
+            _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
+
+        var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => DoneFacts.Empty)]);
+        var window = new MainWindow { Onboarding = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var button = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == buttonName);
+        if (button.IsEffectivelyEnabled)
+            throw new InvalidOperationException($"{buttonName} was enabled before status returned");
+
+        gate.SetResult(snapshot);
+        await vm.PendingEnterForTesting;
+        Dispatcher.UIThread.RunJobs();
+
+        var enabled = button.IsEffectivelyEnabled && button.IsVisible;
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+        return enabled;
+    }
+
     sealed class NeverObserved : IDaemonObservation {
         public Task<ObservedEvidence?> ObserveAsync(MutationRequest request, CancellationToken ct) =>
             Task.FromResult<ObservedEvidence?>(null);
