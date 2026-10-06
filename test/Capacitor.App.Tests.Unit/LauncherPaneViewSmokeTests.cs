@@ -253,6 +253,37 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(forCodex).IsFalse();
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Codex_posture_chips_show_for_codex_and_hide_for_other_vendors() {
+        var (forClaude, forCodex, labels) = await AvaloniaSession.DispatchAsync(async () => {
+            var (vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm } };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var sandbox = Find<Button>(window, "CodexSandboxChip");
+            var approval = Find<Button>(window, "CodexApprovalChip");
+            var claude = (sandbox?.IsVisible ?? true) || (approval?.IsVisible ?? true);
+
+            await vm.ChooseHarnessAsync("codex");
+            Dispatcher.UIThread.RunJobs();
+            var codex = (sandbox?.IsVisible ?? false) && (approval?.IsVisible ?? false);
+            var text = (sandbox?.Content as string, approval?.Content as string);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (claude, codex, text);
+        });
+
+        await Assert.That(forClaude).IsFalse();
+        await Assert.That(forCodex).IsTrue();
+        await Assert.That(labels.Item1).IsEqualTo("Sandbox · Workspace write");
+        await Assert.That(labels.Item2).IsEqualTo("Approvals · On request");
+    }
+
     /// The button carries a glyph, not text, so assistive technology reads the automation name.
     [Test]
     [NotInParallel("AvaloniaSession")]
