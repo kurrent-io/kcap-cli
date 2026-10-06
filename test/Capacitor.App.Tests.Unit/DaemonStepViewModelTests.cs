@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
 using Avalonia.Controls;
@@ -191,6 +192,23 @@ public class DaemonStepViewModelTests {
         await Assert.That(affordance).IsEqualTo(DaemonAffordance.None);
         await Assert.That(message).IsEqualTo(DaemonStepViewModel.CliMissingMessage);
         await Assert.That(statusCalls).IsEqualTo(0);
+    }
+
+    /// A PATH lookup that finds nothing throws from the spawn. That is not an unreadable service.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_CLI_the_process_cannot_start_is_missing() {
+        var (row, message) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Cli.StatusBehavior = _ => throw new Win32Exception(2);
+
+            await h.Enter();
+
+            return (h.Vm.Row, h.Vm.Message);
+        });
+
+        await Assert.That(row).IsEqualTo(DaemonRow.CliMissing);
+        await Assert.That(message).IsEqualTo(DaemonStepViewModel.CliMissingMessage);
     }
 
     [Test]

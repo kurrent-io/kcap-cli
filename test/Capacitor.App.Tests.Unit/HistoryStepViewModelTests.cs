@@ -95,10 +95,17 @@ public class HistoryStepViewModelTests {
         h.Repo("acme/api").Level = ImportLevel.OnlyMe;
         var mixed = (acme.Mixed, acme.Stop, acme.SignalLine);
 
+        var stopsRaised = 0;
+        foreach (var repo in acme.Repos)
+            repo.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(HistoryRepoRow.Stop)) stopsRaised++; };
+
         acme.Stop = (int)ImportLevel.Skip;
 
         await Assert.That(mixed).IsEqualTo((true, -1, "2 repositories · mixed"));
         await Assert.That(acme.Repos.All(r => r.Level == ImportLevel.Skip)).IsTrue();
+        await Assert.That(acme.Repos.All(r => r.Stop == (int)ImportLevel.Skip)).IsTrue();
+        // The row track binds Stop. A Level write that does not raise it leaves the children on Shared.
+        await Assert.That(stopsRaised).IsEqualTo(acme.Repos.Count);
         await Assert.That(acme.Mixed).IsFalse();
     }
 

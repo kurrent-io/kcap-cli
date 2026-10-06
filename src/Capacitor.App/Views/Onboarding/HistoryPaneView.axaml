@@ -136,12 +136,12 @@
                 <!-- Titling runs the user's own agent, on their quota: theirs to turn off. -->
                 <Border Classes="frCallout" IsVisible="{Binding TitlingOffered}" Margin="0,4,0,0">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
-                        <CheckBox x:Name="TitleLocallyCheckBox" Classes="frCheck" VerticalAlignment="Top" Margin="0,2,0,0"
+                        <CheckBox x:Name="TitleLocallyCheckBox" Classes="frCheck" VerticalAlignment="Top" Margin="0,1,0,0"
                                   IsChecked="{Binding TitleLocally, Mode=TwoWay}" />
                         <StackPanel Grid.Column="1" Spacing="3">
                             <TextBlock Classes="frLabel" FontSize="13" Text="Name these sessions as they import" />
                             <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
-                                       Text="This uses your own agent and quota. Untitled sessions stay searchable; titles just make them easier to recognise." />
+                                       Text="Your server can't title sessions, so this uses your own agent and quota. Untitled sessions stay searchable; titles just make them easier to recognise." />
                         </StackPanel>
                     </Grid>
                 </Border>
