@@ -981,12 +981,16 @@ public class DaemonStepTemplateTests {
             var action  = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonActionButton");
             var refresh = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonRefreshButton");
             var next    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "NextButton");
+            var skip    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "SkipButton");
             var back    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "BackButton");
             var message = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "DaemonMessageText");
             var ranks   = (
                 NextPrimary: next?.Classes.Contains("frPrimary") == true,
                 NextSecondary: next?.Classes.Contains("frSecondary") == true,
-                BackSecondary: back?.Classes.Contains("frSecondary") == true);
+                BackSecondary: back?.Classes.Contains("frSecondary") == true,
+                BackColumn: back is null ? -1 : Grid.GetColumn(back),
+                SkipColumn: skip is null ? -1 : Grid.GetColumn(skip),
+                NextColumn: next is null ? -1 : Grid.GetColumn(next));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -1004,6 +1008,8 @@ public class DaemonStepTemplateTests {
         await Assert.That(ranks.NextPrimary).IsFalse();
         await Assert.That(ranks.NextSecondary).IsTrue();
         await Assert.That(ranks.BackSecondary).IsTrue();
+        await Assert.That(ranks.BackColumn).IsLessThan(ranks.SkipColumn);
+        await Assert.That(ranks.SkipColumn).IsLessThan(ranks.NextColumn);
     }
 
     [Test]

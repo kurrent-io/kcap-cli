@@ -911,9 +911,9 @@ public class WizardStartupTests {
         return (graph, graph.Steps.OfType<SignInStepViewModel>().Single());
     }
 
-    /// The success line stays readable for the hold, then the wizard moves on by itself.
+    /// A committed sign-in stays put. The forward button is what leaves the page.
     [Test]
-    public async Task A_committed_sign_in_moves_the_wizard_on_after_the_success_hold() {
+    public async Task A_committed_sign_in_stays_until_the_user_continues() {
         await AvaloniaSession.DispatchAsync(async () => {
             var time = new FakeTimeProvider();
             using var harness = new WizardFixtures.GraphHarness(Config.Root) { Time = time };
@@ -921,37 +921,15 @@ public class WizardStartupTests {
 
             var (graph, signIn) = await OnTheSignInStepAsync(harness);
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-
-            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.SignIn);
-
-            time.Advance(TimeSpan.FromSeconds(5));
-            await WizardFixtures.WaitUntilAsync(
-                () => graph.ViewModel.Current.Id != WizardStepId.SignIn, what: "the move past the sign-in step");
-
-            return true;
-        }).WaitAsync(TimeSpan.FromSeconds(30));
-    }
-
-    /// A user who navigated during the hold stays where they went — including back on Sign in
-    /// itself, where the step id alone would let the stale hold through.
-    [Test]
-    [Arguments(false, WizardStepId.Welcome)]
-    [Arguments(true, WizardStepId.SignIn)]
-    public async Task A_committed_sign_in_never_pulls_the_user_off_a_step_they_chose(bool returned, WizardStepId expected) {
-        await AvaloniaSession.DispatchAsync(async () => {
-            var time = new FakeTimeProvider();
-            using var harness = new WizardFixtures.GraphHarness(Config.Root) { Time = time };
-            harness.Operation = (_, _) => Task.FromResult<AuthResult>(CommittedSignIn());
-
-            var (graph, signIn) = await OnTheSignInStepAsync(harness);
-            await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            await graph.ViewModel.BackCommand.Execute().ToTask();
-            if (returned) await graph.ViewModel.NextCommand.Execute().ToTask();
 
             time.Advance(TimeSpan.FromSeconds(5));
             Dispatcher.UIThread.RunJobs();
 
-            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(expected);
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.SignIn);
+
+            await graph.ViewModel.NextCommand.Execute().ToTask();
+
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Harnesses);
 
             return true;
         }).WaitAsync(TimeSpan.FromSeconds(30));

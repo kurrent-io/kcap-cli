@@ -162,20 +162,8 @@ internal static class WizardComposition {
         IWizardStep[] steps = [welcome, signIn, harnesses, history, daemon, done];
 
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface);
-        signIn.Completed += () => _ = AdvanceAfterHoldAsync(wizard, wizard.Visit, options.Time, options.ShutdownToken);
 
         return new WizardGraph(wizard, auth, steps, history, connect);
-    }
-
-    static async Task AdvanceAfterHoldAsync(
-            OnboardingViewModel wizard, int visit, TimeProvider time, CancellationToken ct) {
-        try {
-            await Task.Delay(SignInStepViewModel.SuccessHold, time, ct).ConfigureAwait(true);
-        } catch (OperationCanceledException) {
-            return;
-        }
-
-        wizard.TryAdvanceFrom(WizardStepId.SignIn, visit);
     }
 
     /// The machine's own name as a person would say it: no ".local", lower case.

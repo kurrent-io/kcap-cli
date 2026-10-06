@@ -136,8 +136,7 @@ public class SignInStepViewModelTests {
         await Assert.That(showPrimary).IsFalse();
     }
 
-    /// Completed is the host's cue to move on, so it must not fire for an attempt that left the
-    /// user with something to do on this page.
+    /// Completed fires only for a committed sign-in. A cancel or a failure still has this page to answer.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Only_a_committed_sign_in_announces_completion() {
