@@ -1,26 +1,30 @@
+using Capacitor.Cli.Core;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One subagent as the sidebar shows it. Outcome is the row's own state; State is what it
-/// presents, which reads Stopped for a still-running row once the session is over.
+/// One subagent or background command as the sidebar shows it. Outcome is the row's own state;
+/// State is what it presents, which reads Stopped for a still-running row once the session is over.
 public sealed class RunRow : ReactiveObject {
     bool _isBackground;
     bool _outcomeUnknown;
     RunState _state = RunState.Running;
     string _stateText = "";
 
-    public RunRow(string callId, string name, string description, DateTimeOffset startedAt) {
+    public RunRow(string callId, string name, string description, DateTimeOffset startedAt, RunKind kind = RunKind.Agent) {
         CallId = callId;
         Name = name;
         Description = description;
         StartedAt = startedAt;
+        Kind = kind;
     }
 
     public string CallId { get; }
     public string Name { get; }
     public string Description { get; }
     public DateTimeOffset StartedAt { get; }
+    public RunKind Kind { get; }
+    public bool IsShell => Kind == RunKind.Shell;
     public DateTimeOffset? EndedAt { get; private set; }
     public RunState Outcome { get; private set; } = RunState.Running;
     public bool IsEnded => Outcome != RunState.Running;

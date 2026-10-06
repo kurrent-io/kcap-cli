@@ -4,7 +4,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.ViewModels;
 
-/// The subagents of one session, folded from each projected line's signals and tool results.
+/// The subagents and background commands of one session, folded from each projected line's signals and tool results.
 /// Owned by the workspace and shared by the chat tab and the work-context pane; every call is
 /// made on the UI thread. The rows rebuild from the log on a feed reset, so nothing here is
 /// persisted.
@@ -12,6 +12,9 @@ public sealed class SessionRuns(TimeProvider time) {
     readonly AvaloniaList<RunRow> _rows = new();
     readonly AvaloniaList<RunRow> _running = new();
     readonly Dictionary<string, RunRow> _byCall = new(StringComparer.Ordinal);
+    /// Calls that may still go to the background, by call id; a Detached promotes one to a row,
+    /// its result drops it. The session's end leaves them: a remote lane can turn it back off.
+    readonly Dictionary<string, RunSignal.Started> _pending = new(StringComparer.Ordinal);
     /// The row an agent id currently belongs to; the latest Detached wins.
     readonly Dictionary<string, RunRow> _byAgent = new(StringComparer.Ordinal);
     /// Rows per presented state, indexed by the state's value.
@@ -60,6 +63,7 @@ public sealed class SessionRuns(TimeProvider time) {
             // The launch acknowledgement arrives beside its Detached and must not end the row; a
             // later result for the same call, an error included, does.
             if (detachedHere?.Contains(callId) == true) continue;
+            _pending.Remove(callId);
             if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
         }
@@ -70,6 +74,7 @@ public sealed class SessionRuns(TimeProvider time) {
         _rows.Clear();
         _byCall.Clear();
         _byAgent.Clear();
+        _pending.Clear();
         Refresh();
     }
 
@@ -78,13 +83,26 @@ public sealed class SessionRuns(TimeProvider time) {
 
     void Start(RunSignal.Started started) {
         if (_byCall.ContainsKey(started.CallId)) return;
-        var row = new RunRow(started.CallId, started.Name, started.Description, started.At);
+        if (started.Provisional) {
+            _pending[started.CallId] = started;
+            return;
+        }
+        Add(started);
+    }
+
+    RunRow Add(RunSignal.Started started) {
+        var row = new RunRow(started.CallId, started.Name, started.Description, started.At, started.Kind);
         _byCall[started.CallId] = row;
         _rows.Add(row);
+        return row;
     }
 
     void Detach(RunSignal.Detached detached) {
-        if (!_byCall.TryGetValue(detached.CallId, out var row) || row.IsEnded) return;
+        if (!_byCall.TryGetValue(detached.CallId, out var row)) {
+            if (!_pending.Remove(detached.CallId, out var pending)) return;
+            row = Add(pending);
+        }
+        if (row.IsEnded) return;
         row.MarkBackground();
         _byAgent[detached.AgentId] = row;
     }

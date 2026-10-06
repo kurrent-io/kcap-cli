@@ -29,6 +29,107 @@ public class SessionRunsTests {
 
     static RunRow Only(SessionRuns s) => s.Rows.Single();
 
+    static RunSignal.Started Shell(string callId, DateTimeOffset? at = null) =>
+        new(callId, "Run the full suite", "dotnet test", at ?? T0, RunKind.Shell, Provisional: true);
+
+    [Test]
+    public async Task A_foreground_shell_call_leaves_no_row() {
+        var s = new SessionRuns(Clock());
+        var changes = 0;
+        s.Changed += () => changes++;
+        s.Apply(Signals(Shell("c1")));
+        await Assert.That(s.Rows).IsEmpty();
+        s.Apply(Result("c1"));
+        await Assert.That(s.Rows).IsEmpty();
+        // The pending entry went with the result: a stray Detached later makes no row.
+        s.Apply(Signals(Detached("c1", "b1")));
+        await Assert.That(s.Rows).IsEmpty();
+        await Assert.That(changes).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_background_shell_runs_from_its_detach_until_its_notification() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Shell("c1")));
+        s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Detached("c1", "b1")));
+        var row = Only(s);
+        await Assert.That(row.Kind).IsEqualTo(RunKind.Shell);
+        await Assert.That(row.IsShell).IsTrue();
+        await Assert.That(row.Name).IsEqualTo("Run the full suite");
+        await Assert.That(row.Description).IsEqualTo("dotnet test");
+        await Assert.That(row.IsBackground).IsTrue();
+        await Assert.That(row.StateText).IsEqualTo("running in background · 0s");
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+
+        s.Apply(Signals(Finished("c1", "b1", RunOutcome.Stopped, at: T0.AddSeconds(30))));
+        await Assert.That(row.State).IsEqualTo(RunState.Stopped);
+        await Assert.That(row.StateText).IsEqualTo("stopped · 30s");
+    }
+
+    [Test]
+    public async Task A_timed_out_shell_is_dated_from_its_call() {
+        var clock = Clock();
+        var s = new SessionRuns(clock);
+        s.Apply(Signals(Shell("c1", at: T0)));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Detached("c1", "b1")));
+        await Assert.That(Only(s).StartedAt).IsEqualTo(T0);
+        await Assert.That(Only(s).StateText).IsEqualTo("running in background · 2m 00s");
+    }
+
+    [Test]
+    public async Task A_detach_for_an_unseen_call_makes_no_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Detached("c9", "b9"), Finished("c9", "b9")));
+        await Assert.That(s.Rows).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_shell_stopped_by_its_task_id_alone_ends() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Shell("c1")));
+        s.Apply(Signals(Detached("c1", "b1")));
+        s.Apply(Signals(Finished(null, "b1", RunOutcome.Stopped)));
+        await Assert.That(Only(s).State).IsEqualTo(RunState.Stopped);
+    }
+
+    [Test]
+    public async Task Session_over_presents_a_running_shell_as_stopped() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Shell("c1")));
+        s.Apply(Signals(Detached("c1", "b1")));
+        s.SessionOver = true;
+        await Assert.That(Only(s).State).IsEqualTo(RunState.Stopped);
+        await Assert.That(Only(s).StateText).IsEqualTo("stopped");
+    }
+
+    [Test]
+    public async Task A_repeated_provisional_start_for_a_live_row_changes_nothing() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Shell("c1")));
+        s.Apply(Signals(Detached("c1", "b1")));
+        s.Apply(Signals(Shell("c1")));
+        await Assert.That(s.Rows).Count().IsEqualTo(1);
+        await Assert.That(Only(s).IsRunning).IsTrue();
+    }
+
+    [Test]
+    public async Task Clear_drops_pending_shell_calls() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Shell("c1")));
+        s.Clear();
+        s.Apply(Signals(Detached("c1", "b1")));
+        await Assert.That(s.Rows).IsEmpty();
+    }
+
+    [Test]
+    public async Task An_agent_start_is_an_agent_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1")));
+        await Assert.That(Only(s).Kind).IsEqualTo(RunKind.Agent);
+        await Assert.That(Only(s).IsShell).IsFalse();
+    }
+
     [Test]
     public async Task A_foreground_start_and_its_result_make_one_done_row() {
         var s = new SessionRuns(Clock());
