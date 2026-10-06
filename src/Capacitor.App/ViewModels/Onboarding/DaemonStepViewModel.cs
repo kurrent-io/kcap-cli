@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
@@ -97,9 +98,13 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         _terminalPathAsync              = terminalPathAsync;
         _time                           = time;
 
-        var idle = this.WhenAnyValue(x => x.Busy, busy => !busy);
+        // Classification resumes off the UI thread. ReactiveCommand does not move a supplied
+        // canExecute onto the dispatcher, and Avalonia rejects that IsEnabled write.
+        var idle = this.WhenAnyValue(x => x.Busy, busy => !busy)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
         ActionCommand  = ReactiveCommand.CreateFromTask(RunActionAsync,
-            this.WhenAnyValue(x => x.Busy, x => x.Affordance, (busy, affordance) => !busy && affordance != DaemonAffordance.None));
+            this.WhenAnyValue(x => x.Busy, x => x.Affordance, (busy, affordance) => !busy && affordance != DaemonAffordance.None)
+                .ObserveOn(RxSchedulers.MainThreadScheduler));
         RefreshCommand = ReactiveCommand.CreateFromTask(() => RefreshAsync(CancellationToken.None), idle);
     }
 
