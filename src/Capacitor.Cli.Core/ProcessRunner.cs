@@ -78,8 +78,8 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
         return await CollectAsync(process, stdoutTask, stderrTask, options, CancellationToken.None, ct).ConfigureAwait(false);
     }
 
-    /// Stops reading once either stream passes <paramref name="outputLimit"/> bytes, then kills the tree and awaits its
-    /// exit before returning, so the caller never holds more than the limit per stream nor outlives the child.
+    /// Stops capturing once either stream passes <paramref name="outputLimit"/> bytes and, if the child is still running,
+    /// kills its tree and awaits its exit. A descendant of a child that already exited is out of the tree's reach.
     public async Task<ProcessResult> RunBoundedAsync(string fileName, string[] args, RunOptions options, int outputLimit, CancellationToken ct) {
         var psi = StartInfo(fileName, args, options);
 

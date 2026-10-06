@@ -28,7 +28,7 @@ public class ProcessRunnerBoundedTests {
             Options, Limit, CancellationToken.None);
         var pid = await ReadPidAsync(pidFile);
         var identity = PidIdentity.Capture(pid);
-        await File.WriteAllTextAsync(go, "");
+        Tmp.CreateFile("go");
         return (await run, pid, identity);
     }
 
