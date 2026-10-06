@@ -104,7 +104,8 @@ public class PullRequestContextViewModelTests {
         var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
         h.Source.Failure = "denied"; h.Time.Advance(TimeSpan.FromSeconds(16));
         await h.Vm.RefreshCommand.Execute();
-        await WaitUntilAsync(() => !h.Vm.IsReading, what: "denial applied");
+        // A refresh lists before it reads the overview, and IsReading drops between the two: wait for the denial itself.
+        await WaitUntilAsync(() => h.Vm.Notice?.Contains("cannot read") == true, what: "denial applied");
         await Assert.That(h.Vm.Description).IsNull();
         await Assert.That(h.Vm.CanDisplay).IsFalse();
         await Assert.That(h.Vm.Notice).Contains("cannot read");
