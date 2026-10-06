@@ -66,8 +66,16 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         MachineName         = machineName;
 
         if (pathFix is not null)
-            pathFix.WhenAnyValue(x => x.Fixed).Subscribe(_ => this.RaisePropertyChanged(nameof(PathHazard)));
+            pathFix.WhenAnyValue(x => x.Fixed).Subscribe(resolved => {
+                this.RaisePropertyChanged(nameof(PathHazard));
+                this.RaisePropertyChanged(nameof(PathResolved));
+                if (resolved && Message == PathRequiredMessage) Message = null;
+            });
     }
+
+    /// Shown when Next is refused because hooks would be written for a command the login shell cannot run.
+    internal const string PathRequiredMessage =
+        "Fix the terminal command on this step before turning harnesses on.";
 
     public WizardStepId Id         => WizardStepId.Harnesses;
     public string       Title      => "Connect Capacitor to your harnesses";
@@ -184,6 +192,13 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         }
 
         if (direction == WizardNavigation.Back) return true;
+
+        // Hooks store the bare command. A selected harness stays on this page until the login
+        // shell can run it. Not now installs nothing, so it does not wait.
+        if (direction != WizardNavigation.Skip && PathHazard && Rows.Any(r => r.Selected)) {
+            Message = PathRequiredMessage;
+            return false;
+        }
 
         _stampOffered(Rows.Select(r => r.Id));
         _declinedAll = direction == WizardNavigation.Skip;

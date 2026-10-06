@@ -106,17 +106,17 @@
                     </Grid>
                 </Border>
 
-                <!-- The login shell cannot find kcap: hooks would install, run, and record nothing. -->
+                <!-- The bundled CLI is not on the login shell. Turning harnesses on waits for the fix. -->
                 <Border Classes="frWarning" IsVisible="{Binding PathHazard}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                         <Path Data="M12 3 2 21h20L12 3Zm0 6v6m0 3v.5" Stroke="{StaticResource KcapDangerBrush}" StrokeThickness="2"
                               Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Top" Margin="0,2,0,0" />
                         <StackPanel Grid.Column="1" Spacing="5">
                             <TextBlock Classes="frLabel" FontSize="12.5">
-                                <Run Text="Your login shell cannot find " /><Run Text="kcap" FontFamily="{StaticResource FrMonoFont}" />
+                                <Run Text="This app includes " /><Run Text="kcap" FontFamily="{StaticResource FrMonoFont}" /><Run Text=", and your terminal cannot run it yet." />
                             </TextBlock>
                             <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
-                                       Text="Some harnesses run it through your shell, so their hooks would record nothing, silently." />
+                                       Text="Harness hooks run that command by name. Turning them on waits until this machine can find it." />
                             <WrapPanel Orientation="Horizontal" ItemSpacing="10" LineSpacing="6" Margin="0,3,0,0">
                                 <Button x:Name="PathFixButton" Classes="frSecondary frCompact"
                                         Content="{Binding PathFix.ActionLabel, Converter={x:Static views:UpperCase.Instance}}"
