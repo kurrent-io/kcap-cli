@@ -30,7 +30,6 @@ public sealed class PathFixViewModel : ReactiveObject {
 
     public string Disclosure => _installer.Disclosure;
 
-    /// The login shell finds kcap now.
     public bool Fixed {
         get => _fixed;
         private set => this.RaiseAndSetIfChanged(ref _fixed, value);
@@ -48,7 +47,6 @@ public sealed class PathFixViewModel : ReactiveObject {
 
     public string ActionLabel => _attempted ? "Try again" : "Fix it on this machine";
 
-    /// What the last attempt did, or null before one; set while the admin prompt is up too.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
@@ -76,7 +74,7 @@ public sealed class PathFixViewModel : ReactiveObject {
         }
     }
 
-    // Claim-before-install (mirrors ShimOfferCoordinator): persisted once, before the outcome is known, so a retry click never re-persists.
+    // Claim before installing so a retry cannot trigger another startup offer.
     Task ClaimOfferedOnceAsync() {
         if (_offerClaimed) return Task.CompletedTask;
         _offerClaimed = true;
@@ -90,15 +88,15 @@ public sealed class PathFixViewModel : ReactiveObject {
                 Message = null;
                 break;
             case ShimOutcome.InstalledButNotOnPath:
-                Message = $"Linked it, but your login shell still does not look there. {result.Detail}".TrimEnd();
+                Message = result.Detail ?? "Installed, but your terminal cannot find kcap yet. Open a new terminal and run kcap --version.";
                 break;
             case ShimOutcome.Cancelled:
                 Message = "Cancelled. Nothing changed.";
                 break;
             default: // Failed
                 Message = result.SudoFallback is null
-                    ? $"That did not work, and nothing changed. {result.Detail}".TrimEnd()
-                    : $"That did not work, and nothing changed. Run: {result.SudoFallback}";
+                    ? $"Could not finish installing the terminal command. {result.Detail}".TrimEnd()
+                    : $"Could not finish installing the terminal command. Run: {result.SudoFallback}";
                 break;
         }
     }

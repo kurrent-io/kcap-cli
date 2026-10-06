@@ -33,18 +33,38 @@ public class WizardSimpleStepsTests {
     }
 
     [Test]
-    public async Task The_step_follows_its_installer() {
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Windows_path_fix_uses_user_path_and_reports_whether_it_was_verified(bool verified) {
+        using var tmp = new TempDir();
+        var target = tmp.PathTo("kcap.exe");
+        var paths = new MemoryUserPath();
+        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(verified ? true : null) };
         var store = new FakeAppStateStore();
-        var windows = new WindowsUserPathInstaller(new NoUserPath(), new FakeLoginShellProbe());
+        var windows = new WindowsUserPathInstaller(paths, probe);
 
-        var withInstaller = new PathFixViewModel(windows, store, "/opt/kcap/kcap.exe");
+        var (fixedPath, disclosure, message) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new PathFixViewModel(windows, store, target);
+            await vm.InstallCommand.Execute().ToTask();
+            Dispatcher.UIThread.RunJobs();
+            return (vm.Fixed, vm.Disclosure, vm.Message);
+        });
 
-        await Assert.That(withInstaller.Disclosure).IsEqualTo(windows.Disclosure);
+        await Assert.That(fixedPath).IsEqualTo(verified);
+        await Assert.That(paths.Read()).IsEqualTo(Path.GetDirectoryName(target));
+        await Assert.That(disclosure).Contains("No administrator rights are needed");
+        await Assert.That(store.Updates).IsEqualTo(1);
+        if (!verified) {
+            await Assert.That(message).Contains("was added to your user PATH");
+            await Assert.That(message).DoesNotContain("nothing changed");
+        }
     }
 
-    sealed class NoUserPath : IUserPathStore {
-        public string? Read() => null;
-        public void Append(string directory) => throw new InvalidOperationException("not expected");
+    sealed class MemoryUserPath : IUserPathStore {
+        string? _value;
+        public string? Read() => _value;
+        public void Append(string directory) => _value = directory;
     }
 
     // ── Shim: install / claim / outcome mapping ─────────────────────────────
@@ -180,7 +200,7 @@ public class WizardSimpleStepsTests {
         });
 
         await Assert.That(satisfied).IsFalse();
-        await Assert.That(message).IsEqualTo("You dismissed the password prompt, so nothing changed.");
+        await Assert.That(message).IsEqualTo("Cancelled. Nothing changed.");
     }
 
     [Test]
@@ -197,7 +217,7 @@ public class WizardSimpleStepsTests {
 
         await Assert.That(satisfied).IsFalse();
         await Assert.That(message).IsNotNull();
-        await Assert.That(message).StartsWith("That did not work, and nothing changed.");
+        await Assert.That(message).StartsWith("Could not finish installing the terminal command.");
         await Assert.That(message).Contains("sudo mkdir -p /usr/local/bin");
     }
 

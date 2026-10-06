@@ -125,6 +125,7 @@
                             </TextBlock>
                             <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
                                        Text="Harness hooks run that command by name. Turning them on waits until this machine can find it." />
+                            <TextBlock Classes="frDetail" Text="{Binding PathFix.Disclosure}" />
                             <WrapPanel Orientation="Horizontal" ItemSpacing="10" LineSpacing="6" Margin="0,3,0,0">
                                 <Button x:Name="PathFixButton" Classes="frPrimary frCompact"
                                         Content="{Binding PathFix.ActionLabel}"

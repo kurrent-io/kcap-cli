@@ -316,7 +316,10 @@ jobs:
           -p:MinVerVersionOverride=${{ steps.version.outputs.VERSION }} -o publish/app/
 
       - name: Assemble pack directory
-        run: cp publish/cli/kcap.exe publish/daemon/kcap-daemon.exe publish/app/
+        run: |
+          set -euo pipefail
+          cp publish/cli/kcap.exe publish/daemon/kcap-daemon.exe publish/app/
+          bash scripts/bundle-app-plugin.sh publish/app "${{ steps.version.outputs.VERSION }}"
 
       - name: Pack (unsigned)
         run: >
@@ -332,6 +335,7 @@ jobs:
         run: |
           set -euo pipefail
           install="$(cygpath -u "$LOCALAPPDATA")/KurrentCapacitor"
+          bash scripts/assert-app-plugin.sh "$install/current" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$install" publish/daemon.sha256
           "$install/current/kcap-daemon.exe" --version

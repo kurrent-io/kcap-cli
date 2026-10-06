@@ -314,8 +314,8 @@ public class HarnessesStepViewModelTests {
             var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
             var runner = new SucceedingProcessRunner();
             var fix = new PathFixViewModel(
-                new PathShimInstaller(runner, probe), new WizardFixtures.NoopAppStateStore(),
-                Path.Combine(dir, "bundled-kcap"), destination);
+                new PathShimInstaller(runner, probe, destination), new WizardFixtures.NoopAppStateStore(),
+                Path.Combine(dir, "bundled-kcap"));
             var h = new Harness(Config.Root, pathFix: fix);
             await h.Vm.OnEnterAsync(CancellationToken.None);
             h.Vm.Visibility = "private";

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Usage: assert-app-plugin.sh <bundle.app> <version>
+# Usage: assert-app-plugin.sh <bundle.app-or-app-directory> <version>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 bundle="${1:?bundle required}"
 version="${2:?version required}"
 source_dir="$here/../kcap"
-plugin="$bundle/Contents/Resources/kcap"
+if [ -d "$bundle/Contents/Resources" ]; then
+  plugin="$bundle/Contents/Resources/kcap"
+else
+  plugin="$bundle/kcap"
+fi
 test -f "$plugin/.claude-plugin/plugin.json"
 grep -qF '"version": "'"$version"'"' "$plugin/.claude-plugin/plugin.json"
 while IFS= read -r -d '' file; do
