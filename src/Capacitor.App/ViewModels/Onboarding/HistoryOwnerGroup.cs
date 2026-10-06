@@ -33,7 +33,7 @@ public sealed class HistoryOwnerGroup : ReactiveObject {
         get => Mixed ? -1 : (int)Repos[0].Level;
         set {
             if (value is < 0 or > 2) return;
-            foreach (var repo in Repos) repo.Level = (ImportLevel)value;
+            foreach (var repo in Repos) repo.Stop = value;
         }
     }
 }

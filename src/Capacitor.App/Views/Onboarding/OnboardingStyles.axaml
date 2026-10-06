@@ -259,16 +259,22 @@
         <Setter Property="BorderThickness" Value="1" />
     </Style>
 
-    <!-- Checkbox: a 16px square, accent fill when on. -->
+    <!-- Checkbox: a 16px square, accent fill when on. The theme centres that square in a taller
+         hit target, which reads as mid-block next to a two-line label. -->
     <Style Selector="CheckBox.frCheck">
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
         <Setter Property="MinWidth" Value="0" />
         <Setter Property="MinHeight" Value="0" />
         <Setter Property="Padding" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Top" />
     </Style>
     <Style Selector="CheckBox.frCheck /template/ Border#NormalRectangle">
         <Setter Property="Width" Value="16" />
         <Setter Property="Height" Value="16" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="BorderBrush" Value="{StaticResource FrDimBrush}" />

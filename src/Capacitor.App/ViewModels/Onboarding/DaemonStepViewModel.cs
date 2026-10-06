@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reactive;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
@@ -23,11 +24,11 @@ public enum DaemonAffordance { None, Install, Start, Takeover, Repair }
 public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     internal const string CliMissingMessage    = "kcap isn't available on this machine. Install it, then check again.";
-    internal const string RequiresSignInMessage = "Go Back to sign in, or continue and enable the daemon later in Settings.";
+    internal const string RequiresSignInMessage = "Go Back and sign in before the daemon can be enabled.";
     internal const string NoServerMessage       = "No workspace is configured. Go Back to Sign in.";
     internal const string BinaryUnresolvedMessage = "kcap can't find its daemon binary. Reinstall kcap, then check again.";
-    internal const string StatusUnknownMessage = "Couldn't read the daemon service. Check again, or continue and try later in Settings.";
-    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state. Check again, or continue and try later in Settings.";
+    internal const string StatusUnknownMessage = "Couldn't read the daemon service. Check again.";
+    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state. Check again.";
     internal const string TxnWaitingMessage    = "Waiting for a daemon operation to finish…";
     internal const string TxnActiveMessage     = "A daemon operation is still running. Check again in a moment.";
     internal const string AlreadyEnabledMessage = "The daemon is running and will start again after a reboot.";
@@ -255,6 +256,9 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             WithdrawUnitWritingOfferWithoutBinary(snapshot);
         } catch (OperationCanceledException) {
             // left the step (or shutting down) mid-classification — nothing to surface
+        } catch (Win32Exception ex) when (ex.NativeErrorCode == 2) {
+            // A bare "kcap" that is not on PATH throws here. That is a missing CLI, not an unreadable service.
+            Set(DaemonRow.CliMissing, CliMissingMessage, DaemonAffordance.None);
         } catch (Exception ex) {
             Set(DaemonRow.StatusUnknown, StatusUnknownMessage, DaemonAffordance.None); // unknown, never a positive row
             Console.Error.WriteLine($"kcap: wizard daemon step classification failed unexpectedly: {ex.Message}");

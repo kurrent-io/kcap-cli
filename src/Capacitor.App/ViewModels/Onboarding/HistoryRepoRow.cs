@@ -31,7 +31,12 @@ public sealed class HistoryRepoRow : ReactiveObject {
 
     public ImportLevel Level {
         get => _level;
-        set => this.RaiseAndSetIfChanged(ref _level, value);
+        set {
+            if (EqualityComparer<ImportLevel>.Default.Equals(_level, value)) return;
+            this.RaiseAndSetIfChanged(ref _level, value);
+            // The row's track binds Stop, not Level. A bulk set from the owner writes Level.
+            this.RaisePropertyChanged(nameof(Stop));
+        }
     }
 
     /// The level as the track's stop index.
@@ -40,7 +45,6 @@ public sealed class HistoryRepoRow : ReactiveObject {
         set {
             if (value is < 0 or > 2) return;
             Level = (ImportLevel)value;
-            this.RaisePropertyChanged();
         }
     }
 
