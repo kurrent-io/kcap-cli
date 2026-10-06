@@ -54,7 +54,7 @@ public static class GitHubCliMapping {
 
     public static (string? Text, bool Truncated) Truncate(string? text) => text is { Length: > BodyLimit } ? (text[..BodyLimit], true) : (text, false);
 
-    public static GitHubCliView? View(string json, PullRequestSubjectDto subject, DateTime fetchedAt) {
+    public static GitHubCliView? View(string json, DateTime fetchedAt) {
         using var document = Parse(json);
         if (document is null || !document.RootElement.IsObject) return null;
         var root = document.RootElement;

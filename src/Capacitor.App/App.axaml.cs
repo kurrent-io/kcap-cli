@@ -174,6 +174,7 @@ public partial class App : Application {
     RemoteAgentsService? _remoteAgents;
     AgentDirectory? _directory;
     ServerVendorModelCatalog? _modelCatalog;
+    GitHubCliReaderProvider? _gh;
     TrayViewModel? _trayVm;
     TrayIconManager? _tray;
     DaemonRestartPendingWatcher? _restartPending;
@@ -500,7 +501,7 @@ public partial class App : Application {
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
-        var readers = new PullRequestReaderRegistry(pullRequests, [new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
+        var readers = new PullRequestReaderRegistry(pullRequests, [_gh = new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
         var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans);
 
         var machineId = new MachineId(_config).ReadPersisted();
@@ -1800,6 +1801,7 @@ public partial class App : Application {
         _directory?.Dispose();
         _remoteAgents?.Dispose();
         _modelCatalog?.Dispose();
+        if (_gh is { } gh) { _gh = null; await gh.DisposeAsync().ConfigureAwait(false); }
         if (_serverClients is null) return;
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }

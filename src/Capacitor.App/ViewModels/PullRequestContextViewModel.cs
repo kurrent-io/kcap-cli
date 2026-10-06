@@ -79,7 +79,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public string ReaderNote => _readerNote?.Text ?? "";
     public bool HasReaderNote => _readerNote is not null;
     public bool ShowsInstallTool => _readerNote?.InstallUrl is not null;
-    public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
+    public string InstallToolLabel => _readerNote?.InstallLabel ?? "";
     public bool IsReading => _refreshing || _queuedRefresh || _overviewPending || _pageRequests.Count > 0;
     bool _userRefresh;
     /// Progress for a refresh someone asked for; the background poll reads silently.
