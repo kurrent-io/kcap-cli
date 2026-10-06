@@ -184,6 +184,58 @@ public class SessionStartAdditionalContextTests {
         await Assert.That(ctx).IsEqualTo("first\n\nsecond");
     }
 
+    static string Context(string envelope) =>
+        JsonNode.Parse(envelope)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+
+    [Test]
+    public async Task BuildEnvelope_drops_a_fragment_that_does_not_fit_whole_and_keeps_later_ones() {
+        var big = new string('x', SessionStartAdditionalContext.MaxContextChars);
+
+        var ctx = Context(SessionStartAdditionalContext.BuildEnvelope("first", big, "last")!);
+
+        await Assert.That(ctx).IsEqualTo("first\n\nlast");
+    }
+
+    [Test]
+    public async Task BuildEnvelope_cuts_a_trimmable_fragment_at_a_line_break_to_fit_the_cap() {
+        var line = new string('m', 99);
+        var list = string.Join('\n', Enumerable.Repeat(line, 200));
+
+        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope([new("nudge"), new(list, Trimmable: true)])!);
+
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).StartsWith("nudge\n\n" + line);
+        await Assert.That(ctx).EndsWith(line);
+    }
+
+    [Test]
+    public async Task BuildEnvelope_funds_a_low_rank_fragment_before_a_long_one_placed_ahead_of_it() {
+        var list = string.Join('\n', Enumerable.Repeat(new string('g', 99), 200));
+
+        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope([new(list, Rank: 2, Trimmable: true), new("## Plans")])!);
+
+        await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
+        await Assert.That(ctx).StartsWith("ggg");
+        await Assert.That(ctx).EndsWith("\n\n## Plans");
+    }
+
+    [Test]
+    public async Task BuildEnvelope_drops_an_untrimmable_fragment_that_does_not_fit_whole() {
+        var block = "<data>\n" + string.Join('\n', Enumerable.Repeat(new string('d', 99), 200)) + "\n</data>";
+
+        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope([new("nudge"), new(block, Rank: 1)])!);
+
+        await Assert.That(ctx).IsEqualTo("nudge");
+    }
+
+    [Test]
+    public async Task BuildEnvelope_drops_a_trimmable_fragment_with_no_line_break_inside_the_room_left() {
+        var result = SessionStartAdditionalContext.BuildRankedEnvelope(
+            [new(new string('m', SessionStartAdditionalContext.MaxContextChars + 1), Trimmable: true)]);
+
+        await Assert.That(result).IsNull();
+    }
+
     [Test]
     public async Task BuildEnvelope_produces_single_top_level_json_object() {
         var result = SessionStartAdditionalContext.BuildEnvelope("first", "second")!;

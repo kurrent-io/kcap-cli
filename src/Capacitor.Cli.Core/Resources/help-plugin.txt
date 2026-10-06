@@ -161,7 +161,7 @@ Notes:
   nothing, because that session started with the integration.
 
   Skills install to ~/.agents/skills/kcap-{recap,errors,hide,disable,
-  validate-plan,review-flows,agent-flows,work-items,plans,guided-tour,suggest-review-flow,
+  validate-plan,review-flows,agent-flows,work-items,plans,guided-tour,
   eval-watch,start-agents}/.
   Codex, Cursor, and any other agent that honors the .agents/skills convention
   will pick them up automatically. Every install of a vendor that reads that tree

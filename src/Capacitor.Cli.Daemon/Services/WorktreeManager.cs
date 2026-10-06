@@ -230,6 +230,9 @@ public partial class WorktreeManager(
         // containment and could reject a safe launch, since a source-only conditional include can define a
         // driver the target never sees.
         if (await IsGitRepoWithCommits(repoPath, time)) {
+            if (!string.IsNullOrEmpty(baseRef) && !await IsValidRefNameAsync(repoPath, baseRef))
+                throw new InvalidOperationException($"invalid_base_ref: {baseRef}");
+
             // Created HERE rather than in a shared prologue. The standalone branch below must validate the
             // destination chain BEFORE anything is created — a pre-existing `.capacitor` or `worktrees`
             // symlink is FOLLOWED by this call, so a check placed after the branch decision would run once
@@ -238,6 +241,30 @@ public partial class WorktreeManager(
 
             var noHooks = NoBranchHooks();
             if (!string.IsNullOrEmpty(baseRef)) {
+                // A commit that exists only locally (a fork's unpushed head) has nothing to fetch.
+                if (IsFullSha(baseRef) && await CommitExistsLocallyAsync(repoPath, baseRef)) {
+                    await WithWorktreeMetadataGate(repoPath, time, () =>
+                        RunGit(repoPath, GitTimeout, time, noHooks,
+                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, baseRef));
+                    LogWorktreeBase(worktreePath, baseRef, "local commit");
+                    var local = new WorktreeInfo(worktreePath, branch, repoPath);
+                    await StripOrRollBackAsync(local);
+
+                    return local;
+                }
+
+                // An agent's branch exists only on its own machine, where origin cannot supply it.
+                if (await ResolveLocalBranchAsync(repoPath, baseRef) is { } branchHead) {
+                    await WithWorktreeMetadataGate(repoPath, time, () =>
+                        RunGit(repoPath, GitTimeout, time, noHooks,
+                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, branchHead));
+                    LogWorktreeBase(worktreePath, baseRef, "local branch");
+                    var fromBranch = new WorktreeInfo(worktreePath, branch, repoPath);
+                    await StripOrRollBackAsync(fromBranch);
+
+                    return fromBranch;
+                }
+
                 // Fetch into a per-worktree ref instead of the shared FETCH_HEAD
                 // so concurrent review launches in the same source repo can't
                 // race on each other's fetches. The unique ref carries the
@@ -256,6 +283,7 @@ public partial class WorktreeManager(
                 await WithWorktreeMetadataGate(repoPath, time, () =>
                     RunGit(repoPath, GitTimeout, time, noHooks,
                         "worktree", "add", "--no-checkout", "-B", branch, worktreePath, fetchedRef));
+                LogWorktreeBase(worktreePath, baseRef, "origin fetch");
                 var fetched = new WorktreeInfo(worktreePath, branch, repoPath, FetchedRef: fetchedRef);
                 await StripOrRollBackAsync(fetched);
 
@@ -1487,6 +1515,32 @@ public partial class WorktreeManager(
         } catch { return false; }
     }
 
+    static bool IsFullSha(string value) =>
+        value.Length == 40 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    async Task<bool> CommitExistsLocallyAsync(string repoPath, string sha) {
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [], "cat-file", "-e", $"{sha}^{{commit}}");
+
+        return result.ExitCode == 0;
+    }
+
+    /// <summary>A base ref arrives over the hub. <c>check-ref-format --branch</c> also expands
+    /// <c>@{-N}</c> to another branch, so only a name it echoes back unchanged is accepted.</summary>
+    async Task<bool> IsValidRefNameAsync(string repoPath, string baseRef) {
+        if (baseRef.StartsWith('-')) return false;
+
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [], "check-ref-format", "--branch", baseRef);
+
+        return result.ExitCode == 0 && result.Stdout.Trim() == baseRef;
+    }
+
+    async Task<string?> ResolveLocalBranchAsync(string repoPath, string name) {
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [],
+            "rev-parse", "--verify", "--quiet", $"refs/heads/{name}^{{commit}}");
+
+        return result.ExitCode == 0 && result.Stdout.Trim() is { Length: > 0 } sha ? sha : null;
+    }
+
     static Task RunGit(string cwd, TimeSpan timeout, TimeProvider time, params string[] args) =>
         RunGit(cwd, timeout, time, sourceReadOnly: false, [], args);
 
@@ -1664,5 +1718,8 @@ public partial class WorktreeManager(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to clean up {Path}")]
     partial void LogCleanupFailed(Exception ex, string path);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Worktree {Path} starts from {BaseRef} via {Source}")]
+    partial void LogWorktreeBase(string path, string baseRef, string source);
 
 }

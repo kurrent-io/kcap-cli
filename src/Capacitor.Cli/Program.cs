@@ -881,6 +881,10 @@ switch (command) {
         return 0;
     }
     case "hook": {
+        // Blocks the agent's Read, so it skips the spool drain below.
+        if (args.Contains("--claude") && args.Contains("--plan-read")) {
+            return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));
+        }
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
         // added (removed from their Handle methods so this runs exactly once per invocation) and

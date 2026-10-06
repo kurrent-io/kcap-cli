@@ -36,9 +36,14 @@ public static class AgentsSkillsInstaller {
         "work-items",
         "plans",
         "guided-tour",
-        "suggest-review-flow",
         "eval-watch",
         "start-agents"
+    ];
+
+    /// <summary>Skills this installer once shipped. Their <c>kcap-</c> folders are deleted on install and remove,
+    /// so an upgraded user does not keep a skill that no longer matches the tools.</summary>
+    public static readonly string[] RetiredSourceNames = [
+        "suggest-review-flow"
     ];
 
     /// <summary>
@@ -80,6 +85,11 @@ public static class AgentsSkillsInstaller {
 
                 if (Directory.Exists(dst)) Directory.Delete(dst, recursive: true);
                 CopyDirectoryWithFrontmatterRewrite(src, dst, prefix);
+            }
+
+            foreach (var name in RetiredSourceNames) {
+                var retired = Path.Combine(targetDir, "kcap-" + name);
+                if (Directory.Exists(retired)) Directory.Delete(retired, recursive: true);
             }
 
             WriteMarker(targetDir);
@@ -181,7 +191,7 @@ public static class AgentsSkillsInstaller {
         var removed = false;
         var errors  = false;
 
-        foreach (var name in SourceNames) {
+        foreach (var name in SourceNames.Concat(RetiredSourceNames)) {
             var dst = Path.Combine(targetDir, "kcap-" + name);
 
             if (!Directory.Exists(dst)) continue;
