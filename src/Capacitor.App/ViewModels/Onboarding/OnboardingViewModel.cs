@@ -46,6 +46,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => _index > 0;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
+    public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
     /// The workspace list's own actions share the footer line with Back.
     public bool TenantActionsVisible => Current is SignInStepViewModel { TenantChoicePending: true };
@@ -75,6 +76,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         set {
             this.RaiseAndSetIfChanged(ref _navigating, value);
             this.RaisePropertyChanged(nameof(CanGoNext));
+            this.RaisePropertyChanged(nameof(CanGoSkip));
         }
     }
 
@@ -104,10 +106,10 @@ public sealed class OnboardingViewModel : ReactiveObject {
         var currentChanged = this.WhenAnyValue(x => x.Current);
         var idle = this.WhenAnyValue(x => x.Navigating).Select(busy => !busy);
         var canBack = currentChanged.CombineLatest(idle, (_, notBusy) => notBusy && _index > 0);
-        var canSkip = currentChanged.CombineLatest(idle, (_, notBusy) => notBusy && _index < Steps.Count - 1);
 
         BackCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Back), canBack);
-        SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip), canSkip);
+        SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip),
+            this.WhenAnyValue(x => x.CanGoSkip));
         NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next),
             this.WhenAnyValue(x => x.CanGoNext));
         FinishLaterCommand = ReactiveCommand.Create(RequestClose, idle);
@@ -128,7 +130,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
             case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
             case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
-                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue):
+                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip):
                 RestateActions();
                 break;
             case nameof(SignInStepViewModel.TenantPickerVisible)
@@ -142,6 +144,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     void RestateActions() {
         this.RaisePropertyChanged(nameof(CanGoNext));
+        this.RaisePropertyChanged(nameof(CanGoSkip));
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
@@ -159,6 +162,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         if (_closed) return;
         _closed = true;
         this.RaisePropertyChanged(nameof(CanGoNext));
+        this.RaisePropertyChanged(nameof(CanGoSkip));
         CloseRequested?.Invoke();
     }
 

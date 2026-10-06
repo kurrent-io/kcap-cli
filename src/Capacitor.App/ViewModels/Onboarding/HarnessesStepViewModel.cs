@@ -39,7 +39,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     bool _installed;
     bool _busy;
     bool _satisfied;
-    string _visibility = "org_public";
+    string? _visibility;
     bool _useProviderApiKey;
     string? _providerKeyNotice;
     string? _message;
@@ -78,6 +78,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     /// Shown when Next is refused because hooks would be written for a command the login shell cannot run.
     internal const string PathRequiredMessage =
         "Fix the terminal command on this step before turning harnesses on.";
+    const string PrivacyRequiredMessage = "Choose who can read new sessions before continuing.";
 
     public WizardStepId Id => WizardStepId.Harnesses;
     public string Title => "Connect Capacitor to your harnesses";
@@ -110,10 +111,19 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public bool CliAvailable => _cli.CliPath is not null;
 
-    public string Visibility {
+    public string? Visibility {
         get => _visibility;
-        set => this.RaiseAndSetIfChanged(ref _visibility, value);
+        set {
+            this.RaiseAndSetIfChanged(ref _visibility, value);
+            this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(CanSkip));
+            if (HasVisibilityChoice && Message == PrivacyRequiredMessage) Message = null;
+        }
     }
+
+    public string? CurrentVisibilityNote { get; private set; }
+
+    bool HasVisibilityChoice => Visibility is { } value && AppConfig.ValidVisibilities.Contains(value);
 
     /// Set when the terminal exports a provider key a recording harness would otherwise have kcap scrub.
     public string? ProviderKeyNotice {
@@ -133,13 +143,15 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(Idle));
             this.RaisePropertyChanged(nameof(ChoicesEditable));
             this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(CanSkip));
         }
     }
 
     public bool Idle => !Busy;
     public bool ChoicesEditable => Idle && !_installed;
     public bool ConnectionsSaved => _installed;
-    public bool CanContinue => _detected && Idle;
+    public bool CanContinue => _detected && Idle && HasVisibilityChoice;
+    public bool CanSkip => CanContinue;
 
     public bool Satisfied {
         get => _satisfied;
@@ -180,7 +192,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
                 var config = await AppConfig.LoadProfileConfig(_config, ct).ConfigureAwait(true);
                 var profileName = _resolveProfileName?.Invoke() ?? config.ActiveProfile;
                 if (config.Profiles.GetValueOrDefault(profileName ?? ProfileConfig.DefaultName) is { } profile) {
-                    Visibility = profile.DefaultVisibility;
+                    var current = VisibilityOptions.FirstOrDefault(o => o.Value == profile.DefaultVisibility);
+                    CurrentVisibilityNote = current is null ? null : $"Current setting: {current.Label}.";
+                    this.RaisePropertyChanged(nameof(CurrentVisibilityNote));
                     UseProviderApiKey = profile.UseProviderApiKey;
                 }
             } catch (Exception ex) {
@@ -220,6 +234,12 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         if (direction == WizardNavigation.Back) return true;
 
+        if (!_detected || Busy) return false;
+        if (!HasVisibilityChoice) {
+            Message = PrivacyRequiredMessage;
+            return false;
+        }
+
         // Hooks store the bare command. A selected harness stays on this page until the login
         // shell can run it. Not now installs nothing, so it does not wait.
         if (direction != WizardNavigation.Skip && PathHazard && Rows.Any(r => r.Selected)) {
@@ -227,11 +247,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             return false;
         }
 
+        if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
         _stampOffered(Rows.Select(r => r.Id));
         if (direction == WizardNavigation.Skip) return true;
-        if (!_detected) return false;
-
-        if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
         if (_installed || !CliAvailable) return true;
 
         await (_inFlight = InstallSelectedAsync()).ConfigureAwait(true);
@@ -245,6 +263,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {
+        if (Visibility is not { } visibility || !AppConfig.ValidVisibilities.Contains(visibility)) return false;
         try {
             await ConfigMutator.MutateAsync(_config, c => {
                 var resolvedName = _resolveProfileName?.Invoke();
@@ -254,7 +273,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
                 var profile = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
 
                 profile = profile with {
-                    DefaultVisibility = Visibility,
+                    DefaultVisibility = visibility,
                     // Only a question that was asked is answered: no key in the terminal leaves any
                     // earlier opt-in alone.
                     UseProviderApiKey = ProviderKeyNotice is null ? profile.UseProviderApiKey : UseProviderApiKey,

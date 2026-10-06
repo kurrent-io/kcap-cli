@@ -112,6 +112,8 @@ public class WizardCompositionHappyPathTests {
             await Assert.That(harness.Claims.Pending().Select(c => c.Profile).ToList()).IsEquivalentTo([ProfileName]);
 
             await graph.ViewModel.NextCommand.Execute().ToTask(); // Sign-in -> Harnesses
+            await Assert.That(graph.ViewModel.CanGoNext).IsFalse();
+            graph.Steps.OfType<HarnessesStepViewModel>().Single().Visibility = "private";
             await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> History (persists; no CLI, nothing installable)
             await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Daemon (nothing to import)
 
@@ -129,7 +131,7 @@ public class WizardCompositionHappyPathTests {
         var config = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(config.Profiles[ProfileName].ServerUrl).IsEqualTo(ServerUrl);
         await Assert.That(config.Profiles[ProfileName].AuthProvider?.Provider).IsEqualTo(AuthProvider.None);
-        await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("org_public");
+        await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("private");
 
         // No daemon touchpoint reached with no CLI resolved: no lane traffic, no IPC, no CLI spawns.
         await Assert.That(harness.Lane.Requests).IsEmpty();

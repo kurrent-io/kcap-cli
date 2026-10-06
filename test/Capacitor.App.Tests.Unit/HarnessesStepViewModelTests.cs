@@ -49,6 +49,29 @@ public class HarnessesStepViewModelTests {
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
 
     [Test]
+    [Arguments(WizardNavigation.Next)]
+    [Arguments(WizardNavigation.Skip)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Privacy_requires_an_explicit_choice_before_install_or_skip(WizardNavigation direction) {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            await Assert.That(h.Vm.Visibility).IsNull();
+            await Assert.That(h.Vm.CanContinue).IsFalse();
+            await Assert.That(h.Vm.CanSkip).IsFalse();
+            await Assert.That(await h.Vm.CanLeaveAsync(direction, CancellationToken.None)).IsFalse();
+            await Assert.That(h.Cli.PluginInstallCallCount).IsEqualTo(0);
+            await Assert.That(h.Stamped).IsEmpty();
+            await Assert.That(File.Exists(ConfigPath)).IsFalse();
+            await Assert.That(await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None)).IsTrue();
+
+            h.Vm.Visibility = "invalid";
+            await Assert.That(await h.Vm.CanLeaveAsync(direction, CancellationToken.None)).IsFalse();
+            await Assert.That(File.Exists(ConfigPath)).IsFalse();
+        });
+    }
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Navigation_stays_visible_in_a_short_window_and_the_next_page_starts_at_the_top() {
         await AvaloniaSession.DispatchAsync(async () => {
@@ -64,11 +87,22 @@ public class HarnessesStepViewModelTests {
                 Dispatcher.UIThread.RunJobs();
                 var scroll = window.GetVisualDescendants().OfType<ScrollViewer>().Single(s => s.Name == "StepScroll");
                 var next = window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "NextButton");
+                var skip = window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SkipButton");
+                var privacy = window.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "PrivacyCard");
+                var rows = window.GetVisualDescendants().OfType<ItemsControl>().Single(c => c.Name == "HarnessRows");
+                await Assert.That(privacy.TranslatePoint(default, window)!.Value.Y < rows.TranslatePoint(default, window)!.Value.Y).IsTrue();
+                await Assert.That(next.IsEnabled).IsFalse();
+                await Assert.That(skip.IsEnabled).IsFalse();
+                await Assert.That(window.GetVisualDescendants().OfType<RadioButton>().Any(r => r.IsChecked == true)).IsFalse();
                 var position = next.TranslatePoint(default, window)!.Value;
                 await Assert.That(position.Y + next.Bounds.Height <= window.Bounds.Height).IsTrue();
-                h.Vm.Visibility = "private";
                 var selected = window.GetVisualDescendants().OfType<RadioButton>().Single(r => r.Tag as string == "private");
+                selected.IsChecked = true;
+                Dispatcher.UIThread.RunJobs();
                 await Assert.That(selected.IsChecked).IsTrue();
+                await Assert.That(h.Vm.Visibility).IsEqualTo("private");
+                await Assert.That(next.IsEnabled).IsTrue();
+                await Assert.That(skip.IsEnabled).IsTrue();
                 scroll.Offset = new Vector(0, 100);
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(scroll.Offset.Y > 0).IsTrue();
@@ -153,6 +187,7 @@ public class HarnessesStepViewModelTests {
             await h.Vm.OnEnterAsync(CancellationToken.None);
             h.Row("Cursor").Record = false; // tools only
             h.Row("Pi").Tools      = false; // capture only
+            h.Vm.Visibility = "private";
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
             var again = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
@@ -179,7 +214,7 @@ public class HarnessesStepViewModelTests {
             h.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
                 flag == "--cursor" ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
             await h.Vm.OnEnterAsync(CancellationToken.None);
-
+            h.Vm.Visibility = "private";
             var leave1 = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
             await Assert.That(h.Vm.ChoicesEditable).IsFalse();
             await Assert.That(h.Vm.Recording).IsEquivalentTo([HarnessId.Claude, HarnessId.Pi]);
@@ -206,6 +241,7 @@ public class HarnessesStepViewModelTests {
             h.Cli.PluginInstallBehavior = (flag, _) => Task.FromResult(
                 flag == "--cursor" && fail ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
             await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
             await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
             fail = false;
@@ -231,7 +267,9 @@ public class HarnessesStepViewModelTests {
         var (visibility, useKey) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root) { ProviderKeys = new HashSet<string> { "ANTHROPIC_API_KEY" } };
             await h.Vm.OnEnterAsync(CancellationToken.None);
-            await Assert.That(h.Vm.Visibility).IsEqualTo("project");
+            await Assert.That(h.Vm.Visibility).IsNull();
+            await Assert.That(h.Vm.CurrentVisibilityNote).Contains("People I share a project with");
+            await Assert.That(h.Vm.CanContinue).IsFalse();
             await Assert.That(h.Vm.UseProviderApiKey).IsTrue();
             h.Vm.Visibility        = "private";
             h.Vm.UseProviderApiKey = true;
@@ -280,6 +318,7 @@ public class HarnessesStepViewModelTests {
                 Path.Combine(dir, "bundled-kcap"), destination);
             var h = new Harness(Config.Root, pathFix: fix);
             await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
 
             var heldLeave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
             var heldCalls = h.Cli.PluginInstallCallCount;
@@ -311,6 +350,7 @@ public class HarnessesStepViewModelTests {
                 new WizardFixtures.NoopAppStateStore(), "/opt/kcap/kcap");
             var h = new Harness(Config.Root, pathFix: fix);
             await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
 
             return (await h.Vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None), h.Cli.PluginInstallCallCount);
         });
@@ -330,19 +370,19 @@ public class HarnessesStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Not_now_installs_nothing_and_writes_nothing_but_records_the_offer() {
+    public async Task Not_now_saves_privacy_without_installing_connections_and_records_the_offer() {
         var (calls, stamped) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root);
             await h.Vm.OnEnterAsync(CancellationToken.None);
-
-            await h.Vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None);
+            h.Vm.Visibility = "private";
+            await Assert.That(await h.Vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None)).IsTrue();
 
             return (h.Cli.PluginInstallCallCount, h.Stamped.ToList());
         });
 
         await Assert.That(calls).IsEqualTo(0);
         await Assert.That(stamped).IsEquivalentTo([HarnessId.Claude, HarnessId.Cursor, HarnessId.Pi]);
-        await Assert.That(File.Exists(ConfigPath)).IsFalse();
+        await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles["default"].DefaultVisibility).IsEqualTo("private");
     }
 
     [Test]

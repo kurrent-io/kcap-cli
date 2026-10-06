@@ -679,6 +679,7 @@ public class WizardStartupTests {
             var harnesses = graph.Steps.OfType<HarnessesStepViewModel>().Single();
 
             await harnesses.OnEnterAsync(CancellationToken.None);
+            harnesses.Visibility = "private";
             harnesses.Rows.Single(r => r.Label == "Cursor").Record = false;
             await harnesses.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
             await graph.History.OnEnterAsync(CancellationToken.None);

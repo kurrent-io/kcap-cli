@@ -36,6 +36,7 @@ public interface IWizardStep {
     bool ShowsOwnPrimary => false;
 
     bool CanContinue => true;
+    bool CanSkip => true;
 
     Task OnEnterAsync(CancellationToken ct);
 

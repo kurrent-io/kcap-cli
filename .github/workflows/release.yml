@@ -888,7 +888,7 @@ jobs:
           set -euo pipefail
           cp trio/bin/kcap trio/bin/kcap-daemon trio/bin/libpty_shim.dylib publish/app/
           chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/Kurrent Capacitor"
-          bash scripts/render-info-plist.sh "${{ steps.version.outputs.VERSION }}" publish/Info.plist
+          bash scripts/assemble-app-bundle.sh publish/app "publish/Kurrent Capacitor.app" "${{ steps.version.outputs.VERSION }}"
 
       - name: Fetch the delta baseline
         shell: bash
@@ -903,7 +903,7 @@ jobs:
         run: >
           vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
           --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
-          --packDir publish/app --plist publish/Info.plist --icon src/Capacitor.App/Assets/kcap-icon.icns
+          --packDir "publish/Kurrent Capacitor.app"
           --channel osx-arm64 --noInst --outputDir releases
           --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
           --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
@@ -915,6 +915,7 @@ jobs:
           mkdir -p extracted
           ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
           APP="extracted/Kurrent Capacitor.app"
+          bash scripts/assert-app-plugin.sh "$APP" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$APP" trio/bin/daemon.sha256
           "$APP/Contents/MacOS/kcap" --version --no-update-check
