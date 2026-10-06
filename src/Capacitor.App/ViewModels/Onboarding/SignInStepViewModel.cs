@@ -16,7 +16,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     internal const int LogLimit = 200;
 
-    /// How long a host keeps the success line on screen before moving on, so it is not a flash.
+    /// How long the re-auth dialog keeps the success line up before it closes.
     internal static readonly TimeSpan SuccessHold = TimeSpan.FromMilliseconds(1600);
 
     /// One pending UI answer. The flow parks on <see cref="AskAsync"/>; the view resolves it, a
@@ -102,8 +102,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             ConsentFlipClaims    claims,
             IAppStateStore       appState,
             IUrlOpener           urlOpener,
-            // What the host does next, under the success headline. The step cannot know: the
-            // wizard moves on, the re-auth dialog refreshes and closes.
+            // Shown under the success headline. The re-auth dialog supplies its own; the wizard does not.
             string?              committedDetail = null,
             TimeProvider?        time = null) {
         _time            = time ?? TimeProvider.System;
@@ -262,15 +261,15 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         _                        => null,
     };
 
-    /// Sign-in has its own actions on the page; the shell's Next means nothing until it commits.
-    public bool OwnsPrimaryAction => !Satisfied;
+    /// Sign-in has its own actions on the page. Next stays hidden until it commits, and while a
+    /// quarantine notice is still up.
+    public bool OwnsPrimaryAction => !Satisfied || QuarantineNotice is not null;
 
     public bool Skippable => false;
 
     public ConnectChoiceViewModel Connect => _connect;
 
-    /// Sign-in committed and nothing on this page still waits for the user. Held back while a
-    /// quarantine notice is up: moving on would leave it on a page nobody is looking at.
+    /// Sign-in committed and a quarantine notice, if any, has been acknowledged.
     public event Action? Completed;
 
     public ObservableCollection<string>           Log     { get; } = [];
@@ -388,7 +387,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     public string? QuarantineNotice {
         get => _quarantineNotice;
-        private set => this.RaiseAndSetIfChanged(ref _quarantineNotice, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _quarantineNotice, value);
+            this.RaisePropertyChanged(nameof(OwnsPrimaryAction));
+        }
     }
 
     public bool TenantPickerVisible {
@@ -490,10 +492,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     /// <summary>
-    /// Never vetoes. A live attempt is cancelled, and the RUN — not just the attempt — is awaited:
+    /// A live attempt is cancelled, and the RUN — not just the attempt — is awaited:
     /// pre-boundary that ends it with nothing durable, past the boundary the operation still
     /// answers Committed, and either way the step's rendered state is final before the wizard
-    /// moves, regardless of which continuation registered first.
+    /// moves. Forward is refused while a quarantine notice is up.
     /// </summary>
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
         _attempt?.Cancel();
@@ -507,7 +509,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             }
         }
 
-        return true;
+        return direction == WizardNavigation.Back || QuarantineNotice is null;
     }
 
     /// The command's body, reachable directly so a re-entrant call can be asserted as a no-op.

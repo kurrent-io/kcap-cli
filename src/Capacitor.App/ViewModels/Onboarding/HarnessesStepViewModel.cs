@@ -215,8 +215,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         _installed = true;
         this.RaisePropertyChanged(nameof(NextLabel));
 
-        // A failure is shown on its row with Retry; the next Next is the user's "carry on anyway".
-        return Rows.Where(r => r.Selected).All(r => r.Succeeded);
+        // The rows show what happened. The next press of Next is Continue.
+        return false;
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {

@@ -78,17 +78,18 @@
                 <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
 
                 <StackPanel Spacing="10">
-                    <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="12">
-                        <Button x:Name="NextButton" Command="{Binding NextCommand}"
+                    <!-- Back stays on the left. The right group is Skip, then the forward button. -->
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+                        <Button x:Name="BackButton" Classes="frSecondary" Content="BACK"
+                                Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
+                        <Button Grid.Column="2" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
+                                Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
+                                IsVisible="{Binding SkipVisible}" />
+                        <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
                                 Classes.frPrimary="{Binding NextIsPrimary}"
                                 Classes.frSecondary="{Binding NextIsSecondary}"
                                 Content="{Binding NextLabel, Converter={x:Static views:UpperCase.Instance}}"
                                 IsVisible="{Binding NextVisible}" />
-                        <Button Grid.Column="1" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
-                                Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
-                                IsVisible="{Binding SkipVisible}" />
-                        <Button Grid.Column="3" x:Name="BackButton" Classes="frSecondary" Content="BACK"
-                                Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
                     </Grid>
 
                     <!-- Daemon step only. These lines name that step's action, and the other pages have none. -->

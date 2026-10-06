@@ -111,22 +111,25 @@ public class HarnessesStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Next_installs_each_selected_row_with_the_options_its_answer_needs() {
-        var (flags, options, left, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+        var (flags, options, left, again, label, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root);
             await h.Vm.OnEnterAsync(CancellationToken.None);
             h.Row("Cursor").Record = false; // tools only
             h.Row("Pi").Tools      = false; // capture only
 
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var again = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
-            return (h.Cli.PluginInstallCalls.ToList(), h.Cli.PluginInstallOptions.ToList(), leave, h.Vm.Satisfied);
+            return (h.Cli.PluginInstallCalls.ToList(), h.Cli.PluginInstallOptions.ToList(), leave, again, h.Vm.NextLabel, h.Vm.Satisfied);
         });
 
         await Assert.That(flags).IsEquivalentTo([null, "--cursor", "--pi"], CollectionOrdering.Matching);
         await Assert.That(options[0]).IsEmpty();
         await Assert.That(options[1]).IsEquivalentTo(["--tools-only"]);
         await Assert.That(options[2]).IsEquivalentTo(["--skip-pi-mcp", "--skip-pi-skills", "--skip-pi-instructions"]);
-        await Assert.That(left).IsTrue();
+        await Assert.That(left).IsFalse();
+        await Assert.That(again).IsTrue();
+        await Assert.That(label).IsEqualTo("Continue");
         await Assert.That(satisfied).IsTrue();
     }
 
@@ -226,7 +229,7 @@ public class HarnessesStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Next_waits_for_the_terminal_command_and_installs_nothing_until_it_resolves() {
-        var (held, callsWhileHeld, message, left, callsAfter) = await AvaloniaSession.DispatchAsync(async () => {
+        var (held, callsWhileHeld, message, left, again, label, callsAfter) = await AvaloniaSession.DispatchAsync(async () => {
             var dir = Path.GetDirectoryName(ConfigPath)!;
             var destination = Path.Combine(dir, "shim-kcap");
             var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
@@ -244,14 +247,17 @@ public class HarnessesStepViewModelTests {
             await fix.InstallCommand.Execute().ToTask();
             Dispatcher.UIThread.RunJobs();
             var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var again = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
-            return (heldLeave, heldCalls, heldMessage, leave, h.Cli.PluginInstallCallCount);
+            return (heldLeave, heldCalls, heldMessage, leave, again, h.Vm.NextLabel, h.Cli.PluginInstallCallCount);
         });
 
         await Assert.That(held).IsFalse();
         await Assert.That(callsWhileHeld).IsEqualTo(0);
         await Assert.That(message).IsEqualTo(HarnessesStepViewModel.PathRequiredMessage);
-        await Assert.That(left).IsTrue();
+        await Assert.That(left).IsFalse();
+        await Assert.That(again).IsTrue();
+        await Assert.That(label).IsEqualTo("Continue");
         await Assert.That(callsAfter).IsEqualTo(3);
     }
 
