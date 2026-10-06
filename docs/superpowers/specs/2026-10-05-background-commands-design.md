@@ -68,8 +68,9 @@ New `RunKind { Agent, Shell }`.
 - A provisional start goes into a pending map by call id, not into `Rows`.
 - A `Detached` whose call is pending promotes it: a Shell row dated from the call, marked background.
   A `Detached` for an existing row behaves as today.
-- A tool result for a pending call without a `Detached` beside it drops the entry. So does the end
-  of the session, so a call that never got a result does not linger.
+- A tool result for a pending call without a `Detached` beside it drops the entry. The end of
+  the session leaves pending calls alone: a remote lane can turn it back off, and a pending call
+  shows nothing.
 - Everything else is unchanged: the end by call id first, then by handle; the session-over rule
   presenting a running row as stopped; elapsed time; per-state counts.
 
@@ -86,8 +87,8 @@ New `RunKind { Agent, Shell }`.
 
 - Title `Subagents` → `Agents & commands`. The list, the collapsed per-state counts and the outcome
   marks are unchanged.
-- Each row carries a kind glyph before its name: the agent glyph and a terminal glyph, in
-  `KcapMutedBrush`. Status colours stay on the outcome mark only.
+- A shell row's name is led by a muted monospace `$` (`KcapMutedBrush`); agent rows are unchanged.
+  Status colours stay on the outcome mark only.
 
 ## Testing
 
@@ -97,4 +98,4 @@ New `RunKind { Agent, Shell }`.
 - `SessionRuns`: promotion, the dropped provisional entry, a reused background id after the first
   ended, session over, mixed counts.
 - `ChatTabViewModel`: the strip text for one, several of one kind, and mixed.
-- Headless view test for the renamed section and the kind glyph.
+- Headless view test for the renamed section and the shell glyph.

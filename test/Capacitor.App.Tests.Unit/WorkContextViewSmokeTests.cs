@@ -483,6 +483,38 @@ public class WorkContextViewSmokeTests {
     static List<string> VisibleTexts(Visual root) =>
         root.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
 
+    /// The title covers both kinds, and only a shell row is led by the `$` glyph — in the folded
+    /// running list and in the opened full list alike, since both use one item template.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_section_is_titled_for_agents_and_commands_and_marks_shell_rows() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var now = host.Time.GetUtcNow();
+            host.Runs.Apply(new ChatProjectionResult([], [], [
+                new RunSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
+                new RunSignal.Started("c2", "Run the full suite", "dotnet test", now.AddSeconds(-40), RunKind.Shell, Provisional: true),
+                new RunSignal.Detached("c2", "b1"),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var section = host.Find<StackPanel>("SubagentsSection");
+            await Assert.That(VisibleTexts(section)).Contains("AGENTS & COMMANDS");
+            await Assert.That(VisibleGlyphs(host.Find<ItemsControl>("RunningSubagentList"))).IsEqualTo(1);
+            await Assert.That(VisibleTexts(section)).Contains("Run the full suite");
+
+            await host.Vm.ToggleRunsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(VisibleGlyphs(host.Find<ItemsControl>("SubagentList"))).IsEqualTo(1);
+        });
+
+        static int VisibleGlyphs(ItemsControl list) =>
+            list.GetVisualDescendants().OfType<TextBlock>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
+    }
+
     /// Folded, the section lists the running rows alone and nothing once none runs; opening it
     /// swaps that list for the full one rather than showing a running row twice.
     [Test]
