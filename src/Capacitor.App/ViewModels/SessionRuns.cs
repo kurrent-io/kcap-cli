@@ -8,22 +8,22 @@ namespace Capacitor.App.ViewModels;
 /// Owned by the workspace and shared by the chat tab and the work-context pane; every call is
 /// made on the UI thread. The rows rebuild from the log on a feed reset, so nothing here is
 /// persisted.
-public sealed class SessionSubagents(TimeProvider time) {
-    readonly AvaloniaList<SubagentRow> _rows = new();
-    readonly AvaloniaList<SubagentRow> _running = new();
-    readonly Dictionary<string, SubagentRow> _byCall = new(StringComparer.Ordinal);
+public sealed class SessionRuns(TimeProvider time) {
+    readonly AvaloniaList<RunRow> _rows = new();
+    readonly AvaloniaList<RunRow> _running = new();
+    readonly Dictionary<string, RunRow> _byCall = new(StringComparer.Ordinal);
     /// The row an agent id currently belongs to; the latest Detached wins.
-    readonly Dictionary<string, SubagentRow> _byAgent = new(StringComparer.Ordinal);
+    readonly Dictionary<string, RunRow> _byAgent = new(StringComparer.Ordinal);
     /// Rows per presented state, indexed by the state's value.
-    readonly int[] _counts = new int[Enum.GetValues<SubagentState>().Length];
+    readonly int[] _counts = new int[Enum.GetValues<RunState>().Length];
     bool _sessionOver;
 
-    public IAvaloniaReadOnlyList<SubagentRow> Rows => _rows;
+    public IAvaloniaReadOnlyList<RunRow> Rows => _rows;
     /// The rows of Rows that present as running, in arrival order.
-    public IAvaloniaReadOnlyList<SubagentRow> Running => _running;
-    public int RunningCount => Count(SubagentState.Running);
+    public IAvaloniaReadOnlyList<RunRow> Running => _running;
+    public int RunningCount => Count(RunState.Running);
 
-    public int Count(SubagentState state) => _counts[(int)state];
+    public int Count(RunState state) => _counts[(int)state];
 
     /// Raised after any call that changed how many rows present any one state.
     public event Action? Changed;
@@ -41,16 +41,16 @@ public sealed class SessionSubagents(TimeProvider time) {
 
     public void Apply(ChatProjectionResult projection) {
         HashSet<string>? detachedHere = null;
-        foreach (var signal in projection.Subagents) {
+        foreach (var signal in projection.Runs) {
             switch (signal) {
-                case SubagentSignal.Started started:
+                case RunSignal.Started started:
                     Start(started);
                     break;
-                case SubagentSignal.Detached detached:
+                case RunSignal.Detached detached:
                     (detachedHere ??= new(StringComparer.Ordinal)).Add(detached.CallId);
                     Detach(detached);
                     break;
-                case SubagentSignal.Finished finished:
+                case RunSignal.Finished finished:
                     Finish(finished);
                     break;
             }
@@ -61,7 +61,7 @@ public sealed class SessionSubagents(TimeProvider time) {
             // later result for the same call, an error included, does.
             if (detachedHere?.Contains(callId) == true) continue;
             if (_byCall.TryGetValue(callId, out var row))
-                row.End(envelope.ToolIsError ? SubagentState.Failed : SubagentState.Done, Stamp(envelope.TimestampIso));
+                row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
         }
         Refresh();
     }
@@ -76,14 +76,14 @@ public sealed class SessionSubagents(TimeProvider time) {
     /// Re-reads the clock for the running rows' elapsed time.
     public void Tick() => Refresh();
 
-    void Start(SubagentSignal.Started started) {
+    void Start(RunSignal.Started started) {
         if (_byCall.ContainsKey(started.CallId)) return;
-        var row = new SubagentRow(started.CallId, started.Name, started.Description, started.At);
+        var row = new RunRow(started.CallId, started.Name, started.Description, started.At);
         _byCall[started.CallId] = row;
         _rows.Add(row);
     }
 
-    void Detach(SubagentSignal.Detached detached) {
+    void Detach(RunSignal.Detached detached) {
         if (!_byCall.TryGetValue(detached.CallId, out var row) || row.IsEnded) return;
         row.MarkBackground();
         _byAgent[detached.AgentId] = row;
@@ -91,12 +91,12 @@ public sealed class SessionSubagents(TimeProvider time) {
 
     /// A known call id decides alone and never falls through to the agent id: a repeated
     /// notification for a first execution must not end a second one holding the same id.
-    void Finish(SubagentSignal.Finished finished) {
+    void Finish(RunSignal.Finished finished) {
         var outcome = finished.Outcome switch {
-            null                    => (SubagentState?)null,
-            SubagentOutcome.Failed  => SubagentState.Failed,
-            SubagentOutcome.Stopped => SubagentState.Stopped,
-            _                       => SubagentState.Done,
+            null                    => (RunState?)null,
+            RunOutcome.Failed  => RunState.Failed,
+            RunOutcome.Stopped => RunState.Stopped,
+            _                       => RunState.Done,
         };
         if (finished.CallId is { } callId && _byCall.TryGetValue(callId, out var byCall)) {
             byCall.End(outcome, finished.At);

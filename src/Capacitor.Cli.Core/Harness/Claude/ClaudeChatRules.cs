@@ -62,25 +62,25 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's
     /// row. The meta flag is not consulted: a hidden row still ends its subagent.
-    public IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) {
+    public IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
 
         switch (raw.Kind) {
             case AcpEventKind.ToolCall when raw.ToolName is "Agent" or "Task" && raw.ToolCallId is { Length: > 0 } callId: {
                 var (name, description) = SpawnFacts(raw.ToolInputJson);
-                return [new SubagentSignal.Started(callId, name, description, evt.Timestamp)];
+                return [new RunSignal.Started(callId, name, description, evt.Timestamp)];
             }
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
                 if (SchemaExtensions.Text(result, "status") == "async_launched"
                     && (SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id")) is { Length: > 0 } agentId)
-                    return [new SubagentSignal.Detached(callId, agentId)];
+                    return [new RunSignal.Detached(callId, agentId)];
                 // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
                 // task_id, from ending a running subagent.
                 if (SchemaExtensions.Text(result, "task_type") == "local_agent"
                     && SchemaExtensions.Text(result, "task_id") is { Length: > 0 } taskId
                     && (SchemaExtensions.Text(result, "message") ?? "").AsSpan().TrimStart().StartsWith(StoppedTaskMessage, StringComparison.OrdinalIgnoreCase))
-                    return [new SubagentSignal.Finished(null, taskId, SubagentOutcome.Stopped, evt.Timestamp)];
+                    return [new RunSignal.Finished(null, taskId, RunOutcome.Stopped, evt.Timestamp)];
                 return [];
             }
             case AcpEventKind.UserMessage when IsTaskNotification(slug, raw): {
@@ -88,8 +88,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 var callId = Tag(TaskToolUseId(), text);
                 var agentId = Tag(TaskId(), text);
                 if (callId is null && agentId is null) return [];
-                var outcome = string.Equals(Tag(TaskStatus(), text), "completed", StringComparison.OrdinalIgnoreCase) ? SubagentOutcome.Done : SubagentOutcome.Failed;
-                return [new SubagentSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
+                var outcome = string.Equals(Tag(TaskStatus(), text), "completed", StringComparison.OrdinalIgnoreCase) ? RunOutcome.Done : RunOutcome.Failed;
+                return [new RunSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
             }
             default:
                 return [];

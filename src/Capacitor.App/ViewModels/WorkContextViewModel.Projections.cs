@@ -183,14 +183,14 @@ public sealed partial class WorkContextViewModel {
     }
     bool _sessionExpanded;
     public bool SessionExpanded { get => _sessionExpanded; private set => this.RaiseAndSetIfChanged(ref _sessionExpanded, value); }
-    bool _subagentsExpanded;
-    public bool SubagentsExpanded { get => _subagentsExpanded; private set => this.RaiseAndSetIfChanged(ref _subagentsExpanded, value); }
+    bool _runsExpanded;
+    public bool RunsExpanded { get => _runsExpanded; private set => this.RaiseAndSetIfChanged(ref _runsExpanded, value); }
 
     public ReactiveCommand<Unit, Unit> TogglePartsCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> TogglePeopleCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleIssuesCommand { get; private set; } = null!;
     public ReactiveCommand<Unit, Unit> ToggleSessionCommand { get; private set; } = null!;
-    public ReactiveCommand<Unit, Unit> ToggleSubagentsCommand { get; private set; } = null!;
+    public ReactiveCommand<Unit, Unit> ToggleRunsCommand { get; private set; } = null!;
 
     void InitializeProjections() {
         TogglePartsCommand   = Toggle(() => PartsExpanded = !PartsExpanded);
@@ -201,7 +201,7 @@ public sealed partial class WorkContextViewModel {
                 LinkPolicy.Open(_opener, issue.Url);
         });
         ToggleSessionCommand = Toggle(() => SessionExpanded = !SessionExpanded);
-        ToggleSubagentsCommand = Toggle(() => SubagentsExpanded = !SubagentsExpanded);
+        ToggleRunsCommand = Toggle(() => RunsExpanded = !RunsExpanded);
     }
 
     ReactiveCommand<Unit, Unit> Toggle(Action flip) {
