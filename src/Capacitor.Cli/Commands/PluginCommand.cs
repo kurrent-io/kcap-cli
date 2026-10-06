@@ -68,13 +68,12 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         var exit = await InstallHarness(args);
 
-        if (exit == 0) {
+        if (exit == 0 && !args.Contains(ToolsOnlyFlag)) {
             var gitHook = new GitHookInstaller(env.Home, env.ResolveMcpBinaryPath);
 
-            // A refresh of an existing install is no consent to a new git config entry, and the
-            // git hook files commits under a recorded session, which --tools-only declines.
+            // Refresh may repair a recording hook, but cannot opt into one.
             if (args.Contains("--if-installed")) gitHook.Refresh();
-            else if (!args.Contains(ToolsOnlyFlag)) gitHook.Install();
+            else gitHook.Install();
         }
 
         return exit;

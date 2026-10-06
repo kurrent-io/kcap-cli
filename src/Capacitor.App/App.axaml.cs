@@ -381,13 +381,9 @@ public partial class App : Application {
             move: async () => {
                 var outcome = await mover.MoveAsync(root!, _shutdown.Token);
                 if (outcome.Moved) {
-                    var launched = Process.Start(new ProcessStartInfo("open") { ArgumentList = { outcome.InstalledPath! }, UseShellExecute = false });
-                    if (launched is null) return new MoveOutcome(false, outcome.InstalledPath, "Could not open Capacitor. Open the copy in Applications.");
-                    using (launched) {
-                        await launched.WaitForExitAsync(_shutdown.Token);
-                        if (launched.ExitCode != 0)
-                            return new MoveOutcome(false, outcome.InstalledPath, "Could not open Capacitor. Open the copy in Applications.");
-                    }
+                    var launcher = new ApplicationsLauncher(new ProcessRunner(_time), InstalledAppState, _time);
+                    if (!await launcher.OpenAsync(outcome.InstalledPath!, _shutdown.Token))
+                        return new MoveOutcome(false, outcome.InstalledPath, "Could not confirm Capacitor opened. Open the copy in Applications, then quit this window.");
                     Quit();
                 }
                 return outcome;
@@ -398,18 +394,21 @@ public partial class App : Application {
         return true;
     }
 
-    static bool InstalledAppRunning(string root) {
+    static bool InstalledAppRunning(string root) => InstalledAppState(root) != false;
+
+    static bool? InstalledAppState(string root) {
         var executable = Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor");
+        var unknown = false;
         foreach (var process in Process.GetProcessesByName("Kurrent Capacitor")) {
             using (process) {
                 try {
                     if (process.Id != Environment.ProcessId && process.MainModule?.FileName == executable) return true;
                 } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
-                    return true; // Do not replace a copy whose running state cannot be verified.
+                    unknown = true;
                 }
             }
         }
-        return false;
+        return unknown ? null : false;
     }
 
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
@@ -735,8 +734,7 @@ public partial class App : Application {
         _setupRestarting = true;
         try {
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window,
-                new LifecyclePrompt(LifecyclePrompt.KindSetup, null, null, false,
-                    "Capacitor will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."), _shutdown.Token)) {
+                SetupRestartPrompt(_historyImport?.Run is { Running: true }), _shutdown.Token)) {
                 _setupRestarting = false;
                 return;
             }
@@ -756,6 +754,11 @@ public partial class App : Application {
             _coordinator?.Window?.Notifier?.Notify("Could not reopen setup. Please try again.");
         }
     }
+
+    internal static LifecyclePrompt SetupRestartPrompt(bool importRunning) => new(
+        LifecyclePrompt.KindSetup, null, null, false,
+        "Capacitor will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."
+        + (importRunning ? " Your history import will stop. Sessions already imported are kept; you can retry from setup." : ""));
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled) {
@@ -977,7 +980,7 @@ public partial class App : Application {
             bridges,
             WizardComposition.NewOperation,
             surface,
-            ResolveCli: () => NewWizardCli(_config, runner, cliPath, probe),
+            ResolveCli: () => NewWizardCli(_config, _serverEnv, runner, cliPath, probe),
             ResolveOps: name => new LocalControlOps(_daemonStore, name, _time),
             ResolveIdentity: () => ResolveWizardIdentity(_config, _serverEnv),
             ResolveConsentFlipIdentity: () => ResolveConsentFlipIdentity(_config),
@@ -1049,13 +1052,13 @@ public partial class App : Application {
 
     // Rebuilt per call (LateBoundKcapCli): the wizard writes the profile, server and daemon name
     // while its steps run, so a binding pinned at composition time would query the wrong service.
-    static IKcapCli NewWizardCli(
-            ConfigRoot config, IProcessRunner runner, string? cliPath, ILoginShellProbe probe) {
-        var (profile, server, daemonName) = ResolveConsentFlipIdentity(config);
+    internal static IKcapCli NewWizardCli(
+            ConfigRoot config, ProfileOverrides env, IProcessRunner runner, string? cliPath, ILoginShellProbe probe) {
+        var identity = ResolveWizardIdentity(config, env);
 
         return new KcapCli(
-            runner, cliPath, daemonName, string.IsNullOrEmpty(profile) ? "default" : profile,
-            probe.TerminalPathAsync, canonicalServer: ServerIdentity.Canonicalize(server));
+            runner, cliPath, identity?.DaemonName ?? "daemon", identity?.Profile ?? ProfileConfig.DefaultName,
+            probe.TerminalPathAsync, canonicalServer: identity?.Server);
     }
 
     // The main window, with the onboarding pane where the rail and launcher go. ShutdownMode is

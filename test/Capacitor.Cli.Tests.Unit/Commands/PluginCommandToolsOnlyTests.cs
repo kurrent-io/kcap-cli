@@ -99,11 +99,14 @@ public class PluginCommandToolsOnlyTests {
         var env    = Env();
         var cursor = env.Harnesses.Of<CursorHarness>().Paths;
         Home.CreateFile([".cursor", "hooks.json"], """{"version":1,"hooks":{"sessionStart":[{"command":"kcap hook --cursor"}]}}""");
+        var gitBefore = "[hook \"kcap\"]\n\tcommand = '/old/kcap' git-hook\n\tevent = post-commit\n";
+        Home.CreateFile([".gitconfig"], gitBefore);
         var before = await File.ReadAllTextAsync(cursor.UserHooksJson);
 
         await Assert.That(await Run(env, "plugin", "install", "--cursor", "--tools-only", "--if-installed")).IsEqualTo(0);
 
         await Assert.That(await File.ReadAllTextAsync(cursor.UserHooksJson)).IsEqualTo(before);
+        await Assert.That(await File.ReadAllTextAsync(GitConfig)).IsEqualTo(gitBefore);
         await Assert.That(HarnessMcpProjections.Cursor.OwnsAnything(cursor.UserMcpJson, env.Home)).IsTrue();
     }
 
