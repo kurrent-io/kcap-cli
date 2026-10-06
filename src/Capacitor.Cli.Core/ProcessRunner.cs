@@ -52,14 +52,7 @@ public interface IProcessRunner {
 /// the internal Timeout.
 public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
     public async Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
-        var psi = new ProcessStartInfo(fileName) {
-            RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        if (options.EnvOverlay is not null)
-            foreach (var (key, value) in options.EnvOverlay) psi.Environment[key] = value;
+        var psi = StartInfo(fileName, args, options);
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start '{fileName}'.");
         // CancellationToken.None on both drains: neither `ct` nor the internal timeout ever
@@ -97,18 +90,27 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
         return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result, TimedOut: false);
     }
 
-    const int TailLimit = 500;
-
-    public async Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
-            Action<StreamedLine> onLine, CancellationToken ct) {
+    // CreateNoWindow: the desktop app is a GUI process, and on Windows a console child of one gets a
+    // console window of its own — every CLI call would flash a terminal. Output is redirected, so
+    // nothing needs the window; elsewhere the flag is ignored.
+    internal static ProcessStartInfo StartInfo(string fileName, string[] args, RunOptions options) {
         var psi = new ProcessStartInfo(fileName) {
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
             UseShellExecute        = false,
+            CreateNoWindow         = true,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
         if (options.EnvOverlay is not null)
             foreach (var (key, value) in options.EnvOverlay) psi.Environment[key] = value;
+        return psi;
+    }
+
+    const int TailLimit = 500;
+
+    public async Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
+            Action<StreamedLine> onLine, CancellationToken ct) {
+        var psi = StartInfo(fileName, args, options);
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start '{fileName}'.");
 

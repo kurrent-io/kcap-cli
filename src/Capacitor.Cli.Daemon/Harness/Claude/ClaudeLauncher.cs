@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -180,7 +181,13 @@ internal sealed partial class ClaudeLauncher(
                 args.Add(ctx.Model);
             }
 
-            if (!string.IsNullOrEmpty(ctx.Prompt)) {
+            if (ctx.PromptFile is { } promptFile) {
+                // Outside the worktree, so Claude would otherwise ask before reading it.
+                args.Add("--add-dir");
+                args.Add(Path.GetDirectoryName(promptFile)!);
+                args.Add("--");
+                args.Add(PromptFile.Pointer(promptFile));
+            } else if (!string.IsNullOrEmpty(ctx.Prompt)) {
                 args.Add("--");
                 args.Add(ctx.Prompt);
             }
@@ -339,8 +346,15 @@ internal sealed partial class ClaudeLauncher(
             return;
         }
 
-        Directory.CreateSymbolicLink(worktreeProjDir, sourceProjDir);
+        if (OperatingSystem.IsWindows()) CreateJunction(worktreeProjDir, sourceProjDir);
+        else Directory.CreateSymbolicLink(worktreeProjDir, sourceProjDir);
     }
+
+    /// A symlink on Windows needs Developer Mode or elevation, so the link is refused ("A required
+    /// privilege is not held") and the agent loses the project's memory and permissions. A directory
+    /// junction needs neither, and .NET reads and deletes it as the link it is.
+    [SupportedOSPlatform("windows")]
+    internal static void CreateJunction(string link, string target) => WindowsJunction.Create(link, target);
 
     /// <summary>
     /// Removes the ~/.claude/projects/{worktree-path-hash} symlink if it exists.

@@ -104,7 +104,9 @@ static class WindowsTaskUnit {
         // A variable named ERRORLEVEL — inherited or captured — would shadow cmd's dynamic exit code.
         sb.Append("set \"ERRORLEVEL=\"\r\n");
         sb.Append(":run\r\n");
-        sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)}\r\n");
+        // The headless console has nowhere to show stderr, so a crash's last words go beside the log.
+        var stderrPath = ExecValue("the stderr log path", StderrPath(spec.LogPath));
+        sb.Append($"{ExecValue("the daemon binary path", spec.DaemonBinaryPath)} {string.Join(' ', args)} 2>>{stderrPath}\r\n");
         // EQU, not `if errorlevel`: that tests "at least", and a crash's exit code is negative.
         sb.Append("if %ERRORLEVEL% EQU 0 exit /b 0\r\n");
         // By absolute path: the captured PATH need not reach System32, and a sleep that fails to start would
@@ -191,7 +193,7 @@ static class WindowsTaskUnit {
     }
 
     /// <summary>
-    /// The Task Scheduler XML. The action is <c>cmd /d /s /v:off /c ""&lt;wrapper&gt;""</c> — every switch
+    /// The Task Scheduler XML. The action is <c>conhost --headless cmd /d /s /v:off /c ""&lt;wrapper&gt;""</c> — every switch
     /// there is load-bearing:
     ///
     /// <para><c>/s</c> with the command text both starting and ending in a quote makes cmd strip exactly the
@@ -203,9 +205,16 @@ static class WindowsTaskUnit {
     /// <para><c>/v:off</c> fixes delayed expansion off before the wrapper is opened, so <c>!NAME!</c> is inert
     /// even where the machine enables it by default. <c>/d</c> skips AutoRun commands, so a per-user AutoRun
     /// value cannot inject a command ahead of the daemon.</para>
+    /// <para>The logon trigger and the principal name the installing user. A logon trigger with no
+    /// <c>UserId</c> fires for every user, and registering one needs an elevated token, so a plain
+    /// <c>schtasks /Create</c> is refused with "Access is denied".</para>
+    ///
+    /// <para><c>conhost --headless</c> gives the daemon a console with no window. A plain <c>cmd.exe</c>
+    /// action opens a visible console at every sign-in, and closing it stops the daemon.</para>
     /// </summary>
-    public static string TaskXml(ServiceSpec spec, string wrapperPath) {
+    public static string TaskXml(ServiceSpec spec, string wrapperPath, string? userId = null) {
         RequireSafeWrapperPath(wrapperPath);
+        var user = Guarded("the user name", userId ?? CurrentUser());
 
         return $"""
         <?xml version="1.0" encoding="UTF-16"?>
@@ -214,8 +223,15 @@ static class WindowsTaskUnit {
             <Description>kcap daemon ({Guarded("the service id", spec.ServiceId)})</Description>
           </RegistrationInfo>
           <Triggers>
-            <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+            <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>
           </Triggers>
+          <Principals>
+            <Principal id="Author">
+              <UserId>{user}</UserId>
+              <LogonType>InteractiveToken</LogonType>
+              <RunLevel>LeastPrivilege</RunLevel>
+            </Principal>
+          </Principals>
           <Settings>
             <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
             <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
@@ -224,18 +240,38 @@ static class WindowsTaskUnit {
             <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
             <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
           </Settings>
-          <Actions>
+          <Actions Context="Author">
             <Exec>
-              <Command>cmd.exe</Command>
-              <Arguments>/d /s /v:off /c ""{Guarded("the wrapper path", wrapperPath)}""</Arguments>
+              <Command>conhost.exe</Command>
+              <Arguments>--headless cmd.exe /d /s /v:off /c ""{Guarded("the wrapper path", wrapperPath)}""</Arguments>
             </Exec>
           </Actions>
         </Task>
         """;
     }
 
+    static string CurrentUser() => $@"{Environment.UserDomainName}\{Environment.UserName}";
+
     public static string? IdFromTaskName(string taskName) =>
         taskName.StartsWith(Prefix, StringComparison.Ordinal) ? taskName[Prefix.Length..] : null;
+
+    public static string StderrPath(string logPath) => Path.ChangeExtension(logPath, ".stderr.log");
+
+    /// The environment the wrapper sets, read back from its <c>set "K=V"</c> lines with the
+    /// <c>%%</c> escaping reversed — the Windows counterpart of the launchd plist's EnvironmentVariables.
+    /// <c>set "K="</c> unsets <c>K</c> in cmd, so it is not part of the environment.
+    public static Dictionary<string, string> EnvFromWrapper(string wrapperText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in wrapperText.Split('\n')) {
+            var line = raw.TrimEnd('\r');
+            if (!line.StartsWith("set \"", StringComparison.Ordinal) || !line.EndsWith('"')) continue;
+            var body = line[5..^1];
+            var eq = body.IndexOf('=');
+            if (eq <= 0 || eq == body.Length - 1) continue;
+            env[body[..eq].Replace("%%", "%")] = body[(eq + 1)..].Replace("%%", "%");
+        }
+        return env;
+    }
 
     /// <summary>
     /// The daemon binary the wrapper exec's — the first quoted token of its exec

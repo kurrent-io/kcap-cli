@@ -154,11 +154,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
             opener, time, permissions, new SessionSubagents(time), missingNote: MissingNote, sessionId: _sessionIds,
-            serverQueue: _sessionIds
+            serverQueue: Observable.Switch(_sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
-                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))
-                .Switch());
+                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))));
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
             : null;

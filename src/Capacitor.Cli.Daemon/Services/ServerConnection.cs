@@ -62,6 +62,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public event Func<string, Task>?                OnStopAgent; // agentId
     public event Func<SendInputCommand, Task>?      OnSendInput;
     public event Func<string, string, Task>?        OnSendSpecialKey; // agentId, key
+    public event Func<SendRawInputCommand, Task>?   OnSendRawInput;
     public event Func<ResizeTerminalCommand, Task>? OnResizeTerminal;
 
     // Per-phase eval handlers (DEV-1463 PR 2). These use SignalR's
@@ -139,6 +140,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>What the connect payload claims for RequestStatusReport2 — the live handler itself, so
     /// the claim and the routing cannot drift apart.</summary>
     internal bool AdvertisesCorrelatedStatusReports => OnRequestStatusReport2 is not null;
+
+    // Read off the handler, never asserted, as with correlated status reports.
+    internal bool AdvertisesRawInput => OnSendRawInput is not null;
 
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): snapshot of the un-acked resolved-
     /// candidates ledger, re-advertised on <c>DaemonConnect</c> (mirrors <see cref="GetLiveAgents"/>).
@@ -259,6 +263,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         _hub.On<LaunchAgentCommand>("LaunchAgent", cmd => SafeInvoke("LaunchAgent", () => OnLaunchAgent?.Invoke(cmd)));
         _hub.On<string>("StopAgent", agentId => SafeInvoke("StopAgent", () => OnStopAgent?.Invoke(agentId)));
         _hub.On<SendInputCommand>("SendInput", cmd => SafeInvoke("SendInput", () => OnSendInput?.Invoke(cmd)));
+        _hub.On<SendRawInputCommand>("SendRawInput", cmd => SafeInvoke("SendRawInput", () => OnSendRawInput?.Invoke(cmd)));
         _hub.On<string, string>("SendSpecialKey", (agentId, key) => SafeInvoke("SendSpecialKey", () => OnSendSpecialKey?.Invoke(agentId, key)));
         // "ResizeTerminalAggregate", not the legacy "ResizeTerminal": the payload is now the
         // server-aggregated min terminal size across web viewers, with (0,0) meaning "clear web
@@ -679,7 +684,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // RequestStatusReport2 frames its null-conditional invoke answers with silence.
             SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports,
             EvalProtocolVersion: 2,
-            VendorModels: _config.VendorModels);
+            VendorModels: _config.VendorModels,
+            SupportsRawInput: AdvertisesRawInput,
+            SupportsBranchBaseRef: true);
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";

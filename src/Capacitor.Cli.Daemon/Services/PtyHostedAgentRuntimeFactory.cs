@@ -23,12 +23,18 @@ namespace Capacitor.Cli.Daemon.Services;
 /// settings-overlay glitch never blocks launch (same contract as before the refactor,
 /// <c>AgentOrchestrator.LogPrepareSoftFailure</c>).
 /// </summary>
+/// <param name="windows">Test seam for the platform; null reads the ambient OS.</param>
+/// <param name="promptRoot">Test seam for where an overlong prompt is written; null is the temp directory.</param>
 internal sealed partial class PtyHostedAgentRuntimeFactory(
         IHostedAgentLauncher                  launcher,
         IPtyProcessFactory                    ptyFactory,
         ILogger<PtyHostedAgentRuntimeFactory> logger,
-        TimeProvider                          time
+        TimeProvider                          time,
+        bool?                                 windows    = null,
+        string?                               promptRoot = null
     ) : IHostedAgentRuntimeFactory {
+    readonly bool _windows = windows ?? OperatingSystem.IsWindows();
+
     public string Vendor             => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
@@ -86,7 +92,18 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             LogPrepareSoftFailure(ex, ctx.AgentId);
         }
 
-        var launchArgs    = launcher.BuildArgs(launcherCtx);
+        var launchArgs = launcher.BuildArgs(launcherCtx);
+
+        // Windows only: elsewhere the argument limit is far larger, and a prompt that fits keeps its
+        // usual place on the command line.
+        string? promptFile = null;
+        if (_windows && launcherCtx.Prompt is { Length: > 0 } prompt && PromptFile.Overflows(launchArgs.Args)) {
+            promptFile  = PromptFile.Write(promptRoot ?? PromptFile.DefaultRoot, ctx.AgentId, prompt);
+            launcherCtx = launcherCtx with { PromptFile = promptFile };
+            launchArgs  = launcher.BuildArgs(launcherCtx);
+            LogPromptMovedToFile(ctx.AgentId, prompt.Length);
+        }
+
         var args          = launchArgs.Args;
         var mcpConfigPath = launchArgs.McpConfigPath;
 
@@ -118,7 +135,17 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
         }
 
-        var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
+        IPtyProcess pty;
+        try {
+            pty = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
+        } catch {
+            if (promptFile is not null) PromptFile.Delete(promptFile);
+            throw;
+        }
+
+        if (promptFile is not null)
+            _ = pty.WaitForExitAsync().ContinueWith(_ => PromptFile.Delete(promptFile), TaskScheduler.Default);
+
         // Gate the multi-CR submit spray on whether this launch turned off approval prompts — the
         // launcher is the authority (it set the flags). See PtyHostedAgentRuntime.SubmitAsync.
         var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, launcher.DisablesApprovalPrompts(launcherCtx));
@@ -128,4 +155,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
     partial void LogPrepareSoftFailure(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId}'s {Length}-character prompt is too long for the command line; it reads it from a file")]
+    partial void LogPromptMovedToFile(string agentId, int length);
 }
