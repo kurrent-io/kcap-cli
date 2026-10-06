@@ -34,10 +34,14 @@ public sealed class AppCrashLog(ConfigRoot config, TimeProvider time) {
                 Directory.CreateDirectory(config.Directory);
                 TrimIfLarge();
 
+                // A link here would send the exception text to whatever file it names.
+                if (new FileInfo(Path).LinkTarget is not null) return;
+
                 var options = new FileStreamOptions { Mode = FileMode.Append, Access = FileAccess.Write, Share = FileShare.ReadWrite };
-                if (!OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+                if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnly;
 
                 using var stream = new FileStream(Path, options);
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(stream.SafeFileHandle, OwnerOnly);
                 stream.Write(Encoding.UTF8.GetBytes(FormatEntry(source, ex, time.GetUtcNow())));
             } catch {
                 // The process is already failing; a full disk or a permissions error has no better outlet.
@@ -45,11 +49,18 @@ public sealed class AppCrashLog(ConfigRoot config, TimeProvider time) {
         }
     }
 
+    const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
     public static string FormatEntry(string source, Exception ex, DateTimeOffset now) =>
         $"{now.ToUniversalTime():o}  version={Version}  source={source}\n{ex}\n---\n";
 
+    // Best-effort on its own: a log that cannot be trimmed can still take this entry.
     void TrimIfLarge() {
-        var file = new FileInfo(Path);
-        if (file.Exists && file.Length > MaxBytes) file.Delete();
+        try {
+            var file = new FileInfo(Path);
+            if (file.Exists && file.Length > MaxBytes) file.Delete();
+        } catch (IOException) {
+        } catch (UnauthorizedAccessException) {
+        }
     }
 }
