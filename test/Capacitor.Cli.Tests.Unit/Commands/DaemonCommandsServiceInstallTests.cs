@@ -3,10 +3,8 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-/// <summary>`install --verify` is a launchd-only slice: the engine needs a manager whose
-/// WriteAndBootstrap actually classifies/mutates per the verify algorithm, and the on-disk recheck
-/// needs GenerateFiles to return exactly one file. Non-launchd managers get a clear, coded-nowhere
-/// rejection rather than a deep failure inside the transaction.</summary>
+/// <summary>`install --verify` runs on launchd and on a Windows Scheduled Task; systemd reports no job
+/// pid to verify against, so it gets a clear rejection rather than a deep failure inside a transaction.</summary>
 public class DaemonCommandsServiceInstallTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -18,17 +16,10 @@ public class DaemonCommandsServiceInstallTests {
         await Assert.That(exit).IsEqualTo(1);
     }
 
-    [Test]
-    public async Task Verify_flag_is_rejected_on_the_windows_manager_too() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new WindowsScheduledTaskServiceManager(Config.Root), "test-id", Home, TimeProvider.System).Install(["--verify"], true);
-        await Assert.That(exit).IsEqualTo(1);
-    }
-
     /// <summary>--replace only has meaning inside the verify transaction engine (it selects
     /// ServiceVerify.InstallVerifiedAsync's ownership matrix) — a plain install has no transaction
-    /// to hand it to, so the combination is rejected before even reaching the launchd-only gate
-    /// (asserted here on a non-launchd manager, which would otherwise reject for a different
-    /// reason).</summary>
+    /// to hand it to, so the combination is rejected before even reaching the platform gate (asserted
+    /// here on systemd, which would otherwise reject for a different reason).</summary>
     [Test]
     public async Task Replace_without_verify_is_rejected() {
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace"], true);
