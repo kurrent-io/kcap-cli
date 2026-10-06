@@ -44,6 +44,12 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => _index > 0;
 
+    /// One filled button per screen. Next is that button on a step with no action of its own, and
+    /// once the step's own action has finished. While the action is on screen, Next is secondary.
+    public bool NextIsPrimary => !Current.ShowsOwnPrimary;
+
+    public bool NextIsSecondary => Current.ShowsOwnPrimary;
+
     /// The outcome lines name the daemon step's own action. Other pages have no such button.
     public bool ShowLifecycleStatus =>
         Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.StatusText);
@@ -101,7 +107,10 @@ public sealed class OnboardingViewModel : ReactiveObject {
             case nameof(IWizardStep.NextLabel): this.RaisePropertyChanged(nameof(NextLabel)); break;
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
             case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
-            case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable): RestateActions(); break;
+            case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
+                or nameof(IWizardStep.ShowsOwnPrimary):
+                RestateActions();
+                break;
         }
     }
 
@@ -109,6 +118,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(NextIsPrimary));
+        this.RaisePropertyChanged(nameof(NextIsSecondary));
         this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
         this.RaisePropertyChanged(nameof(ShowLifecycleAttention));
     }

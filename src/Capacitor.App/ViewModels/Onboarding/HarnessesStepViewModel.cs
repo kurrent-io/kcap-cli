@@ -69,6 +69,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             pathFix.WhenAnyValue(x => x.Fixed).Subscribe(resolved => {
                 this.RaisePropertyChanged(nameof(PathHazard));
                 this.RaisePropertyChanged(nameof(PathResolved));
+                this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
                 if (resolved && Message == PathRequiredMessage) Message = null;
             });
     }
@@ -100,6 +101,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     /// The login shell cannot find kcap, and nothing has fixed that yet.
     public bool PathHazard => PathFix is { Fixed: false };
+
+    /// The terminal fix is the filled action until the login shell can run kcap.
+    public bool ShowsOwnPrimary => PathHazard;
 
     public bool PathResolved => PathFix is { Fixed: true };
 

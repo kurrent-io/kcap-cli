@@ -131,8 +131,14 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     /// a later re-classification must not re-derive (or revoke) a mutation's success from a snapshot.
     public bool Satisfied {
         get => _satisfied;
-        private set => this.RaiseAndSetIfChanged(ref _satisfied, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _satisfied, value);
+            this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
+        }
     }
+
+    /// Enable / Start is the filled action until the service is running. Continue stays secondary.
+    public bool ShowsOwnPrimary => !Satisfied && ActionLabel is not null;
 
     public DaemonRow Row {
         get => _row;
@@ -148,6 +154,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             this.RaiseAndSetIfChanged(ref _affordance, value);
             this.RaisePropertyChanged(nameof(ActionLabel));
             this.RaisePropertyChanged(nameof(RefreshVisible));
+            this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
         }
     }
 
