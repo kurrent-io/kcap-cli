@@ -279,7 +279,63 @@ public class ClaudeChatRulesTests {
         await Assert.That(R(AgentCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,")).Runs).IsEmpty();
         await Assert.That(R(Notification(originKind: true, flags: "\"isSidechain\":true,")).Runs).IsEmpty();
         await Assert.That(R(LaunchResult.Replace("\"type\":\"user\",", "\"type\":\"user\",\"isSidechain\":true,")).Runs).IsEmpty();
-        await Assert.That(R("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls","subagent_type":"Explore"}}]}}""").Runs).IsEmpty();
+        await Assert.That(R("""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{"file_path":"/x","subagent_type":"Explore"}}]}}""").Runs).IsEmpty();
+        await Assert.That(R(ShellCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,")).Runs).IsEmpty();
+    }
+
+    const string ShellCall = """{"type":"assistant","timestamp":"2026-09-17T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_B","name":"Bash","input":{"command":"dotnet test --solution Capacitor.slnx\n  --no-build","description":"Run the full suite","run_in_background":true}}]}}""";
+    const string ShellLaunchResult = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_B","type":"tool_result","content":"Command running in background with ID: bcyix00ks. Output is being written to: /tmp/x/tasks/bcyix00ks.output.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"bcyix00ks"}}""";
+    const string ShellTimedOutResult = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_C","type":"tool_result","content":"Command running in background with ID: b7k2. Output is being written to: /tmp/x/tasks/b7k2.output.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b7k2","timedOutAfterMs":120000}}""";
+
+    [Test]
+    public async Task A_Bash_call_is_a_provisional_shell_start_named_by_its_description() {
+        var started = (RunSignal.Started)R(ShellCall).Runs.Single();
+        await Assert.That(started.CallId).IsEqualTo("toolu_B");
+        await Assert.That(started.Kind).IsEqualTo(RunKind.Shell);
+        await Assert.That(started.Provisional).IsTrue();
+        await Assert.That(started.Name).IsEqualTo("Run the full suite");
+        await Assert.That(started.Description).IsEqualTo("dotnet test --solution Capacitor.slnx");
+        await Assert.That(started.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 0, 0, TimeSpan.Zero));
+    }
+
+    /// A call without the flag still starts provisionally: a foreground command that hits its
+    /// timeout is moved to the background, and only its result says so.
+    [Test]
+    public async Task An_unflagged_Bash_call_without_a_description_is_named_by_its_first_command_line() {
+        var call = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Bash","input":{"command":"  make check\nmake lint"}}]}}""";
+        var started = (RunSignal.Started)R(call).Runs.Single();
+        await Assert.That(started.Provisional).IsTrue();
+        await Assert.That(started.Name).IsEqualTo("make check");
+        await Assert.That(started.Description).IsEqualTo("make check");
+    }
+
+    [Test]
+    public async Task A_long_command_name_is_cut_to_eighty_characters() {
+        var command = new string('x', 120);
+        var started = (RunSignal.Started)R($$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Bash","input":{"command":"{{{command}}}"}}]}}""").Runs.Single();
+        await Assert.That(started.Name).IsEqualTo(new string('x', 79) + "…");
+    }
+
+    [Test]
+    [Arguments(ShellLaunchResult, "toolu_B", "bcyix00ks")]
+    [Arguments(ShellTimedOutResult, "toolu_C", "b7k2")]
+    public async Task A_result_with_a_background_task_id_detaches_the_call(string line, string callId, string taskId) {
+        var detached = (RunSignal.Detached)R(line).Runs.Single();
+        await Assert.That(detached.CallId).IsEqualTo(callId);
+        await Assert.That(detached.AgentId).IsEqualTo(taskId);
+    }
+
+    [Test]
+    public async Task A_plain_Bash_result_is_no_signal() {
+        var result = """{"type":"user","message":{"content":[{"tool_use_id":"toolu_B","type":"tool_result","content":"ok"}]},"toolUseResult":{"stdout":"ok","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}}""";
+        await Assert.That(R(result).Runs).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("running")]
+    [Arguments("pending")]
+    public async Task A_running_or_unknown_notification_status_ends_nothing(string status) {
+        await Assert.That(R(Notification(originKind: true, status: status)).Runs).IsEmpty();
     }
 
     [Test]
@@ -300,7 +356,7 @@ public class ClaudeChatRulesTests {
     [Test]
     [Arguments(true)]
     [Arguments(false)]
-    public async Task Finished_from_a_notification_keyed_by_both_ids_and_failed_unless_completed(bool originKind) {
+    public async Task Finished_from_a_notification_keyed_by_both_ids_with_the_status_as_its_outcome(bool originKind) {
         var done = R(Notification(originKind));
         await Assert.That(done.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
         await Assert.That(done.Envelopes.Single().Text).IsEqualTo("**Agent \"Map desktop chat UI surfaces\" finished**");
@@ -311,8 +367,10 @@ public class ClaudeChatRulesTests {
         await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
         await Assert.That(finished.At).IsEqualTo(new DateTimeOffset(2026, 9, 17, 10, 5, 0, TimeSpan.Zero));
 
-        var failed = (RunSignal.Finished)R(Notification(originKind, status: "killed")).Runs.Single();
+        var failed = (RunSignal.Finished)R(Notification(originKind, status: "failed")).Runs.Single();
         await Assert.That(failed.Outcome).IsEqualTo(RunOutcome.Failed);
+        var killed = (RunSignal.Finished)R(Notification(originKind, status: "killed")).Runs.Single();
+        await Assert.That(killed.Outcome).IsEqualTo(RunOutcome.Stopped);
     }
 
     /// Claude Code delivers a notification that lands mid-turn as a queued_command attachment
@@ -377,8 +435,11 @@ public class ClaudeChatRulesTests {
 
         var probe = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_O","content":"…"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"Task output (last 10 lines)","retrieval_status":"partial"}}""");
         await Assert.That(probe.Runs).IsEmpty();
-        var shell = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: b1"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Successfully stopped task: b1"}}""");
-        await Assert.That(shell.Runs).IsEmpty();
+        var shell = (RunSignal.Finished)R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: b1"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Successfully stopped task: b1","command":"sleep 100"}}""").Runs.Single();
+        await Assert.That(shell.AgentId).IsEqualTo("b1");
+        await Assert.That(shell.Outcome).IsEqualTo(RunOutcome.Stopped);
+        var shellProbe = R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_O","content":"…"}]},"toolUseResult":{"task_id":"b1","task_type":"local_bash","message":"Task output (last 10 lines)"}}""");
+        await Assert.That(shellProbe.Runs).IsEmpty();
     }
 
     [Test]
@@ -395,6 +456,7 @@ public class ClaudeChatRulesTests {
         var finished = (RunSignal.Finished)R(line).Runs.Single();
         await Assert.That(finished.CallId).IsEqualTo("toolu_A");
         await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
+        await Assert.That(finished.Outcome).IsNull();
     }
 
     [Test]
