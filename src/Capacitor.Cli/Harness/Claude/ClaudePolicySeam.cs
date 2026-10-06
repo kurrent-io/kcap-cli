@@ -17,13 +17,17 @@ internal enum SeamAnswer { Answered, NotAnswered }
 /// an ungoverned session exits 0 with no output, because any non-zero exit renders Claude's opaque
 /// hook-error banner.
 /// </summary>
-internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
+internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, PolicyJudgeGateway? judge = null) {
     /// <summary>False degrades a policy ask to pass-through: nothing is written to Claude, and the
     /// decision event records requested=ask against effective=pass_through so the gap stays
     /// visible rather than silent.</summary>
     internal const bool PreToolUseAskEnabled = true;
 
     const string DefaultReason = "kcap approval policy";
+
+    /// <summary>The judge's whole share of a Claude hook, the transcript read included: the hook
+    /// itself runs under a 5s ceiling, and the vendor waits on it before the call can run.</summary>
+    internal static readonly TimeSpan JudgeBudget = TimeSpan.FromSeconds(2);
 
     /// <summary>One seam invocation's evaluated payload: what the vendor asked for, what the
     /// session's policy makes of it, and the correlation keys the journal and the event share.</summary>
@@ -35,7 +39,8 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
     /// correlates on <paramref name="CallId"/> and <paramref name="InputHash"/> alone, so both are
     /// available even when the evaluation below cannot run at all.</summary>
     sealed record SeamFields(
-        string? ToolName, string? CallId, string? Cwd, string? AgentId, JsonElement? ToolInput, string InputHash);
+        string? ToolName, string? CallId, string? Cwd, string? AgentId, JsonElement? ToolInput, string InputHash,
+        string? TranscriptPath);
 
     /// <summary>Test-only: throws from inside the evaluation region, so the arm that must still
     /// spend an already-consumed ask is driven by a real exception. That region's own dependencies
@@ -43,7 +48,8 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
     /// production.</summary>
     internal Action? BeforeSnapshotLoadForTest;
 
-    public async Task<int> HandlePreToolUseAsync(string body, string sessionId, bool renderedAgent, TextWriter stdout) {
+    public async Task<int> HandlePreToolUseAsync(
+            string body, string sessionId, bool renderedAgent, TextWriter stdout, TimeSpan? judgeBudget = null) {
         JsonNode? node;
         try { node = JsonNode.Parse(body); } catch { return 0; }
         if (node is not JsonObject payload) return 0;
@@ -55,14 +61,17 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
         var ctx = Build(fields, sessionId, PolicySeams.ClaudePreToolUse, snapshot, mode);
 
         var journal = new PolicyDecisionJournal(config);
+        var judged  = await ConsultJudgeAsync(ctx, fields, judgeBudget ?? JudgeBudget);
+        var outcome = judged?.Outcome ?? ctx.Eval.Outcome;
+        var reason  = ReasonFor(ctx, judged);
 
         // stdout is the only thing Claude acts on; the event below is a local spool append that a
-        // later drain delivers, so no path here waits on the network.
-        switch (ctx.Eval.Outcome) {
+        // later drain delivers. The judge is the one round trip, and only for a call no rule decided.
+        switch (outcome) {
             case PolicyOutcome.Deny:
-                stdout.Write(BuildPreToolUseDecision("deny", ctx.Reason));
+                stdout.Write(BuildPreToolUseDecision("deny", reason));
                 if (ctx.CallId is { Length: > 0 }) journal.RecordTerminal(sessionId, ctx.CallId, "deny", ctx.InputHash);
-                await Emit(ctx, "deny", "deny");
+                await Emit(ctx, "deny", "deny", judged: judged);
                 break;
             case PolicyOutcome.Ask: {
                 // Read into a local rather than branching on the constant directly: `case Ask when
@@ -70,16 +79,21 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
                 // (PreToolUseAskEnabled)` does the same to whichever arm the constant excludes.
                 var askEnabled = PreToolUseAskEnabled;
                 if (askEnabled) {
-                    stdout.Write(BuildPreToolUseDecision("ask", ctx.Reason));
+                    stdout.Write(BuildPreToolUseDecision("ask", reason));
                     journal.RecordAsk(sessionId, ctx.CallId, ctx.InputHash);
                 }
-                await Emit(ctx, "ask", askEnabled ? "ask" : "pass_through");
+                await Emit(ctx, "ask", askEnabled ? "ask" : "pass_through", judged: judged);
                 break;
             }
             case PolicyOutcome.Allow:
-                stdout.Write(BuildPreToolUseDecision("allow", ctx.Reason));
+                stdout.Write(BuildPreToolUseDecision("allow", reason));
                 if (ctx.CallId is { Length: > 0 }) journal.RecordTerminal(sessionId, ctx.CallId, "allow", ctx.InputHash);
-                await Emit(ctx, "allow", "allow");
+                await Emit(ctx, "allow", "allow", judged: judged);
+                break;
+            // A judge that did not decide is recorded one by one, with why; only a call nothing
+            // consulted is a counted pass-through.
+            case PolicyOutcome.None when judged is not null:
+                await Emit(ctx, "pass_through", "pass_through", judged: judged);
                 break;
             // None under TightenOnly records nothing at all: the daemon owns the rendered session's
             // full evaluation, so nothing was decided here.
@@ -95,7 +109,8 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
     /// Answers a raised permission prompt. The fresh evaluation always runs; the journal of what
     /// earlier seams decided for the same call can only tighten it, never loosen it.
     /// </summary>
-    public async Task<SeamAnswer> HandlePermissionRequestAsync(JsonNode node, string sessionId, TextWriter stdout) {
+    public async Task<SeamAnswer> HandlePermissionRequestAsync(
+            JsonNode node, string sessionId, TextWriter stdout, TimeSpan? judgeBudget = null) {
         if (node is not JsonObject payload) return SeamAnswer.NotAnswered;
 
         var fields  = ReadFields(payload);
@@ -124,33 +139,43 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
             return SeamAnswer.NotAnswered;
         }
 
+        // The fresh evaluation is rules, then the judge for a call no rule decided. Under a consumed
+        // ask the judge still runs: its deny is the one answer that could tighten the standing
+        // prompt, and Claude's PermissionRequest carries no call id, so this consultation cannot be
+        // known to repeat the PreToolUse one.
+        var judged = await ConsultJudgeAsync(ctx, fields, judgeBudget ?? JudgeBudget);
+        var outcome = judged?.Outcome ?? ctx.Eval.Outcome;
+
         // Both halves ride every event this seam emits: requested=ask alone cannot say whether the
         // guard held a stale ask over a fresh allow, or the policy asked for itself.
-        var fresh = ctx.Eval.Outcome.ToString().ToLowerInvariant();
+        var fresh = outcome.ToString().ToLowerInvariant();
 
         // A deny subsumes any ask that consume just cleared — it is the most restrictive answer
         // either source can produce, so nothing below could tighten it further.
-        if (ctx.Eval.Outcome == PolicyOutcome.Deny) {
+        if (outcome == PolicyOutcome.Deny) {
             stdout.Write(BuildPermissionRequestDecision("deny"));
-            await Emit(ctx, "deny", "deny", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh);
+            await Emit(ctx, "deny", "deny", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh, judged: judged);
             return SeamAnswer.Answered;
         }
 
         // A prompt the policy's own ask forced belongs to the human it was raised for: outranking
         // it with a fresh allow would auto-answer the very question the ask exists to pose.
         if (consumed.PendingAsk) {
-            await Emit(ctx, "ask", "prompt_stands", consumed.Ambiguous, consumed.PendingAsk, fresh);
+            await Emit(ctx, "ask", "prompt_stands", consumed.Ambiguous, consumed.PendingAsk, fresh, judged);
             return SeamAnswer.NotAnswered;
         }
 
-        switch (ctx.Eval.Outcome) {
+        switch (outcome) {
             case PolicyOutcome.Allow:
                 stdout.Write(BuildPermissionRequestDecision("allow"));
-                await Emit(ctx, "allow", "allow", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh);
+                await Emit(ctx, "allow", "allow", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh, judged: judged);
                 return SeamAnswer.Answered;
             // At an already-raised prompt, leaving it standing *is* the ask.
             case PolicyOutcome.Ask:
-                await Emit(ctx, "ask", "prompt_stands", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh);
+                await Emit(ctx, "ask", "prompt_stands", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh, judged: judged);
+                return SeamAnswer.NotAnswered;
+            case PolicyOutcome.None when judged is not null:
+                await Emit(ctx, "pass_through", "prompt_stands", pendingAskConsumed: consumed.PendingAsk, freshOutcome: fresh, judged: judged);
                 return SeamAnswer.NotAnswered;
             case PolicyOutcome.None:
                 journal.IncrementPassThrough(sessionId);
@@ -183,7 +208,8 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
             // dashes itself — every kcap event carries the dashless form.
             Str(body, "agent_id")?.Replace("-", ""),
             toolInput,
-            PolicyInputHash.Compute(toolName, toolInput));
+            PolicyInputHash.Compute(toolName, toolInput),
+            Str(body, "transcript_path"));
     }
 
     /// <summary>An empty snapshot means the session is ungoverned, not "pass-through": no output,
@@ -198,6 +224,39 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
         var reason = (eval.MatchedRules.Count > 0 ? eval.MatchedRules[0].Reason : null) ?? DefaultReason;
         return new(sessionId, seam, f.AgentId, f.CallId, snapshot, mode, action, eval, f.InputHash, reason);
     }
+
+    /// <summary>
+    /// Consults the judge for a call no rule decided, in a full-mode session whose policy enables
+    /// it. Null when it was not consulted. Local seams send no agent id: the hook's <c>agent_id</c>
+    /// names a subagent, not the hosted run whose staging the server would search.
+    /// </summary>
+    async Task<PolicyJudgeResult?> ConsultJudgeAsync(SeamContext ctx, SeamFields f, TimeSpan budget) {
+        if (judge is null || ctx.Eval.Outcome != PolicyOutcome.None || ctx.Mode != EvaluationMode.Full
+         || !ctx.Snapshot.JudgeEnabled)
+            return null;
+
+        try {
+            var started      = time.GetTimestamp();
+            var declarations = ClaudeJudgeDeclarationReader.Read(f.TranscriptPath, ctx.CallId, f.Cwd,
+                config.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(ctx.SessionId)}.json"));
+            var action       = PolicyWire.ToWire(ctx.Action);
+            var inline       = new HookSpool(config, time).IsPolicySnapshotDelivered(ctx.SessionId, ctx.Snapshot.Id)
+                ? null
+                : PolicyWire.ToUpload(ctx.SessionId, ctx.Snapshot);
+
+            return await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
+                    ctx.SessionId, AgentId: null, "claude", ctx.Seam, ctx.Snapshot.Id, PolicyEngine.Version, action,
+                    declarations.Turns, declarations.Refusals, inline, budgetMs),
+                budget - time.GetElapsedTime(started));
+        } catch {
+            return PolicyJudgeResult.PassThrough("judge_error");
+        }
+    }
+
+    static string ReasonFor(SeamContext ctx, PolicyJudgeResult? judged) =>
+        judged is { Outcome: not PolicyOutcome.None }
+            ? judged.Rationale is { Length: > 0 } r ? $"kcap policy judge: {r}" : "kcap policy judge"
+            : ctx.Reason;
 
     /// <summary>The provenance for a prompt that stands because the evaluation failed, not because
     /// a policy asked for it. Emitted only when an ask was consumed, so the record can still
@@ -226,13 +285,15 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time) {
         body[property] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     Task Emit(SeamContext ctx, string requested, string effective, bool? ambiguous = null,
-              bool? pendingAskConsumed = null, string? freshOutcome = null) =>
+              bool? pendingAskConsumed = null, string? freshOutcome = null, PolicyJudgeResult? judged = null) =>
         new PolicyDecisionEmitter(config, time).EmitAsync(PolicyWire.Decision(
             sessionId: ctx.SessionId, agentId: ctx.AgentId, vendor: "claude", seam: ctx.Seam,
             snapshot: ctx.Snapshot, mode: ctx.Mode, requestedOutcome: requested, effectiveOutcome: effective,
             action: PolicyWire.ToWire(ctx.Action), matchedRules: PolicyWire.ToWire(ctx.Eval.MatchedRules), time: time,
+            failureClass: judged?.FailureClass,
             correlationId: ctx.CallId, correlationAmbiguous: ambiguous ?? (ctx.CallId is null),
-            pendingAskConsumed: pendingAskConsumed, freshOutcome: freshOutcome), ctx.Snapshot);
+            pendingAskConsumed: pendingAskConsumed, freshOutcome: freshOutcome,
+            judge: judged?.Consultation), ctx.Snapshot);
 
     // camelCase keys are Claude's own PreToolUse hook contract, outside kcap's snake_case
     // convention — the same exemption LocalPermissionBridge.BuildClaudeResponse takes.

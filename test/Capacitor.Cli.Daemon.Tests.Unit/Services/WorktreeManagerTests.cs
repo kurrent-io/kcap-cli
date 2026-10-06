@@ -69,6 +69,125 @@ public class WorktreeManagerTests {
     }
 
     [Test]
+    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote() {
+        using var repo = GitRepo.Create("local-only");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
+            await Assert.That(worktree.FetchedRef).IsNull();
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_an_unknown_sha_falls_back_to_the_origin_fetch() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/9/head", out _);
+
+        // Committed after the clone, so the clone's object store cannot have it.
+        repo.Upstream.CreateFile("late.txt", "late");
+        repo.Upstream.CommitAll("late commit");
+        var lateSha = repo.Upstream.Head;
+        repo.Upstream.Do("update-ref", "refs/pull/10/head", lateSha);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "remote-sha", baseRef: lateSha);
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(lateSha);
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-sha");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_ref_name_keeps_the_fetch_path() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/8/head", out _);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "ref-name", baseRef: "refs/pull/8/head");
+
+        try {
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/ref-name");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_local_branch_name_starts_from_that_branch_head() {
+        using var repo = GitRepo.Create("local-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var defaultBranch = repo.CurrentBranch;
+        repo.Checkout("feature/agent-work", create: true);
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("agent commit");
+        var branchHead = repo.Head;
+        repo.Checkout(defaultBranch);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "local-branch", baseRef: "feature/agent-work");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(branchHead);
+            await Assert.That(worktree.FetchedRef).IsNull();
+            await Assert.That(worktree.Branch).IsEqualTo("capacitor/local-branch");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    public async Task CreateAsync_with_a_branch_name_missing_locally_fetches_it_from_origin() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/11/head", out var sideSha);
+
+        // Created after the clone, so only origin has it.
+        repo.Upstream.Do("branch", "remote-only", sideSha);
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo.Clone, name: "remote-branch", baseRef: "remote-only");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(sideSha);
+            await Assert.That(worktree.FetchedRef).IsEqualTo("refs/kcap/review/remote-branch");
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
+    [Test]
+    [Arguments("bad..name")]
+    [Arguments("-delete-me")]
+    [Arguments("@{-1}")]
+    [Arguments("with space")]
+    public async Task CreateAsync_refuses_a_base_ref_that_is_not_a_valid_ref_name(string baseRef) {
+        using var repo = GitRepo.Create("invalid-ref");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+
+        var manager = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await manager.CreateAsync(repo, name: "invalid-ref", baseRef: baseRef));
+
+        await Assert.That(ex!.Message).Contains("invalid_base_ref");
+        await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
+    }
+
+    [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
 
@@ -611,5 +730,12 @@ public class WorktreeManagerTests {
 
         await Assert.That(Directory.Exists(activeCwd)).IsTrue()
             .Because("an active snapshot must survive regardless of what its name happens to end with");
+    }
+
+    /// Parallel checkout is a Windows-only change: macOS and Linux keep git's default checkout.
+    [Test]
+    public async Task Parallel_checkout_is_asked_for_on_windows_only() {
+        await Assert.That(WorktreeManager.ParallelCheckoutFor(isWindows: true)).IsEquivalentTo([new GitConfigOverride("checkout.workers", "0")]);
+        await Assert.That(WorktreeManager.ParallelCheckoutFor(isWindows: false)).IsEmpty();
     }
 }

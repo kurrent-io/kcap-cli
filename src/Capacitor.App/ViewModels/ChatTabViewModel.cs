@@ -384,15 +384,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set => this.RaiseAndSetIfChanged(ref _isReadOnlyParticipant, value);
     }
 
+    bool _takesAttachments = true;
+    internal bool TakesAttachments { get => _takesAttachments; set => this.RaiseAndSetIfChanged(ref _takesAttachments, value); }
+
+    internal const string NoAttachmentsHint = "a review agent takes no attachments";
+
     string _readOnlyNotice = "";
     public string ReadOnlyNotice { get => _readOnlyNotice; private set => this.RaiseAndSetIfChanged(ref _readOnlyNotice, value); }
 
-    /// Why this session cannot be messaged, or "" for an ordinary agent. Mirrors the wording of
-    /// the daemon's attach-time ProtectionReason so the chat banner and the terminal banner name
-    /// the same block identically; an unrecognised kind fails safe as protected, like
-    /// AgentActionService.IsProtectedKind.
+    /// Why this session cannot be messaged, or "" when it can. Mirrors the wording of the daemon's
+    /// attach-time ProtectionReason so the chat banner and the terminal banner name the same block
+    /// identically.
     internal static string ParticipantNotice(AgentStatusDto dto) {
-        if (!AgentActionService.IsProtectedKind(dto.Kind)) return "";
+        if (AgentActionService.AcceptsTypedInput(dto.Kind)) return "";
         var role = string.IsNullOrEmpty(dto.FlowRole) ? "" : $", role {dto.FlowRole}";
         var flow = string.IsNullOrEmpty(dto.FlowRunId) ? "" : $" (flow {dto.FlowRunId}{role})";
         return $"{dto.Kind} agent{flow}";
@@ -546,7 +550,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Observable.Merge(
                 _input.WhenAnyValue(i => i.CanAttach).Select(_ => Unit.Default),
                 _input.WhenAnyValue(i => i.AttachHint).Select(_ => Unit.Default),
-                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default))
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default),
+                this.WhenAnyValue(x => x.TakesAttachments).Select(_ => Unit.Default))
             .Subscribe(_ => {
                 this.RaisePropertyChanged(nameof(IAttachmentSink.CanAttach));
                 this.RaisePropertyChanged(nameof(IAttachmentSink.AttachHint));
@@ -567,7 +572,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var snapshot = ComposerText;
             var edits = _composerEdits;
             var files = Tray.Snapshot();
-            if (files.Count > 0 && !_input.CanAttach) { Notice(_input.AttachHint); return; }
+            if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
             IReadOnlyList<string> ids = [];
             if (files.Count > 0) {
                 // The bytes have to be on the server before the prompt names them: a prompt that
@@ -679,6 +684,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void OnSession(ChatSessionInfo info) {
         ReadOnlyNotice = info.ReadOnlyNotice;
         IsReadOnlyParticipant = info.ReadOnlyNotice.Length > 0;
+        TakesAttachments = info.TakesAttachments;
         _vendor = info.Vendor;
         _root = info.Root;
         _rootSubject.OnNext(info.Root);
@@ -786,8 +792,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The one surface every intake source hands its result to.
     public IAttachmentSink Attachments => this;
 
-    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant;
-    string? IAttachmentSink.AttachHint => _input.AttachHint;
+    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant && TakesAttachments;
+    string? IAttachmentSink.AttachHint => TakesAttachments ? _input.AttachHint : NoAttachmentsHint;
     int IAttachmentSink.FreeSlots => Tray.FreeSlots;
 
     void IAttachmentSink.Accept(IntakeResult result) {

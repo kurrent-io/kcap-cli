@@ -282,6 +282,7 @@ public class PullRequestReaderRegistryTests {
         await registry.DiscoverAsync(false, default);
         await Assert.That(registry.NoteFor("github", "github.com")!.Text).IsEqualTo("Install GitHub CLI to read pull requests here.");
         await Assert.That(registry.NoteFor("github", "github.com")!.InstallUrl).IsEqualTo("https://cli.github.com");
+        await Assert.That(registry.NoteFor("github", "github.com")!.InstallLabel).IsEqualTo("Install GitHub CLI");
         gh.Status = PullRequestReaderStatusKind.SignedOut;
         await registry.DiscoverAsync(true, default);
         await Assert.That(registry.NoteFor("github", "github.com")!.Text).IsEqualTo("GitHub CLI is not signed in. Run gh auth login to read pull requests here.");
@@ -300,6 +301,19 @@ public class PullRequestReaderRegistryTests {
         var note = registry.NoteFor("github", "github.com")!;
         await Assert.That(note.Text).IsEqualTo("Update GitHub CLI to read pull requests here.");
         await Assert.That(note.InstallUrl).IsEqualTo("https://cli.github.com");
+        await Assert.That(note.InstallLabel).IsEqualTo("Update GitHub CLI");
+    }
+
+    [Test]
+    public async Task A_routed_read_names_the_tool_that_served_it() {
+        var gh = new StubProvider("gh", ready: true, hosts: ["github.com"]);
+        var glab = new StubProvider("glab", ready: true, hosts: ["gitlab.com"], kind: "gitlab");
+        var registry = new PullRequestReaderRegistry(new StubLinks(), [gh, glab], TimeProvider.System);
+        await registry.DiscoverAsync(false, default);
+        var local = await registry.OverviewAsync("session", new() { Provider = "github", Host = "github.com", RepoHash = "hash", Owner = "example", RepoName = "repo", Number = 1 }, default);
+        var other = await registry.OverviewAsync("session", new() { Provider = "gitlab", Host = "gitlab.com", RepoHash = "hash", Owner = "example", RepoName = "repo", Number = 2 }, default);
+        await Assert.That(local.Reader).IsEqualTo("GitHub CLI");
+        await Assert.That(other.Reader).IsEqualTo("GitLab CLI");
     }
 
     internal sealed class StubLinks : IPullRequestSource {
