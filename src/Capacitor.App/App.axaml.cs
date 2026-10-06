@@ -49,7 +49,7 @@ public partial class App : Application {
     // The app's one read of KCAP_DAEMONS_DIR.
     readonly DaemonStore _daemonStore = DaemonStore.FromEnvironment();
 
-    // And its one read of KCAP_CONFIG_DIR.
+    // And its one read of KCAP_CONFIG_DIR, besides Program's for the crash log.
     readonly ConfigRoot _config = ConfigRoot.FromEnvironment();
 
     // And its one read of KCAP_URL / KCAP_PROFILE.
