@@ -43,13 +43,13 @@ public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? she
             try {
                 ProcessResult result;
                 try {
-                    result = await runner.RunAsync(path, args, new RunOptions(Overlay, Deadline, CancelMode.KillTree), linked.Token).ConfigureAwait(false);
+                    result = await runner.RunBoundedAsync(path, args, new RunOptions(Overlay, Deadline, CancelMode.KillTree), outputLimit, linked.Token).ConfigureAwait(false);
                 } catch (Exception exception) when (exception is InvalidOperationException or IOException or Win32Exception) {
                     _path = null;
                     return new(GitHubCliOutcome.NotStarted, -1, "", exception.Message);
                 }
                 if (result.TimedOut) return new(GitHubCliOutcome.TimedOut, result.ExitCode, "", result.Stderr);
-                if (result.Stdout.Length > outputLimit) return new(GitHubCliOutcome.Oversized, result.ExitCode, "", "");
+                if (result.Oversized) return new(GitHubCliOutcome.Oversized, result.ExitCode, "", "");
                 return new(result.ExitCode == 0 ? GitHubCliOutcome.Ok : GitHubCliOutcome.Failed, result.ExitCode, result.Stdout, result.Stderr);
             } finally { _slots.Release(); }
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested && !ct.IsCancellationRequested) {
