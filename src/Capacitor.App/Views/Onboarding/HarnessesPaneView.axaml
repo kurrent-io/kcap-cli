@@ -31,27 +31,30 @@
                             <DataTemplate x:DataType="vm:HarnessRowViewModel">
                                 <Border Classes="frRowRule" Padding="2,11">
                                     <StackPanel Spacing="6">
-                                        <Grid ColumnDefinitions="*,Auto,68,68" ColumnSpacing="8">
-                                            <StackPanel Spacing="2" VerticalAlignment="Center">
-                                                <TextBlock x:Name="HarnessLabelText" Classes="frLabel" Text="{Binding Label}" />
-                                                <TextBlock Classes="frSignal" Text="{Binding SignalLine}" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <!-- The box shares the name's row. The line under the name must not pull it down. -->
+                                        <Grid ColumnDefinitions="*,Auto,68,68" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+                                            <TextBlock Grid.Row="0" x:Name="HarnessLabelText" Classes="frLabel" VerticalAlignment="Center"
+                                                       Text="{Binding Label}" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Classes="frSignal" Margin="0,2,0,0"
+                                                       Text="{Binding SignalLine}" />
+                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                                 <TextBlock Classes="frSignal" Text="installing…" IsVisible="{Binding Installing}" />
                                                 <TextBlock Classes="frSignal" Text="✓ turned on" Foreground="{StaticResource KcapSuccessBrush}"
                                                            IsVisible="{Binding Succeeded}" />
                                                 <Button x:Name="HarnessRetryButton" Classes="frSecondary frCompact" Content="RETRY"
                                                         Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
                                             </StackPanel>
-                                            <CheckBox Grid.Column="2" x:Name="RecordCheckBox" Classes="frCheck" HorizontalAlignment="Center"
+                                            <CheckBox Grid.Row="0" Grid.Column="2" x:Name="RecordCheckBox" Classes="frCheck"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).Idle}"
                                                       IsChecked="{Binding Record, Mode=TwoWay}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}" />
-                                            <CheckBox Grid.Column="3" x:Name="ToolsCheckBox" Classes="frCheck" HorizontalAlignment="Center"
+                                            <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="frCheck"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).Idle}"
                                                       IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
                                                       ToolTip.Tip="{Binding Label, StringFormat='Give {0} Capacitor tools'}" />
-                                            <TextBlock Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                            <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                        FontFamily="{StaticResource FrMonoFont}" FontSize="9" LetterSpacing="0.6"
                                                        Foreground="{StaticResource FrDimBrush}" IsVisible="{Binding ToolsBundled}" />
                                         </Grid>

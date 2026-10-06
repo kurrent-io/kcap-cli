@@ -45,7 +45,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool BackVisible => _index > 0;
 
     /// The workspace list's own actions share the footer line with Back.
-    public bool TenantActionsVisible => Current is SignInStepViewModel { TenantPickerVisible: true };
+    public bool TenantActionsVisible => Current is SignInStepViewModel { TenantChoicePending: true };
 
     public System.Windows.Input.ICommand? ConfirmTenantCommand =>
         Current is SignInStepViewModel signIn ? signIn.ConfirmTenantCommand : null;
@@ -120,7 +120,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
                 or nameof(IWizardStep.ShowsOwnPrimary):
                 RestateActions();
                 break;
-            case nameof(SignInStepViewModel.TenantPickerVisible):
+            case nameof(SignInStepViewModel.TenantPickerVisible)
+                or nameof(SignInStepViewModel.TenantChoicePending):
                 this.RaisePropertyChanged(nameof(TenantActionsVisible));
                 this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
                 this.RaisePropertyChanged(nameof(CancelTenantCommand));
