@@ -11,6 +11,7 @@ using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Policy;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -205,8 +206,8 @@ public sealed class ClaudeHookCommand(
 
                 var rendered = hosted.IsRendered;
 
-                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time)
-                    .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out);
+                return await new Cli.Harness.Claude.ClaudePolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time))
+                    .HandlePreToolUseAsync(body, sessionId, rendered, stdout ?? Console.Out, JudgeShare(budget));
             } catch { return 0; }
         }
 
@@ -479,8 +480,9 @@ public sealed class ClaudeHookCommand(
             var permProfile = profiles.Effective;
             var selfHeal    = !await IsSessionExcludedAsync(permProfile, body, budget);
 
+            // Read after the watcher self-heal inside Handle, which spends from the same budget.
             return await new PermissionRequestCommand(config, profiles, hosted, http, watchers, clock.Time)
-                .Handle(body, selfHeal, stdout);
+                .Handle(body, selfHeal, stdout, () => JudgeShare(budget));
         }
 
         // On session-start, clear the last-emitted repo cache so this session always gets a
@@ -1162,6 +1164,9 @@ public sealed class ClaudeHookCommand(
         writer.WriteLine(merged.ToJsonString());
     }
 
+    static TimeSpan JudgeShare(HookBudget budget) =>
+        budget.Remaining < Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget ? budget.Remaining : Cli.Harness.Claude.ClaudePolicySeam.JudgeBudget;
+
     /// <summary>Records how many tool calls ran past the policy engine unmatched, and resets the
     /// counter so a resumed session never re-reports them.</summary>
     void StampPassThroughCount(JsonNode node, string sessionId) {
@@ -1171,12 +1176,13 @@ public sealed class ClaudeHookCommand(
         } catch { }
     }
 
-    /// <summary>Drops the session's snapshot, journal and snapshot-upload markers. Best effort
+    /// <summary>Drops the session's snapshot, journal, judge scan state and snapshot-upload markers. Best effort
     /// throughout: a file that will not delete costs disk, never the hook.</summary>
     void EvictPolicyState(string sessionId) {
         var key = PolicySnapshotStore.Sanitize(sessionId);
         TryDelete(config.Path("policy", "sessions", $"{key}.json"));
         TryDelete(config.Path("policy", "journal", $"{key}.json"));
+        TryDelete(config.Path("policy", "judge", $"{key}.json"));
 
         try {
             var uploaded = config.Path("policy", "uploaded");
