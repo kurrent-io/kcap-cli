@@ -25,7 +25,7 @@ public class HarnessesStepViewModelTests {
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
-                IReadOnlySet<HarnessId>? declined = null) {
+                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -36,7 +36,7 @@ public class HarnessesStepViewModelTests {
                 _ => { DetectCalls++; return Task.FromResult(detected); },
                 () => declined ?? new HashSet<HarnessId>(),
                 Stamped.AddRange,
-                config, pathFix: null,
+                config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
                 "test-mac");
         }
@@ -220,6 +220,65 @@ public class HarnessesStepViewModelTests {
         await Assert.That(withClaude).IsEqualTo("ANTHROPIC_API_KEY is set in your terminal.");
         await Assert.That(withoutKey).IsNull();
         await Assert.That(codexKeyOnly).IsNull(); // Codex was not detected
+    }
+
+    /// Hooks store the bare command, so a selected harness cannot leave until the login shell finds it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Next_waits_for_the_terminal_command_and_installs_nothing_until_it_resolves() {
+        var (held, callsWhileHeld, message, left, callsAfter) = await AvaloniaSession.DispatchAsync(async () => {
+            var dir = Path.GetDirectoryName(ConfigPath)!;
+            var destination = Path.Combine(dir, "shim-kcap");
+            var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+            var runner = new SucceedingProcessRunner();
+            var fix = new PathFixViewModel(
+                new PathShimInstaller(runner, probe), new WizardFixtures.NoopAppStateStore(),
+                Path.Combine(dir, "bundled-kcap"), destination);
+            var h = new Harness(Config.Root, pathFix: fix);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            var heldLeave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var heldCalls = h.Cli.PluginInstallCallCount;
+            var heldMessage = h.Vm.Message;
+
+            await fix.InstallCommand.Execute().ToTask();
+            Dispatcher.UIThread.RunJobs();
+            var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+            return (heldLeave, heldCalls, heldMessage, leave, h.Cli.PluginInstallCallCount);
+        });
+
+        await Assert.That(held).IsFalse();
+        await Assert.That(callsWhileHeld).IsEqualTo(0);
+        await Assert.That(message).IsEqualTo(HarnessesStepViewModel.PathRequiredMessage);
+        await Assert.That(left).IsTrue();
+        await Assert.That(callsAfter).IsEqualTo(3);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Not_now_still_leaves_while_the_terminal_cannot_run_kcap() {
+        var (left, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var fix = new PathFixViewModel(
+                new PathShimInstaller(new WizardFixtures.NoopProcessRunner(), new FakeLoginShellProbe()),
+                new WizardFixtures.NoopAppStateStore(), "/opt/kcap/kcap");
+            var h = new Harness(Config.Root, pathFix: fix);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (await h.Vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None), h.Cli.PluginInstallCallCount);
+        });
+
+        await Assert.That(left).IsTrue();
+        await Assert.That(calls).IsEqualTo(0);
+    }
+
+    sealed class SucceedingProcessRunner : IProcessRunner {
+        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) =>
+            Task.FromResult(new ProcessResult(0, "", "", false));
+
+        public Task<StreamingResult> RunStreamingAsync(
+                string fileName, string[] args, RunOptions options, Action<StreamedLine> onLine, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     [Test]

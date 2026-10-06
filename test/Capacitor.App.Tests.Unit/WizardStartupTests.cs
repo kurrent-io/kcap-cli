@@ -672,6 +672,7 @@ public class WizardStartupTests {
     public async Task History_discovers_for_the_harnesses_left_recording() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            harness.ShimApplicable = false; // this page leaves only once the login shell can find kcap
             harness.Detected = VendorDetection.Build("claude", "cursor");
 
             var graph = WizardComposition.BuildGraph(harness.Options());
