@@ -89,12 +89,11 @@
                                 Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
                     </Grid>
 
-                    <!-- The outcome consumer's lines: wizard-first mode has no tray and no rail, so this
-                         is where a lane outcome actually becomes visible. -->
+                    <!-- Daemon step only. These lines name that step's action, and the other pages have none. -->
                     <TextBlock x:Name="LifecycleStatusText" Classes="frNote" Text="{Binding Surface.StatusText}"
-                               IsVisible="{Binding Surface.StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                               IsVisible="{Binding ShowLifecycleStatus}" />
                     <TextBlock x:Name="LifecycleAttentionText" Classes="frError" Text="{Binding Surface.AttentionText}"
-                               IsVisible="{Binding Surface.AttentionText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                               IsVisible="{Binding ShowLifecycleAttention}" />
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>
