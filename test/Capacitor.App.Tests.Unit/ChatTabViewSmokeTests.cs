@@ -1650,4 +1650,28 @@ public class ChatTabViewSmokeTests {
             await host.CloseAsync();
         });
     }
+
+    /// A command's name can run to 80 characters; on a narrow pane the name gives way, never the
+    /// state line with its timer.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_command_name_never_pushes_the_state_line_out_of_the_banner() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Window.Width = 600;
+            var description = "Run every integration suite against the staging server and collect the coverage";
+            var call = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make it","description":"{{{description}}}"}}]}}""";
+            var launch = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
+            await host.LoadAsync(Tmp.CreateFile("sh.jsonl", [call, launch]));
+            host.Settle();
+
+            var banner = host.View.FindControl<Border>("SubagentsBanner")!;
+            var state = banner.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.IsEffectivelyVisible && t.Text!.StartsWith("running in background · ", StringComparison.Ordinal));
+            var right = state.TranslatePoint(new Point(state.Bounds.Width, 0), banner)!.Value.X;
+            await Assert.That(right).IsLessThanOrEqualTo(banner.Bounds.Width);
+            await Assert.That(state.Bounds.Width).IsGreaterThan(0);
+            await host.CloseAsync();
+        });
+    }
 }

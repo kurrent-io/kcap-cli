@@ -244,21 +244,22 @@
                 <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="13,10"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                         BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningRuns}">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
+                    <Grid ColumnDefinitions="Auto,*">
+                        <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" Margin="0,0,8,0" VerticalAlignment="Center"
                                 Background="{StaticResource KcapWarningBrush}" RenderTransform="translateY(-1.5px)"
                                 views:PulseClock.IsActive="{Binding HasRunningRuns}" />
-                        <StackPanel x:Name="RunningSubagentText" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
-                                    IsVisible="{Binding RunningRow, Converter={x:Static ObjectConverters.IsNotNull}}">
-                            <TextBlock Text="{Binding RunningRow.Name}" FontSize="13.5" FontWeight="SemiBold"
+                        <!-- The name gives way on a narrow pane; the state line with its timer never does. -->
+                        <Grid x:Name="RunningSubagentText" Grid.Column="1" ColumnDefinitions="*,Auto" HorizontalAlignment="Left" VerticalAlignment="Center"
+                              IsVisible="{Binding RunningRow, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <TextBlock Text="{Binding RunningRow.Name}" FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                        Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                            <TextBlock Text="{Binding RunningRow.StateText}" FontSize="13.5"
+                            <TextBlock Grid.Column="1" Margin="6,0,0,0" Text="{Binding RunningRow.StateText}" FontSize="13.5"
                                        Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                        </StackPanel>
-                        <TextBlock x:Name="SubagentSummaryText" Text="{Binding RunSummary}" FontSize="13.5" FontWeight="SemiBold"
+                        </Grid>
+                        <TextBlock x:Name="SubagentSummaryText" Grid.Column="1" TextTrimming="CharacterEllipsis" Text="{Binding RunSummary}" FontSize="13.5" FontWeight="SemiBold"
                                    Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center"
                                    IsVisible="{Binding RunningRow, Converter={x:Static ObjectConverters.IsNull}}" />
-                    </StackPanel>
+                    </Grid>
                 </Border>
 
                 <Border x:Name="QueuedMessagesBanner" Grid.Row="1" Margin="0,0,0,8" Padding="13,10"
