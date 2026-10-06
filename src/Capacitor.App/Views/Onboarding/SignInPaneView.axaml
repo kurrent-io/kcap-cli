@@ -10,9 +10,23 @@
         <!-- Sign in -->
         <Border Classes="frCard" IsVisible="{Binding StartPanelVisible}">
             <StackPanel Spacing="16">
-                <Button x:Name="WorkAccountButton" Classes="frPrimary" HorizontalAlignment="Stretch"
+                <Button x:Name="WorkAccountButton" Classes="frPrimary" HorizontalAlignment="Left"
                         Content="CONTINUE WITH YOUR WORK ACCOUNT" Command="{Binding ContinueWithWorkAccountCommand}"
-                        IsEnabled="{Binding Idle}" />
+                        IsEnabled="{Binding Idle}" IsVisible="{Binding !Satisfied}" />
+
+                <StackPanel Spacing="4" IsVisible="{Binding Satisfied}">
+                    <Border Classes="frResolved">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
+                                  Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                            <StackPanel Spacing="2">
+                                <TextBlock x:Name="StartSignedInText" Classes="frLabel" Text="{Binding Status}" />
+                                <TextBlock Classes="frBody" Text="{Binding StatusDetail}"
+                                           IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
 
                 <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
                     <StackPanel Orientation="Horizontal" Spacing="10">
@@ -59,16 +73,15 @@
                     </StackPanel>
                 </Border>
 
-                <Border Classes="frDivider" />
-
-                <StackPanel Orientation="Horizontal" Spacing="22">
-                    <Button x:Name="UseCodeButton" Classes="frLink" Content="USE A CODE INSTEAD"
-                            Command="{Binding UseCodeCommand}" IsEnabled="{Binding Idle}" />
-                    <Button x:Name="WorkspaceUrlButton" Classes="frLink" Content="I HAVE A WORKSPACE URL"
-                            Command="{Binding ToggleUrlPanelCommand}" IsEnabled="{Binding Idle}" />
-                    <Button x:Name="CancelSignInButton" Classes="frLink" Content="CANCEL"
-                            Command="{Binding CancelCommand}" IsVisible="{Binding Busy}" />
+                <!-- Alternates only while nothing is in flight. Cancel replaces them for the wait. -->
+                <StackPanel Spacing="0" HorizontalAlignment="Left" IsVisible="{Binding ShowPrimaryAction}">
+                    <Button x:Name="UseCodeButton" Classes="frLink" HorizontalAlignment="Left" Content="USE A CODE INSTEAD"
+                            Command="{Binding UseCodeCommand}" />
+                    <Button x:Name="WorkspaceUrlButton" Classes="frLink" HorizontalAlignment="Left" Content="I HAVE A WORKSPACE URL"
+                            Command="{Binding ToggleUrlPanelCommand}" />
                 </StackPanel>
+                <Button x:Name="CancelSignInButton" Classes="frLink" HorizontalAlignment="Left" Content="CANCEL"
+                        Command="{Binding CancelCommand}" IsVisible="{Binding Busy}" />
 
                 <StackPanel Spacing="8" IsVisible="{Binding UrlPanelVisible}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
@@ -88,7 +101,8 @@
             <StackPanel Spacing="14">
                 <TextBlock Classes="frMicro" Text="WORKSPACES FOR YOUR ACCOUNT" />
                 <ListBox x:Name="TenantList" Classes="frList" ItemsSource="{Binding Tenants}"
-                         SelectedItem="{Binding SelectedTenant, Mode=TwoWay}">
+                         SelectedItem="{Binding SelectedTenant, Mode=TwoWay}"
+                         IsEnabled="{Binding TenantChoicePending}">
                     <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="auth:DiscoveredTenant">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
@@ -105,6 +119,17 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+                <Border Classes="frResolved" IsVisible="{Binding Satisfied}">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
+                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                        <StackPanel Spacing="2">
+                            <TextBlock x:Name="SignedInText" Classes="frLabel" Text="{Binding Status}" />
+                            <TextBlock Classes="frBody" Text="{Binding StatusDetail}"
+                                       IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </Border>
 
@@ -201,18 +226,6 @@
                 </StackPanel>
                 <ProgressBar IsIndeterminate="True" Height="2" MinHeight="2" Background="{StaticResource FrDividerBrush}"
                              Foreground="{StaticResource FrAccentBrush}" />
-            </StackPanel>
-        </Border>
-
-        <Border Classes="frResolved" IsVisible="{Binding SignedInVisible}">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-                <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
-                      Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
-                <StackPanel Spacing="2">
-                    <TextBlock x:Name="SignedInText" Classes="frLabel" Text="{Binding Status}" />
-                    <TextBlock Classes="frBody" Text="{Binding StatusDetail}"
-                               IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                </StackPanel>
             </StackPanel>
         </Border>
 

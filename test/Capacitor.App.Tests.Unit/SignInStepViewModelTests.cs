@@ -422,7 +422,44 @@ public class SignInStepViewModelTests {
         await Assert.That(offered).IsEquivalentTo(["acme", "globex"]);
         await Assert.That(satisfied).IsTrue();
         await Assert.That(status).IsEqualTo("Signed in as globex");
-        await Assert.That(stillVisible).IsFalse();
+        await Assert.That(stillVisible).IsTrue();
+    }
+
+    /// The list stays after Continue. A dedicated success page would replace the choice.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_workspace_list_stays_until_sign_in_replaces_it() {
+        var (heldList, heldStart, heldPending, heldPhase, phase, startAfter, listAfter) =
+            await AvaloniaSession.DispatchAsync(async () => {
+                using var h = new Harness();
+                var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                h.Connect.Choice = ConnectChoice.Discover;
+                h.Operation = async (_, ct) => {
+                    var picked = await h.Picker.PickAsync([Tenant("acme"), Tenant("globex")], TenantPickContext.None, ct);
+                    await release.Task.WaitAsync(ct);
+
+                    return Committed(username: picked!.OrgLogin);
+                };
+
+                var exec = h.SignIn();
+                await WaitUntil(() => h.Vm.TenantPickerVisible, "the tenant list");
+                await h.Vm.ConfirmTenantCommand.Execute().ToTask();
+
+                var during = (h.Vm.TenantPickerVisible, h.Vm.StartPanelVisible, h.Vm.TenantChoicePending, h.Vm.Phase);
+                release.TrySetResult();
+                await exec;
+
+                return (during.Item1, during.Item2, during.Item3, during.Item4,
+                    h.Vm.Phase, h.Vm.StartPanelVisible, h.Vm.TenantPickerVisible);
+            });
+
+        await Assert.That(heldList).IsTrue();
+        await Assert.That(heldStart).IsFalse();
+        await Assert.That(heldPending).IsFalse();
+        await Assert.That(heldPhase).IsEqualTo(SignInPhase.PickWorkspace);
+        await Assert.That(phase).IsEqualTo(SignInPhase.PickWorkspace);
+        await Assert.That(startAfter).IsFalse();
+        await Assert.That(listAfter).IsTrue();
     }
 
     [Test]

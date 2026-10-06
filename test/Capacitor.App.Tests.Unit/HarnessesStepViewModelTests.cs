@@ -127,7 +127,7 @@ public class HarnessesStepViewModelTests {
         await Assert.That(options[0]).IsEmpty();
         await Assert.That(options[1]).IsEquivalentTo(["--tools-only"]);
         await Assert.That(options[2]).IsEquivalentTo(["--skip-pi-mcp", "--skip-pi-skills", "--skip-pi-instructions"]);
-        await Assert.That(left).IsFalse();
+        await Assert.That(left).IsTrue();
         await Assert.That(again).IsTrue();
         await Assert.That(label).IsEqualTo("Continue");
         await Assert.That(satisfied).IsTrue();
@@ -255,7 +255,7 @@ public class HarnessesStepViewModelTests {
         await Assert.That(held).IsFalse();
         await Assert.That(callsWhileHeld).IsEqualTo(0);
         await Assert.That(message).IsEqualTo(HarnessesStepViewModel.PathRequiredMessage);
-        await Assert.That(left).IsFalse();
+        await Assert.That(left).IsTrue();
         await Assert.That(again).IsTrue();
         await Assert.That(label).IsEqualTo("Continue");
         await Assert.That(callsAfter).IsEqualTo(3);

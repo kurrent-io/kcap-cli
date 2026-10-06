@@ -75,6 +75,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     string? _waitingText;
     string? _quarantineNotice;
     bool    _tenantPickerVisible;
+    bool    _tenantChoiceMade;
     bool    _modeChoiceVisible;
     bool    _orgNamePromptVisible;
     bool    _slugPromptVisible;
@@ -148,6 +149,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             Tenants.Clear();
             foreach (var tenant in tenants) Tenants.Add(tenant);
             SelectedTenant      = Tenants.FirstOrDefault();
+            _tenantChoiceMade   = false;
             TenantPickerVisible = true;
         });
 
@@ -185,14 +187,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         OpenSignInUrlCommand      = ReactiveCommand.Create(() => Open(BrowserUrl));
         OpenVerificationUriCommand = ReactiveCommand.Create(() => Open(VerificationUri));
 
-        ConfirmTenantCommand = ReactiveCommand.Create(() => {
-            TenantPickerVisible = false;
-            _picker.Select(SelectedTenant);
-        });
-        CancelTenantCommand = ReactiveCommand.Create(() => {
-            TenantPickerVisible = false;
-            _picker.Select(null);
-        });
+        ConfirmTenantCommand = ReactiveCommand.Create(() => CommitTenant(SelectedTenant));
+        CancelTenantCommand  = ReactiveCommand.Create(() => CommitTenant(null));
 
         // Unofferable rather than declinable: a blank submit must never end the whole run.
         var hasWorkspace = this.WhenAnyValue(x => x.ExistingWorkspaceInput, input => !string.IsNullOrWhiteSpace(input));
@@ -228,8 +224,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
 
     public SignInPhase Phase =>
-        Satisfied                                    ? SignInPhase.SignedIn
-        : ConfirmVisible                             ? SignInPhase.ConfirmCreate
+        ConfirmVisible                             ? SignInPhase.ConfirmCreate
         : OrgNamePromptVisible || SlugPromptVisible ? SignInPhase.CreateWorkspace
         : ModeChoiceVisible                          ? SignInPhase.NoWorkspace
         : TenantPickerVisible                        ? SignInPhase.PickWorkspace
@@ -242,7 +237,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         SignInPhase.NoWorkspace                                   => "No Capacitor workspace yet",
         SignInPhase.CreateWorkspace or SignInPhase.ConfirmCreate => "Create your workspace",
         SignInPhase.Provisioning                                  => "Setting up your workspace",
-        SignInPhase.SignedIn                                      => "You're signed in",
         _                                                         => "Sign in to Capacitor",
     };
 
@@ -358,6 +352,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             this.RaiseAndSetIfChanged(ref _satisfied, value);
             this.RaisePropertyChanged(nameof(ShowPrimaryAction));
             this.RaisePropertyChanged(nameof(OwnsPrimaryAction));
+            this.RaisePropertyChanged(nameof(StatusLineVisible));
             RestatePhase();
         }
     }
@@ -397,9 +392,13 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         get => _tenantPickerVisible;
         private set {
             this.RaiseAndSetIfChanged(ref _tenantPickerVisible, value);
+            this.RaisePropertyChanged(nameof(TenantChoicePending));
             RestatePhase();
         }
     }
+
+    /// Footer actions for the list. False once a choice is in flight, while the list itself stays.
+    public bool TenantChoicePending => _tenantPickerVisible && !_tenantChoiceMade;
 
     public DiscoveredTenant? SelectedTenant {
         get => _selectedTenant;
@@ -552,11 +551,12 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         var result = await attempt.Result.ConfigureAwait(true);
 
         _attempt = null;
-        Busy     = false;
-        HidePrompts();
-        // Nothing polls a device code or a browser wait once the attempt has settled.
-        ClearTransient();
         Apply(result);
+        // A pick stays on the list. Dropping it here would flash the sign-in card, then a
+        // dedicated success page.
+        if (!TenantPickerVisible) HidePrompts();
+        ClearTransient();
+        Busy = false;
         await SurfaceQuarantineAsync().ConfigureAwait(true);
 
         if (Satisfied && QuarantineNotice is null) Completed?.Invoke();
@@ -729,17 +729,15 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public bool StartPanelVisible   => Phase is SignInPhase.Start or SignInPhase.Waiting;
     public bool CreateFormVisible   => Phase is SignInPhase.CreateWorkspace;
     public bool ProvisioningVisible => Phase is SignInPhase.Provisioning;
-    public bool SignedInVisible     => Phase is SignInPhase.SignedIn;
 
     /// The status line under the work-account action. The ready line only restates the button,
-    /// so it stays hidden until something has happened.
-    public bool StatusLineVisible => !_statusIsReady && !string.IsNullOrEmpty(Status);
+    /// so it stays hidden until something has happened. A committed result uses the success row.
+    public bool StatusLineVisible => !_statusIsReady && !Satisfied && !string.IsNullOrEmpty(Status);
 
     void RestatePhase() {
         this.RaisePropertyChanged(nameof(StartPanelVisible));
         this.RaisePropertyChanged(nameof(CreateFormVisible));
         this.RaisePropertyChanged(nameof(ProvisioningVisible));
-        this.RaisePropertyChanged(nameof(SignedInVisible));
         this.RaisePropertyChanged(nameof(Phase));
         this.RaisePropertyChanged(nameof(Title));
         this.RaisePropertyChanged(nameof(Eyebrow));
@@ -765,7 +763,16 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         ProvisioningProgress = null;
     }
 
+    void CommitTenant(DiscoveredTenant? tenant) {
+        if (_tenantChoiceMade) return;
+
+        _tenantChoiceMade = true;
+        this.RaisePropertyChanged(nameof(TenantChoicePending));
+        _picker.Select(tenant);
+    }
+
     void HidePrompts() {
+        _tenantChoiceMade    = false;
         TenantPickerVisible  = false;
         ModeChoiceVisible    = false;
         OrgNamePromptVisible = false;
