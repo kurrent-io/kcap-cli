@@ -129,11 +129,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         get {
             var running = _runs.Rows.Where(r => r.IsRunning).ToList();
             if (running.Count < 2) return "";
-            return running.All(r => r.IsBackground)
-                ? $"{running.Count} subagents running in background"
-                : $"{running.Count} subagents running";
+            var shells = running.Count(r => r.IsShell);
+            var agents = running.Count - shells;
+            var counts = (agents, shells) switch {
+                (_, 0) => $"{agents} subagents",
+                (0, _) => $"{shells} commands",
+                _      => $"{Plural(agents, "subagent")}, {Plural(shells, "command")}",
+            };
+            return running.All(r => r.IsBackground) ? $"{counts} running in background" : $"{counts} running";
         }
     }
+
+    static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 
     void RefreshRuns() {
         this.RaisePropertyChanged(nameof(HasRunningRuns));
