@@ -25,11 +25,11 @@
                     </StackPanel>
                     <StackPanel Spacing="6">
                         <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
-                                Background="#1C2427" Classes="pulsing" />
+                                Background="{StaticResource FrSkeletonBrush}" Classes="pulsing" />
                         <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
-                                Background="#1C2427" Classes="pulsing" />
+                                Background="{StaticResource FrSkeletonBrush}" Classes="pulsing" />
                         <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
-                                Background="#1C2427" Classes="pulsing" />
+                                Background="{StaticResource FrSkeletonBrush}" Classes="pulsing" />
                     </StackPanel>
                 </StackPanel>
 

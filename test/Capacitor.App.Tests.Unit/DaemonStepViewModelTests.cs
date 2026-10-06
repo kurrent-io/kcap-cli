@@ -960,7 +960,7 @@ public class DaemonStepTemplateTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_window_selects_a_template_for_the_daemon_step() {
-        var (actionButton, refreshButton, messageText) = await AvaloniaSession.DispatchAsync(async () => {
+        var (actionButton, refreshButton, messageText, ranks) = await AvaloniaSession.DispatchAsync(async () => {
             using var temp = new TempClaims();
             var step = new DaemonStepViewModel(
                 new FakeKcapCli { StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
@@ -980,20 +980,30 @@ public class DaemonStepTemplateTests {
 
             var action  = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonActionButton");
             var refresh = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonRefreshButton");
+            var next    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "NextButton");
+            var back    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "BackButton");
             var message = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "DaemonMessageText");
+            var ranks   = (
+                NextPrimary: next?.Classes.Contains("frPrimary") == true,
+                NextSecondary: next?.Classes.Contains("frSecondary") == true,
+                BackSecondary: back?.Classes.Contains("frSecondary") == true);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (action, refresh, message?.Text);
+            return (action, refresh, message?.Text, ranks);
         });
 
         await Assert.That(actionButton).IsNotNull();
         await Assert.That(actionButton!.Content).IsEqualTo("ENABLE DAEMON");
         await Assert.That(actionButton.IsVisible).IsTrue();
+        await Assert.That(actionButton.Classes.Contains("frPrimary")).IsTrue();
         await Assert.That(refreshButton).IsNotNull();
         await Assert.That(refreshButton!.IsVisible).IsFalse();
         await Assert.That(messageText).IsEqualTo(DaemonStepViewModel.NotInstalledMessage);
+        await Assert.That(ranks.NextPrimary).IsFalse();
+        await Assert.That(ranks.NextSecondary).IsTrue();
+        await Assert.That(ranks.BackSecondary).IsTrue();
     }
 
     [Test]

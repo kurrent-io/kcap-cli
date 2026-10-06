@@ -32,6 +32,9 @@ public interface IWizardStep {
     /// The page carries its own primary action, so the shell shows neither Next nor Skip.
     bool OwnsPrimaryAction => false;
 
+    /// The page is showing its own filled action. The footer Next stays secondary until that action is done.
+    bool ShowsOwnPrimary => false;
+
     Task OnEnterAsync(CancellationToken ct);
 
     /// False vetoes the navigation and holds the current step.

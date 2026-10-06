@@ -34,7 +34,7 @@
                     <Button x:Name="DaemonActionButton" Classes="frPrimary frCompact"
                             Content="{Binding ActionLabel, Converter={x:Static views:UpperCase.Instance}}"
                             Command="{Binding ActionCommand}"
-                            IsVisible="{Binding ActionLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            IsVisible="{Binding ShowsOwnPrimary}" />
                     <Button x:Name="DaemonRefreshButton" Classes="frSecondary frCompact" Content="CHECK AGAIN"
                             Command="{Binding RefreshCommand}" IsVisible="{Binding RefreshVisible}" />
                 </StackPanel>

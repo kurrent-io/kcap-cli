@@ -15,6 +15,7 @@
     <SolidColorBrush x:Key="FrControlBorderBrush" Color="#38DED9FF" />
     <SolidColorBrush x:Key="FrDividerBrush" Color="#17DED9FF" />
     <SolidColorBrush x:Key="FrPanelBorderBrush" Color="#262E31" />
+    <SolidColorBrush x:Key="FrSkeletonBrush" Color="#1C2427" />
     <SolidColorBrush x:Key="FrRailIdleBrush" Color="#29DED9FF" />
     <SolidColorBrush x:Key="FrRailStopBrush" Color="#57DED9FF" />
     <SolidColorBrush x:Key="FrRailPassedBrush" Color="#B8DED9FF" />

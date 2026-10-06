@@ -432,10 +432,14 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
-        <Style Selector="Button.kcapPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.kcapPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapPrimaryBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryBrush}" />
+        <Style Selector="Button.kcapPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">

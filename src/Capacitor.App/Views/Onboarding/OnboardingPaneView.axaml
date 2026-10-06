@@ -79,13 +79,15 @@
 
                 <StackPanel Spacing="10">
                     <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="12">
-                        <Button x:Name="NextButton" Classes="frPrimary" Command="{Binding NextCommand}"
+                        <Button x:Name="NextButton" Command="{Binding NextCommand}"
+                                Classes.frPrimary="{Binding NextIsPrimary}"
+                                Classes.frSecondary="{Binding NextIsSecondary}"
                                 Content="{Binding NextLabel, Converter={x:Static views:UpperCase.Instance}}"
                                 IsVisible="{Binding NextVisible}" />
                         <Button Grid.Column="1" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
                                 Content="{Binding SkipLabel, Converter={x:Static views:UpperCase.Instance}}"
                                 IsVisible="{Binding SkipVisible}" />
-                        <Button Grid.Column="3" x:Name="BackButton" Classes="frQuiet" Content="BACK"
+                        <Button Grid.Column="3" x:Name="BackButton" Classes="frSecondary" Content="BACK"
                                 Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
                     </Grid>
 
