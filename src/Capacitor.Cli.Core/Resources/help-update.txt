@@ -6,8 +6,18 @@ For npm-global installs, upgrades to the latest published version on your
 active release channel (npm install -g @kurrent/kcap@<tag>) and then
 refreshes your opted-in agent plugins (skills, Codex/Cursor/Copilot hooks,
 Claude plugin). This works even when your package manager blocks install
-scripts. Exits early if already up to date. For non-npm installs (e.g.
-Homebrew), prints the command to run instead.
+scripts. Exits early if already up to date.
+
+For script installs (curl -fsSL https://www.kurrent.io/install | bash, or
+install.ps1 on Windows), reads the installer's channel manifest instead of
+npm, downloads this platform's archive from GitHub Releases and checks its
+sha256 against the manifest; any mismatch installs nothing. The release
+goes into its own versions/<version> directory and the `current` link is
+switched to it, so running processes keep the files they started from.
+The new binary then runs `kcap refresh`. A daemon service installed from a
+script install is moved onto the `current` path, so it follows updates.
+
+For other installs (e.g. Homebrew), prints the command to run instead.
 
 On Windows the update also works while agent sessions or the daemon keep
 the binary locked: the old executable is moved aside and cleaned up later.

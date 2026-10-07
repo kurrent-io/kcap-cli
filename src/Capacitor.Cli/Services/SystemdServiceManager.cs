@@ -2,8 +2,13 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Services;
 
-sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = null) : IServiceManager {
+sealed class SystemdServiceManager(
+    UserHome home,
+    UnitFileWriter? writeUnit = null,
+    Func<string, string[], (int ExitCode, string StdOut, string StdErr)>? runProcess = null
+) : IServiceManager {
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _runProcess = runProcess ?? ServiceProcess.Run;
 
     public string Describe() => "systemd --user unit";
 
@@ -44,6 +49,25 @@ sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = nu
     /// invoking systemctl.</summary>
     internal void WriteUnitFiles(ServiceSpec spec) =>
         _writeUnit(SystemdUnit.UnitPath(home, spec.ServiceId), SystemdUnit.Unit(spec), null);
+
+    /// <summary>
+    /// Points an installed unit's binary at what <paramref name="stabilize"/> maps it to, and reloads
+    /// systemd's copy of the unit. The running daemon is left alone: it picks the new binary up on its
+    /// next start. True when the unit was rewritten.
+    /// </summary>
+    public bool Repoint(string serviceId, Func<string, string> stabilize) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        if (!File.Exists(path)) return false;
+
+        var text   = File.ReadAllText(path);
+        var binary = SystemdUnit.BinaryFromUnit(text);
+        if (binary is null || SystemdUnit.WithBinary(text, stabilize(binary)) is not { } rewritten) return false;
+
+        _writeUnit(path, rewritten, null);
+        _runProcess("systemctl", SystemdUnit.DaemonReloadArgs());
+
+        return true;
+    }
 
     public void Install(ServiceSpec spec, bool startNow) {
         WriteUnitFiles(spec);

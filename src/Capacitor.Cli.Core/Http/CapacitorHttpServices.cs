@@ -170,6 +170,13 @@ public static class CapacitorHttpServices {
             c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
         });
 
+        // Downloads a release archive, so the whole-request cap is generous; manifest reads carry their own.
+        // GitHub answers a release asset with a redirect to its storage host, which the default handler follows.
+        services.AddHttpClient<KcapReleaseClient>(c => {
+            c.Timeout = TimeSpan.FromMinutes(10);
+            c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
+        });
+
         // A named lane, and WorkOSClient draws from it per call: the token store holds that client for
         // the process's life, so a typed client would freeze one handler inside it.
         //

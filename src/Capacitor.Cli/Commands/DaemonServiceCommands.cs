@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
@@ -95,10 +96,30 @@ sealed class DaemonServiceCommands(
     static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(55);
 
     /// <summary>
-    /// Brings every installed launchd job up to the unit this version writes. It runs after each
-    /// update, unattended, so a daemon hosting agents is never restarted: it is left for a later run.
+    /// Brings every installed unit up to the one this version writes, and moves a unit pinned to a script
+    /// install's version directory onto its stable <c>current</c> path so the daemon follows updates. It
+    /// runs after each update, unattended, so a daemon hosting agents is never restarted: a launchd reload
+    /// is left for a later run, and a systemd daemon picks the new path up on its next start.
     /// </summary>
-    internal async Task<int> Refresh() {
+    internal async Task<int> Refresh(Func<string, string>? stabilize = null) {
+        stabilize ??= ScriptInstallLayout.Stabilize;
+
+        if (manager is SystemdServiceManager systemd) {
+            var unwritten = 0;
+
+            foreach (var serviceId in systemd.ListInstalled()) {
+                try {
+                    if (systemd.Repoint(serviceId, stabilize))
+                        await Console.Out.WriteLineAsync($"Daemon '{serviceId}': now runs the current kcap version on its next start.");
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    await Console.Error.WriteLineAsync($"Daemon '{serviceId}': could not update its unit ({ex.Message}).");
+                    unwritten++;
+                }
+            }
+
+            return unwritten == 0 ? 0 : 1;
+        }
+
         if (manager is not LaunchdServiceManager launchd) return 0;
 
         var failed  = 0;
@@ -111,21 +132,21 @@ sealed class DaemonServiceCommands(
                 break;
             }
 
-            var outcome = launchd.RefreshProcessType(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error);
+            var outcome = launchd.RefreshUnit(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error, stabilize);
 
             switch (outcome) {
-                case ProcessTypeRefresh.Reloaded:
-                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded to run at standard priority.");
+                case UnitRefresh.Reloaded:
+                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded with its updated service unit.");
                     break;
-                case ProcessTypeRefresh.Deferred:
+                case UnitRefresh.Deferred:
                     await Console.Out.WriteLineAsync(
-                        $"Daemon '{serviceId}': busy, so its priority change waits for the next update.");
+                        $"Daemon '{serviceId}': busy, so its service unit change waits for the next update.");
                     break;
-                case ProcessTypeRefresh.Unverified:
+                case UnitRefresh.Unverified:
                     await Console.Out.WriteLineAsync(
                         $"Daemon '{serviceId}': launchd's state could not be read, so the check waits for the next update.");
                     break;
-                case ProcessTypeRefresh.Failed:
+                case UnitRefresh.Failed:
                     await Console.Error.WriteLineAsync($"Daemon '{serviceId}': {error}");
                     failed++;
                     break;

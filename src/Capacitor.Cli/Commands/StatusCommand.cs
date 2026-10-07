@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, NpmRegistryClient npm, MachineAuth machine, TimeProvider time,
+        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time,
         bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();

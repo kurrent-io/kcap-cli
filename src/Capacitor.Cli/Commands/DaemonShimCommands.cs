@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.FirstRun;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Commands;
@@ -105,7 +106,8 @@ public static class DaemonShimCommands {
             CancellationToken ct = default) {
         isMacOs ??= OperatingSystem.IsMacOS();
 
-        var target = (resolveTarget ?? (() => ResolveLinkTarget(() => Environment.ProcessPath, File.Exists)))();
+        var target = (resolveTarget ?? (() => ResolveLinkTarget(
+            () => Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null, File.Exists)))();
 
         if (string.IsNullOrEmpty(target))
             return new ShimEnsureJson(Capability, null, null, null, "none",

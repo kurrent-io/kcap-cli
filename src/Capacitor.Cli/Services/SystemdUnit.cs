@@ -96,6 +96,30 @@ static class SystemdUnit {
         return UnescapeExpansions(sb.ToString());
     }
 
+    /// <summary>
+    /// The unit with its <c>ExecStart=</c> binary replaced by <paramref name="binary"/>, or null when the
+    /// binary is already that or the line is not shaped the way <see cref="Unit"/> writes it. Every other
+    /// byte of the unit survives.
+    /// </summary>
+    public static string? WithBinary(string unitText, string binary) {
+        var current = BinaryFromUnit(unitText);
+        if (current is null || current == binary) return null;
+
+        var oldPrefix = $"ExecStart={QuoteArg(current)}";
+        var lines     = unitText.Split('\n');
+        var index     = Array.FindIndex(lines, l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+        if (index < 0) return null;
+
+        var line = lines[index];
+        if (!line.StartsWith(oldPrefix, StringComparison.Ordinal)
+         || (line.Length > oldPrefix.Length && line[oldPrefix.Length] != ' ')) return null;
+
+        lines[index] = $"ExecStart={QuoteArg(binary)}{line[oldPrefix.Length..]}";
+        var rewritten = string.Join('\n', lines);
+
+        return BinaryFromUnit(rewritten) == binary ? rewritten : null;
+    }
+
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");
 
     // ── systemd value/argument quoting ──
