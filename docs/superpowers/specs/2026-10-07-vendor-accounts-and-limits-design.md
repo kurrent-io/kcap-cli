@@ -104,6 +104,13 @@ The result is written to the account's registry entry under `accounts.lock`, so 
 publishes the same state. Every refresh stamps `refreshedAt` and bumps `revision` even when nothing
 else changed, giving the app evidence that a refresh happened (Section 6.3).
 
+**Overlapping refreshes.** A refresh records the account's `generation` and a per-account
+`probeSeq` (incremented under `accounts.lock` when the probe starts) before calling the vendor. At
+commit it applies its identity result only if no probe with a higher `probeSeq` has committed since;
+otherwise it records only `refreshedAt` and bumps `revision`. A limits result carries the generation
+the refresh started under and is dropped by the reading fence (Section 5.1) if that generation has
+been retired. Reversed completion order therefore never restores an older login.
+
 **Identity change.** When an authoritative probe reports a different identity than the one recorded
 (another login in the same directory), the account's `generation` increments, its reading is deleted
 under both locks, and the session ids already seen in that reading are kept as retired for the old
@@ -111,6 +118,13 @@ generation. Readings from a retired session are dropped (Section 5.1); app-serve
 generation they launched under and are dropped when it no longer matches. A session that started
 under the old login but had produced no reading before the change cannot be told apart and may
 contribute until it ends — a stated limitation.
+
+Retirement reaches every reader, not just local writers. The reading file records its `generation`;
+a daemon building a snapshot omits a reading whose generation differs from the registry entry's, so
+the interval between the registry update and the reading's deletion cannot publish the old login's
+numbers under the new identity. The public account view carries `generation` independently of the
+reading, and the server discards its stored reading and blocked marker for an account whose
+generation changed before merging anything (Section 6.2).
 
 ### 3.3 Same login in two directories
 
@@ -236,17 +250,32 @@ A reading holds windows keyed by `(limitId, windowLength)` — Claude has one li
 a 7-day window — each with used percentage, reset time and `confirmedAt`; plus plan and credits where
 known, the account `generation`, and the session ids that contributed.
 
-**Ordering without vendor timestamps.** Neither Claude's status line nor Codex's payloads carry a
-time of observation, and a status line can repeat a session's cached values. Ordering therefore uses
-the data itself: usage within one window only grows until it resets.
+**Values are ordered by the data.** Usage within one window only grows until it resets:
 
 - Incoming window with a **later** reset time than stored: a new window — replace.
-- **Same** reset time: keep the higher used percentage; on equal or higher, set `confirmedAt` to now.
+- **Same** reset time: keep the higher used percentage.
 - **Earlier** reset time: stale — ignore.
 
-`confirmedAt` is receipt time of the last observation the merge accepted, which is all freshness can
-promise: "this value was current as of a vendor response no older than this". A cached repeat of a
-lower value never refreshes `confirmedAt`.
+**Freshness is a separate question:** was this observation produced by a new vendor response, or is
+it a replay of one already seen? Every producer classifies its observation before merging, and only a
+fresh observation sets a window's `confirmedAt` — to the producer's time for that response, never to
+a later receipt time.
+
+| Producer | Fresh when | `confirmedAt` |
+|---|---|---|
+| Claude status line | The session's `cost.total_api_duration_ms` is greater than the last value recorded for that `session_id` — a new API response arrived since | Wrapper's clock at that run |
+| Codex rollout | Every token-count event is one response | The rollout line's own `timestamp` |
+| Codex app-server notification | Every `account/rateLimits/updated` | Receipt time in the runtime |
+| Codex refresh | Every `account/rateLimits/read` response | Receipt time in the refresh |
+
+A replayed observation may still raise a percentage (ordering above), but never moves `confirmedAt`.
+The reading keeps the last `total_api_duration_ms` per contributing Claude session for this check.
+A fresh observation with an equal value moves `confirmedAt` forward; a replay with an equal value
+changes nothing.
+
+**Merging** is the same function everywhere — producer, daemon and server — and keeps the maximum
+`confirmedAt` per window. Publishing, duplicate snapshots and reconnects carry producer times through
+and never restamp them.
 
 **Writing.** A producer takes `readings.lock` with a non-blocking attempt and a budget of at most
 50 ms; on contention it skips the observation. Holding the lock it reads `accounts.json` (atomically
@@ -258,7 +287,8 @@ commits before them (and is deleted) or sees their result (and skips); it cannot
 or retired reading.
 
 A window whose reset time has passed is shown as reset with unknown usage until a new observation
-arrives. An account with no observation is "no reading", not zero.
+arrives. An account with no observation is "no reading", not zero. The reading file records its
+`generation`, which every reader checks (Section 3.2).
 
 ### 5.2 Claude: `kcap statusline`
 
@@ -270,11 +300,15 @@ debounced at 300ms and an in-flight run is cancelled when the next update fires.
 **Command.** Wiring writes `statusLine.command` so that a missing kcap still runs the user's original:
 
 ```sh
-if command -v kcap >/dev/null 2>&1; then exec kcap statusline --account <id>; else <original>; fi
+if command -v kcap >/dev/null 2>&1; then exec kcap statusline --account <id>; else exec sh -c '<original>'; fi
 ```
 
-with `<original>` the user's command verbatim (or `:` when there was none). Claude runs status line
-commands through Git Bash or a POSIX shell where those exist; on Windows without Git Bash, where
+`<original>` is never spliced into the guard's own syntax. It is passed as one argument to a nested
+`sh -c`, quoted with POSIX single quotes (each `'` written as `'\''`), so comments, multiline commands
+and heredocs in the original parse inside the nested shell exactly as they did on their own. With no
+original the `else` branch is `:`. The wrapper's own step 3 below runs the original the same way:
+`sh -c <original>` as an argument vector, no string composition. Claude runs status line commands
+through Git Bash or a POSIX shell where those exist; on Windows without Git Bash, where
 Claude uses PowerShell, the plain `kcap statusline --account <id>` is written and a missing kcap
 blanks the status line — stated, not hidden. The account id is in the command because the wrapper
 cannot rely on `CLAUDE_CONFIG_DIR`, which `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` removes.
@@ -287,6 +321,13 @@ cannot rely on `CLAUDE_CONFIG_DIR`, which `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` rem
 rewritten. An interrupted install leaves either the original command with a backup (re-wire completes
 it) or our command with a backup (done). Backups and the original command are local bookkeeping: they
 never appear in a published snapshot (Section 6.1).
+
+**Settings writes are atomic.** Every write to a vendor settings file — this one, and the plugin,
+hook and MCP writes of Section 4.1 — reads the existing file, edits only the keys kcap owns, and
+replaces the file through `AtomicFile.Replace`, never `File.WriteAllText`. An existing file that does
+not parse is never overwritten or reset to an empty object: wiring refuses that account, reports it
+Broken with "settings file unreadable", and leaves the file as it was. An interruption at any point
+therefore leaves either the old file or the new one, with the user's other settings intact.
 
 **Re-wire.** If `statusLine.command` is ours, nothing changes. Otherwise the user changed it: back it
 up as the new original, then reinstall ours. Our own command is never adopted as an original.
@@ -305,8 +346,9 @@ registry and may write one reading file, nothing else.
 1. Read stdin to end.
 2. If `rate_limits` is present and the account is registered, merge the reading (Section 5.1) with
    `session_id` as the contributing session. Any failure or lock contention is swallowed.
-3. If the backup holds an original command, run it through the shell Claude would use, with the same
-   stdin bytes, environment and working directory, and pass its stdout, stderr and exit code through.
+3. If the backup holds an original command, run it as `sh -c <original>` (on Windows without Git
+   Bash, `powershell -NoProfile -Command <original>`), with the same stdin bytes, environment and
+   working directory, and pass its stdout, stderr and exit code through.
    With no original, print nothing and exit 0.
 4. If the wrapper itself is cancelled, the original's process tree is killed with it.
 
@@ -331,16 +373,26 @@ untouched, and app-server sessions get no second transcript source.
 
 ### 5.4 Limit hits
 
-When the hosted-agent usage-limit detector reports a block, the daemon queues — outside the PTY read
-loop — a "blocked" marker on the reading of the account that agent runs under (the daemon's default
-Claude account until spec 2), plus a refresh. The detector yields text only and cannot say which
-window caused the block, so:
+A "blocked" marker on an account's reading comes from two sources:
 
-- **Blocked until** is the latest reset among the account's windows at or above 100%, or "unknown"
-  when no window is known to be exhausted.
-- The marker clears only when every window at or above 100% has passed its reset, or a newer accepted
-  observation shows all of the account's windows below 100%. A partial observation that updates one
-  window never clears it on its own.
+- **Claude:** the hosted-agent usage-limit detector (Claude PTY agents only). The daemon queues —
+  outside the PTY read loop — the marker on the reading of the account that agent runs under (the
+  daemon's default Claude account until spec 2), plus a refresh. The detector yields text only and
+  cannot say which window caused the block.
+- **Codex:** a fresh observation (Section 5.1) whose `rate_limit_reached_type` is non-null, from any
+  Codex producer. It names the exhausted window when it maps to `primary` or `secondary`.
+
+Rules, for both:
+
+- **Blocked until** is the reset of the window the signal names; otherwise the latest reset among the
+  account's windows at or above 100%; otherwise "unknown".
+- An explicit signal outranks percentages: a blocked marker is set even when the cached percentages
+  read below 100%, and a replayed observation never clears it.
+- The marker clears when its blocked-until time has passed, or when a **fresh** observation covers
+  every window the account has a reading for, shows all of them below 100%, and (Codex) has a null
+  `rate_limit_reached_type`. A partial observation that updates one window never clears it.
+- A marker with an "unknown" blocked-until never clears by time and never merely because no
+  exhausted window is known; only the fresh, complete, all-below observation clears it.
 - **Next reset** on the screen stays the earliest reset of any window; it is not "unblocked at".
 
 ### 5.5 Testing
@@ -349,20 +401,33 @@ window caused the block, so:
   original runs with identical stdin, environment and working directory and its output and exit code
   pass through; no original prints nothing; a held `readings.lock` skips capture and the original
   still prints promptly; a slow original is killed with the wrapper on cancellation; with kcap absent
-  from PATH the guarded command still runs the original. Run against the real executable with no
-  server config and an unreachable network, and assert no network call.
+  from PATH the guarded command still runs the original; the guard passes `sh -n` and runs the
+  original correctly when it holds a trailing `#` comment, single quotes, multiple lines or a heredoc.
+  Run against the real executable with no server config and an unreachable network, and assert no
+  network call.
 - **Install / re-wire / unwire:** exact `settings.json` round-trip; command edit then re-wire;
   command edit then unwire keeps the edit; a `padding` edit with our command still installed survives
-  unwire; interrupted install at each step; corrupt backup.
-- **Readings:** repeated cached Claude payloads do not refresh `confirmedAt`; a lower value with the
-  same reset is ignored; a new window replaces; several `limit_id`s coexist; a writer paused after
-  validating membership while removal runs does not recreate the file; a retired session's late
-  observation after an identity change is dropped.
-- **Codex:** rollout fixtures (primary only, both windows, several limit ids, credits, limit reached);
+  unwire; interrupted install at each step, including a kill during the settings file write itself,
+  with unrelated settings asserted intact; a malformed existing settings file is left untouched and
+  the account reports Broken.
+- **Readings:** a repeated Claude payload with an unchanged `total_api_duration_ms` does not move
+  `confirmedAt`, while a new response with an equal value does; a fresh equal-valued Codex response
+  moves it; a lower value with the same reset is ignored; a new window replaces; several `limit_id`s
+  coexist; duplicate daemon snapshots and a reconnect replay never restamp `confirmedAt`; a writer
+  paused after validating membership while removal runs does not recreate the file; a retired
+  session's late observation after an identity change is dropped.
+- **Identity:** a daemon building a snapshot between the registry update and the reading's deletion
+  publishes no reading; a retired account with no reading still publishes its new generation; a new
+  login with lower usage at the same reset time replaces the old login's higher value on the server;
+  two overlapping refreshes across a login change, completing in reverse order, leave the newer login.
+- **Codex:** rollout fixtures (primary only, both windows, several limit ids, credits, limit reached
+  with and without a matching window, and a limit-reached event while cached percentages are below
+  100% — each with its expected blocked state and Ready result);
   `account/rateLimits/updated` in an app-server session; refresh of an idle account against a stub
   app-server, including `account/read` success with limits failure and an unsupported method.
 - **Limit hit:** block before any reading; two exhausted windows with different resets; a partial
-  newer observation that must not clear the block; clearing on the last reset and on an all-below
+  newer observation that must not clear the block; an unknown-reset block that survives time passing
+  and a replayed all-below observation; clearing on the last reset and on a fresh, complete all-below
   observation.
 
 ## 6. Part B — publishing and the screen
@@ -371,7 +436,7 @@ window caused the block, so:
 
 Every daemon watches `accounts.json` and the readings directory (debounced, a few seconds) and
 publishes a snapshot built from a **public account view**: id, vendor, directory, label, identity
-(email, org, plan), sign-in, recording state, `refreshedAt`, refresh errors, reading. Backups, original
+(email, org, plan), `generation`, sign-in, recording state, `refreshedAt`, refresh errors, reading. Backups, original
 status line commands and other wiring bookkeeping are never in it — they are arbitrary user shell text
 and stay on the host.
 
@@ -389,6 +454,9 @@ Account actions requested by the desktop app go through a daemon, which calls `A
 - `DaemonConnect` gains an `Accounts` member, appended last so older servers keep binding.
 - `AccountsChanged` carries the full snapshot, throttled per daemon to one call per 30 seconds with a
   trailing send, so the last change in a burst — including a removal — always goes out.
+- **Identity retirement.** When an account arrives with a higher `generation` than stored, the server
+  discards its stored reading and blocked marker before merging the snapshot's reading, and ignores
+  readings whose generation is lower than the account's.
 - **Ordering across daemons.** The server keeps, per host, the highest registry `revision` applied,
   and rejects a snapshot with a lower revision whichever daemon sends it. Within an accepted snapshot,
   each reading window is merged by the rules of Section 5.1, so an older reading from another daemon
