@@ -49,6 +49,7 @@ public static class ToolSummary {
     ];
 
     public static ToolCategory Categorize(string name, string? inputJson) {
+        if (KcapToolCatalogue.Match(name) is { } kcap) return kcap.Category;
         var category = Names.TryGetValue(name, out var known) ? known : ToolCategory.Other;
         if (category is not (ToolCategory.Read or ToolCategory.Command) || string.IsNullOrEmpty(inputJson)) return category;
         try {
@@ -98,6 +99,11 @@ public static class ToolSummary {
         ToolCategory.Agent     => "Task",
         ToolCategory.Plan      => "Plan",
         ToolCategory.Question  => "Question",
+        ToolCategory.Artefact  => "Page",
+        ToolCategory.Work      => "Work",
+        ToolCategory.Memory    => "Memory",
+        ToolCategory.Session   => "Recall",
+        ToolCategory.Flow      => "Flow",
         _                      => "Tool",
     };
 
