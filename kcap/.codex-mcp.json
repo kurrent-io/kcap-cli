@@ -33,9 +33,9 @@
       "command": "kcap",
       "args": ["mcp", "handoff"]
     },
-    "kcap-artefacts": {
+    "kcap-pages": {
       "command": "kcap",
-      "args": ["mcp", "artefacts"]
+      "args": ["mcp", "pages"]
     },
     "kcap-knowledge": {
       "command": "kcap",

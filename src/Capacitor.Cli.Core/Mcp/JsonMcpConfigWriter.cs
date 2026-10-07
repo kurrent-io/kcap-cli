@@ -54,6 +54,10 @@ public static class JsonMcpConfigWriter {
                 changed = true;
             }
 
+            foreach (var name in KcapMcpServers.Retired)
+                if (block[name] is JsonNode retired && marker.Owns(configPath, name, retired) && block.Remove(name))
+                    changed = true;
+
             return changed;
         });
 
@@ -117,7 +121,7 @@ public static class JsonMcpConfigWriter {
         if (cwd is not null && s.NeedsProjectCwd) o["cwd"] = cwd;
         if (shape.Enable == EnableStyle.EnabledTrue) o["enabled"] = true;
 
-        // Only where the harness has a per-server trust knob; flows, memory and artefacts keep prompting.
+        // Only where the harness has a per-server trust knob; flows, memory and pages keep prompting.
         if (s.AutoApprove && shape.Trust == TrustStyle.TrustBool) o["trust"] = true;   // Gemini
 
         return o;
