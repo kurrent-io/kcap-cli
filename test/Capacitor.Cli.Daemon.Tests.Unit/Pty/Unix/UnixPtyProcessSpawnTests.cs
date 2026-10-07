@@ -83,6 +83,30 @@ public class UnixPtyProcessSpawnTests {
         }
     }
 
+    /// <summary>A leader that ignores SIGTERM is only stopped by the SIGKILL fallback, and Terminate
+    /// must return with it reaped: a disposed runtime never checks again, so a leader still unreaped
+    /// at that point stays a zombie for the daemon's lifetime.</summary>
+    [Test]
+    public async Task Terminate_reaps_a_leader_that_only_the_kill_fallback_stops() {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+
+        using var spawner = new UnixSpawnerThread();
+        var       factory = new UnixPtyProcessFactory(spawner, TimeProvider.System);
+        var proc = factory.Spawn(
+            "/bin/sh", ["-c", "trap '' TERM; echo \"CHILD:$$:DONE\"; while :; do sleep 1; done"],
+            AppContext.BaseDirectory);
+        try {
+            await Assert.That(await ReadReportedChildPidAsync(proc)).IsEqualTo(proc.Pid);
+
+            await proc.TerminateAsync(TimeSpan.FromMilliseconds(300));
+
+            await Assert.That(proc.HasExited).IsTrue();
+            await Assert.That(UnixPtyInterop.waitpid(proc.Pid, out _, UnixPtyInterop.WNOHANG)).IsEqualTo(-1);
+        } finally {
+            await proc.DisposeAsync();
+        }
+    }
+
     /// <summary>A spawned child that nothing came to own has to go down with its whole group. The
     /// helper ignores SIGHUP, so closing the master alone leaves it running — only the group kill
     /// reaches it.</summary>
