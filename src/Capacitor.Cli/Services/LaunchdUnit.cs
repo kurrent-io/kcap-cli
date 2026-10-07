@@ -40,6 +40,42 @@ static class LaunchdUnit {
         printStdout.Split('\n').Any(static line =>
             line.Trim().StartsWith("spawn type = adaptive", StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// The plist with its daemon binary (the first <c>ProgramArguments</c> entry) replaced by
+    /// <paramref name="binary"/>, or null when the binary is already that or the plist is not shaped the
+    /// way this writer writes it. Text-level, so every other byte of the unit survives.
+    /// </summary>
+    public static string? WithBinary(string plistXml, string binary) {
+        string? current;
+        try { current = BinaryFromPlist(plistXml); }
+        catch (Exception ex) when (ex is System.Xml.XmlException or InvalidDataException) { return null; }
+
+        if (current is null || current == binary) return null;
+
+        const string key = "<key>ProgramArguments</key><array>";
+        var at = plistXml.IndexOf(key, StringComparison.Ordinal);
+        if (at < 0) return null;
+
+        var oldElement = $"<string>{ServiceText.Xml(current)}</string>";
+        var start      = plistXml.IndexOf("<string>", at + key.Length, StringComparison.Ordinal);
+        if (start < 0 || string.CompareOrdinal(plistXml, start, oldElement, 0, oldElement.Length) != 0) return null;
+
+        var rewritten = string.Concat(plistXml.AsSpan(0, start), $"<string>{Guarded("binary path", binary)}</string>",
+            plistXml.AsSpan(start + oldElement.Length));
+
+        return BinaryFromPlist(rewritten) == binary ? rewritten : null;
+    }
+
+    /// <summary>The program <c>launchctl print</c> shows the loaded job running, or null when it shows none.
+    /// launchd reads the plist only when the job loads, so this lags a rewritten plist until a reload.</summary>
+    public static string? LoadedProgram(string printStdout) {
+        foreach (var line in printStdout.Split('\n')) {
+            var t = line.Trim();
+            if (t.StartsWith("program = ", StringComparison.Ordinal)) return t["program = ".Length..];
+        }
+        return null;
+    }
+
     /// <summary>The Library/LaunchAgents directory under the given home.</summary>
     public static string AgentsDir(UserHome home) =>
         Path.Combine(home.Path, "Library", "LaunchAgents");

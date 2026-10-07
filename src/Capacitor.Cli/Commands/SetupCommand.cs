@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
@@ -2202,6 +2203,14 @@ sealed class SetupCommand(
         var exePath = Environment.ProcessPath;
 
         if (exePath is null) return null;
+
+        // Through `current`, so the Claude plugin registration follows a script-install update.
+        if (ScriptInstallLayout.FromBinary(exePath, File.Exists) is { } script) {
+            var stablePlugin = Path.Combine(script.Current, "kcap");
+
+            if (Directory.Exists(stablePlugin))
+                return stablePlugin;
+        }
 
         var exeDir = Path.GetDirectoryName(exePath);
 
