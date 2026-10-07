@@ -7,11 +7,14 @@ public sealed record AgentStatusPresentation(
     public static AgentStatusPresentation None { get; } =
         new(AgentStatusKind.Other, "", "", false, []);
 
+    /// The session is over, so a daemon word it last reported no longer means it is live.
+    public bool Ended { get; init; }
+
     public string AccessibleName => Tip.Length == 0 ? "" : Tip.Split('\n')[0];
 
     public bool HasLabel => Label.Length > 0;
     /// The daemon says Running but the turn is unknown (a remote row): live, yet not claimed as Working.
-    public bool IsRunningUnknownTurn => Kind == AgentStatusKind.Other && Label == "Running";
+    public bool IsRunningUnknownTurn => !Ended && Kind == AgentStatusKind.Other && Label == "Running";
     public bool IsInFlight => Kind is AgentStatusKind.Working or AgentStatusKind.Starting || IsRunningUnknownTurn;
     public bool IsWarning => Kind is AgentStatusKind.Idle or AgentStatusKind.NeedsYou or AgentStatusKind.Answer;
     public bool IsDanger => Kind == AgentStatusKind.Failed;

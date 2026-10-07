@@ -49,7 +49,7 @@ public static class SessionStatusDots {
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
             string? usageLimitSummary, string? launchStage, string? elapsed,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
-            string? model = null, string? harness = null) {
+            string? model = null, string? harness = null, bool ended = false) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
@@ -91,7 +91,7 @@ public static class SessionStatusDots {
         Add(facts, requester, "Requester");
         Add(facts, borrowedFrom, "Borrowed from");
         return new AgentStatusPresentation(kind, label, FormatTip(facts),
-            kind is AgentStatusKind.Working or AgentStatusKind.Starting, facts);
+            kind is AgentStatusKind.Working or AgentStatusKind.Starting, facts) { Ended = ended };
     }
 
     static void Add(List<AgentStatusFact> facts, string? text, string? caption = null) {

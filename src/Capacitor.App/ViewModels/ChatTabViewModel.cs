@@ -323,6 +323,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     string _status = "";
+    bool _ended;
     bool? _awaitingInput;
     bool _waitsOnUser;
     int? _liveSubagents;
@@ -359,7 +360,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         AgentStatus = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
-            answerExpected: answerExpected);
+            answerExpected: answerExpected, ended: _ended);
         StatusText = AgentStatus.Label;
     }
 
@@ -679,6 +680,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         ApplyUsageLimit(info.UsageLimit);
         _status = info.Status;
+        _ended = info.Ended;
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();

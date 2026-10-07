@@ -56,10 +56,14 @@
             <Path Stretch="Uniform" Stroke="{StaticResource KcapDangerBrush}"
                   StrokeThickness="1.6" StrokeLineCap="Round" Data="M3,3 L9,9 M9,3 L3,9"
                   IsVisible="{Binding ShowsCross}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
-            <!-- No Stretch: a zero-height line scales by min(sx, 0) and collapses to a dot. -->
-            <Path Stroke="{StaticResource KcapMutedBrush}"
-                  StrokeThickness="1.6" StrokeLineCap="Round" Data="M2,6 H10"
-                  IsVisible="{Binding ShowsDash}" />
+            <!-- A Path stretched on its own zero-height bounds collapses to a dot; the fixed
+                 12px canvas gives the Viewbox real bounds to scale into the 16px header box. -->
+            <Viewbox Stretch="Uniform" IsVisible="{Binding ShowsDash}">
+                <Canvas Width="12" Height="12">
+                    <Path Stroke="{StaticResource KcapMutedBrush}"
+                          StrokeThickness="1.6" StrokeLineCap="Round" Data="M2,6 H10" />
+                </Canvas>
+            </Viewbox>
         </Panel>
         <TextBlock x:Name="StatusWord" Classes="statusWord" Text="{Binding Label}"
                    Classes.inflight="{Binding IsInFlight}" Classes.warning="{Binding IsWarning}"
