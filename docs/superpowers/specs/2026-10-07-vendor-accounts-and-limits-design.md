@@ -5,6 +5,9 @@ desktop and hosted agents", 2026-09-24). This is the first of two specs: it cove
 Claude and Codex account on a host, recording all of them, and showing their usage limits. Choosing
 an account when launching a hosted agent is spec 2.
 
+Implemented as two plans and two PRs from this one spec: **Part A — recording every account**
+(Sections 3–4), which fixes silent session loss on its own; then **Part B — limits** (Sections 5–6).
+
 ## 1. Problem
 
 People run several Claude or Codex subscriptions side by side by pointing the vendor CLI at a
@@ -24,13 +27,14 @@ in effect when `kcap setup` ran.
 | Decision | Choice |
 |---|---|
 | Unit | An **account** is one vendor + one config directory on one host. The directory is the key. |
+| Registry | A per-user file store at a fixed location, changed under a lock by the CLI or any daemon. |
 | Discovery | Detect candidates and let the user confirm each; explicit add for anything missed. |
-| Recording | Every listed account is wired (plugin/hooks, MCP, skills, status line). |
-| Claude readings | A `kcap statusline` wrapper installed in each account's `settings.json`, wrapping the user's own status line. |
-| Codex readings | The `rate_limits` object already present in Codex session logs. |
-| Credentials | Never read. No token is opened, copied or sent; no usage endpoint is polled. |
-| Ownership | The daemon on each host owns the account list and the readings. |
-| Transport | Daemon → server (owner-only) → app for remote hosts; daemon → app over the local socket for this host. |
+| Recording | Every listed account is wired (plugin/hooks, MCP, status line) through one shared wiring service. |
+| Claude readings | A `kcap statusline` wrapper in each account's `settings.json`, wrapping the user's own status line. |
+| Codex readings | `rate_limits` in rollouts (PTY sessions), `account/rateLimits/updated` (app-server sessions), and `account/rateLimits/read` on refresh. |
+| Credentials | Never read. No token or credential file is opened, copied or sent. Vendor processes make their own authenticated calls. |
+| Transport | Every daemon publishes the registry and readings: to the server (owner-only) and to the local app. |
+| Remote hosts | Read-only in the app. Changes happen on the host itself. |
 | UI | An Accounts screen per host. No header chips in this spec. |
 | Out of scope | Account picker at launch, per-agent config directories, automatic switching (spec 2). |
 
@@ -39,180 +43,297 @@ everywhere — CLI, UI, code — to keep the two apart.
 
 ## 3. Accounts
 
-### 3.1 What an account carries
+### 3.1 The registry
+
+A single per-user store, `accounts/` beside the daemons directory, at a fixed location that ignores
+`KCAP_CONFIG_DIR` for the same reason the daemons directory does: two daemons or two config roots on
+one machine must see one list, or each would wire the same `settings.json` and undo the other's
+changes. It holds:
+
+- `accounts.json` — the list: id (stable, generated), vendor, directory (full path, resolved), label,
+  and per-account wiring bookkeeping (Section 4.4).
+- `readings/<id>.json` — the latest reading per account (Section 5.1).
+
+Mutations — add, remove, rename, wire, unwire — take an exclusive file lock on `accounts.json`,
+re-read it, apply, and replace it atomically. Any kcap process may mutate: `kcap accounts`, `kcap
+setup`, `kcap uninstall`, the npm refresh, or a daemon acting for the desktop app. No daemon has to be
+running. Daemons are readers and publishers (Section 6.1).
+
+The default directory (`~/.claude`, `~/.codex`, or the `CLAUDE_CONFIG_DIR` / `CODEX_HOME` in effect at
+setup) is registered when setup wires it, so an existing install migrates to a list of one with no
+behavior change.
+
+### 3.2 What an account shows
 
 | Field | Source |
 |---|---|
-| Vendor, directory | The list itself |
-| Label | User-editable; defaults to the email (Claude) or the directory name (Codex) |
-| Email, org id, org name | Claude: `claude auth status --json` with `CLAUDE_CONFIG_DIR=<dir>` |
-| Plan | Claude: `subscriptionType` from the same command. Codex: `plan_type` from its readings |
-| Signed in | Claude: `loggedIn`. Codex: exit status / output of `codex login status` with `CODEX_HOME=<dir>` |
-| Wired | The existing wiring checks, run against this account's layout |
+| Label | User-editable; defaults to the email, else the directory name |
+| Email, org | Claude: `claude auth status --json` (`email`, `orgId`, `orgName`) with `CLAUDE_CONFIG_DIR=<dir>`. Codex: app-server `account/read` (`email`, `chatgptAccountId`) with `CODEX_HOME=<dir>` |
+| Plan | Claude: `subscriptionType`. Codex: `planType` from `account/read` or readings |
+| Signed in | Claude: `loggedIn`. Codex: `account/read` returns an account |
+| Recording state | Section 4.3 |
 | Latest reading | Section 5 |
 
-`claude auth status --json` prints `loggedIn`, `authMethod`, `email`, `orgId`, `orgName`,
-`subscriptionType` and `configDirectory`; it prints no secret. `codex login status` prints only the
-sign-in method. kcap does not open Codex's `auth.json` to learn the email: that is reading a
-credential file.
+`claude auth status --json` prints no secret. kcap never opens Codex's `auth.json`; the app-server
+reports the account itself.
 
-The default directory (`~/.claude`, `~/.codex`, or the override in the daemon's environment) is
-always an account when the vendor CLI is installed, so an existing install behaves as before with a
-list of one.
+Identity is refreshed on add, daemon start, explicit refresh, and after a limit hit — not on a timer,
+since each refresh starts a vendor process. When a refresh reports a different identity than the one
+recorded (a different login in the same directory), the account's reading and blocked marker are
+discarded before the new identity is stored.
 
-### 3.2 Same login in two directories
+### 3.3 Same login in two directories
 
-Two Claude directories reporting the same `orgId` and email are one subscription and share limits.
-The screen groups them as one account with two directories, and readings from either update it.
-Codex exposes no identity, so two Codex directories with one login show as two accounts with the
-same numbers — a known gap.
+Two directories of one vendor reporting the same identity (Claude: `orgId` + email; Codex:
+`chatgptAccountId`) share limits. The screen shows them as one row listing both directories; readings
+from either update it. Accounts with unknown identity (signed out, CLI missing, refresh failed) never
+group. Per-directory actions — re-wire, remove — act on a chosen directory, and the row's menu lists
+them by path.
 
-### 3.3 Discovery
+### 3.4 Discovery
 
-Setup and the app's Add flow offer candidates; nothing is wired until the user confirms it.
+Setup and the Add flow on this host offer candidates; nothing is registered or wired until the user
+confirms it.
 
-- Directories under the user home matching `.claude*` / `.codex*` that contain the vendor's own
-  files (`settings.json` or `projects/` for Claude; `config.toml`, `auth.json` presence or
-  `sessions/` for Codex — presence only, never contents).
+- Directories directly under the user home matching `.claude*` / `.codex*` that contain the vendor's
+  own files (`settings.json` or `projects/` for Claude; `config.toml` or `sessions/` for Codex —
+  presence only, never contents).
 - claude-swap's profile directories.
 - `CLAUDE_CONFIG_DIR` / `CODEX_HOME` in the current environment.
 
 `kcap accounts add <vendor> <dir>` and the app's "Choose a directory" cover the rest. `kcap accounts
-remove` unwires the account and forgets its readings; it never deletes the directory or signs out.
+remove` unwires the account and deletes its reading; it never deletes the directory or signs out.
 
-### 3.4 Ownership
+## 4. Part A — recording every account
 
-The list lives in the daemon's state on that host and changes only through the daemon — from the app
-or from `kcap accounts` talking to it over the local socket — following the one-lane rule for daemon
-mutations.
+### 4.1 One wiring service
 
-## 4. Recording every account
+Today the writes live in the CLI executable (`SetupCommand.InstallPlugin`,
+`PluginCommand.InstallCodexHooks`, Codex MCP setup) and `ClaudePluginInstaller` / `CodexHooksInstaller`
+are detection and marker helpers; the daemon cannot call the CLI's code. Part A moves the install,
+uninstall and status logic into a Core service, `AccountWiring`, taking an account's layout
+(`ClaudeHarness.Over(paths)` / `CodexHarness.Over(paths)`) and returning a per-step result. Setup,
+`kcap plugin`, `kcap accounts`, uninstall, the npm refresh path (`npm/kcap/bin/refresh.js` and the
+`plugin --if-installed` commands it runs) and daemons all call it, and every caller iterates the
+registry instead of the one environment-derived layout. Each wiring run holds the registry lock for
+that account, so concurrent setup, refresh and app actions serialize.
 
-`ClaudeHarness.Over(paths)` and `CodexHarness.Over(paths)` already build a harness over an arbitrary
-layout (reviewers' isolated homes use them). Wiring an account runs the existing installers against
-that account's layout instead of the daemon-wide one:
+Per account it does:
 
-- **Claude:** enable the kcap plugin in `<dir>/settings.json`; install the status line wrapper there
-  (Section 5.1).
-- **Codex:** the kcap hook in `<dir>/hooks.json`; MCP registration in `<dir>/config.toml`, tracked in
+- **Claude:** register the marketplace and enable the kcap plugin in `<dir>/settings.json`; install
+  the status line wrapper (Section 5.2).
+- **Codex:** the kcap hook in `<dir>/hooks.json`; MCP registration in `<dir>/config.toml` tracked in
   that directory's own `mcp-ownership-v1.json`, so "owns only what it created" holds per account.
-- **Skills:** team skills are materialized into each Claude account's `<dir>/skills` as well as
-  `~/.claude/skills` (see 4.1).
 
-Wiring happens when an account is added or confirmed, and `kcap setup` and the app's re-wire action
-iterate every listed account. `kcap status` and the Accounts screen report wiring per account,
-replacing the single default-directory check.
+Skills need nothing per account: team skills materialize into each repository's own `.claude/skills`
+and `.agents/skills`, which every account's sessions read, and kcap's packaged skills ship inside the
+plugin.
 
-`kcap import` and any other `projects/` scan take each account's layout. Live sessions need no
-change: hooks hand over the transcript path.
+### 4.2 Attribution in recording paths
 
-An account nobody listed stays unrecorded. Discovery and the not-wired warning narrow that gap; they
-do not close it.
+Hooks are shared plugin hooks with no account argument, and `CLAUDE_CONFIG_DIR` may be scrubbed from
+their environment. Every recording path that reads a vendor layout derives the account from data the
+vendor hands it, validated against the registry:
 
-### 4.1 Verify first: do user skills follow `CLAUDE_CONFIG_DIR`?
+- **Claude hooks:** the account whose `projects/` contains `transcript_path`. Plan capture
+  (`ClaudeHookCommand`, both sites reading `Paths.Plans`) uses that account's layout.
+- **Codex hooks and watcher:** the account whose `sessions/` contains the rollout path. Title lookup
+  (`HarnessTitleStores`, the Codex `session_index.jsonl` reader) uses that account's home.
+- **Import:** `kcap import` and every other `projects/` / `sessions/` scan iterate all registered
+  accounts, each with its own title store.
 
-The vendor docs say `CLAUDE_CONFIG_DIR` relocates "all settings, session history, and plugins" and
-list personal skills only as `~/.claude/skills`. This spec assumes skills follow the config
-directory. The first implementation step is a live check — a skill placed only in `<dir>/skills`,
-then only in `~/.claude/skills`, listed from a session under `CLAUDE_CONFIG_DIR=<dir>` — and the
-skills bullet above is dropped if `~/.claude/skills` turns out to load regardless.
+A path inside no registered account falls back to the environment-derived layout, as today.
 
-## 5. Readings
+### 4.3 Recording state
 
-A reading is the latest known usage for one account: each window's used percentage and reset time,
-the plan where known, when it was taken, and the session it came from. One small JSON file per
-account in kcap's local state directory, replaced atomically. Readers tolerate a missing or
-unparseable file by keeping the previous value.
+"Wired" is not enough to know an account records. Each account reports one of:
 
-### 5.1 Claude: `kcap statusline`
+| State | Meaning |
+|---|---|
+| Recording | Claude: plugin enabled and the payload effectively installed (`IsEffectivelyInstalled`). Codex: hook present and trusted |
+| Needs trust | Codex hook installed but not yet trusted (`CodexHookTrust`); the screen and setup tell the user to trust it in that home |
+| Broken | Plugin enabled but payload missing, or hook command present but unusable |
+| Not wired | Nothing installed |
 
-Claude Code passes the status line command a JSON document on stdin that, for Pro and Max
-subscribers, includes `rate_limits.five_hour` and `rate_limits.seven_day`, each with
-`used_percentage` and `resets_at` (epoch seconds). It is present only after the session's first API
-response, and a window is dropped once its reset passes.
+The Accounts screen and `kcap status` show this per account, replacing today's single
+default-directory check.
 
-**Install.** Wiring sets `statusLine` in `<dir>/settings.json` to
-`kcap statusline --account <id>`. The account is named in the command because each account has its
-own settings file; the wrapper cannot rely on `CLAUDE_CONFIG_DIR` in its environment, which
-`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` removes. An existing `statusLine` (command, `padding`,
-`refreshInterval`, `hideVimModeIndicator`) moves into kcap's per-account state as the original;
-`padding`, `refreshInterval` and `hideVimModeIndicator` stay in `settings.json` because they
-configure the bar, not the command.
+### 4.4 Uninstall
 
-**Re-wire.** A `statusLine.command` that is not ours means the user changed it: adopt it as the new
-original and reinstall ours. Never overwrite the user's change without keeping it.
+`kcap uninstall` unwires every registered account through `AccountWiring` — plugin, hooks, MCP and
+status line — before it stops daemons and removes kcap's config, and deletes the registry last. A
+failure on one account is reported and leaves that account's registry entry and status line backup
+in place, so a later uninstall can finish it.
 
-**Unwire.** Restore the original exactly, or remove `statusLine` if there was none.
+### 4.5 Testing
+
+- Each directory in a two-account `TempDir` gets plugin/hooks; MCP ownership is tracked per account;
+  unwire removes only what we added.
+- A new session under a non-default account records end to end, for Claude and for Codex.
+- Plan capture under a non-default Claude account with `CLAUDE_CONFIG_DIR` absent from the hook's
+  environment; Codex titles across two homes; import across two accounts.
+- Recording state: missing Claude payload reports Broken; untrusted Codex hook reports Needs trust.
+- Registry: two processes mutating concurrently; two named daemons and two `KCAP_CONFIG_DIR` roots see
+  one list; uninstall with one account failing.
+
+## 5. Part B — readings
+
+### 5.1 Reading model
+
+A reading file holds, per window: label, window length, used percentage, reset time, and the time the
+vendor reported it (`observedAt`). Windows are keyed by `(limitId, windowLength)`; Claude has one
+limit with a 5-hour and a 7-day window. Plan and credits ride along where known.
+
+Writers merge rather than overwrite: under a short per-file lock, read the file, replace a window only
+when the incoming `observedAt` is newer, and replace the file atomically. Out-of-order writers
+therefore never move a window backwards, and one Codex `limitId` never erases another. A writer whose
+account id is no longer in the registry writes nothing, so a session still running after the account
+is removed cannot recreate its reading.
+
+A window whose reset time has passed is shown as reset with unknown usage until a new observation
+arrives. A reading for an account with no observation yet is "no reading", not zero.
+
+### 5.2 Claude: `kcap statusline`
+
+Claude Code passes the status line command JSON on stdin that, for Pro and Max subscribers, includes
+`rate_limits.five_hour` and `rate_limits.seven_day`, each with `used_percentage` and `resets_at`
+(epoch seconds), present only after the session's first API response. Updates are debounced at 300ms
+and an in-flight run is cancelled when the next update fires.
+
+**Command.** Wiring writes `statusLine.command` as `kcap statusline --account <id>`, resolved and
+quoted the same way the plugin's hook commands invoke kcap, so the wrapper has the same PATH contract
+as recording itself. The account id is in the command because the wrapper cannot rely on
+`CLAUDE_CONFIG_DIR`, which `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` removes.
+
+**Backup before replacement.** Before changing `settings.json`, wiring writes the account's original
+`statusLine` (or "none") into the registry entry and flushes it. Only then is `settings.json`
+rewritten. `padding`, `refreshInterval` and `hideVimModeIndicator` stay in `settings.json`: they
+configure the bar, not the command. An interrupted install leaves either the original setting with a
+backup (re-wire completes it) or our command with a backup (already done).
+
+**Re-wire.** If `statusLine.command` is ours, nothing changes. If it is something else, the user
+changed it: back it up as the new original, then reinstall ours. Our own command is never adopted as
+an original.
+
+**Unwire.** Restore the backup only while `statusLine.command` is still ours. If the user has since
+replaced it, leave their setting and discard the backup. A missing or corrupt backup with our command
+installed removes `statusLine.command` and reports it, rather than guessing.
+
+**Startup.** `kcap statusline` is dispatched before any of the CLI's ordinary startup: no repository
+or profile resolution, no git call, no telemetry, no server-URL gate, no update notice. It reads the
+registry and writes a reading file, nothing else.
 
 **Each run.**
 
-1. Read stdin.
-2. If `rate_limits` is present, write the account's reading. No network call and no daemon IPC on
-   this path: Claude cancels a status line still running when the next update arrives.
-3. Run the original command with the same stdin and environment and pass its stdout and exit code
-   through unchanged. With no original, print nothing and exit 0.
+1. Read stdin to end.
+2. If `rate_limits` is present and the account is registered, merge the reading (Section 5.1). Any
+   failure here is swallowed.
+3. If the backup holds an original command, run it through the user's shell the way Claude runs a
+   status line command, with the same stdin bytes, environment and working directory, and pass its
+   stdout, stderr and exit code through. With no original, print nothing and exit 0.
+4. If the wrapper itself is cancelled, the original's process tree is killed with it.
 
-A failure in step 2 never affects step 3. A project's own `statusLine` overrides the account's;
-those projects give no readings.
+A project's own `statusLine` overrides the account's; those projects give no readings.
 
-### 5.2 Codex: session logs
+### 5.3 Codex
 
-The Codex watcher already tails each rollout. Codex writes a `rate_limits` object on token-count
-events, for example:
+- **PTY sessions:** the rollout watcher already tails each rollout. Token-count events carry
+  `rate_limits` (`limit_id`, `primary` / `secondary` with `used_percent`, `window_minutes`,
+  `resets_at`, `plan_type`, `credits`). The watcher merges them into the reading of the account
+  whose `sessions/` holds the rollout.
+- **App-server sessions** (hosted reviewers and opted-in interactive launches, which suppress the
+  watcher): the runtime handles `account/rateLimits/updated` notifications and merges them into the
+  reading of the account whose `CODEX_HOME` launched it — the daemon's default account until spec 2
+  adds per-agent homes.
+- **Idle accounts:** refresh (Section 3.2) starts `codex app-server` with that account's
+  `CODEX_HOME` and calls `account/read` and `account/rateLimits/read`. Codex makes the authenticated
+  call; kcap never sees a token.
 
-```json
-{"limit_id":"codex","primary":{"used_percent":4.0,"window_minutes":10080,"resets_at":1791622733},
- "secondary":null,"credits":{"has_credits":true,"unlimited":false,"balance":"62500"},
- "plan_type":"pro","rate_limit_reached_type":null}
-```
+All three are side outputs. The transcript projection does not change, so canonical event ids are
+untouched, and app-server sessions get no second transcript source.
 
-The watcher writes a reading for the rollout's `CODEX_HOME`: each window with its length in minutes,
-`plan_type`, the credits balance, and readings for other `limit_id`s kept separately ("+N per
-model"). This is a side output of the watcher. The transcript projection does not change, so
-canonical event ids are untouched.
+### 5.4 Limit hits
 
-### 5.3 Limit hits
+When the hosted-agent usage-limit detector reports a block, the daemon queues — outside the PTY read
+loop — a "blocked" marker on the reading of the account that agent runs under (the daemon's default
+Claude account until spec 2). The detector yields text only, so the marker has no reset time of its
+own: it borrows the earliest reset among that account's windows at or above 100%, else "reset
+unknown". It clears when that reset passes, or when a newer observation shows every window below
+100%. A sign-in refresh is queued the same way.
 
-The existing PTY usage-limit detector stays as it is and additionally marks the account's reading
-"blocked until <reset>", covering a single long turn that crosses every threshold between readings.
+### 5.5 Testing
 
-## 6. Daemon, server and app
+- **Wrapper:** reading merged from stdin, including `rate_limits` absent and one window only; the
+  original runs with identical stdin, environment and working directory and its output and exit code
+  pass through; no original prints nothing; a reading failure does not change output; a slow original
+  is killed with the wrapper on cancellation. Run against the real executable with no server config
+  and an unreachable network, and assert no network call.
+- **Install / re-wire / unwire:** exact `settings.json` round-trip; user edit then re-wire; user edit
+  then unwire keeps the edit; interrupted install at each step; corrupt backup.
+- **Readings:** out-of-order writers; several `limit_id`s; removal during a live session; identity
+  change discards the old reading.
+- **Codex:** rollout fixtures (primary only, both windows, several limit ids, credits, limit reached);
+  `account/rateLimits/updated` in an app-server session; refresh of an idle account against a stub
+  app-server.
+- **Limit hit:** block before any reading; reset known and unknown; clearing on reset and on a lower
+  reading.
 
-### 6.1 Daemon
+## 6. Part B — publishing and the screen
 
-The daemon keeps one snapshot per account: the list entry, wiring state, sign-in state, and latest
-reading.
+### 6.1 Daemons
 
-- Reading files are watched and debounced (a few seconds).
-- Sign-in state is refreshed on account add, daemon start, explicit refresh, and after a limit hit —
-  not on a timer: each run starts the vendor CLI.
-- Wiring state is refreshed on setup, re-wire and daemon start.
+Every daemon watches the registry and the readings directory (debounced, a few seconds) and publishes
+one snapshot per account: registry entry, identity, recording state, reading. Several daemons on one
+host publish the same snapshot; the server keys it by host and account, so duplicates are idempotent.
+Account mutations requested by the desktop app go through the daemon, which calls `AccountWiring`
+under the registry lock.
 
 ### 6.2 Server
 
+- The server advertises an `accounts` capability; a daemon sends account data only to a server that
+  advertises it, so an older server never receives a method it cannot handle.
 - `DaemonConnect` gains an `Accounts` member, appended last so older servers keep binding.
-- A new `AccountsChanged` hub call carries the full snapshot on change, at most once per 30 seconds.
-- The server keeps the latest snapshot per daemon and account and serves it **only to the daemon's
-  owner**. Email and org name are personal data, and no other user needs them.
-- Requires a matching kcap-server change.
+- `AccountsChanged` carries the full snapshot, throttled to one call per 30 seconds with a trailing
+  send, so the last change in a burst — including a removal — always goes out. Each snapshot carries
+  the daemon's connection epoch; the server drops snapshots from a superseded connection.
+- The server persists the latest snapshot per host and account so an offline host still shows its
+  last state after a server restart, and serves it **only to the host's owner** — reads and
+  subscriptions alike. Email and org name are personal data.
+- Matching kcap-server change: storage, owner-scoped read and subscription for the desktop app, and
+  the capability.
 
 ### 6.3 Local app
 
-A new local-socket frame type carries the snapshot, appended to `FrameType` and advertised in
-`LocalControlCapabilities.Current` beside its handler. The app reads its own host over the socket
-and other hosts from the server, as it does for agents today.
+Two appended local-socket frame types, each with encode and decode in `FrameCodec` and a handler,
+advertised in `LocalControlCapabilities.Current` beside their handlers:
+
+- **AccountsSnapshot** — daemon to app, on subscribe and on change.
+- **AccountAction** — app to daemon: `add`, `remove`, `rename`, `rewire`, `refresh`, each with a
+  request id, the account id (or vendor + directory for `add`), and a reply carrying the per-step
+  wiring result.
+
+In the app, account actions enter the existing app-lifetime mutation lane as a new verb carrying the
+action and account id. Two actions on the same account never coalesce; actions on different accounts
+queue independently. Success is the next snapshot showing the expected state (account present,
+absent, renamed, or recording state after re-wire), never the reply alone. A daemon that does not
+advertise the frames gets no account UI; actions are disabled with "update kcap on this host".
 
 ### 6.4 Accounts screen
 
-- **Accounts** page with a host switcher.
-- Summary cards: accounts ready for a long run (every window under 90%), the next reset, and how many
-  need a fix (not signed in or not wired).
-- Rows grouped by vendor. Each row: label and email, plan badge, a 5-hour and a weekly bar with the
-  reset countdown, "+N per model" where applicable, reading age, wired and signed-in state, and a
-  menu with refresh, re-wire, rename and remove. "No reading yet" when none exists; a window whose
-  reset has passed shows as reset with unknown usage.
-- **Add account:** detected candidates first, then "Choose a directory". Adding wires the account
-  and, if it is not signed in, tells the user to run the vendor's sign-in with that directory
+- **Accounts** page with a host switcher. This host is editable; remote hosts are read-only and say
+  where to make changes.
+- Summary cards:
+  - **Ready for a long run:** accounts that are recording, signed in, not blocked, and have a reading
+    under an hour old in which every window is under 90%. Accounts with no reading count as unknown,
+    not ready.
+  - **Next reset:** the earliest reset across all windows.
+  - **Need a fix:** not signed in, Needs trust, Broken, or Not wired.
+- Rows grouped by vendor. Each row: label and email, plan badge, one bar per window labeled from its
+  actual length ("5h", "Week", or the minutes Codex reports), reset countdown, "+N per model" for
+  extra limit ids, reading age, recording and sign-in state, and on this host a menu with refresh,
+  re-wire, rename and remove.
+- **Add account** (this host only): detected candidates first, then "Choose a directory". Adding
+  wires the account and, if it is not signed in, shows the vendor's sign-in for that directory
   (`CLAUDE_CONFIG_DIR=<dir> claude`, then `/login`; `CODEX_HOME=<dir> codex login`). kcap never
   performs the sign-in itself.
 - **Colors:** bars are neutral until a threshold and then use `KcapWarning*`; a blocked account uses
@@ -225,34 +346,30 @@ and other hosts from the server, as it does for agents today.
 | Condition | Shown as |
 |---|---|
 | Vendor CLI not installed | Sign-in "unknown" |
-| Status command fails or reports signed out | "Needs sign-in" |
+| Identity refresh fails or reports signed out | "Needs sign-in" |
 | Reading file unreadable | Previous reading kept |
 | Host offline | Server's last snapshot, "host offline · last seen …" |
 | Account directory deleted | "Directory missing", with remove in the menu |
+| Daemon too old for account frames | Read-only, "update kcap on this host" |
 
-## 7. Testing
+### 6.6 Testing
 
-- **Status line wrapper:** reading written from stdin, including `rate_limits` absent and one window
-  only; original run with identical stdin, stdout and exit code passed through; no original prints
-  nothing; a reading write failure does not change output.
-- **Status line install:** install, adopt, restore round-trip `settings.json` exactly, including a
-  user edit between re-wires and the bar-only keys staying in place.
-- **Codex readings:** parsed from rollout fixtures — primary only, both windows, several `limit_id`s,
-  credits, `rate_limit_reached_type` set.
-- **Discovery:** a `TempDir` with Claude- and Codex-shaped directories, claude-swap profiles and
-  look-alike directories without vendor files.
-- **Multi-account wiring:** each directory gets plugin/hooks, MCP ownership tracked per account,
-  unwire removes only what we added.
-- **Daemon snapshot:** a reading change appears within the debounce; changes to the server are
-  throttled; a corrupt file keeps the previous reading; same-login Claude directories group.
-- **Local IPC:** the new frame type is advertised only with its handler.
-- **App:** headless view-model tests for thresholds, reading age, reset windows, host offline,
-  missing directory, and the summary cards.
+- **Daemon:** a registry or reading change appears in the snapshot within the debounce; trailing
+  throttle sends the last change of a burst; two daemons publish one host's accounts idempotently.
+- **Server contract:** old daemon / new server and new daemon / old server; another user's read and
+  subscription denied; disconnect with a pending update; removal propagation; server restart with an
+  offline host.
+- **Local IPC:** frames advertised only with handlers; action refused by an old daemon; queued actions
+  on one account do not coalesce; partial wiring failure surfaces per step.
+- **App:** headless view-model tests for window labels, thresholds, reading age, reset windows, the
+  ready predicate (no reading, stale, blocked, expired windows, per-model exhaustion), host offline,
+  missing directory, and remote read-only.
 
-## 8. Not doing
+## 7. Not doing
 
 - Reading, copying or brokering any vendor credential.
-- Polling a vendor usage endpoint.
+- Calling a vendor usage endpoint ourselves; vendor processes make their own calls.
 - Recording an account directory nobody listed.
+- Changing accounts on a remote host from the app.
 - Choosing an account at launch, per-agent config directories, or switching accounts on a limit —
   spec 2.
