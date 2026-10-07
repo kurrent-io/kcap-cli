@@ -12,7 +12,7 @@ Description:
   dispatch is argument-driven (no stdin payload) — see --pi / --opencode below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity]',
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--vibe]',
   which writes the appropriate hook configuration (or, for Pi/OpenCode/Antigravity,
   the plugin/hooks-block) for the vendor.
 
@@ -52,6 +52,12 @@ Options:
               kcap acts on the first PreInvocation of a conversation (spawns a
               watcher tailing its transcript_full.jsonl, vendor=antigravity) and
               synthesizes session-end on idle. Other events are no-ops.
+  --vibe      Dispatch a Mistral Vibe hook event. Self-routes on the payload's
+              hook_event_name (pre_tool/post_tool/post_agent). Vibe has no
+              session-start/-end event, so the first hook kcap sees for a session
+              spawns the watcher tailing its transcript_path (vendor=vibe) and
+              POSTs session-start; later hooks are no-ops. Always exits 0 with
+              empty stdout (a passthrough under Vibe's hook contract).
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

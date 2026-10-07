@@ -139,6 +139,16 @@ Options:
                       `install --pi` writes a small kcap-owned, marker-delimited
                       block (non-destructive — preserves your own instructions)
                       that nudges Pi to use the kcap tools for why/history questions.
+  --vibe              Target Mistral Vibe: merge kcap's hooks into the shared
+                      ~/.vibe/hooks.toml (honours $VIBE_HOME) for pre_tool/
+                      post_tool/post_agent, register the kcap MCP servers in
+                      ~/.vibe/config.toml, and install the agent skills. Writes the
+                      bare `kcap hook --vibe` command, so kcap must be on PATH. Vibe
+                      loads hooks at startup — restart any running `vibe` session.
+  --skip-vibe-mcp     With --vibe: skip registering the kcap MCP servers in
+                      ~/.vibe/config.toml (the [[mcp_servers]] tables).
+  --skip-vibe-skills  With --vibe: skip installing the kcap skills into
+                      ~/.agents/skills.
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -270,6 +280,7 @@ Examples:
   kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
   kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   kcap plugin install --antigravity         # Install Antigravity capture plugin (~/.gemini/config/plugins/kcap/)
+  kcap plugin install --vibe                # Install Mistral Vibe hooks (merge into ~/.vibe/hooks.toml) + MCP
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed
@@ -280,4 +291,5 @@ Examples:
   kcap plugin remove --kiro                 # Restore previous default agent, delete kcap.json
   kcap plugin remove --opencode             # Delete ~/.config/opencode/plugins/kcap.ts
   kcap plugin remove --antigravity          # Remove the kcap plugin from ~/.gemini/config/plugins/kcap/
+  kcap plugin remove --vibe                 # Remove kcap hooks + MCP from ~/.vibe/hooks.toml and config.toml
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

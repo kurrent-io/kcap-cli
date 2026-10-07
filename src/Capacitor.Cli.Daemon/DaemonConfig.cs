@@ -412,6 +412,11 @@ public class DaemonConfig {
     /// whichever binary this names. Overridable via <c>KCAP_GEMINI_PATH</c>.</summary>
     public string GeminiPath { get; set; } = Core.Harness.Gemini.GeminiHarness.CliBinary;
 
+    /// <summary>Path or bare command for the Mistral Vibe CLI. Overridable via <c>KCAP_VIBE_PATH</c>.
+    /// Vibe is a recording-only harness — the daemon never launches it — so this exists only to give
+    /// <c>kcap config</c> a slot for the binary path; it is not read by any launcher.</summary>
+    public string VibePath { get; set; } = Core.Harness.MistralVibe.MistralVibeHarness.CliBinary;
+
     /// <summary>
     /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When
     /// <see langword="false"/> (the default), the ACP layers (<c>AcpEventTranslator</c>,
