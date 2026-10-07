@@ -55,7 +55,8 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// Test-only seam: the current lease's read, or the last one started.
     internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
 
-    public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, byte[]?>? readWorkingCopy = null) {
+    public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, byte[]?>? readWorkingCopy = null,
+            IUrlOpener? opener = null) {
         _source = source;
         _activity = activity;
         _time = time;

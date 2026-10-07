@@ -232,6 +232,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ? $"Refresh this work · {RefreshShortcut.Label} or {fromTerminal}"
             : $"Refresh this work · {RefreshShortcut.Label}";
 
+    /// The Artefacts tab's model, when this pane's workspace has one; the pane shows its summary
+    /// row and switches its session beside the plan's.
+    public ArtefactsTabViewModel? Artefacts { get; }
+    public ReactiveCommand<Unit, Unit> OpenArtefactsCommand { get; }
+
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     /// The item's own page in the web UI; enabled once a read has named the item.
     public ReactiveCommand<Unit, Unit> OpenWorkItemCommand { get; }
@@ -243,9 +248,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionSubagents subagents, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
-            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null) {
+            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
+            ArtefactsTabViewModel? artefacts = null) {
         _source = source;
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
+        Artefacts = artefacts;
+        OpenArtefactsCommand = ReactiveCommand.Create(() => Artefacts?.RequestOpen());
+        _disposables.Add(OpenArtefactsCommand);
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
@@ -264,6 +273,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 ResolveBranch();
                 PullRequests?.Refresh();
                 Plan.Refresh();
+                Artefacts?.Refresh();
                 if (_current is null) return;
                 IsRefreshing = true;
                 if (_current.IsReading) _current.RefreshPending = true;
@@ -331,6 +341,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Phase = WorkContextPhase.Loading;
         StartRead(_current);
         Plan.SwitchSession(id);
+        Artefacts?.SwitchSession(id, WorktreePath ?? RepositoryPath);
     }
 
     void StartRead(ReadLease lease) {
@@ -372,12 +383,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void OnTick() {
         if (_tornDown) return;
         Plan.Refresh();
+        if (Artefacts is { IsShown: true } artefacts) artefacts.Refresh();
         if (_current is { IsReading: false } lease) StartRead(lease);
     }
 
     void OnSignInCompleted() {
         if (_tornDown) return;
         Plan.Refresh();
+        Artefacts?.Refresh();
         if (_current is not { } lease) return;
         if (lease.IsReading) lease.RefreshPending = true;
         else StartRead(lease);

@@ -2,7 +2,9 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -27,10 +29,76 @@ public class WorkspaceViewModelTests {
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
-            SessionAccessService? access = null) =>
-        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+            SessionAccessService? access = null, IPlanArtifactSource? planArtifacts = null, IUrlOpener? opener = null) =>
+        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, opener ?? new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            new NoAttachmentUploader(), access: access);
+            new NoAttachmentUploader(), access: access, planArtifacts: planArtifacts);
+
+    const string Session = "0123456789abcdef0123456789abcdef";
+
+    static PlanArtifactDto Doc(string path, string kind = "design") => new() {
+        ArtifactId = path, Kind = kind, Title = path, Source = "declared", SessionId = Session, Path = path, Content = "# x",
+        ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+        DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+    };
+
+    static PlanArtifactsRead Ready(params PlanArtifactDto[] docs) =>
+        new(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto { Artifacts = [.. docs] });
+
+    /// The tab exists only while the session has a document, like Pull request with its changes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_tab_appears_with_the_first_document_and_falls_back_to_chat_when_none_remain() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.ShowsSurfaceSwitch).IsTrue();
+
+            await vm.ShowArtefactsCommand.Execute();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+            await Assert.That(vm.Artefacts.IsShown).IsTrue();
+
+            source.Enqueue(Ready());
+            vm.Artefacts.Refresh();
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await Assert.That(vm.Artefacts.IsShown).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A card's Open: a document goes to the tab, a page to the browser.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_opens_a_document_in_the_tab_and_a_page_in_the_browser() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var opener = new RecordingOpener();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), opener), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source, opener: opener);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared design doc", "x-design.md", "docs/x-design.md", null, "/repo/x/docs/x-design.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Artefacts);
+            await Assert.That(vm.Artefacts.Selected!.Path).IsEqualTo("docs/x-design.md");
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Page, "Published page", "Brief", "v1 · Org", "https://x/artefacts/1", null));
+            await Assert.That(opener.Opened).IsEquivalentTo(new[] { "https://x/artefacts/1" });
+            await vm.TeardownAsync();
+        });
+    }
 
     static FakeServerLane ConnectedLane() {
         var lane = new FakeServerLane();

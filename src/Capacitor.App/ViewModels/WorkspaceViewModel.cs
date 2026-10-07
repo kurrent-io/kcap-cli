@@ -10,7 +10,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-public enum WorkspaceTab { Chat, Terminal, PullRequest }
+public enum WorkspaceTab { Chat, Terminal, PullRequest, Artefacts }
 
 /// Owns the persistent Chat, Terminal and PR surfaces for one agent. Presence is
 /// replayed as accumulated state so each subscriber receives an already-cached agent.
@@ -63,6 +63,15 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     /// subscription per workspace, not two.
     public WorkContextViewModel WorkContext { get; }
     public PullRequestContextViewModel? PullRequests { get; }
+    public ArtefactsTabViewModel Artefacts { get; }
+    bool _showsArtefactsTab;
+    public bool ShowsArtefactsTab {
+        get => _showsArtefactsTab;
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsArtefactsTab, value);
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
+        }
+    }
     bool _showsPullRequestTab;
     public bool ShowsPullRequestTab {
         get => _showsPullRequestTab;
@@ -71,7 +80,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
         }
     }
-    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab;
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab || ShowsArtefactsTab;
 
     WorkspaceTab _activeTab = WorkspaceTab.Chat;
     public WorkspaceTab ActiveTab {
@@ -83,6 +92,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(IsTerminalActive));
             this.RaisePropertyChanged(nameof(IsPullRequestActive));
             this.RaisePropertyChanged(nameof(ShowsTerminalBanners));
+            this.RaisePropertyChanged(nameof(IsArtefactsActive));
+            Artefacts.IsShown = IsArtefactsActive;
             PullRequests?.SetReaderVisible(value == WorkspaceTab.PullRequest);
             Terminal.SurfaceShown = IsTerminalActive;
         }
@@ -93,17 +104,28 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public bool ShowsChat => IsChatActive && Chat is not null;
     public bool IsTerminalActive => ActiveTab == WorkspaceTab.Terminal;
     public bool IsPullRequestActive => ActiveTab == WorkspaceTab.PullRequest;
+    public bool IsArtefactsActive => ActiveTab == WorkspaceTab.Artefacts;
     public bool ShowsTerminalBanners => IsTerminalActive;
 
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowPullRequestCommand { get; }
+    public ReactiveCommand<Unit, Unit> ShowArtefactsCommand { get; }
+
+    void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = WorkspaceTab.Artefacts; }
+
+    /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
+    internal void OpenCard(ToolCard card) {
+        if (card.DocumentPath is { } path && Artefacts.OpenDocument(path)) return;
+        if (card.Url is { } url) LinkPolicy.Open(_opener, url);
+    }
 
     public ReactiveCommand<Unit, Unit> OpenInWebCommand { get; }
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
 
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _lease = new();
+    readonly IUrlOpener _opener;
 
     // Read by StopCommand at click time -- the DTO's own Kind decides protected-ness
     // (AgentActionService.IsProtectedKind), so Stop must see whatever the LATEST resolved dto
@@ -116,8 +138,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
-            IPlanSource? plans = null) {
+            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null) {
         AgentId = agentId;
+        _opener = opener;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
 
@@ -130,7 +153,14 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
         var subagents = new SessionSubagents(time);
         var planActivity = new PlanActivity();
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity);
+        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
+        Artefacts.OpenRequested += ShowArtefacts;
+        _disposables.Add(Disposable.Create(() => Artefacts.OpenRequested -= ShowArtefacts));
+        Artefacts.WhenAnyValue(a => a.HasAny).Subscribe(has => {
+            ShowsArtefactsTab = has;
+            if (!has && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
+        }).DisposeWith(_disposables);
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
@@ -213,7 +243,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard);
             })
             .DisposeWith(_disposables);
 
@@ -223,6 +253,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _disposables.Add(ShowChatCommand);
         _disposables.Add(ShowTerminalCommand);
         _disposables.Add(ShowPullRequestCommand);
+        ShowArtefactsCommand = ReactiveCommand.Create(ShowArtefacts);
+        _disposables.Add(ShowArtefactsCommand);
 
         OpenInWebCommand = ReactiveCommand.Create(() => actions.OpenInWeb(agentId));
         _disposables.Add(OpenInWebCommand);
@@ -274,6 +306,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         if (PullRequests is { } pullRequests) await pullRequests.TeardownAsync();
         if (Chat is { } chat) await chat.TeardownAsync();
         await WorkContext.TeardownAsync();
+        await Artefacts.TeardownAsync();
         await Terminal.TeardownAsync();
     }
 }
