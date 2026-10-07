@@ -43,9 +43,9 @@
                VerticalAlignment="Center" ClipToBounds="False"
                Classes.pulsing="{Binding Pulses}" views:PulseClock.IsActive="{Binding Pulses}">
             <Ellipse Stretch="Uniform" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5" Margin="1"
-                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsPulse}" />
+                     HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsRing}" />
             <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
-                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsPulse}" />
+                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsRing}" />
             <Path Stretch="Uniform" Data="{StaticResource IdleClockIcon}"
                   Fill="{StaticResource KcapWarningBrush}" IsVisible="{Binding ShowsClock}"
                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
@@ -56,9 +56,10 @@
             <Path Stretch="Uniform" Stroke="{StaticResource KcapDangerBrush}"
                   StrokeThickness="1.6" StrokeLineCap="Round" Data="M3,3 L9,9 M9,3 L3,9"
                   IsVisible="{Binding ShowsCross}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
-            <Path Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}"
+            <!-- No Stretch: a zero-height line scales by min(sx, 0) and collapses to a dot. -->
+            <Path Stroke="{StaticResource KcapMutedBrush}"
                   StrokeThickness="1.6" StrokeLineCap="Round" Data="M2,6 H10"
-                  IsVisible="{Binding ShowsDash}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
+                  IsVisible="{Binding ShowsDash}" />
         </Panel>
         <TextBlock x:Name="StatusWord" Classes="statusWord" Text="{Binding Label}"
                    Classes.inflight="{Binding IsInFlight}" Classes.warning="{Binding IsWarning}"

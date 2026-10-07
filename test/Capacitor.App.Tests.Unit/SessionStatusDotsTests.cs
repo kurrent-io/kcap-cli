@@ -66,6 +66,8 @@ public class SessionStatusDotsTests {
         var done = SessionStatusDots.ForRow(Local("a", status: "Completed"), pending: false);
         await Assert.That(done.Kind).IsEqualTo(AgentStatusKind.Done);
         await Assert.That(done.Label).IsEqualTo("Done");
+        await Assert.That(done.ShowsDash).IsTrue();
+        await Assert.That(done.ShowsRing).IsFalse();
     }
 
     [Test]

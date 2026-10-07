@@ -10,13 +10,15 @@ public sealed record AgentStatusPresentation(
     public string AccessibleName => Tip.Length == 0 ? "" : Tip.Split('\n')[0];
 
     public bool HasLabel => Label.Length > 0;
-    public bool IsInFlight => Kind is AgentStatusKind.Working or AgentStatusKind.Starting;
+    /// The daemon says Running but the turn is unknown (a remote row): live, yet not claimed as Working.
+    public bool IsRunningUnknownTurn => Kind == AgentStatusKind.Other && Label == "Running";
+    public bool IsInFlight => Kind is AgentStatusKind.Working or AgentStatusKind.Starting || IsRunningUnknownTurn;
     public bool IsWarning => Kind is AgentStatusKind.Idle or AgentStatusKind.NeedsYou or AgentStatusKind.Answer;
     public bool IsDanger => Kind == AgentStatusKind.Failed;
-    public bool ShowsPulse => Kind is AgentStatusKind.Working or AgentStatusKind.Starting;
+    public bool ShowsRing => IsInFlight;
     public bool ShowsClock => Kind == AgentStatusKind.Idle;
     public bool ShowsAsk => Kind == AgentStatusKind.Answer;
     public bool ShowsBang => Kind == AgentStatusKind.NeedsYou;
     public bool ShowsCross => Kind == AgentStatusKind.Failed;
-    public bool ShowsDash => Kind is AgentStatusKind.Done or AgentStatusKind.Other;
+    public bool ShowsDash => Kind is AgentStatusKind.Done or AgentStatusKind.Other && !IsRunningUnknownTurn;
 }
