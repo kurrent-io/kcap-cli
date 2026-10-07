@@ -1145,6 +1145,7 @@ class McpFlowsServer(
         var targetKind   = GetRequiredArg(arguments, "target_kind");
         var targetRef    = GetRequiredArg(arguments, "target_ref");
         var targetTitle  = GetRequiredArg(arguments, "target_title");
+        var sessionTitle = McpToolArguments.RequireBoundedString(arguments, "session_title", StartAgentTool.MaxTitleLength);
         var context      = GetRequiredArg(arguments, "context");
         var instructions = arguments?["instructions"]?.GetValue<string>();
         var mode         = arguments?["mode"]?.GetValue<string>();
@@ -1210,7 +1211,8 @@ class McpFlowsServer(
             // override is 3 (v3), every other catalog start is 2 (v2), a dynamic start sends none. The
             // §2.7 B3 primary attempt overrides this to 4 for the /v4 route (see the routing below).
             ClientFlowProtocolVersion: model is not null ? 3 : definitionYaml is null ? 2 : null,
-            Model:                model
+            Model:                model,
+            SessionTitle:         sessionTitle
         );
 
         // §2.7 B3: a participant_parked-capable client routes every non-dynamic, vendor-bearing
@@ -2410,6 +2412,10 @@ class McpFlowsServer(
     static string HarnessTimeoutGuidance(string statusTool) =>
         $"This call blocks for minutes while the round runs. If your harness aborts it with a tool timeout, the flow is still running server-side: do not start it again and do not investigate — call {statusTool} with wait: true (flow_run_id may be omitted: it resolves the open flow this session started, or on a harness without a session identity the open flow started from this workspace). ";
 
+    static string SessionTitleDescription(string whose, string example) =>
+        $"Required. The title of the {whose} session: a short phrase naming this particular piece of work, specific enough to tell it apart from the other sessions in the repository, e.g. {example}. " +
+        $"It names the session from its first moment, in place of the flow's generic instructions. At most {StartAgentTool.MaxTitleLength} characters.";
+
     internal static McpTool[] BuildToolsList() => [
         new(
             "start_review_flow",
@@ -2427,13 +2433,14 @@ class McpFlowsServer(
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
+                    ["session_title"] = new("string", SessionTitleDescription("reviewer's", "'Review PR #1302: deliver flow results through a server restart'")),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of THIS SESSION's project directory, not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your checkout was NOT borrowed, so inline anything uncommitted that matters."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
                     ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it reviews a worktree mirrored from THIS SESSION's project directory — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
                     ["vendor"]       = new("string", "Optional reviewer vendor for the reserved alias, independent of the driver harness. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. The selected vendor must be installed and certified unattended on an eligible daemon; there is no silent fallback. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex')."),
                     ["model"]        = new("string", "Optional reviewer model override for this review. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
-                ["kind", "target_kind", "target_ref", "target_title", "context"]
+                ["kind", "target_kind", "target_ref", "target_title", "session_title", "context"]
             ),
             McpToolAnnotations.Launch
         ),
@@ -2500,13 +2507,14 @@ class McpFlowsServer(
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
                     ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
+                    ["session_title"]  = new("string", SessionTitleDescription("participant agent's", "'Test the hook spool drain against a 401'")),
                     ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of THIS SESSION's project directory, not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs."),
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
                     ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it works in a worktree mirrored from THIS SESSION's project directory — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
                     ["vendor"]         = new("string", "Optional reviewer vendor. Reserved spec-review/code-review aliases use it independently of the driver. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. Custom single-participant catalog definitions accept an explicit override. Rejected for multi-participant and definition_yaml flows. The selected vendor must be certified unattended on an eligible daemon; no silent fallback. Pass a lowercase canonical token."),
                     ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
-                ["target_kind", "target_ref", "target_title", "context"]
+                ["target_kind", "target_ref", "target_title", "session_title", "context"]
             ),
             McpToolAnnotations.Launch
         ),
@@ -2619,7 +2627,9 @@ record StartReviewFlowDto(
     // route (see StartFlowAsync). Omitted (null via WhenWritingNull) keeps a no-model start
     // byte-identical to the v2 wire on any server version. A model requires a non-null Vendor
     // (StartFlowAsync rejects the pairing locally) and is invalid for dynamic (definition_yaml) flows.
-    [property: JsonPropertyName("model")]                  string? Model = null
+    [property: JsonPropertyName("model")]                  string? Model = null,
+    // A server that predates participant session titles skips the member and titles the session from its prompt.
+    [property: JsonPropertyName("session_title")]          string? SessionTitle = null
 );
 
 /// <summary>

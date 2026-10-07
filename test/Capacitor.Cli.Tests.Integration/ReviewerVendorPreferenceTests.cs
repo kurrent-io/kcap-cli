@@ -125,6 +125,7 @@ public class ReviewerVendorPreferenceTests : IDisposable {
                 ["target_kind"]  = "pr",
                 ["target_ref"]   = "123",
                 ["target_title"] = "some PR",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "some context"
             }
         }

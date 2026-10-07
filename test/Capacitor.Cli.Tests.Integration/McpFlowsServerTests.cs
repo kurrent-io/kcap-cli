@@ -189,6 +189,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]  = "spec",
                 ["target_ref"]   = "docs/feature.md",
                 ["target_title"] = "Feature spec",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "Review."
             };
             await SendRequest(proc, ToolsCallRequest(3, "start_review_flow", args));
@@ -346,8 +347,8 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 byName["start_review_flow"],
-                properties: ["kind", "target_kind", "target_ref", "target_title", "context", "instructions", "mode", "vendor", "model"],
-                required:   ["kind", "target_kind", "target_ref", "target_title", "context"]
+                properties: ["kind", "target_kind", "target_ref", "target_title", "session_title", "context", "instructions", "mode", "vendor", "model"],
+                required:   ["kind", "target_kind", "target_ref", "target_title", "session_title", "context"]
             );
 
             await AssertSchema(
@@ -420,6 +421,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]   = "pr",
                 ["target_ref"]    = "https://github.com/x/y/pull/1",
                 ["target_title"]  = "My PR",
+                ["session_title"] = "Review the thing",
                 ["context"]       = "please look at this"
             };
 
@@ -841,6 +843,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]  = "spec",
                 ["target_ref"]   = "docs/feature.md",
                 ["target_title"] = "Feature spec",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "Please review this spec for completeness."
             };
 
@@ -936,6 +939,7 @@ public class McpFlowsServerTests : IDisposable {
                 ["target_kind"]  = "pr",
                 ["target_ref"]   = "42",
                 ["target_title"] = "Some PR",
+                ["session_title"] = "Review the thing",
                 ["context"]      = "Review this."
             };
 
@@ -1151,7 +1155,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
-                ["target_title"]="t", ["context"]="please review"
+                ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="please review"
             };
             var response = await SendRequest(proc, ToolsCallRequest(30, "start_review_flow", args), TimeSpan.FromSeconds(30));
             var result = response["result"]?.AsObject();
@@ -1191,7 +1195,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
-                ["target_title"]="t", ["context"]="please review"
+                ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="please review"
             };
             // This must resolve quickly (run-terminal path exits on first "failed" GET),
             // well within 15 s (compared to the 8-min cap if we polled indefinitely).
@@ -1280,7 +1284,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"] = "spec-review", ["target_kind"] = "spec", ["target_ref"] = "r",
-                ["target_title"] = "t", ["context"] = "please review"
+                ["target_title"] = "t", ["session_title"] = "Review the thing", ["context"] = "please review"
             };
             // Must complete well before 8 min (expect ~20-30s for 6 GETs at 3s poll + budget logic).
             var response = await SendRequest(proc, ToolsCallRequest(41, "start_review_flow", args), TimeSpan.FromSeconds(60));
@@ -1327,7 +1331,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"] = "spec-review", ["target_kind"] = "spec", ["target_ref"] = "r",
-                ["target_title"] = "t", ["context"] = "please review"
+                ["target_title"] = "t", ["session_title"] = "Review the thing", ["context"] = "please review"
             };
             // Must complete almost immediately (no retry, no delay loop for 4xx).
             var response = await SendRequest(proc, ToolsCallRequest(42, "start_review_flow", args), TimeSpan.FromSeconds(15));
@@ -1373,7 +1377,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"] = "spec-review", ["target_kind"] = "spec", ["target_ref"] = "r",
-                ["target_title"] = "t", ["context"] = "please review"
+                ["target_title"] = "t", ["session_title"] = "Review the thing", ["context"] = "please review"
             };
             // NotFoundGrace = 10s, PollInterval = 3s → should fail within ~15s (grace + one more poll).
             // Allow 30s to be safe.
@@ -1438,7 +1442,7 @@ public class McpFlowsServerTests : IDisposable {
         try {
             var args = new JsonObject {
                 ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r",
-                ["target_title"]="t", ["context"]="please review"
+                ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="please review"
             };
             var response = await SendRequest(proc, ToolsCallRequest(20, "start_review_flow", args), TimeSpan.FromSeconds(30));
             var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
@@ -1462,7 +1466,7 @@ public class McpFlowsServerTests : IDisposable {
 
         using var proc = SpawnMcpServer();
         try {
-            var args = new JsonObject { ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r", ["target_title"]="t", ["context"]="c" };
+            var args = new JsonObject { ["kind"]="spec-review", ["target_kind"]="spec", ["target_ref"]="r", ["target_title"]="t", ["session_title"]="Review the thing", ["context"]="c" };
             var response = await SendRequest(proc, ToolsCallRequest(21, "start_review_flow", args));
             var text = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
             await Assert.That(text!.Contains("## done")).IsTrue();
@@ -1560,6 +1564,7 @@ public class McpFlowsServerTests : IDisposable {
         ["target_kind"]  = "pr",
         ["target_ref"]   = "https://github.com/x/y/pull/1",
         ["target_title"] = "My PR",
+        ["session_title"] = "Review the thing",
         ["context"]      = "please look at this"
     };
 
@@ -1782,8 +1787,8 @@ public class McpFlowsServerTests : IDisposable {
 
             await AssertSchema(
                 startFlow,
-                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "context", "instructions", "mode", "vendor", "model"],
-                required:   ["target_kind", "target_ref", "target_title", "context"]
+                properties: ["definition_id", "definition_yaml", "target_kind", "target_ref", "target_title", "session_title", "context", "instructions", "mode", "vendor", "model"],
+                required:   ["target_kind", "target_ref", "target_title", "session_title", "context"]
             );
 
             var props    = startFlow["inputSchema"]!["properties"]!.AsObject();
@@ -1825,6 +1830,7 @@ public class McpFlowsServerTests : IDisposable {
             var args = new JsonObject {
                 ["cwd"]       = worktree.Path,
                 ["prompt"]    = "Fix the retry.",
+                ["title"]     = "Fix the retry",
                 ["work_item"] = "none"
             };
 

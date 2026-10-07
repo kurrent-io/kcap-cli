@@ -173,7 +173,7 @@ The server enforces per-run budgets; watch for these in tool error responses:
 Single-participant definitions start eagerly — round 1 runs as part of `start_flow`:
 
 ```
-start_flow(definition_id, target_kind, target_ref, target_title, context)
+start_flow(definition_id, target_kind, target_ref, target_title, session_title, context)
   → participant returns a result: kind findings (with the result text) | kind clean
 
 if clean:
@@ -192,7 +192,7 @@ if findings:
 Multi-participant definitions start round-less — you address each role yourself, and the run is clean only in aggregate:
 
 ```
-start_flow(definition_id, target_kind, target_ref, target_title, context)
+start_flow(definition_id, target_kind, target_ref, target_title, session_title, context)
   → no round yet — roles have not launched
 
 send_to_participant(flow_run_id, participant="reviewer", message=…)
@@ -218,7 +218,7 @@ report completion to user
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
 | `list_flow_definitions` | — | — | Before `start_flow`, whenever the user has not named a definition or named one you have not seen listed. Read-only: returns each runnable definition's id, version, description, whether it is single- or multi-participant, and its participants' role, authored vendor and model. A `server_catching_up` error is retryable — do not read it as an empty catalog. |
-| `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (reserved aliases only — explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (reserved aliases only — explicit reviewer model override; REQUIRES `vendor`, rejected on dynamic/multi-participant starts), `instructions`, `mode` (`context-only` — optional; by default the participant's worktree is mirrored from THIS SESSION's project directory, not from the directory you are working in. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
+| `start_flow` | Exactly one of `definition_id` (catalog id, e.g. `spec-review`, `code-review`, or a custom catalog id) or `definition_yaml` (inline dynamic definition — see "Composing a dynamic flow"); plus `target_kind` (what is being worked on: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title), `session_title` (the participant session's title: a short phrase naming this piece of work, specific enough to tell it apart from other sessions — it replaces the definition's generic opening instruction as the name), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (reserved aliases only — explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (reserved aliases only — explicit reviewer model override; REQUIRES `vendor`, rejected on dynamic/multi-participant starts), `instructions`, `mode` (`context-only` — optional; by default the participant's worktree is mirrored from THIS SESSION's project directory, not from the directory you are working in. Pass `context-only` to opt out and treat the submitted context as authoritative) | Once, at the start of a flow task. |
 | `send_to_participant` | `flow_run_id`, `participant` (role name declared in the flow definition's `participants` map; single-participant definitions use `reviewer` — an unknown role is rejected, naming the valid ones), `message` | `instructions`, `async` (defaults to `true`) | After addressing a non-clean result for that role, or to launch a role for the first time. Pass the same `flow_run_id`, the role's name, and the updated message. |
 | `get_flow_status` | — | `flow_run_id` (omit to read the newest open flow this session started, or on a harness without a session identity the newest one started from this workspace; several open flows are listed instead), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow run (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |
 | `close_flow` | `flow_run_id` | — | Only after the definition's clean signal — or when abandoning the task early; the run otherwise stays open until closed. |
@@ -226,13 +226,14 @@ report completion to user
 ## Example (custom definition)
 
 ```
-# Step 1 — start (all five required args required; the participant sees a mirror of THIS SESSION's
+# Step 1 — start (all six args required; the participant sees a mirror of THIS SESSION's
 # project directory, not of the directory you are working in — pass mode="context-only" to opt out)
 start_flow(
   definition_id="code-review",
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
+  session_title="Review the null check on user input",
   context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"
@@ -261,6 +262,7 @@ start_flow(
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
+  session_title="Review and test the null check on user input",
   context="Review the diff on this branch and write/run tests for the new code path."
 )
 # → returns flow_run_id, e.g. "flow_xyz789"; no round in the response
