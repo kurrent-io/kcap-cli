@@ -40,6 +40,10 @@ public class ChatTabViewModelTests {
     const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
     const string PlanCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_P","name":"mcp__plugin_kcap_kcap-plans__update_plan_task","input":{"ordinal":1,"status":"completed"}}]}}""";
     const string PlanResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_P","content":"{}"}]}}""";
+    const string PublishCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_pub","name":"mcp__plugin_kcap_kcap-artefacts__publish_artefact","input":{"title":"Retention brief","html":"<p>x</p>","visibility":"org"}}]}}""";
+    const string PublishResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_pub","content":"{\"artefact\":{\"artefact_id\":\"01ec\",\"title\":\"Retention brief\",\"owner_user_id\":\"u1\",\"visibility\":\"org\",\"latest_version\":1,\"updated_at\":\"2026-10-07T10:00:00Z\",\"is_owner\":true,\"url\":\"https://kurrent.kcap.ai/artefacts/01ec\"}}"}]}}""";
+    const string WorkItemCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_wi","name":"mcp__plugin_kcap_kcap-workitems__declare_work_item","input":{"issue_key":"AI-3084"}}]}}""";
+    const string LinearCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_lin","name":"mcp__plugin_linear_linear__save_issue","input":{"title":"Add tests"}}]}}""";
     const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
     const string AgentLaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
     const string AgentFinishLine = """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}}""";
@@ -62,12 +66,13 @@ public class ChatTabViewModelTests {
         public ChatTabViewModel Chat { get; }
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
-                       ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null) {
+                       ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
+                       Action<ToolCard>? openCard = null) {
             seed?.Invoke(Permissions);
             Subagents = new SessionSubagents(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Subagents, unavailableNote, planActivity: Plan, openCard: openCard);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -87,7 +92,8 @@ public class ChatTabViewModelTests {
         }
     }
 
-    static Harness Claude(Action<FakePermissionService>? seed = null) => new(TranscriptChat.For("claude"), seed);
+    static Harness Claude(Action<FakePermissionService>? seed = null, Action<ToolCard>? openCard = null) =>
+        new(TranscriptChat.For("claude"), seed, openCard: openCard);
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -325,6 +331,71 @@ public class ChatTabViewModelTests {
             File.AppendAllText(other, ReadCallLine + "\n");
             await h.TickAsync();
             await Assert.That(Group(h.Chat, 0).Calls).Count().IsEqualTo(2);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_kcap_call_reads_as_a_labelled_row_and_a_publish_becomes_a_card_when_its_result_lands() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [WorkItemCallLine, PublishCallLine]);
+            await h.PushAsync(Dto(path));
+
+            var group = Group(h.Chat, 0);
+            var work = group.Calls[0];
+            await Assert.That(work.Label).IsEqualTo("Attached work item");
+            await Assert.That(work.Detail).IsEqualTo("AI-3084");
+            await Assert.That(work.Category).IsEqualTo(ToolCategory.Work);
+            var publish = group.Calls[1];
+            await Assert.That(publish.Label).IsEqualTo("Published page");
+            await Assert.That(publish.Detail).IsEqualTo("Retention brief");
+            await Assert.That(publish.HasCard).IsFalse();
+
+            File.AppendAllText(path, PublishResultLine + "\n");
+            await h.TickAsync();
+
+            await Assert.That(publish.Outcome).IsEqualTo(ToolOutcome.Done);
+            await Assert.That(publish.HasCard).IsTrue();
+            await Assert.That(publish.Card!.Meta).IsEqualTo("v1 · Org");
+            await Assert.That(publish.CanOpenCard).IsTrue();
+            await publish.OpenCardCommand!.Execute();
+            await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "https://kurrent.kcap.ai/artefacts/01ec" });
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_foreign_mcp_call_reads_as_server_and_tool_with_its_first_argument() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [LinearCallLine])));
+
+            var call = Group(h.Chat, 0).Calls[0];
+            await Assert.That(call.Label).IsEqualTo("Linear · save issue");
+            await Assert.That(call.Detail).IsEqualTo("Add tests");
+            await Assert.That(call.Category).IsEqualTo(ToolCategory.Other);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A page card follows the opener the workspace hands in when there is one, so slice 2 can
+    /// route a document into the tab without the chat knowing about tabs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_injected_card_opener_takes_precedence_over_the_browser() {
+        await RunOnUiAsync(async () => {
+            ToolCard? opened = null;
+            var h = Claude(openCard: card => opened = card);
+            var path = Tmp.CreateFile("t.jsonl", [PublishCallLine, PublishResultLine]);
+            await h.PushAsync(Dto(path));
+
+            var publish = Group(h.Chat, 0).Calls[0];
+            await publish.OpenCardCommand!.Execute();
+            await Assert.That(opened?.Url).IsEqualTo("https://kurrent.kcap.ai/artefacts/01ec");
+            await Assert.That(h.Opener.Opened).IsEmpty();
             await h.TeardownAsync();
         });
     }
