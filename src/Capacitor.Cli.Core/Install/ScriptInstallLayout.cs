@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Capacitor.Cli.Core.Install;
 
 /// <summary>
@@ -21,6 +23,16 @@ public sealed record ScriptInstallLayout(string Root) {
 
     /// <summary>The path a file under <c>current/bin</c> is reached by, whichever version is active.</summary>
     public string CurrentBin(string fileName) => Path.Combine(Current, "bin", fileName);
+
+    /// <summary>The release channel the marker records, or null when it is missing or unreadable.</summary>
+    public string? RecordedChannel() {
+        try {
+            using var doc = JsonDocument.Parse(File.ReadAllText(Marker));
+            return doc.RootElement.Str("channel");
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) {
+            return null;
+        }
+    }
 
     static readonly Lazy<ScriptInstallLayout?> Running = new(() => FromBinary(Environment.ProcessPath, File.Exists));
 

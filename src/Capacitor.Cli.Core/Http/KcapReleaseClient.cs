@@ -13,6 +13,10 @@ public sealed class KcapReleaseClient(HttpClient http, TimeProvider time) : IRel
 
     static readonly TimeSpan ManifestTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>Covers the body as well as the headers: a transfer that stalls after them would
+    /// otherwise hang <c>kcap update</c>, since the client's own timeout ends at the headers.</summary>
+    public TimeSpan DownloadTimeout { get; init; } = TimeSpan.FromMinutes(10);
+
     public string BaseUrl { get; init; } =
         (Environment.GetEnvironmentVariable(BaseUrlEnvVar) is { Length: > 0 } b ? b : "https://www.kurrent.io").TrimEnd('/');
 
@@ -53,12 +57,15 @@ public sealed class KcapReleaseClient(HttpClient http, TimeProvider time) : IRel
 
     /// <summary>Streams <paramref name="url"/> into <paramref name="destination"/>. Throws on any failure.</summary>
     public async Task DownloadAsync(string url, string destination, CancellationToken ct) {
-        using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var deadline = new CancellationTokenSource(DownloadTimeout, time);
+        using var cts      = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
         if (!resp.IsSuccessStatusCode)
             throw new HttpRequestException($"{url} answered {(int)resp.StatusCode}.");
 
-        await using var body = await resp.Content.ReadAsStreamAsync(ct);
+        await using var body = await resp.Content.ReadAsStreamAsync(cts.Token);
         await using var file = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        await body.CopyToAsync(file, ct);
+        await body.CopyToAsync(file, cts.Token);
     }
 }

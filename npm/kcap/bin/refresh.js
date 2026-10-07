@@ -19,16 +19,22 @@ const REFRESH_TIMEOUT_MS = 15 * 60_000;
 
 // Runs `kcap refresh` through the given launcher (an absolute path to kcap.js), so the NEW
 // launcher and the NEW binary run it after an upgrade. Never throws and never fails the caller:
-// a failed refresh must never break `npm install` or report `kcap update` as failed.
-function runRefreshes(launcherPath) {
+// a failed refresh must never break `npm install` or report `kcap update` as failed. Its stderr
+// (which steps failed, a plugin patch that could not be written) is passed on through `warn`.
+function runRefreshes(launcherPath, warn = console.warn) {
   try {
-    spawnSync(process.execPath, [launcherPath, "refresh"], {
-      stdio: "ignore",
+    const result = spawnSync(process.execPath, [launcherPath, "refresh"], {
+      stdio: ["ignore", "ignore", "pipe"],
+      encoding: "utf8",
       env: process.env,
       timeout: REFRESH_TIMEOUT_MS,
       killSignal: "SIGKILL",
       windowsHide: true,
     });
+    const stderr = (result.stderr || "").trim();
+    if (stderr) warn(stderr);
+    if (result.status !== 0)
+      warn("kcap: some agent integrations were not refreshed; run `kcap refresh` to retry.");
   } catch {
     // Never fail the caller.
   }

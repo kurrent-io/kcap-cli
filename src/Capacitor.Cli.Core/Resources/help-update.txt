@@ -16,6 +16,8 @@ goes into its own versions/<version> directory and the `current` link is
 switched to it, so running processes keep the files they started from.
 The new binary then runs `kcap refresh`. A daemon service installed from a
 script install is moved onto the `current` path, so it follows updates.
+A daemon service installed under npm keeps running the npm binary after a
+switch to the script install: run `kcap daemon service install` again.
 
 For other installs (e.g. Homebrew), prints the command to run instead.
 

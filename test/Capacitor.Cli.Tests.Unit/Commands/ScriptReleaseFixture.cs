@@ -28,25 +28,51 @@ sealed class ScriptReleaseFixture : IDisposable {
         Directory.CreateSymbolicLink(Layout.Current, $"versions/{installedVersion}");
     }
 
-    public KcapReleaseClient Client() =>
-        new(new HttpClient(), TimeProvider.System) { BaseUrl = _server.Urls[0], ReleasesUrl = _server.Urls[0] + "/releases" };
+    public KcapReleaseClient Client(TimeSpan? downloadTimeout = null) =>
+        new(new HttpClient(), TimeProvider.System) {
+            BaseUrl         = _server.Urls[0],
+            ReleasesUrl     = _server.Urls[0] + "/releases",
+            DownloadTimeout = downloadTimeout ?? TimeSpan.FromMinutes(1),
+        };
+
+    /// <summary>Leaves a version directory behind, as an install that later moved away from it does.</summary>
+    public void LeaveVersion(string version, string content) => _tmp.CreateFile($"kcap/versions/{version}/bin/kcap", content);
+
+    /// <summary>Replaces the <c>current</c> link with a real directory the installer did not make.</summary>
+    public void MakeCurrentADirectory() {
+        Directory.Delete(Layout.Current);
+        _tmp.CreateDir("kcap", "current");
+    }
+
+    /// <summary>Rewrites the marker as an install from <paramref name="channel"/> would have left it.</summary>
+    public void RecordChannel(string channel) =>
+        File.WriteAllText(Layout.Marker, $$"""{"source":"script","channel":"{{channel}}"}""");
+
+    /// <summary>Puts a directory where the marker file goes, so rewriting it fails.</summary>
+    public void BlockMarker() {
+        File.Delete(Layout.Marker);
+        _tmp.CreateDir("kcap", "install.json");
+    }
 
     public IReadOnlyList<string> Requests => [.. _server.LogEntries.Select(e => e.RequestMessage.Path)];
 
     /// <summary>Publishes <paramref name="version"/>: its archive, and a manifest whose checksum is the
     /// archive's unless <paramref name="manifestSha"/> overrides it.</summary>
-    public void Publish(string version, string? manifestSha = null, string archiveRid = Rid, bool channel = true) {
+    public void Publish(
+            string version, string? manifestSha = null, string archiveRid = Rid, string? channel = "latest", TimeSpan? archiveDelay = null) {
         var archive = Archive(version);
         var sha     = manifestSha ?? Convert.ToHexStringLower(SHA256.HashData(archive));
         var json    = $$$$"""{"version":"{{{{version}}}}","commit":"c","platforms":{"{{{{archiveRid}}}}":{"sha256":"{{{{sha}}}}","size":{{{{archive.Length}}}},"url":"https://ignored.invalid/x"}}}""";
 
         _server.Given(Request.Create().WithPath($"/download/cli/{version}/manifest.json").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody(json));
-        if (channel)
-            _server.Given(Request.Create().WithPath("/download/cli/channels/latest.json").UsingGet())
+        if (channel is not null)
+            _server.Given(Request.Create().WithPath($"/download/cli/channels/{channel}.json").UsingGet())
                 .RespondWith(Response.Create().WithStatusCode(200).WithBody(json));
         _server.Given(Request.Create().WithPath($"/releases/v{version}/kcap-{Rid}.tar.gz").UsingGet())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody(archive));
+            .RespondWith(archiveDelay is { } delay
+                ? Response.Create().WithStatusCode(200).WithBody(archive).WithDelay(delay)
+                : Response.Create().WithStatusCode(200).WithBody(archive));
     }
 
     /// <summary>The release layout: <c>bin/kcap</c>, <c>bin/kcap-daemon</c> and the plugin directory.

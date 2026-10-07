@@ -52,6 +52,15 @@ public sealed class UpdateCommand(
     /// source-gen also doesn't apply the record default on deserialize, so a real
     /// profile can carry a null <c>UpdateChannel</c> — also handled here.
     /// </summary>
+    /// <summary>The channel a script install follows is the one its marker records, which the installer
+    /// and every channel switch write; the profile's applies to every other install.</summary>
+    internal static string? ConfiguredChannel(InstallKind kind, ScriptInstallLayout? layout, string? profileChannel) =>
+        kind == InstallKind.Script && layout?.RecordedChannel() is { } recorded ? recorded : profileChannel;
+
+    /// <inheritdoc cref="ConfiguredChannel(InstallKind, ScriptInstallLayout?, string?)"/>
+    internal static string? ConfiguredChannel(string? profileChannel) =>
+        ConfiguredChannel(InstallProvenance.Kind(), ScriptInstallLayout.OfRunningBinary(), profileChannel);
+
     internal static string ResolveChannel(string[] args, string? configuredChannel) {
         if (args.Contains("--stable")) return "latest";
         if (args.Contains("--beta"))   return "beta";
@@ -61,7 +70,7 @@ public sealed class UpdateCommand(
 
     public async Task<int> HandleAsync(string[] args) {
         var profile   = profiles.Effective;
-        var channel   = ResolveChannel(args, profile?.UpdateChannel);
+        var channel   = ResolveChannel(args, ConfiguredChannel(_kind, ScriptLayout, profile?.UpdateChannel));
         var checkOnly = args.Contains("--check");
 
         if (AppBundled) {
@@ -75,6 +84,9 @@ public sealed class UpdateCommand(
         // the whole v2 config via ConfigMutator — NEVER write a flat
         // LegacyV1Config, which would overwrite the user's v2 profile config.
         if (args.Contains("--beta") || args.Contains("--stable")) {
+            if (_kind == InstallKind.Script && ScriptLayout is { } switched && switched.RecordedChannel() != channel)
+                ScriptUpdater.TryWriteMarker(switched, channel, Console.Error);
+
             // The startup snapshot: ConfigMutator below re-reads under its own lock.
             var pc = profiles.Snapshot;
 

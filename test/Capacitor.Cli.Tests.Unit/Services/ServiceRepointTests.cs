@@ -141,4 +141,46 @@ public class ServiceRepointTests {
         await Assert.That(calls.Select(c => string.Join(' ', c)).ToArray()).IsEquivalentTo(["--user daemon-reload"]);
         await Assert.That(systemd.Repoint("test", Stabilize)).IsFalse();
     }
+
+    SystemdServiceManager Systemd(List<string[]> calls, int reloadExit = 0, string needReload = "no") {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        return new SystemdServiceManager(Home, (p, c, _) => File.WriteAllText(p, c), (_, args) => {
+            calls.Add(args);
+            return args[1] == "daemon-reload" ? (reloadExit, "", reloadExit == 0 ? "" : "Failed to connect to bus") : (0, needReload + "\n", "");
+        });
+    }
+
+    /// <summary>The unit is already rewritten when the reload fails, so the failure must surface: nothing
+    /// else would tell the caller that systemd still holds the old path.</summary>
+    [Test]
+    public async Task Systemd_repoint_throws_when_daemon_reload_fails() {
+        var systemd = Systemd([], reloadExit: 1);
+        File.WriteAllText(SystemdUnit.UnitPath(Home, "test"), SystemdUnit.Unit(Spec(Pinned)));
+
+        await Assert.That(() => systemd.Repoint("test", Stabilize)).Throws<InvalidOperationException>().WithMessageContaining("Failed to connect to bus");
+    }
+
+    /// <summary>A reload that failed after the rewrite is retried by the next refresh, which finds the unit
+    /// already on the stable path but stale in systemd.</summary>
+    [Test]
+    public async Task Systemd_repoint_reloads_a_stable_unit_that_systemd_reports_stale() {
+        var calls   = new List<string[]>();
+        var systemd = Systemd(calls, needReload: "yes");
+        File.WriteAllText(SystemdUnit.UnitPath(Home, "test"), SystemdUnit.Unit(Spec(Stable)));
+
+        await Assert.That(systemd.Repoint("test", Stabilize)).IsTrue();
+        await Assert.That(calls.Select(c => c[1]).ToArray()).IsEquivalentTo(["show", "daemon-reload"]);
+    }
+
+    [Test]
+    public async Task Systemd_repoint_leaves_a_current_stable_unit_alone() {
+        var calls   = new List<string[]>();
+        var systemd = Systemd(calls);
+        File.WriteAllText(SystemdUnit.UnitPath(Home, "test"), SystemdUnit.Unit(Spec(Stable)));
+
+        await Assert.That(systemd.Repoint("test", Stabilize)).IsFalse();
+        await Assert.That(calls.Select(c => c[1]).ToArray()).IsEquivalentTo(["show"]);
+    }
 }

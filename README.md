@@ -2448,7 +2448,9 @@ kcap feedback --feedback                               # send feedback; prompts 
 > `current` link is switched to it, so running processes keep the files they
 > started from; then the new binary runs `kcap refresh`. A daemon service
 > installed from a script install is moved onto the `current` path, so it
-> follows updates.
+> follows updates. Switching from npm, a daemon service installed under npm keeps
+> running the npm binary: run `kcap daemon service install` again once the
+> script install is on your `PATH`.
 >
 > `kcap refresh` is the agent-integration refresh every installer runs: skills,
 > per-vendor hooks and plugins, the Claude Code plugin and installed daemon

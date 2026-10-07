@@ -57,6 +57,49 @@ public class UpdateCommandScriptInstallTests : IDisposable {
         await Assert.That(output.GetCapturedOutput()).Contains("kcap updated to 999.0.0.");
     }
 
+    /// <summary>An install from the beta channel keeps updating from it while the profile names none.</summary>
+    [Test]
+    public async Task The_channel_the_install_recorded_is_the_default() {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.RecordChannel("beta");
+        f.Publish("999.0.0", channel: "beta");
+
+        using var output = ConsoleOutput.StartFullCapture();
+        var exit = await Command(f, []).HandleAsync(["--check"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(f.Requests).Contains("/download/cli/channels/beta.json");
+        await Assert.That(f.Requests).DoesNotContain("/download/cli/channels/latest.json");
+    }
+
+    [Test]
+    public async Task An_explicit_stable_flag_overrides_the_recorded_channel() {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.RecordChannel("beta");
+        f.Publish("999.0.0");
+
+        using var output = ConsoleOutput.StartFullCapture();
+        var exit = await Command(f, []).HandleAsync(["--check", "--stable"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(f.Requests).Contains("/download/cli/channels/latest.json");
+    }
+
+    /// <summary>The switch is recorded where the next run reads it, even when nothing newer installs.</summary>
+    [Test]
+    public async Task A_beta_switch_is_recorded_in_the_marker() {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish("1.0.0", channel: "beta");
+
+        using var output = ConsoleOutput.StartFullCapture();
+        await Command(f, []).HandleAsync(["--check", "--beta"]);
+
+        await Assert.That(f.Layout.RecordedChannel()).IsEqualTo("beta");
+    }
+
     [Test]
     public async Task The_check_reads_the_channel_manifest_not_npm() {
         Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");

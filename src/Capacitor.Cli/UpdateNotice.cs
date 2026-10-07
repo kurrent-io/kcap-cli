@@ -86,7 +86,7 @@ internal static class UpdateNotice {
             var profile = profiles.Effective;
             if (profile?.UpdateCheck == false) return;
 
-            var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+            var channel  = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
             // Asked for only once the notice is going to happen: this runs on the way out of EVERY
             // invocation, and a registry client built for a suppressed one costs a handler chain the
             // command never sends on.

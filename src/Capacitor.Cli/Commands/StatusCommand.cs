@@ -221,7 +221,7 @@ public sealed class StatusCommand(
 
         if (args.Contains("--no-update-check") || profile?.UpdateCheck == false) return (current, default, false);
 
-        var channel = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+        var channel = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result  = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config), false);
@@ -272,7 +272,7 @@ public sealed class StatusCommand(
             return;
         }
 
-        var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+        var channel  = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         // Cap the recommendation at the connected server's version (min(npm latest, server)).

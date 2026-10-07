@@ -10,9 +10,10 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class ScriptUpdaterTests {
     static bool Unsupported => OperatingSystem.IsWindows();
 
-    static async Task<(bool Ok, string Out, string Err)> Install(ScriptReleaseFixture f, string version, string channel = "latest") {
+    static async Task<(bool Ok, string Out, string Err)> Install(
+            ScriptReleaseFixture f, string version, string channel = "latest", TimeSpan? downloadTimeout = null) {
         var (stdout, stderr) = (new StringWriter(), new StringWriter());
-        var ok = await new ScriptUpdater(f.Client())
+        var ok = await new ScriptUpdater(f.Client(downloadTimeout))
             .InstallAsync(f.Layout, version, channel, ScriptReleaseFixture.Rid, stdout, stderr, CancellationToken.None);
         return (ok, stdout.ToString(), stderr.ToString());
     }
@@ -115,14 +116,74 @@ public class ScriptUpdaterTests {
         Skip.When(Unsupported, "the fixture's current is a symlink");
         using var f = new ScriptReleaseFixture();
         f.Publish("1.5.0");
-        Directory.Delete(f.Layout.Current);
-        Directory.CreateDirectory(f.Layout.Current);
+        f.MakeCurrentADirectory();
 
         var (ok, _, err) = await Install(f, "1.5.0");
 
         await Assert.That(ok).IsFalse();
         await Assert.That(err).Contains("is not a link the installer made");
         await Assert.That(Directory.Exists(f.Layout.VersionDir("1.5.0"))).IsFalse();
+    }
+
+    /// <summary>The active version is never replaced: everything that runs kcap runs it from there.</summary>
+    [Test]
+    public async Task The_active_version_is_left_in_place_and_nothing_is_downloaded() {
+        Skip.When(Unsupported, "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish("1.0.0");
+
+        var (ok, output, _) = await Install(f, "1.0.0", channel: "beta");
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(output).Contains("already the active version");
+        await Assert.That(File.ReadAllText(f.Layout.CurrentBin("kcap"))).IsEqualTo("old");
+        await Assert.That(f.Requests.Any(p => p.EndsWith(".tar.gz", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(File.ReadAllText(f.Layout.Marker)).Contains("\"channel\":\"beta\"");
+    }
+
+    /// <summary>A process started from a version before <c>current</c> moved away may still run there, so
+    /// installing that version again moves the old directory aside instead of deleting it.</summary>
+    [Test]
+    public async Task A_leftover_version_directory_is_moved_aside_not_deleted() {
+        Skip.When(Unsupported, "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.LeaveVersion("1.5.0", "leftover");
+        f.Publish("1.5.0");
+
+        var (ok, _, _) = await Install(f, "1.5.0");
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(File.ReadAllText(f.Layout.CurrentBin("kcap"))).IsEqualTo("kcap 1.5.0");
+        var aside = Directory.EnumerateDirectories(f.Layout.Versions, ".replaced-1.5.0-*").Single();
+        await Assert.That(File.ReadAllText(Path.Combine(aside, "bin", "kcap"))).IsEqualTo("leftover");
+    }
+
+    [Test]
+    public async Task A_stalled_download_fails_within_its_deadline_and_installs_nothing() {
+        Skip.When(Unsupported, "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish("1.5.0", archiveDelay: TimeSpan.FromSeconds(10));
+
+        var (ok, _, err) = await Install(f, "1.5.0", downloadTimeout: TimeSpan.FromMilliseconds(300));
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(err).Contains("Could not download");
+        await AssertNothingInstalled(f, "1.5.0");
+    }
+
+    /// <summary>The marker is rewritten after the switch; failing to write it does not undo an update.</summary>
+    [Test]
+    public async Task A_marker_that_cannot_be_written_still_reports_the_update() {
+        Skip.When(Unsupported, "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish("1.5.0");
+        f.BlockMarker();
+
+        var (ok, _, err) = await Install(f, "1.5.0");
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f.CurrentTarget).IsEqualTo("versions/1.5.0");
+        await Assert.That(err).Contains("Could not record the update channel");
     }
 
     [Test]

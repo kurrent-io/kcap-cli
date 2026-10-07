@@ -47,10 +47,17 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
             return false;
         }
 
-        var current = new FileInfo(layout.Current);
-        if (current.LinkTarget is null && (current.Exists || Directory.Exists(layout.Current))) {
+        var current = new DirectoryInfo(layout.Current);
+        if (current.LinkTarget is null && (current.Exists || File.Exists(layout.Current))) {
             await stderr.WriteLineAsync($"{layout.Current} is not a link the installer made. Nothing was installed.");
             return false;
+        }
+
+        var dest = layout.VersionDir(version);
+        if (ActiveVersionDir(layout) is { } active && PathsEqual(active, dest)) {
+            await stdout.WriteLineAsync($"kcap {version} is already the active version.");
+            TryWriteMarker(layout, channel, stderr);
+            return true;
         }
 
         Directory.CreateDirectory(layout.Versions);
@@ -89,10 +96,17 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
                 return false;
             }
 
-            // A leftover directory of this version is not current (only an older one is), so nothing runs from it.
-            var dest = layout.VersionDir(version);
+            // A leftover directory of this version is not active, but a process started from it before
+            // `current` moved away may still run there: it is moved aside and kept, never deleted.
+            var aside = Path.Combine(layout.Versions, $".replaced-{version}-{Guid.NewGuid():N}");
             try {
-                if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
+                if (Directory.Exists(dest)) Directory.Move(dest, aside);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await stderr.WriteLineAsync($"Could not replace {dest}, which may be in use: {ex.Message}. Nothing was installed.");
+                return false;
+            }
+
+            try {
                 Directory.Move(staging, dest);
                 SwitchCurrent(layout, dest);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) {
@@ -100,7 +114,7 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
                 return false;
             }
 
-            WriteMarker(layout, channel);
+            TryWriteMarker(layout, channel, stderr);
             await stdout.WriteLineAsync($"Installed kcap {version} to {layout.Root}");
 
             return true;
@@ -127,34 +141,62 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
         await TarFile.ExtractToDirectoryAsync(gzip, destination, overwriteFiles: false, ct);
     }
 
-    /// <summary>The installer's marker, rewritten with the channel this update followed.</summary>
-    static void WriteMarker(ScriptInstallLayout layout, string channel) {
+    /// <summary>The installer's marker, rewritten with the channel this update followed. The version is
+    /// already active when this runs, so a failure is reported and the update still succeeds.</summary>
+    internal static void TryWriteMarker(ScriptInstallLayout layout, string channel, TextWriter stderr) {
         var json = new JsonObject { ["source"] = "script", ["channel"] = channel }.ToJsonString();
         var tmp  = $"{layout.Marker}.tmp-{Environment.ProcessId}";
-        File.WriteAllText(tmp, json + "\n");
-        File.Move(tmp, layout.Marker, overwrite: true);
+        try {
+            File.WriteAllText(tmp, json + "\n");
+            File.Move(tmp, layout.Marker, overwrite: true);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            try { File.Delete(tmp); } catch { /* best-effort */ }
+            stderr.WriteLine($"Could not record the update channel in {layout.Marker}: {ex.Message}");
+        }
     }
+
+    /// <summary>The version directory <c>current</c> points at, or null when it is not a link.</summary>
+    internal static string? ActiveVersionDir(ScriptInstallLayout layout) =>
+        new DirectoryInfo(layout.Current).LinkTarget is { } target
+            ? Path.GetFullPath(Path.Combine(layout.Root, target))
+            : null;
+
+    static bool PathsEqual(string a, string b) =>
+        string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+            OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// On Unix a new relative link renamed over <c>current</c>, which rename(2) does atomically: there is
     /// no moment without one. Windows has no atomic replace for a junction, so it is removed and recreated,
-    /// as the install script does.
+    /// as the install script does, and the previous junction is put back when the new one cannot be made.
     /// </summary>
     static void DefaultSwitch(ScriptInstallLayout layout, string versionDir) {
         if (OperatingSystem.IsWindows()) {
+            var previous = ActiveVersionDir(layout);
             if (Directory.Exists(layout.Current) || File.Exists(layout.Current)) Directory.Delete(layout.Current);
-            using var mklink = Process.Start(new ProcessStartInfo("cmd.exe") {
-                ArgumentList = { "/d", "/c", "mklink", "/J", layout.Current, versionDir },
-                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
-            })!;
-            var err = mklink.StandardError.ReadToEnd();
-            mklink.StandardOutput.ReadToEnd();
-            mklink.WaitForExit();
-            if (mklink.ExitCode != 0) throw new IOException($"mklink /J failed: {err.Trim()}");
+
+            try {
+                CreateJunction(layout.Current, versionDir);
+            } catch (Exception ex) when (previous is not null && ex is IOException or System.ComponentModel.Win32Exception) {
+                try { CreateJunction(layout.Current, previous); } catch { /* the original error is the one to report */ }
+                throw;
+            }
+
             return;
         }
 
         SwitchLink(layout.Current, Path.GetRelativePath(layout.Root, versionDir));
+    }
+
+    static void CreateJunction(string link, string target) {
+        using var mklink = Process.Start(new ProcessStartInfo("cmd.exe") {
+            ArgumentList = { "/d", "/c", "mklink", "/J", link, target },
+            UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true,
+        })!;
+        var err = mklink.StandardError.ReadToEnd();
+        mklink.StandardOutput.ReadToEnd();
+        mklink.WaitForExit();
+        if (mklink.ExitCode != 0) throw new IOException($"mklink /J failed: {err.Trim()}");
     }
 
     /// <summary>Atomically points the symlink at <paramref name="link"/> to <paramref name="target"/>.</summary>

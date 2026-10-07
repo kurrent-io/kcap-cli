@@ -56,6 +56,10 @@ static class SystemdUnit {
     public static string[] StopArgs(string id)      => ["--user", "stop", UnitName(id)];
     public static string[] IsActiveArgs(string id)  => ["--user", "is-active", UnitName(id)];
     public static string[] IsEnabledArgs(string id) => ["--user", "is-enabled", UnitName(id)];
+    public static string[] NeedDaemonReloadArgs(string id) => ["--user", "show", "--property=NeedDaemonReload", "--value", UnitName(id)];
+
+    /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
+    public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
 
     public static ServiceState StatusFrom(string activeOut, int enabledExit) {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
