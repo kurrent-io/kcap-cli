@@ -97,6 +97,7 @@ Plugin:
 
 Maintenance:
   update                           Check for and install updates
+  refresh                          Refresh the agent integrations kcap installed (runs after an update)
   feedback (--bug|--feedback) [-m <text>]  Report a bug or send feedback to Kurrent support
   cleanup                          Kill all orphaned watcher processes
   uninstall [--project] [--yes]    Remove kcap config + all agent integrations

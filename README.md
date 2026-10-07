@@ -360,6 +360,7 @@ At a glance — each links to its section below:
 | [`kcap ignore`](#configuration) | Exclude paths from recording |
 | [`kcap allow`](#configuration) | Restrict recording to named paths |
 | [`kcap update`](#other-commands) | Upgrade the CLI and refresh agent plugins |
+| [`kcap refresh`](#other-commands) | Re-run the agent-integration refresh after an install or update |
 | [`kcap uninstall`](#uninstalling) | Remove kcap from this machine |
 | [`kcap status` / `whoami` / `login` / `logout`](#other-commands) | Health, identity, and auth |
 | [`kcap harness`](#new-harness-detection) | List / dismiss / reset the "set kcap up for this agent" nudges |
@@ -1090,7 +1091,7 @@ kcap daemon service stop                   # stop the running service (stays ins
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
-kcap daemon service refresh                # bring installed macOS units up to this version; reloads only an idle daemon (runs after `kcap update`)
+kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; reloads only an idle daemon (runs after `kcap update`)
 kcap daemon service uninstall              # stop and remove the service
 ```
 
@@ -2433,9 +2434,10 @@ kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # skip the browser, sign in with a device code instead
-kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
+kcap update         # upgrade the CLI and refresh agent plugins (npm-global and script installs)
 kcap update --beta  # switch to the beta channel and update to the latest beta
 kcap update --stable # switch back to the stable channel (the default)
+kcap refresh        # re-run the agent-integration refresh an install or update runs
 kcap logout         # delete stored tokens
 kcap feedback --bug -m "the daemon crashed on stop"   # file a bug report
 kcap feedback --feedback                               # send feedback; prompts for the message on a TTY
@@ -2452,10 +2454,27 @@ kcap feedback --feedback                               # send feedback; prompts 
 > registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
 > manager blocks install scripts. It exits early if you're already up to date,
-> and tells you what to run instead for non-npm installs (e.g. Homebrew). On the
+> and tells you what to run instead for other installs (e.g. Homebrew). On the
 > stable channel it stops at your connected server's version when the server
 > trails npm, so it never installs a CLI newer than the server it talks to. Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+>
+> **Script installs** (`curl -fsSL https://www.kurrent.io/install | bash`, or
+> `install.ps1` on Windows) update without npm: `kcap update` reads the
+> installer's channel manifest, downloads this platform's archive from GitHub
+> Releases and checks its sha256 against the manifest, installing nothing on a
+> mismatch. Each release gets its own `versions/<version>` directory and the
+> `current` link is switched to it, so running processes keep the files they
+> started from; then the new binary runs `kcap refresh`. A daemon service
+> installed from a script install is moved onto the `current` path, so it
+> follows updates. Switching from npm, a daemon service installed under npm keeps
+> running the npm binary: run `kcap daemon service install` again once the
+> script install is on your `PATH`.
+>
+> `kcap refresh` is the agent-integration refresh every installer runs: skills,
+> per-vendor hooks and plugins, the Claude Code plugin and installed daemon
+> service units, each only if you installed it before. Run it yourself when an
+> update reports a step that failed.
 >
 > **Windows:** the update works even while Claude Code sessions (whose kcap MCP
 > servers keep the binary locked) or the daemon are running — the old executable

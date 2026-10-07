@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// A job installed as Adaptive gets its plist rewritten to Standard, but is reloaded only when the
 /// daemon accepts an idle-only restart, because the reload kills whatever it hosts.
 /// </summary>
-public class LaunchdProcessTypeRefreshTests {
+public class LaunchdUnitRefreshTests {
     [TempHome] public required TempHome Home { get; init; }
 
     const string Label = "io.kurrent.kcap.daemon.test";
@@ -91,9 +91,9 @@ public class LaunchdProcessTypeRefreshTests {
         var calls = new List<string[]>();
         var asked = 0;
 
-        var outcome = Manager(calls, "adaptive (6)").RefreshProcessType("test", () => { asked++; return true; }, Plenty, out var error);
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => { asked++; return true; }, Plenty, out var error);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Reloaded);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
         await Assert.That(error).IsNull();
         await Assert.That(asked).IsEqualTo(1);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
@@ -107,9 +107,9 @@ public class LaunchdProcessTypeRefreshTests {
         var path  = Seed(AdaptivePlist());
         var calls = new List<string[]>();
 
-        var outcome = Manager(calls, "adaptive (6)").RefreshProcessType("test", () => false, Plenty, out _);
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => false, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Deferred);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Deferred);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
     }
@@ -123,9 +123,9 @@ public class LaunchdProcessTypeRefreshTests {
         Seed(LaunchdUnit.Plist(Spec()));
         var calls = new List<string[]>();
 
-        var outcome = Manager(calls, "adaptive (6)").RefreshProcessType("test", () => true, Plenty, out _);
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Reloaded);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
     }
 
     [Test]
@@ -136,9 +136,9 @@ public class LaunchdProcessTypeRefreshTests {
         var calls = new List<string[]>();
         var asked = false;
 
-        var outcome = Manager(calls, "daemon (3)").RefreshProcessType("test", () => asked = true, Plenty, out _);
+        var outcome = Manager(calls, "daemon (3)").RefreshUnit("test", () => asked = true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Unchanged);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Unchanged);
         await Assert.That(asked).IsFalse();
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
     }
@@ -150,9 +150,9 @@ public class LaunchdProcessTypeRefreshTests {
         var path  = Seed(AdaptivePlist());
         var calls = new List<string[]>();
 
-        var outcome = Manager(calls, "adaptive (6)", running: true, bootoutExit: 0, false, false, 5, 0).RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = Manager(calls, "adaptive (6)", running: true, bootoutExit: 0, false, false, 5, 0).RefreshUnit("test", () => true, Plenty, out var error);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("previous unit was restored and loaded");
         await Assert.That(File.ReadAllText(path)).IsEqualTo(AdaptivePlist());
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "bootstrap"]);
@@ -164,9 +164,9 @@ public class LaunchdProcessTypeRefreshTests {
 
         Seed(AdaptivePlist());
 
-        var outcome = Manager([], "adaptive (6)", running: true, bootoutExit: 0, false, false, 5).RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = Manager([], "adaptive (6)", running: true, bootoutExit: 0, false, false, 5).RefreshUnit("test", () => true, Plenty, out var error);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("the daemon is not loaded");
     }
 
@@ -179,9 +179,9 @@ public class LaunchdProcessTypeRefreshTests {
         Seed(AdaptivePlist());
         var calls = new List<string[]>();
 
-        var outcome = Manager(calls, "adaptive (6)", running: true, bootoutExit: 5).RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = Manager(calls, "adaptive (6)", running: true, bootoutExit: 5).RefreshUnit("test", () => true, Plenty, out var error);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("did not unload");
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "print"]);
     }
@@ -194,10 +194,10 @@ public class LaunchdProcessTypeRefreshTests {
         var calls = new List<string[]>();
         var asked = false;
 
-        var outcome = Manager(calls, "adaptive (6)").RefreshProcessType(
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit(
             "test", () => asked = true, () => LaunchdServiceManager.ReloadBudget - TimeSpan.FromSeconds(1), out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Deferred);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Deferred);
         await Assert.That(asked).IsFalse();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
@@ -210,9 +210,9 @@ public class LaunchdProcessTypeRefreshTests {
         Seed(AdaptivePlist());
         var asked = false;
 
-        var outcome = Manager([], "adaptive (6)", running: false).RefreshProcessType("test", () => asked = true, Plenty, out _);
+        var outcome = Manager([], "adaptive (6)", running: false).RefreshUnit("test", () => asked = true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Reloaded);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
         await Assert.That(asked).IsFalse();
     }
 
@@ -228,9 +228,9 @@ public class LaunchdProcessTypeRefreshTests {
         var calls = new List<string[]>();
         var asked = false;
 
-        var outcome = Manager(calls, "adaptive (6)").RefreshProcessType("test", () => asked = true, Plenty, out _);
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => asked = true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Unchanged);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Unchanged);
         await Assert.That(asked).IsFalse();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(foreign);
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
@@ -253,9 +253,9 @@ public class LaunchdProcessTypeRefreshTests {
         var calls = new List<string[]>();
         var asked = false;
 
-        var outcome = Manager(calls, "adaptive (6)", printFails: true).RefreshProcessType("test", () => asked = true, Plenty, out _);
+        var outcome = Manager(calls, "adaptive (6)", printFails: true).RefreshUnit("test", () => asked = true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Unverified);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Unverified);
         await Assert.That(asked).IsFalse();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
@@ -269,9 +269,9 @@ public class LaunchdProcessTypeRefreshTests {
 
         var path = Seed(AdaptivePlist());
 
-        var outcome = Manager([], "adaptive (6)", bootstrapTimesOut: true).RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = Manager([], "adaptive (6)", bootstrapTimesOut: true).RefreshUnit("test", () => true, Plenty, out var error);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Reloaded);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
         await Assert.That(error).IsNull();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
     }
@@ -299,9 +299,9 @@ public class LaunchdProcessTypeRefreshTests {
                 };
             });
 
-        var outcome = manager.RefreshProcessType("test", () => true, Plenty, out var error);
+        var outcome = manager.RefreshUnit("test", () => true, Plenty, out var error);
 
-        await Assert.That(outcome).IsEqualTo(ProcessTypeRefresh.Failed);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("restored and loaded");
         // Six calls after the daemon is asked, the most ReloadBudget reserves for.
         await Assert.That(calls.Select(c => c[0]).ToArray())

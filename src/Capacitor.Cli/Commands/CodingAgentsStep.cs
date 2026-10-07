@@ -283,7 +283,7 @@ internal static class CodingAgentsStep {
         // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Kiro integration skipped — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -492,7 +492,7 @@ internal static class CodingAgentsStep {
         // on Copilot finding it on PATH — same precheck as the Cursor branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Copilot hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -557,7 +557,7 @@ internal static class CodingAgentsStep {
         // on Gemini finding it on PATH — same precheck as the Cursor/Copilot branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Gemini hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -631,7 +631,7 @@ internal static class CodingAgentsStep {
         // Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Pi extension not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -757,7 +757,7 @@ internal static class CodingAgentsStep {
         // precheck as the Pi/Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] OpenCode plugin not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -823,7 +823,7 @@ internal static class CodingAgentsStep {
         // Antigravity must find kcap on PATH (same precheck as the OpenCode/Pi branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Antigravity hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -1224,7 +1224,7 @@ internal static class CodingAgentsStep {
         // instead. Mirror of PluginCommand.InstallCursor's precheck.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -1516,8 +1516,8 @@ internal static class CodingAgentsStep {
         }
 
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap via npm:");
-            writeLine("    [cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap:");
+            writeLine("    [cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }

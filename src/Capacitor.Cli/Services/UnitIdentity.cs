@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Install;
 
 namespace Capacitor.Cli.Services;
 
@@ -18,7 +19,7 @@ static class UnitIdentity {
         var ext     = OperatingSystem.IsWindows() ? ".exe" : "";
         var sibling = Path.Combine(dir, $"kcap-daemon{ext}");
 
-        return File.Exists(sibling) ? sibling : null;
+        return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
     }
 
     /// <summary>config.json path for a baked <c>KCAP_CONFIG_DIR</c>, or the default config root
