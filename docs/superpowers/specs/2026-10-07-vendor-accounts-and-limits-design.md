@@ -409,7 +409,12 @@ the constraints, or "unknown" if any constraint is unknown.
 
 **Evidence is ordered by producer time.** The marker carries `blockedAt` (the newest signal's time:
 detection time for Claude, the rollout line's `timestamp` or receipt time for Codex) and `clearedAt`
-(the newest clearing evidence's time). The account is blocked while `blockedAt > clearedAt`.
+(the newest clearing evidence's time). The account is blocked while `blockedAt > clearedAt` **and** at
+least one constraint is active: an unknown constraint, or a window constraint whose reset is still in
+the future. Expiry is evaluated against the clock wherever the predicate is read — producer, daemon,
+server, app — so it needs no transition and no new evidence: once the last window constraint's reset
+passes with no unknown constraint, the account reads unblocked, and replaying an older snapshot only
+re-adds constraints that are already expired.
 
 - A window constraint lapses when its reset time passes. An unknown constraint never lapses by time.
 - **Clearing evidence** is a fresh observation (Section 5.1) whose producer time is later than
@@ -464,7 +469,9 @@ detection time for Claude, the rollout line's `timestamp` or receipt time for Co
   and a replayed all-below observation; clearing on the last reset and on a fresh, complete all-below
   observation; successive signals naming the primary then the secondary window, and the reverse,
   where passing the earlier reset does not unblock; block and clear snapshots delivered to the server
-  in reverse order; a rewound older Codex all-below event arriving after a newer block.
+  in reverse order; a rewound older Codex all-below event arriving after a newer block. Time advancing past
+  the last known reset with no new vendor response unblocks; an older snapshot replayed afterwards
+  keeps it unblocked; an unknown constraint alongside expired window constraints keeps it blocked.
 
 ## 6. Part B — publishing and the screen
 
