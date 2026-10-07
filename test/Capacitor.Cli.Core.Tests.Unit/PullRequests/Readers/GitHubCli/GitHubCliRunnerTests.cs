@@ -90,6 +90,24 @@ public class GitHubCliRunnerTests {
         await Assert.That((await runner.RunAsync(["view"], GitHubCliRunner.ViewOutputLimit)).Outcome).IsEqualTo(GitHubCliOutcome.Ok);
     }
 
+    /// A real gh that floods past the limit and then hangs: only the bounded capture ends it before the deadline.
+    [Test]
+    public async Task A_real_gh_flooding_past_the_limit_is_oversized_before_the_deadline() {
+        Skip.When(OperatingSystem.IsWindows(), "execs a POSIX script");
+
+        var gh = Tmp.CreateExecutable("bin/gh", """
+            #!/bin/sh
+            head -c 1048576 /dev/zero | tr '\0' x
+            exec sleep 60
+            """);
+        await using var runner = new GitHubCliRunner(new ProcessRunner(TimeProvider.System), null, name => name == "PATH" ? Path.GetDirectoryName(gh) : null);
+
+        var result = await runner.RunAsync(["pr", "view"], 64 * 1024);
+
+        await Assert.That(result.Outcome).IsEqualTo(GitHubCliOutcome.Oversized);
+        await Assert.That(result.Stdout).IsEmpty();
+    }
+
     [Test]
     public async Task A_start_failure_forgets_the_located_path_so_the_next_call_relocates() {
         var gh = InstallGh("bin");
