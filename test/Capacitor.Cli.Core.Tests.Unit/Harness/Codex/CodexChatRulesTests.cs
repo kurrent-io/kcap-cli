@@ -150,6 +150,6 @@ public class CodexChatRulesTests {
         var chat = TranscriptChat.For("codex")!;
         var result = chat.ProjectWithInputs(Item("""{"type":"function_call","name":"spawn_agent","call_id":"c1","arguments":"{\"task\":\"t\"}"}"""), 1, Received, chat.CreateContext("a1", null));
         await Assert.That(result.Envelopes).Count().IsEqualTo(1);
-        await Assert.That(result.Subagents).IsEmpty();
+        await Assert.That(result.Runs).IsEmpty();
     }
 }
