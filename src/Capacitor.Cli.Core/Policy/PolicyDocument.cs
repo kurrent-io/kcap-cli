@@ -15,8 +15,8 @@ public sealed record RuleMatcher(
 
 public sealed record PolicyRule(RuleMatcher Match, RuleOutcome Outcome, string? Reason);
 
-/// <summary>Parsed and preserved so the snapshot hash covers it; nothing consults it at evaluation
-/// time.</summary>
+/// <summary>The rules never read it: <c>mode</c> decides whether an undecided call is sent to the
+/// server's judge, and the server composes <c>prompt</c> from the uploaded document itself.</summary>
 public sealed record JudgeConfig(string Mode, string? Prompt);
 
 public sealed record PolicyDocument(int Version, IReadOnlyList<PolicyRule> Rules, JudgeConfig? Judge);

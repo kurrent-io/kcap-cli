@@ -1,0 +1,17 @@
+kcap refresh — Refresh the agent integrations kcap installed
+
+Usage: kcap refresh
+
+Brings the agent integrations a previous kcap installed up to this
+version: agent skills, the Codex, Cursor, Copilot, Pi, OpenCode, Gemini,
+Kiro and Antigravity integrations, the Claude Code plugin and any
+installed daemon service units. Each step runs only when you installed
+that integration before, so a fresh machine is left untouched.
+
+For npm and script installs it also points the Claude plugin's MCP
+entries at this kcap binary.
+
+kcap update, the npm postinstall and the install scripts run it for you;
+run it yourself when one of them reports a step that failed.
+
+Exits non-zero when any step fails, listing each one.

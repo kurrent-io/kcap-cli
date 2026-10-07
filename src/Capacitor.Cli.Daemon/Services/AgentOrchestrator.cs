@@ -824,6 +824,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnStopAgent              += HandleUnsequencedStopAgent;
         _server.OnSendInput              += HandleSendInput;
         _server.OnSendSpecialKey         += HandleSendSpecialKey;
+        _server.OnSendRawInput           += HandleSendRawInput;
         _server.OnResizeTerminal         += HandleResizeTerminal;
         _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
         // Settlement lost-ack redelivery (D1): re-deliver unretired terminal acks POST-registration
@@ -4490,9 +4491,47 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.IsPrivate) return; // server-origin key ignored for private agents
+        if (agent.IsPrivate || !AcceptsTypedInput(agent.Kind)) return;
+
+        if (IsClosingToInput(agent)) return;
 
         await agent.Runtime.SendSpecialKeyAsync(key);
+    }
+
+    /// <summary>Teardown keeps the agent in <c>_agents</c> while it disposes the runtime, so a
+    /// keystroke arriving then would otherwise reach a PTY that is closing.</summary>
+    static bool IsClosingToInput(AgentInstance agent) =>
+        agent.IsCleanupStarted || agent.IsReapClaimed || agent.Runtime.HasExited;
+
+    async Task HandleSendRawInput(SendRawInputCommand cmd) {
+        if (!_agents.TryGetValue(cmd.AgentId, out var agent)) {
+            LogSendRawInputUnknownAgent(cmd.AgentId, _agents.Count);
+            return;
+        }
+
+        if (agent.IsPrivate || !AcceptsTypedInput(agent.Kind)) return;
+
+        if (IsClosingToInput(agent)) return;
+
+        byte[] bytes;
+
+        try {
+            bytes = Convert.FromBase64String(cmd.Data);
+        } catch (FormatException) {
+            LogSendRawInputUndecodable(cmd.AgentId, cmd.DispatchId);
+            return;
+        }
+
+        if (bytes.Length == 0) return;
+
+        var waitGeneration = agent.ActivityClock.WaitGeneration;
+
+        try {
+            await agent.Runtime.SendRawInputAsync(bytes);
+            if (IsSubmit(bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+        } catch (NotSupportedException) {
+            LogSendRawInputNotSupported(cmd.AgentId, agent.Runtime.Vendor);
+        }
     }
 
     Task<string[]> HandleFindRepoForRemote(FindRepoForRemoteRequest req)
@@ -5875,6 +5914,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "SendSpecialKey '{Key}' dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
     partial void LogSendSpecialKeyUnknownAgent(string agentId, string key, int knownAgents);
 
+    [LoggerMessage(Level = LogLevel.Debug, Message = "SendRawInput dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
+    partial void LogSendRawInputUnknownAgent(string agentId, int knownAgents);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendRawInput dropped: payload for agent {AgentId} (dispatch {DispatchId}) is not valid base64")]
+    partial void LogSendRawInputUndecodable(string agentId, Guid dispatchId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "SendRawInput dropped: agent {AgentId} runtime '{Vendor}' has no raw-input surface")]
+    partial void LogSendRawInputNotSupported(string agentId, string vendor);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error reading output for agent {AgentId}")]
     partial void LogOutputReadError(Exception ex, string agentId);
 
@@ -6109,6 +6157,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private send-input handler (bracketed-paste submit).</summary>
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
+
+    internal Task HandleSendRawInputForTest(SendRawInputCommand cmd) => HandleSendRawInput(cmd);
+
+    internal Task HandleSendSpecialKeyForTest(string agentId, string key) => HandleSendSpecialKey(agentId, key);
 
     /// <summary>Test-only: run ONE selected reap exactly as the heartbeat does (claim, then stop only
     /// if the claim was won) — the seam for driving a candidate selected before some racing event.</summary>

@@ -79,6 +79,16 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --plan-read --no-update-check",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [

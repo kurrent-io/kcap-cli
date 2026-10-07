@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
@@ -95,10 +96,30 @@ sealed class DaemonServiceCommands(
     static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(55);
 
     /// <summary>
-    /// Brings every installed launchd job up to the unit this version writes. It runs after each
-    /// update, unattended, so a daemon hosting agents is never restarted: it is left for a later run.
+    /// Brings every installed unit up to the one this version writes, and moves a unit pinned to a script
+    /// install's version directory onto its stable <c>current</c> path so the daemon follows updates. It
+    /// runs after each update, unattended, so a daemon hosting agents is never restarted: a launchd reload
+    /// is left for a later run, and a systemd daemon picks the new path up on its next start.
     /// </summary>
-    internal async Task<int> Refresh() {
+    internal async Task<int> Refresh(Func<string, string>? stabilize = null) {
+        stabilize ??= ScriptInstallLayout.Stabilize;
+
+        if (manager is SystemdServiceManager systemd) {
+            var unwritten = 0;
+
+            foreach (var serviceId in systemd.ListInstalled()) {
+                try {
+                    if (systemd.Repoint(serviceId, stabilize))
+                        await Console.Out.WriteLineAsync($"Daemon '{serviceId}': now runs the current kcap version on its next start.");
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    await Console.Error.WriteLineAsync($"Daemon '{serviceId}': could not update its unit ({ex.Message}).");
+                    unwritten++;
+                }
+            }
+
+            return unwritten == 0 ? 0 : 1;
+        }
+
         if (manager is not LaunchdServiceManager launchd) return 0;
 
         var failed  = 0;
@@ -111,21 +132,21 @@ sealed class DaemonServiceCommands(
                 break;
             }
 
-            var outcome = launchd.RefreshProcessType(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error);
+            var outcome = launchd.RefreshUnit(serviceId, () => RequestIdleRestart(serviceId), TimeLeft, out var error, stabilize);
 
             switch (outcome) {
-                case ProcessTypeRefresh.Reloaded:
-                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded to run at standard priority.");
+                case UnitRefresh.Reloaded:
+                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded with its updated service unit.");
                     break;
-                case ProcessTypeRefresh.Deferred:
+                case UnitRefresh.Deferred:
                     await Console.Out.WriteLineAsync(
-                        $"Daemon '{serviceId}': busy, so its priority change waits for the next update.");
+                        $"Daemon '{serviceId}': busy, so its service unit change waits for the next update.");
                     break;
-                case ProcessTypeRefresh.Unverified:
+                case UnitRefresh.Unverified:
                     await Console.Out.WriteLineAsync(
                         $"Daemon '{serviceId}': launchd's state could not be read, so the check waits for the next update.");
                     break;
-                case ProcessTypeRefresh.Failed:
+                case UnitRefresh.Failed:
                     await Console.Error.WriteLineAsync($"Daemon '{serviceId}': {error}");
                     failed++;
                     break;
@@ -195,12 +216,11 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        // --verify is a launchd-only slice for now: the engine's readiness/version check needs a
-        // manager that actually implements a verify-aware WriteAndBootstrap, and the on-disk
-        // recheck needs GenerateFiles to return exactly one file (Windows returns two). Reject
-        // early and clearly rather than let either assumption fail deep inside the transaction.
-        if (verify && manager is not LaunchdServiceManager) {
-            await Console.Error.WriteLineAsync("install --verify is only supported on macOS (launchd) in this release.");
+        // --verify needs a manager whose Query reports the job's own pid. launchd runs the full
+        // transaction engine; a Windows Scheduled Task runs WindowsServiceVerify below. systemd has
+        // neither yet, so it is refused here rather than failing deep inside a transaction.
+        if (verify && manager is not (LaunchdServiceManager or WindowsScheduledTaskServiceManager)) {
+            await Console.Error.WriteLineAsync("install --verify is only supported on macOS (launchd) and Windows in this release.");
             return 1;
         }
 
@@ -229,10 +249,13 @@ sealed class DaemonServiceCommands(
             // to a valid server URL here too, so the transaction never destroys a working unit only to
             // install one whose daemon would exit config-invalid and never satisfy readiness.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
-            var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
-                n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
-                time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable);
-            var exit   = await engine.InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
+            var exit = manager is WindowsScheduledTaskServiceManager
+                ? await NewWindowsVerify(() => profileUrlValid)
+                    .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId)
+                : await new ServiceVerify(store, root, (LaunchdServiceManager)manager,
+                        n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
+                        time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable)
+                    .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
             if (exit != VerifyExit.Ok) return exit;
         } else {
             // Plain (non-verify) install serializes on the same per-label lock every other mutating
@@ -323,19 +346,36 @@ sealed class DaemonServiceCommands(
     }
 
     /// <summary>
-    /// Routes plain vs <c>--verify</c> starts. <c>--verify</c> is gated to launchd like
-    /// <see cref="Install"/>'s own gate — the engine's readiness/ownership poll needs a
-    /// manager whose WriteAndBootstrap/Query actually implement the verify algorithm.
+    /// Routes plain vs <c>--verify</c> starts. <c>--verify</c> needs a manager whose Query reports the
+    /// job's own pid: launchd, or a Windows Scheduled Task through <see cref="WindowsServiceVerify"/>.
     /// </summary>
     internal async Task<int> Start(string[] args) {
         if (!args.Contains("--verify")) return await StartPlain();
 
+        if (manager is WindowsScheduledTaskServiceManager) {
+            var exit = await NewWindowsVerify().StartVerifiedAsync(id);
+            if (exit == VerifyExit.Ok) {
+                try { await Console.Out.WriteLineAsync($"Service '{id}' started (verified)."); } catch (IOException) { }
+            }
+            return exit;
+        }
+
         if (manager is not LaunchdServiceManager) {
-            await Console.Error.WriteLineAsync("start --verify is only supported on macOS (launchd) in this release.");
+            await Console.Error.WriteLineAsync("start --verify is only supported on macOS (launchd) and Windows in this release.");
             return 1;
         }
 
         return await StartVerified();
+    }
+
+    WindowsServiceVerify NewWindowsVerify(Func<bool>? profileViable = null) =>
+        new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
+            profileViable, unitEnv: RetiredUnitEnv);
+
+    // The retired unit's baked environment, or null when it has no wrapper to read.
+    IReadOnlyDictionary<string, string>? RetiredUnitEnv(string serviceId) {
+        var wrapper = WindowsTaskUnit.WrapperPath(root, serviceId);
+        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
     }
 
     async Task<int> StartPlain() {
@@ -688,7 +728,9 @@ sealed class DaemonServiceCommands(
         if (!unitPresent) return (null, null, null, null);
 
         try {
-            var env = LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(home, id)));
+            var env = manager is WindowsScheduledTaskServiceManager
+                ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(WindowsTaskUnit.WrapperPath(root, id)))
+                : LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(home, id)));
             env.TryGetValue(ProfileOverrides.ProfileVar, out var profile);
             env.TryGetValue("KCAP_EXPECT_SERVER_URL", out var expectedServer);
             env.TryGetValue("KCAP_CONSENT_SEED_DEFAULT", out var consentSeed);
@@ -720,13 +762,13 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|ensure|status|refresh> [--name N]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]");
-        Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/version/ownership and rolls back on failure");
+        Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/version/ownership and rolls back on failure");
         Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
         Console.Error.WriteLine("                          --retire ID (requires --replace --verify) also removes unit ID in the same transaction");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
-        Console.Error.WriteLine("                          --verify (macOS/launchd only) polls readiness/ownership and rolls back on failure");
+        Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/ownership and rolls back on failure");
         Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
         Console.Error.WriteLine("  ensure [--name N] [--profile P] [--json]   Install-or-start from a fresh status read");
         Console.Error.WriteLine("                          (bakes the born-prompt consent seed; gate refusals emit recovery_surface=)");

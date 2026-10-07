@@ -136,8 +136,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (pluginPath is null) {
             if (refreshOnly) return 0;
 
-            await env.Stderr.WriteLineAsync("Plugin directory not found. Re-install kcap via npm:");
-            await env.Stderr.WriteLineAsync("  npm install -g @kurrent/kcap");
+            await env.Stderr.WriteLineAsync("Plugin directory not found. Re-install kcap:");
+            await env.Stderr.WriteLineAsync("  " + InstallProvenance.ReinstallCommand());
 
             return 1;
         }
@@ -281,7 +281,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
             await env.Stderr.WriteLineAsync(
                 "Cannot install agent skills: kcap plugin folder not found. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -294,7 +294,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
             await env.Stderr.WriteLineAsync(
                 $"Cannot install agent skills: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -384,7 +384,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (pluginPath is null) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Codex plugin: kcap plugin folder not found. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -395,7 +395,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!Directory.Exists(skillsSource)) {
             await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: 'skills' folder missing from {pluginPath}. " +
-                "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -413,7 +413,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             await env.Stderr.WriteLineAsync(
                 $"Cannot install Codex plugin: missing skill folder(s) under {skillsSource}: "
               + string.Join(", ", missingSkills)
-              + ". Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + ". Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -718,7 +718,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             case false when !KcapOnPath:
                 await env.Stderr.WriteLineAsync(
                     "Cannot install Cursor hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+                  + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
                 );
 
                 return 1;
@@ -897,7 +897,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the Pi extension: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1051,7 +1051,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1203,7 +1203,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1433,7 +1433,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Copilot hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -1661,7 +1661,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Kiro hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;
@@ -2085,7 +2085,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Gemini hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap"
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
             );
 
             return 1;

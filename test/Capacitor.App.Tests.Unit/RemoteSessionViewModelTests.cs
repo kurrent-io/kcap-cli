@@ -447,19 +447,19 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(vendor: "claude"));
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
-            await Assert.That(vm.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningRuns, "the strip");
+            await Assert.That(vm.Chat.RunningRow!.StateText).StartsWith("running in background · ");
             await Assert.That(vm.Chat.Items.OfType<ToolGroupItem>().Single().Calls.Single().Outcome).IsEqualTo(ToolOutcome.Done);
 
             h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, AgentNotification));
-            await h.UntilAsync(vm, () => !vm.Chat.HasRunningSubagents, "the finish");
+            await h.UntilAsync(vm, () => !vm.Chat.HasRunningRuns, "the finish");
             await Assert.That(vm.Chat.Items.OfType<SystemNoteItem>().Count()).IsEqualTo(1);
             await Assert.That(vm.Chat.Items.OfType<UserTurnItem>().Any()).IsFalse();
             await vm.TeardownAsync();
         });
     }
 
-    /// The not-before-start guard in SessionSubagents compares a completion's own time with the
+    /// The not-before-start guard in SessionRuns compares a completion's own time with the
     /// launch it would end; a batch stored late must not let a stale completion win that compare.
     [Test]
     public async Task A_completion_stored_late_but_dated_before_the_resumed_launch_leaves_it_running() {
@@ -478,14 +478,14 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(vendor: "claude"));
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the first launch");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningRuns, "the first launch");
 
             h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, firstFinish));
-            await h.UntilAsync(vm, () => !vm.Chat.HasRunningSubagents, "the first finish");
+            await h.UntilAsync(vm, () => !vm.Chat.HasRunningRuns, "the first finish");
 
             h.Lane.PushStreamEvent(Envelope("s1", 3, CanonicalEventTypes.AssistantToolCallsGenerated, secondCall));
             h.Lane.PushStreamEvent(Envelope("s1", 4, CanonicalEventTypes.ToolResultReceived, secondLaunch));
-            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the second launch");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningRuns, "the second launch");
 
             // A completion that lands after this synchronization marker was folded into the strip
             // before the marker's own row could appear, since the tail applies its stream in order.
@@ -493,8 +493,8 @@ public class RemoteSessionViewModelTests {
             h.Lane.PushStreamEvent(Envelope("s1", 6, CanonicalEventTypes.AssistantTextGenerated, """{"content":"__sync__"}"""));
             await h.UntilAsync(vm, () => vm.Chat.Items.OfType<AssistantTextItem>().Any(i => i.Text == "__sync__"), "the sync marker");
 
-            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(vm.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
+            await Assert.That(vm.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(vm.Chat.RunningRow!.StateText).StartsWith("running in background · ");
             await vm.TeardownAsync();
         });
     }
@@ -509,11 +509,11 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(vendor: "claude"));
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningRuns, "the strip");
             var rows = vm.Chat.Items.Count;
 
             h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, MetaNotification));
-            await h.UntilAsync(vm, () => !vm.Chat.HasRunningSubagents, "the finish");
+            await h.UntilAsync(vm, () => !vm.Chat.HasRunningRuns, "the finish");
             await Assert.That(vm.Chat.Items.Count).IsEqualTo(rows);
             await vm.TeardownAsync();
         });
@@ -528,16 +528,16 @@ public class RemoteSessionViewModelTests {
                 Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
             var vm = h.Build(Harness.Row(vendor: "claude"));
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
-            await h.UntilAsync(vm, () => vm.Chat.HasRunningSubagents, "the strip");
+            await h.UntilAsync(vm, () => vm.Chat.HasRunningRuns, "the strip");
 
             h.Directory.Rows.Remove("remote:a1");
             await Assert.That(vm.SessionEnded).IsTrue();
-            await Assert.That(vm.Chat.HasRunningSubagents).IsFalse();
+            await Assert.That(vm.Chat.HasRunningRuns).IsFalse();
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(vendor: "claude"));
             await Assert.That(vm.SessionEnded).IsFalse();
-            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(vm.Chat.RunningSubagent!.StateText).StartsWith("running in background · ");
+            await Assert.That(vm.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(vm.Chat.RunningRow!.StateText).StartsWith("running in background · ");
             await vm.TeardownAsync();
         });
     }

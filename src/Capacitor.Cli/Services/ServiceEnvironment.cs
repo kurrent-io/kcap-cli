@@ -176,6 +176,13 @@ static class ServiceEnvironment {
         // supervisor's own HOME would decide the rest.
         env[Core.ConfigRoot.ConfigDirEnvVar] = config.Directory;
 
+        // A rooted HOME decides the fixed daemons directory before the profile folder does, and a
+        // scheduled task starts without the installing shell's HOME (Git Bash, MSYS or a redirected
+        // corporate home). Without it the daemon and the CLI that installed it look in two different
+        // places for each other and for the repo list.
+        if (isWindows && source.TryGetValue("HOME", out var home) && Path.IsPathFullyQualified(home))
+            env["HOME"] = home;
+
         return env;
     }
 

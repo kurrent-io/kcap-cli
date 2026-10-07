@@ -24,13 +24,33 @@ public class WizardSimpleStepsTests {
     // ── Shim: pure applicability decision ───────────────────────────────────
 
     [Test]
-    [Arguments(false, "/opt/kcap/kcap", false, false)] // non-macOS
+    [Arguments(false, "/opt/kcap/kcap", false, false)] // no installer for this OS
     [Arguments(true, null, false, false)]               // no resolved CLI
     [Arguments(true, "/opt/kcap/kcap", true, false)]     // already on PATH
     [Arguments(true, "/opt/kcap/kcap", null, false)]     // probe inconclusive — fail quiet
-    [Arguments(true, "/opt/kcap/kcap", false, true)]     // macOS + CLI + positively absent
-    public async Task ComputeApplicable_matches_the_spec_decision(bool isMacOs, string? target, bool? onPath, bool expected) {
-        await Assert.That(ShimStepViewModel.ComputeApplicable(isMacOs, target, onPath)).IsEqualTo(expected);
+    [Arguments(true, "/opt/kcap/kcap", false, true)]     // installer + CLI + positively absent
+    public async Task ComputeApplicable_matches_the_spec_decision(bool hasInstaller, string? target, bool? onPath, bool expected) {
+        await Assert.That(ShimStepViewModel.ComputeApplicable(hasInstaller, target, onPath)).IsEqualTo(expected);
+    }
+
+    /// The step shows its installer's own disclosure, and without one it cannot apply however the
+    /// composition root decided.
+    [Test]
+    public async Task The_step_follows_its_installer() {
+        var store = new FakeAppStateStore();
+        var windows = new WindowsUserPathInstaller(new NoUserPath(), new FakeLoginShellProbe());
+
+        var withInstaller = new ShimStepViewModel(true, windows, store, "/opt/kcap/kcap.exe");
+        var without = new ShimStepViewModel(true, null, store, "/opt/kcap/kcap.exe");
+
+        await Assert.That(withInstaller.Applicable).IsTrue();
+        await Assert.That(withInstaller.Disclosure).IsEqualTo(windows.Disclosure);
+        await Assert.That(without.Applicable).IsFalse();
+    }
+
+    sealed class NoUserPath : IUserPathStore {
+        public string? Read() => null;
+        public void Append(string directory) => throw new InvalidOperationException("not expected");
     }
 
     // ── Shim: install / claim / outcome mapping ─────────────────────────────
@@ -74,8 +94,8 @@ public class WizardSimpleStepsTests {
         public ShimHarness() {
             Destination = Path.Combine(TempDir, "kcap");
             Target      = Path.Combine(TempDir, "target-cli");
-            Installer   = new PathShimInstaller(Runner, Probe);
-            Vm          = new ShimStepViewModel(true, Installer, Store, Target, Destination);
+            Installer   = new PathShimInstaller(Runner, Probe, Destination);
+            Vm          = new ShimStepViewModel(true, Installer, Store, Target);
         }
 
         // InstallCommand's IsExecuting/CanExecute/End notifications ride the dispatcher scheduler;
@@ -192,7 +212,7 @@ public class WizardSimpleStepsTests {
     public async Task Null_target_reports_kcap_not_found_and_claims_nothing() {
         var (satisfied, message, updates) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new ShimHarness();
-            var vm = new ShimStepViewModel(true, h.Installer, h.Store, null, h.Destination);
+            var vm = new ShimStepViewModel(true, h.Installer, h.Store, null);
 
             await vm.InstallCommand.Execute().ToTask();
             Dispatcher.UIThread.RunJobs(); // drain the command's dispatcher-scheduled notifications, as ShimHarness.Install does

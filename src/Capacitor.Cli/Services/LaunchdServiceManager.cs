@@ -120,49 +120,61 @@ sealed partial class LaunchdServiceManager(
     public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + 6 * RefreshCtlTimeout;
 
     /// <summary>
-    /// Moves an installed job off the Adaptive process type. The plist is rewritten whenever it carries
-    /// the Adaptive line, but launchd reads the type only when the job loads, and the reload kills
-    /// whatever the daemon hosts. So a running Adaptive job is reloaded only once
-    /// <paramref name="requestIdleRestart"/> reports that the daemon accepted an idle-only restart. A
-    /// busy daemon refuses that restart, and the reload waits for a later refresh, as it does when
-    /// <paramref name="timeLeft"/> is under <see cref="ReloadBudget"/>.
+    /// Brings an installed job up to the unit this version writes: off the Adaptive process type, and
+    /// onto the stable <c>current</c> path when <paramref name="stabilize"/> maps its binary there (a
+    /// script install's version directory is never updated in place). The plist is rewritten whenever
+    /// it is out of date, but launchd reads it only when the job loads, and the reload kills whatever
+    /// the daemon hosts. So a running job is reloaded only once <paramref name="requestIdleRestart"/>
+    /// reports that the daemon accepted an idle-only restart. A busy daemon refuses that restart, and
+    /// the reload waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
+    /// <see cref="ReloadBudget"/>.
     /// </summary>
-    public ProcessTypeRefresh RefreshProcessType(
-            string serviceId, Func<bool> requestIdleRestart, Func<TimeSpan> timeLeft, out string? error) {
+    public UnitRefresh RefreshUnit(
+            string serviceId, Func<bool> requestIdleRestart, Func<TimeSpan> timeLeft, out string? error,
+            Func<string, string>? stabilize = null) {
         error = null;
         var path = LaunchdUnit.PlistPath(home, serviceId);
 
         if (LaunchdUnit.TryReadPlist(path, out var original) != LaunchdUnit.PlistRead.Ok)
-            return ProcessTypeRefresh.Unchanged;
+            return UnitRefresh.Unchanged;
 
         var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
         var probe    = printTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(printExit, printOut, printErr);
-        var stale    = probe == LabelProbe.Loaded && LaunchdUnit.LoadedAsAdaptive(printOut);
         var upgraded = LaunchdUnit.UpgradeProcessType(original!);
 
         // A plist this writer cannot upgrade would reload as Adaptive again.
-        if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return ProcessTypeRefresh.Unchanged;
+        if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return UnitRefresh.Unchanged;
+
+        var binary = ReadBinaryPathSafe(path);
+        var target = binary is not null && stabilize is not null ? stabilize(binary) : binary;
+        if (target is not null && LaunchdUnit.WithBinary(upgraded ?? original!, target) is { } repointed)
+            upgraded = repointed;
+
+        // A loaded job still running a version directory keeps it after the plist moves on.
+        var loadedProgram = LaunchdUnit.LoadedProgram(printOut);
+        var pinned = loadedProgram is not null && stabilize is not null && stabilize(loadedProgram) != loadedProgram;
+        var stale  = probe == LabelProbe.Loaded && (LaunchdUnit.LoadedAsAdaptive(printOut) || pinned);
 
         // Rewriting the file is safe whatever launchd holds; only the reload depends on what it does.
         if (upgraded is not null) _writeUnit(path, upgraded, null);
-        if (probe == LabelProbe.Unknown) return ProcessTypeRefresh.Unverified;
-        if (!stale) return upgraded is null ? ProcessTypeRefresh.Unchanged : ProcessTypeRefresh.Rewritten;
-        if (timeLeft() < ReloadBudget) return ProcessTypeRefresh.Deferred;
+        if (probe == LabelProbe.Unknown) return UnitRefresh.Unverified;
+        if (!stale) return upgraded is null ? UnitRefresh.Unchanged : UnitRefresh.Rewritten;
+        if (timeLeft() < ReloadBudget) return UnitRefresh.Deferred;
 
         // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
         var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
-        if (running && !requestIdleRestart()) return ProcessTypeRefresh.Deferred;
+        if (running && !requestIdleRestart()) return UnitRefresh.Deferred;
 
         // The accepted restart is already exiting the daemon. Booting out now unloads the job before
         // launchd can relaunch it from the definition it cached at load.
         var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
         if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
             error = "launchctl bootout did not unload the job, so it keeps running as Adaptive until the next update";
-            return ProcessTypeRefresh.Failed;
+            return UnitRefresh.Failed;
         }
 
         var reload = Bootstrap(serviceId, path, acceptAdaptive: false);
-        if (reload.Error is null) return ProcessTypeRefresh.Reloaded;
+        if (reload.Error is null) return UnitRefresh.Reloaded;
 
         if (upgraded is not null) _writeUnit(path, original!, null);
         var rollback = Bootstrap(serviceId, path, acceptAdaptive: true);
@@ -176,7 +188,7 @@ sealed partial class LaunchdServiceManager(
                 : $"{bootstrapError}; restoring the previous unit also failed ({rollbackError}), and launchd's state for the job is unclear — check `kcap daemon service status`";
         }
 
-        return ProcessTypeRefresh.Failed;
+        return UnitRefresh.Failed;
     }
 
     (LabelProbe Label, string StdOut) Probe(string serviceId) {

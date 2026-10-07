@@ -9,7 +9,8 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 
 /// What the chat hides or rewrites in Claude records: meta and sidechain records, the blocks
 /// Claude Code injects around a user turn, and the finished-background-task record it injects as
-/// if the user had spoken. Also where a subagent's launch, detachment and end are read.
+/// if the user had spoken. Also where a subagent's or a background command's launch, detachment
+/// and end are read.
 public sealed partial class ClaudeChatRules : IChatDisplayRules {
     public static readonly ClaudeChatRules Instance = new();
 
@@ -62,25 +63,31 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's
     /// row. The meta flag is not consulted: a hidden row still ends its subagent.
-    public IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) {
+    public IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
 
         switch (raw.Kind) {
             case AcpEventKind.ToolCall when raw.ToolName is "Agent" or "Task" && raw.ToolCallId is { Length: > 0 } callId: {
                 var (name, description) = SpawnFacts(raw.ToolInputJson);
-                return [new SubagentSignal.Started(callId, name, description, evt.Timestamp)];
+                return [new RunSignal.Started(callId, name, description, evt.Timestamp)];
+            }
+            case AcpEventKind.ToolCall when raw.ToolName is "Bash" && raw.ToolCallId is { Length: > 0 } callId: {
+                var (name, command) = ShellFacts(raw.ToolInputJson);
+                return [new RunSignal.Started(callId, name, command, evt.Timestamp, RunKind.Shell, Provisional: true)];
             }
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
+                if (SchemaExtensions.Text(result, "backgroundTaskId") is { Length: > 0 } backgroundId)
+                    return [new RunSignal.Detached(callId, backgroundId)];
                 if (SchemaExtensions.Text(result, "status") == "async_launched"
                     && (SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id")) is { Length: > 0 } agentId)
-                    return [new SubagentSignal.Detached(callId, agentId)];
+                    return [new RunSignal.Detached(callId, agentId)];
                 // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
-                // task_id, from ending a running subagent.
-                if (SchemaExtensions.Text(result, "task_type") == "local_agent"
+                // task_id, from ending a running row.
+                if (SchemaExtensions.Text(result, "task_type") is "local_agent" or "local_bash"
                     && SchemaExtensions.Text(result, "task_id") is { Length: > 0 } taskId
                     && (SchemaExtensions.Text(result, "message") ?? "").AsSpan().TrimStart().StartsWith(StoppedTaskMessage, StringComparison.OrdinalIgnoreCase))
-                    return [new SubagentSignal.Finished(null, taskId, SubagentOutcome.Stopped, evt.Timestamp)];
+                    return [new RunSignal.Finished(null, taskId, RunOutcome.Stopped, evt.Timestamp)];
                 return [];
             }
             case AcpEventKind.UserMessage when IsTaskNotification(slug, raw): {
@@ -88,8 +95,17 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 var callId = Tag(TaskToolUseId(), text);
                 var agentId = Tag(TaskId(), text);
                 if (callId is null && agentId is null) return [];
-                var outcome = string.Equals(Tag(TaskStatus(), text), "completed", StringComparison.OrdinalIgnoreCase) ? SubagentOutcome.Done : SubagentOutcome.Failed;
-                return [new SubagentSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
+                // A cut-off notification has no status and still says the run ended; a status
+                // that is not an end, such as running, says nothing.
+                RunOutcome? outcome;
+                switch (Tag(TaskStatus(), text)?.ToLowerInvariant()) {
+                    case null:        outcome = null; break;
+                    case "completed": outcome = RunOutcome.Done; break;
+                    case "failed":    outcome = RunOutcome.Failed; break;
+                    case "killed":    outcome = RunOutcome.Stopped; break;
+                    default:          return [];
+                }
+                return [new RunSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
             }
             default:
                 return [];
@@ -114,6 +130,30 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         } catch (JsonException) {
             return ("agent", "");
         }
+    }
+
+    const int ShellNameLimit = 80;
+
+    /// The row's name is the call's description, else the command's first line; the description
+    /// line under it is that first line.
+    static (string Name, string Command) ShellFacts(string? inputJson) {
+        if (inputJson is null) return ("command", "");
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            var input = doc.RootElement;
+            var command = FirstLine(input.Str("command") ?? "");
+            var name = input.Str("description") is { } d && d.Trim() is { Length: > 0 } described ? described : command;
+            if (name.Length == 0) name = "command";
+            return (name.Length > ShellNameLimit ? name[..(ShellNameLimit - 1)] + "…" : name, command);
+        } catch (JsonException) {
+            return ("command", "");
+        }
+    }
+
+    static string FirstLine(string text) {
+        var trimmed = text.TrimStart();
+        var end = trimmed.IndexOf('\n');
+        return (end < 0 ? trimmed : trimmed[..end]).TrimEnd();
     }
 
     static string? Tag(Regex tag, string text) =>

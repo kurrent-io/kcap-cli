@@ -7,18 +7,24 @@ public enum ShimOutcome { Installed, InstalledButNotOnPath, Cancelled, Failed }
 public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? SudoFallback);
 
 /// Installs a `/usr/local/bin/kcap` symlink to a resolved CLI so a terminal PATH that omits the
-/// CLI's own location still finds `kcap` (spec §5). Mechanics only — the once-ever offer and
-/// tray-menu wiring live in the desktop app's ShimOfferCoordinator.
-public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe probe) {
+/// CLI's own location still finds `kcap`. Mechanics only — the once-ever offer and tray-menu wiring
+/// live in the desktop app's ShimOfferCoordinator. `destination` is a parameter so tests drive the
+/// real filesystem taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
+public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination)
+    : ICliPathInstaller {
     public const string Destination = "/usr/local/bin/kcap";
 
     const string OsascriptPath = "/usr/bin/osascript";
 
-    public Task<ShimResult> InstallAsync(string target, CancellationToken ct) =>
-        InstallAsync(target, Destination, ct);
+    public string Disclosure =>
+        "This links /usr/local/bin/kcap to this app's CLI, so kcap works from any terminal. " +
+        "Installing it prompts once for your admin password.";
 
-    // Destination is a parameter (not the Destination constant) so tests drive real filesystem
-    // taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
+    public ShimPreflight Preflight(string target) => Preflight(destination, target);
+
+    public Task<ShimResult> InstallAsync(string target, CancellationToken ct) =>
+        InstallAsync(target, destination, ct);
+
     public async Task<ShimResult> InstallAsync(string target, string destination, CancellationToken ct) {
         if (!LooksLikeTarget(target))
             return new ShimResult(ShimOutcome.Failed, "CLI path contains a newline or carriage return and cannot be used.", null);

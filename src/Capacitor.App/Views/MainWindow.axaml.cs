@@ -67,7 +67,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
 
         this.WhenActivated(disposables => {
-            ViewModel?.WhenAnyValue(x => x.CurrentWorkspace)
+            if (ViewModel is not { } viewModel) return;
+            viewModel.WhenAnyValue(x => x.CurrentWorkspace)
                 .Subscribe(workspace => {
                     // A popup can't meaningfully survive the pane swapping under it — opening a
                     // workspace closes the feed; its Closed handler then turns the gate off.

@@ -25,4 +25,15 @@ printf '#!/usr/bin/env bash\necho "transient failure" >&2\nexit 7\n' > "$error_f
 rc=1; set +e; bash "$sh" "$local_dir" "$v" "$error_fetch" >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" -eq 1 ] || { echo "FAIL: a fetch error (exit 7) must refuse to publish -> rc=$rc (want 1)"; fail=1; }
 
+# The channel argument names the Windows objects, Setup.exe among them.
+win_local="$tmp/win-local"; win_remote="$tmp/win-remote"; mkdir -p "$win_local" "$win_remote"
+printf 'setup' > "$win_local/Kurrent-Capacitor-$v-win-x64-Setup.exe"
+printf 'other' > "$win_remote/Kurrent-Capacitor-$v-win-x64-Setup.exe"
+win_fetch="$tmp/win-fetch.sh"
+printf '#!/usr/bin/env bash\n[ -f "%s/$1" ] || exit 44\ncp "%s/$1" "$2"\n' "$win_remote" "$win_remote" > "$win_fetch"; chmod +x "$win_fetch"
+rc=0; set +e; bash "$sh" "$win_local" "$v" "$win_fetch" win-x64 >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" -eq 1 ] || { echo "FAIL: a republished win-x64 Setup.exe with different bytes must refuse -> rc=$rc (want 1)"; fail=1; }
+rc=0; set +e; bash "$sh" "$win_local" "$v" "$win_fetch" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" -eq 0 ] || { echo "FAIL: without the channel only osx-arm64 names are checked -> rc=$rc (want 0)"; fail=1; }
+
 [ "$fail" -eq 0 ] && echo "ok" || exit 1
