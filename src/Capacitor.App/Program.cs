@@ -29,7 +29,7 @@ internal static class Program
         };
 
         if (OperatingSystem.IsMacOS())
-            ActiveDisplayGate.WaitAsync(CoreGraphicsDisplays.ActiveCount, TimeProvider.System,
+            ActiveDisplayGate.WaitAsync(CoreVideoDisplayLink.Probe, TimeProvider.System,
                 onWaiting: () => Console.Error.WriteLine("Every display is asleep; the app starts once one wakes."))
                 .GetAwaiter().GetResult();
 

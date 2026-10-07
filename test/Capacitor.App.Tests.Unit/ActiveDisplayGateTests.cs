@@ -4,24 +4,26 @@ using Microsoft.Extensions.Time.Testing;
 namespace Capacitor.App.Tests.Unit;
 
 public class ActiveDisplayGateTests {
+    const int NoActiveDisplay = -6661;
+
     [Test]
-    public async Task A_lit_display_starts_the_app_at_once() {
+    public async Task A_display_link_that_can_be_created_starts_the_app_at_once() {
         var time    = new FakeTimeProvider();
         var waiting = 0;
 
-        var wait = ActiveDisplayGate.WaitAsync(() => 2, time, onWaiting: () => waiting++);
+        var wait = ActiveDisplayGate.WaitAsync(() => 0, time, onWaiting: () => waiting++);
 
         await Assert.That(wait.IsCompletedSuccessfully).IsTrue();
         await Assert.That(waiting).IsEqualTo(0);
     }
 
     [Test]
-    public async Task A_dark_screen_waits_until_a_display_wakes_and_reports_the_wait_once() {
+    public async Task A_refused_display_link_waits_until_one_can_be_created_and_reports_the_wait_once() {
         var time    = new FakeTimeProvider();
-        var counts  = new Queue<int>([0, 0, 2]);
+        var codes   = new Queue<int?>([NoActiveDisplay, NoActiveDisplay, 0]);
         var waiting = 0;
 
-        var wait = ActiveDisplayGate.WaitAsync(counts.Dequeue, time, onWaiting: () => waiting++);
+        var wait = ActiveDisplayGate.WaitAsync(codes.Dequeue, time, onWaiting: () => waiting++);
 
         await Assert.That(wait.IsCompleted).IsFalse();
 
@@ -32,15 +34,15 @@ public class ActiveDisplayGateTests {
         time.Advance(ActiveDisplayGate.PollInterval);
         await wait.WaitAsync(TimeSpan.FromSeconds(5));
 
-        await Assert.That(counts.Count).IsEqualTo(0);
+        await Assert.That(codes.Count).IsEqualTo(0);
         await Assert.That(waiting).IsEqualTo(1);
     }
 
     [Test]
-    public async Task A_failed_display_query_does_not_hold_the_app() {
+    public async Task A_probe_that_cannot_run_does_not_hold_the_app() {
         var time = new FakeTimeProvider();
 
-        var wait = ActiveDisplayGate.WaitAsync(() => -1, time, onWaiting: () => { });
+        var wait = ActiveDisplayGate.WaitAsync(() => null, time, onWaiting: () => { });
 
         await Assert.That(wait.IsCompletedSuccessfully).IsTrue();
     }
