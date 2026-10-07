@@ -177,6 +177,10 @@
                                 <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
                                         FlyoutPresenterClasses="kcapPanel">
                                     <StackPanel Spacing="2" Margin="6" MinWidth="188">
+                                        <Button x:Name="RailHelpSetupButton" Classes="kcapGhost" Content="Set up Capacitor…"
+                                                Command="{Binding SetupCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding CanOpenSetup}" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
                                         <Button x:Name="RailHelpSignInButton" Classes="kcapGhost" Content="Sign in"
                                                 Command="{Binding SignInCommand}" Click="OnHelpFlyoutItemClick"
                                                 IsVisible="{Binding SignInVisible}"

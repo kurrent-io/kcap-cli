@@ -59,6 +59,18 @@ public class WizardCompositionHappyPathTests {
     const string ServerUrl   = "https://acme.example";
 
     [Test]
+    public async Task Resuming_an_authenticated_setup_starts_at_connections_without_signing_in_again() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
+            await graph.ViewModel.PendingEnterForTesting;
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Harnesses);
+            await Assert.That(graph.Steps.OfType<SignInStepViewModel>().Single().Satisfied).IsTrue();
+            await Assert.That(graph.Auth.Current).IsNull();
+        });
+    }
+
+    [Test]
     public async Task Fresh_machine_paste_sign_in_reaches_a_correct_done_summary() {
         WizardCompositionFixtures.WriteConfig(Config.Root,
             new ProfileConfig { ActiveProfile = ProfileName, Profiles = new() { [ProfileName] = new Profile() } });
@@ -85,12 +97,12 @@ public class WizardCompositionHappyPathTests {
             var graph = WizardComposition.BuildGraph(options);
             await graph.ViewModel.PendingEnterForTesting;
 
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
+            var connect = graph.Connect;
             connect.Choice          = ConnectChoice.Paste;
             connect.ServerInputText = ServerUrl;
-            await Assert.That(connect.Satisfied).IsTrue(); // a valid intent is staged before Next
+            await Assert.That(connect.Validate()).IsTrue(); // a valid intent is staged before sign-in
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Connect -> Sign-in
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Welcome -> Sign-in
 
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -99,50 +111,27 @@ public class WizardCompositionHappyPathTests {
             await Assert.That(authHandler.Requests.Any(r => r.Contains("/auth/config"))).IsTrue();
             await Assert.That(harness.Claims.Pending().Select(c => c.Profile).ToList()).IsEquivalentTo([ProfileName]);
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Sign-in -> Defaults
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Defaults -> Agents (persists via ConfigMutator)
-
-            var defaults = graph.Steps.OfType<DefaultsStepViewModel>().Single();
-            await Assert.That(defaults.Satisfied).IsTrue();
-            await Assert.That(defaults.Message).IsNull();
-
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Agents -> Import (no CLI, nothing installable)
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Import -> Daemon (no CLI, nothing runnable)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Sign-in -> Harnesses
+            await Assert.That(graph.ViewModel.CanGoNext).IsFalse();
+            graph.Steps.OfType<HarnessesStepViewModel>().Single().Visibility = "private";
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> History (persists; no CLI, nothing installable)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Daemon (nothing to import)
 
             var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.CliMissing);
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Daemon -> Done
-            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Done);
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // refused: the daemon is required
 
-            return graph.Steps.OfType<DoneStepViewModel>().Single().Summary;
+            return (graph.ViewModel.Current.Id, daemon.Status);
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
-        var byTitle = summary.ToDictionary(e => e.Title);
-
-        await Assert.That(summary.Count).IsEqualTo(7); // every configured step but Done itself
-        await Assert.That(byTitle["Use kcap in the terminal"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Use kcap in the terminal"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Choose a workspace"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Choose a workspace"].Note).IsEqualTo(ServerUrl);
-        await Assert.That(byTitle["Sign in"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Sign in"].Note).IsNull();
-        await Assert.That(byTitle["Sessions from this machine"].Satisfied).IsTrue();
-        await Assert.That(byTitle["Sessions from this machine"].Note)
-            .IsEqualTo("Org-repo sessions visible in the workspace. Machine name daemon-a.");
-        await Assert.That(byTitle["Install agent hooks"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Install agent hooks"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Import past sessions"].Satisfied).IsFalse();
-        await Assert.That(byTitle["Import past sessions"].Note).IsEqualTo(WizardComposition.CliMissingNote);
-        await Assert.That(byTitle["Enable the daemon"].Satisfied).IsFalse();
-        // The dominant CLI-missing note, never the stale "requires sign-in" — sign-in DID commit.
-        await Assert.That(byTitle["Enable the daemon"].Note).IsEqualTo(WizardComposition.CliMissingNote);
+        await Assert.That(summary.Id).IsEqualTo(WizardStepId.Daemon);
+        await Assert.That(summary.Status).IsEqualTo(DaemonStepViewModel.RequiredMessage);
 
         var config = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(config.Profiles[ProfileName].ServerUrl).IsEqualTo(ServerUrl);
         await Assert.That(config.Profiles[ProfileName].AuthProvider?.Provider).IsEqualTo(AuthProvider.None);
-        await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("org_public");
-        await Assert.That(config.Profiles[ProfileName].Daemon?.Name).IsEqualTo("daemon-a");
+        await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("private");
 
         // No daemon touchpoint reached with no CLI resolved: no lane traffic, no IPC, no CLI spawns.
         await Assert.That(harness.Lane.Requests).IsEmpty();
@@ -204,10 +193,10 @@ public class WizardCompositionAbandonTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
             await graph.ViewModel.PendingEnterForTesting;
 
-            var connect = graph.Steps.OfType<ConnectStepViewModel>().Single();
+            var connect = graph.Connect;
             connect.Choice          = ConnectChoice.Paste;
             connect.ServerInputText = "https://acme.example";
-            await Assert.That(connect.Satisfied).IsTrue(); // a valid intent is staged — Begin is never called
+            await Assert.That(connect.Validate()).IsTrue(); // a valid intent is staged — Begin is never called
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(

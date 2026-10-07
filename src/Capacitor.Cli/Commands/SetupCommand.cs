@@ -2196,11 +2196,13 @@ sealed class SetupCommand(
 
     internal static string? ResolvePluginPath(string? overrideDir = null) {
         overrideDir ??= Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
+        return ResolvePluginPathForExecutable(Environment.ProcessPath, overrideDir);
+    }
+
+    internal static string? ResolvePluginPathForExecutable(string? exePath, string? overrideDir = null) {
         if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
             return overrideDir;
         }
-
-        var exePath = Environment.ProcessPath;
 
         if (exePath is null) return null;
 
@@ -2216,27 +2218,25 @@ sealed class SetupCommand(
 
         if (exeDir is null) return null;
 
-        // Try: <exe_dir>/../../../../plugin  (npm optional-deps layout)
-        // Binary is at <wrapper>/node_modules/@kurrent/<platform-pkg>/bin/kcap
-        // Plugin is at <wrapper>/plugin
+        var bundlePluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "Resources", "kcap"));
+        if (Directory.Exists(bundlePluginPath)) return bundlePluginPath;
+
+        // npm optional dependencies: <wrapper>/node_modules/@kurrent/<platform>/bin/kcap.
         var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kcap"));
 
         if (Directory.Exists(optDepsPluginPath))
             return optDepsPluginPath;
 
-        // Try: <exe_dir>/../../kcap/plugin  (npm flat layout)
         var npmPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap", "kcap"));
 
         if (Directory.Exists(npmPluginPath))
             return npmPluginPath;
 
-        // Try: <exe_dir>/../plugin  (wrapper package direct layout)
         var wrapperPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "kcap"));
 
         if (Directory.Exists(wrapperPluginPath))
             return wrapperPluginPath;
 
-        // Try: repo root layout (dev mode)
         var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
 
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
