@@ -20,6 +20,7 @@ The desktop app shows when its daemon runs in the background band and offers the
 - An app-driven reload that waits for the daemon to be idle, and a daemon-side idle-only reload that refuses a newly busy state atomically. The reload here is always disclosed as destructive, so no idle check needs to be exact.
 - Teaching `kcap daemon restart` to reload the job. The app does not use that command, and `service refresh --force` covers the terminal user.
 - Windows and systemd. Neither has a process type with this behaviour.
+- Showing a Reload failure in the tray. The reload is started from the window, and its outcome is shown beside the button that started it.
 
 ## Design
 
@@ -106,39 +107,38 @@ under the existing 60 s mutation bound.
 
 Exit 0 with `current` passes the same two steps and is a success: the daemon runs at standard priority, which is what the user asked for.
 
+**One presenter.** Every other verb's failure goes through the outcome channel to the app's presenter and from there to the shared attention lane. A Reload outcome does not: the controller that started it awaits the lane's outcome and is its only presenter. The channel consumer acknowledges a Reload envelope and logs its token without posting anything. The shared attention lane is a replaying subject whose text the window copies into a field that ignores null, so a message posted there cannot be withdrawn once the condition it described is gone; a Reload outcome, which is resolved by later evidence, must not live there.
+
 **Controller.** `DaemonLifecycleController` gains:
 
 - `IObservable<bool> BackgroundPriority`, a replaying subject set from every `ServiceSnapshot` the controller reads: true for a background-band word, false for a positive word, unchanged for an unknown reading or a failed read. A passive status read runs on every transition into `Connected`, not only the once-per-run arm, so a daemon that connects later, or is reloaded outside the app, updates the indicator. The passive read never arms a mutation.
-- `Task ReloadServiceAsync(CancellationToken ct)`: captures the attach generation, shows the reload prompt, and cancels with a status line if the generation changed while the prompt was open, as `ConfirmAndReplaceAsync` does. On accept it awaits the lane's outcome for `MutationVerb.Reload`, posts "Daemon runs at standard priority." on the status lane for `Succeeded`, leaves every other outcome to the outcome channel, then re-queries the service status so the indicator follows evidence.
+- `IObservable<ReloadState?> ReloadState`, a replaying subject: null, or the last Reload outcome that still stands, as a record of the token, the exit code when there is one, the daemon name and a sequence number. All writes to it happen under the controller's lock, in the order the controller observes them.
+- `IObservable<bool> IsReloading`, true from an accepted prompt until the lane's outcome has been recorded. A click while it is true is ignored, so at most one reload is in flight and outcomes arrive in click order.
+- `Task ReloadServiceAsync(CancellationToken ct)`: captures the attach generation, shows the reload prompt, and cancels with a status line if the generation changed while the prompt was open, as `ConfirmAndReplaceAsync` does. On accept it sets `IsReloading`, awaits the lane's outcome for `MutationVerb.Reload`, records it, clears `IsReloading`, then re-queries the service status so the indicator follows evidence. `Succeeded` records null and posts "Daemon runs at standard priority." on the status lane; every other outcome records its token.
 
 The prompt is shown on every click. The count it names is the latest `DaemonInfoDto.ActiveAgents`, but the disclosure states that any agent, pending launch or evaluation running when the daemon exits ends with it, so a launch that lands after the count was read is covered by the consent given.
 
-### App: indicator, prompt and attention
+**Resolution.** `ReloadState` changes in exactly three ways, all under the controller's lock:
 
-**Indicator.** `MainWindowViewModel` gains `BackgroundPriority` and `BackgroundPriorityText`, built like `RestartPending`: gated to a connected attach, fed by the controller's observable through a constructor parameter, with the message
+- A new outcome replaces whatever stands, in click order.
+- A passive status read with a positive spawn type clears a standing outcome whose sole complaint was the priority state or a transient inability to act, that is `background_band`, `spawn_type_unknown`, `deferred`, `contended` or `unverified`, and only when the read started after that outcome was recorded. The controller takes one monotonic counter under its lock for both outcome records and read starts, so a read that began before the failure cannot clear it. Every other token stays until a later `Succeeded`, because a positive spawn type does not disprove it: launchd keeps a loaded `daemon` job after its plist is deleted, and an ownership mismatch is independent of priority.
+- A `Succeeded` outcome clears whatever stands.
+
+There is nothing to withdraw from a message lane and nothing to intercept in a queue: the view renders the state, so the moment it changes the text changes with it, in an open window as much as in a fresh one.
+
+### App: indicator and prompt
+
+**Indicator.** `MainWindowViewModel` gains `BackgroundPriority`, `BackgroundPriorityText`, `ReloadFailureText`, `IsReloading` and a `ReloadDaemonCommand`, fed by the controller's observables through constructor parameters and gated to a connected attach like `RestartPending`. The indicator text is
 
 > Daemon runs at background priority — agent terminals lag under load.
 
-and a `ReloadDaemonCommand` bound to the controller's action. In `SessionRailView.axaml` the block sits beside the update-pending indicator, as `Classes.backgroundPriority`, in `KcapWarning*` tone because it is a needs-you status, with a `kcapGhost` "Reload" button carrying the command. The update-pending indicator is unchanged.
+In `SessionRailView.axaml` one block sits beside the update-pending indicator, as `Classes.backgroundPriority`, in `KcapWarning*` tone because it is a needs-you status. It holds the indicator line, a `kcapGhost` "Reload" button bound to the command and disabled while `IsReloading`, and under them the failure line, visible only while `ReloadFailureText` is non-null. The block is visible while either the indicator or a failure stands, so a failure that outlives a lowered indicator, such as `unit_missing` after a positive read, remains readable until a success clears it. The update-pending indicator is unchanged.
+
+**Failure copy.** `ReloadCopy.For(ReloadState)` builds the failure line, naming the daemon and the terminal command: `reload_unsupported` ("This kcap CLI cannot reload the daemon service. Update kcap, then press Reload again."), `background_band` ("The daemon still runs at background priority after the reload. Run `kcap daemon service refresh --name <daemon> --force` from a terminal and check `kcap daemon status`."), `spawn_type_unknown` ("The reload finished but the daemon's priority could not be confirmed. Check `kcap daemon status --name <daemon>`."), `deferred`, `contended`, `not_loaded`, `unverified`, `unit_missing`, `unit_unreadable`, `unit_unsupported`, `failed`, the unconfirmed outcome ("The daemon reload is not yet confirmed — check `kcap daemon status --name <daemon>`."), and a fallback for any other token, including the exit-code token an absent or malformed reason line produces ("The daemon reload for <daemon> failed (exit N). Check `kcap daemon status --name <daemon>`; details are in the app log."). No copy claims the daemon restarted unless `reloaded` was established. The raw token is logged alongside.
 
 **Prompt.** `LifecyclePrompt.KindReloadService` is a new kind. `LifecyclePromptViewModel` titles it "Reload the daemon service" and labels accept "Reload now"; decline stays visible. The controller builds the disclosure:
 
 > Reloading restarts the daemon and ends everything it hosts: N agent(s) now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.
-
-**Outcome copy.** `App.AttentionCopyFor` gains mappings for every Reload token: `reload_unsupported` ("This kcap CLI cannot reload the daemon service. Update kcap, then press Reload again."), `background_band` ("The daemon still runs at background priority after the reload. Run `kcap daemon service refresh --name <daemon> --force` from a terminal and check `kcap daemon status`."), `spawn_type_unknown` ("The reload finished but the daemon's priority could not be confirmed. Check `kcap daemon status --name <daemon>`."), `deferred`, `contended`, `not_loaded`, `unverified`, `unit_missing`, `unit_unreadable`, `unit_unsupported` and `failed`, each naming the daemon and the terminal command. No copy claims the daemon restarted unless `reloaded` was established.
-
-**Fallback copy.** A Reload envelope whose token has no mapping, including the exit-code token an absent or malformed reason line produces, is still shown: "The daemon reload for <daemon> failed (exit N). Check `kcap daemon status --name <daemon>`; details are in the app log." The raw token stays in the log. Every other verb keeps today's log-only treatment of unknown tokens.
-
-**Attention entries with owners.** The attention lane is a replaying subject shared by the main window and the tray, and the status lane is a different subject, so a success line cannot clear an earlier failure: the tray would keep asserting attention and a reopened window would replay the stale text over the newer status. Text is not an identity either: several tokens and verbs already map to the same copy, so clearing "the text a Reload posted" could delete a newer warning from another verb that happens to read the same.
-
-The lane therefore carries an `AttentionEntry` (an opaque id plus the text) instead of a bare string; the window and the tray bind to its text. `ILifecycleSurface.Attention` returns the entry's id, and a new `ILifecycleSurface.ClearAttention(AttentionId id)` sets the lane to null only if it currently holds that exact entry, as one atomic conditional step on the subject. The presenter records the id of the Reload-owned entry it last posted together with the token it carried.
-
-**Resolution.** Two things resolve a Reload-owned entry:
-
-- A verified Reload success (`Succeeded`) resolves any Reload-owned entry.
-- A passive status read with a positive spawn type resolves only the entries whose sole complaint was the priority state or a transient inability to act: `background_band`, `spawn_type_unknown`, `deferred`, `contended` and `unverified`. Entries for `reload_unsupported`, `not_loaded`, `unit_missing`, `unit_unreadable`, `unit_unsupported`, `failed`, the fallback copy, and any ownership or skew leg from the shared classifier stay until a verified success, because a positive spawn type does not disprove them: launchd keeps a loaded `daemon` job after its plist is deleted, and an ownership mismatch is independent of priority.
-
-Resolution also supersedes what has not been shown yet. The lane delivers a failure to the waiter at once and enqueues its envelope for a presenter that drains separately and may be paused behind another outcome's dialog, so a stale Reload failure can still be queued when the success or the positive read arrives. The controller stamps each resolution with the lane's envelope sequence at that moment; the presenter, before showing a Reload envelope, drops one enqueued at or before a stamp that resolves its token, acknowledges it and logs it instead. Failures reach the window and the tray through the attention lane every mutation already uses; this change adds no tray indicator of its own.
 
 ## Testing
 
@@ -154,9 +154,9 @@ Resolution also supersedes what has not been shown yet. The lane delivers a fail
 
 - `KcapCliTests`: the snapshot parses the field as a word, as null and as absent; `ServiceReloadAsync` passes the exact arguments.
 - `DaemonMutationLaneTests`: a pinned executor whose status carries no spawn type, with two installed services, is refused with `reload_unsupported` and dispatches nothing; with the field present the verb dispatches; timeout, non-zero exit with and without the token, and exit 0 followed by a daemon that becomes reachable within the window, one that never does, an ownership snapshot reading `adaptive`, one reading `background`, one with an unknown word, one without the field, and one reading `daemon` with full evidence each map to the stated outcome.
-- `DaemonLifecycleControllerTests`: a background-band snapshot raises the indicator, a positive one lowers it, an unknown or failed read leaves it; an initial Unreachable followed by Connected to an Adaptive daemon raises it, and a later reconnect to a Standard successor lowers it and resolves a `background_band` entry; a positive read leaves a `unit_missing` entry and an ownership-repair entry in place; the prompt shows on every click, a decline runs no mutation, a generation change while the prompt is open cancels with the status line; `Succeeded` posts the standard-priority line, resolves every Reload-owned entry and lowers the indicator after the re-query.
-- `App` presentation tests: every Reload token has copy; an envelope with an absent or unknown token is presented with the fallback copy, not logged only; a failure followed by a verified success leaves the tray out of attention and a reopened main window without the stale text; an entry with identical text posted by a different outcome survives the Reload clear; a Reload failure whose presentation is paused until after a verified success or a resolving positive read is acknowledged and logged, not shown.
-- `SessionRailView` smoke: the indicator binds to the view model's property and its button to the command.
+- `DaemonLifecycleControllerTests`: a background-band snapshot raises the indicator, a positive one lowers it, an unknown or failed read leaves it; an initial Unreachable followed by Connected to an Adaptive daemon raises it, and a later reconnect to a Standard successor lowers it and clears a standing `background_band` state; a positive read leaves a standing `unit_missing` state and a standing ownership-mismatch state; a positive read that started before a `contended` outcome was recorded does not clear it, one that started after does; a reload that succeeds followed by one that fails leaves the failure standing; a second click while a reload is in flight is ignored; the prompt shows on every click, a decline runs no mutation, a generation change while the prompt is open cancels with the status line; `Succeeded` posts the standard-priority line, clears the state and lowers the indicator after the re-query; an unknown token renders the fallback copy with the exit code.
+- `App` tests: the outcome consumer acknowledges and logs a Reload envelope without posting to the attention lane.
+- `SessionRailView` smoke: the block binds the indicator text, the failure text, the button's command and its disabled state; the block is visible with a failure standing and the indicator lowered.
 
 **Live, on a Mac whose daemon is loaded as Adaptive.** The rail shows the indicator; clicking shows the prompt naming the agent count; accepting at a quiet moment ends them, the daemon pid changes, `launchctl print` reads `daemon (3)` and `ps -o pri` on the daemon reads 20, and the indicator disappears without a restart of the app. The diagnosing machine, with its hand-edited Standard plist, is this case.
 
