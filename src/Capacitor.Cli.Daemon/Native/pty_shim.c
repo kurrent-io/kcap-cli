@@ -577,8 +577,8 @@ static void reset_caught_signal_handlers(void) {
     for (int sig = 1; sig < NSIG; sig++) {
         struct sigaction old;
         if (sigaction(sig, NULL, &old) != 0) continue;
-        int caught = (old.sa_flags & SA_SIGINFO) || (old.sa_handler != SIG_DFL && old.sa_handler != SIG_IGN);
-        if (caught) sigaction(sig, &dfl, NULL);
+        // sa_handler and sa_sigaction share storage, so this holds whether or not SA_SIGINFO is set.
+        if (old.sa_handler != SIG_DFL && old.sa_handler != SIG_IGN) sigaction(sig, &dfl, NULL);
     }
 }
 
@@ -654,8 +654,6 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
         // async-signal-safe list (close, write, _exit, chdir, execve, kill, getpid, prctl,
         // getppid, sigaction, pthread_sigmask).
         reset_caught_signal_handlers();
-        int restore_err = pthread_sigmask(SIG_SETMASK, &saved_mask, NULL);
-        if (restore_err != 0) { child_fail_and_die(errpipe[1], PTY_STEP_FORK, restore_err); }
 
         close(errpipe[0]);
         // cancel_fd is caller-owned and only meaningful to the PARENT's poll loop; close our
@@ -686,6 +684,11 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
 #endif
 
         if (chdir(cwd) != 0) { child_fail_and_die(errpipe[1], PTY_STEP_CHDIR, errno); }
+
+        // Unblocked as late as possible: a signal that kills the child after this line closes the
+        // error pipe with no record, which the parent reads as a successful exec.
+        int restore_err = pthread_sigmask(SIG_SETMASK, &saved_mask, NULL);
+        if (restore_err != 0) { child_fail_and_die(errpipe[1], PTY_STEP_FORK, restore_err); }
 
         if (plan->mode == PTY_EXEC_FD) {
 #ifdef __linux__

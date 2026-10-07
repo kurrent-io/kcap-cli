@@ -228,6 +228,45 @@ public class PtySpawnTests {
         } finally { Free(plan); }
     }
 
+    /// <summary>An ignored disposition stays ignored even when it was installed with SA_SIGINFO:
+    /// the flag says how a handler would be called, not that there is one. SIGURG's default
+    /// action is to ignore, so ignoring it changes nothing a concurrent spawn could notice.</summary>
+    [Test, RunOn(OS.Linux), NotInParallel]
+    public async Task Child_keeps_a_signal_ignored_with_siginfo() {
+        const int sigurg = 23;
+        var ignore = new byte[SigactionSize];
+        BitConverter.TryWriteBytes(ignore.AsSpan(0), (nint)1 /* SIG_IGN */);
+        BitConverter.TryWriteBytes(ignore.AsSpan(SigactionFlagsOffset), 4 /* SA_SIGINFO */);
+        var saved = new byte[SigactionSize];
+        if (sigaction(sigurg, ignore, saved) != 0) throw new InvalidOperationException("sigaction failed");
+
+        var plan = Preflight("/bin/cat", ["cat", "/proc/self/status"]);
+        try {
+            var rc = Spawn(plan, out var result);
+            try {
+                await Assert.That(rc).IsEqualTo(0);
+                var ignored = Convert.ToUInt64(ReadStatusFields(DrainMaster(result.MasterFd)).SigIgn, 16);
+                await Assert.That(ignored & (1UL << (sigurg - 1))).IsNotEqualTo(0UL);
+            } finally {
+                if (result.MasterFd >= 0) UnixPtyInterop.close(result.MasterFd);
+                if (result.Pid > 0) {
+                    UnixPtyInterop.kill(result.Pid, UnixPtyInterop.SIGKILL);
+                    UnixPtyInterop.waitpid(result.Pid, out _, 0);
+                }
+            }
+        } finally {
+            Free(plan);
+            _ = sigaction(sigurg, saved, null);
+        }
+    }
+
+    // glibc's struct sigaction on 64-bit: handler, 128-byte sa_mask, then int sa_flags.
+    const int SigactionSize        = 256;
+    const int SigactionFlagsOffset = 136;
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    static extern int sigaction(int sig, byte[]? act, byte[]? oldact);
+
     static (string SigBlk, string SigIgn) ReadStatusFields(string status) {
         string Field(string name) =>
             status.Split('\n').Select(l => l.Trim()).Single(l => l.StartsWith(name + ":", StringComparison.Ordinal))[(name.Length + 1)..].Trim();
