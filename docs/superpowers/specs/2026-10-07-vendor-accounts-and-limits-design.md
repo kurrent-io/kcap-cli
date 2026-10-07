@@ -107,9 +107,16 @@ else changed, giving the app evidence that a refresh happened (Section 6.3).
 **Overlapping refreshes.** A refresh records the account's `generation` and a per-account
 `probeSeq` (incremented under `accounts.lock` when the probe starts) before calling the vendor. At
 commit it applies its identity result only if no probe with a higher `probeSeq` has committed since;
-otherwise it records only `refreshedAt` and bumps `revision`. A limits result carries the generation
-the refresh started under and is dropped by the reading fence (Section 5.1) if that generation has
-been retired. Reversed completion order therefore never restores an older login.
+otherwise it records only `refreshedAt` and bumps `revision`. Reversed completion order therefore
+never restores an older login.
+
+A refresh's limits belong to the identity its own probe saw, so both commit together: holding
+`accounts.lock` and then `readings.lock`, the refresh applies its identity (retiring the old
+generation and deleting its reading if the login changed) and then merges its limits tagged with the
+generation that commit produced. A refresh whose identity was superseded by a higher `probeSeq` drops
+its limits; a refresh whose probe failed merges its limits only if the generation is still the one it
+started under. A single refresh that discovers login B therefore leaves B's identity and B's fresh
+limits.
 
 **Identity change.** When an authoritative probe reports a different identity than the one recorded
 (another login in the same directory), the account's `generation` increments, its reading is deleted
@@ -263,10 +270,16 @@ a later receipt time.
 
 | Producer | Fresh when | `confirmedAt` |
 |---|---|---|
-| Claude status line | The session's `cost.total_api_duration_ms` is greater than the last value recorded for that `session_id` — a new API response arrived since | Wrapper's clock at that run |
+| Claude status line | The session's `cost.total_api_duration_ms` is greater than a baseline already recorded for that `session_id` — a new API response arrived since | Wrapper's clock at that run |
 | Codex rollout | Every token-count event is one response | The rollout line's own `timestamp` |
 | Codex app-server notification | Every `account/rateLimits/updated` | Receipt time in the runtime |
 | Codex refresh | Every `account/rateLimits/read` response | Receipt time in the refresh |
+
+**Claude baseline.** The first run seen for a session — after install, or after the counter history
+is lost — only records `total_api_duration_ms` as the baseline. Its values are merged, but they are
+not fresh: the session may be replaying a response from hours ago. A later run with a higher counter
+confirms. A payload without the counter is never fresh. A window that has values but no
+`confirmedAt` reads as "freshness unknown", which the Ready predicate treats as stale.
 
 A replayed observation may still raise a percentage (ordering above), but never moves `confirmedAt`.
 The reading keeps the last `total_api_duration_ms` per contributing Claude session for this check.
@@ -324,7 +337,11 @@ never appear in a published snapshot (Section 6.1).
 
 **Settings writes are atomic.** Every write to a vendor settings file — this one, and the plugin,
 hook and MCP writes of Section 4.1 — reads the existing file, edits only the keys kcap owns, and
-replaces the file through `AtomicFile.Replace`, never `File.WriteAllText`. An existing file that does
+replaces it atomically, never with `File.WriteAllText`. The atomic writer is permission-aware: the
+temporary file is created with the destination's existing mode, or with the mode the caller requires
+(Codex's `config.toml` writer creates 0600 today), before any byte is written, then renamed over the
+destination. `AtomicFile.Replace` gains this option; the existing owner-only Codex test
+(`RegisterKcapMcpServers_writes_owner_only_files_on_unix`) stays and passes through the refactor. An existing file that does
 not parse is never overwritten or reset to an empty object: wiring refuses that account, reports it
 Broken with "settings file unreadable", and leaves the file as it was. An interruption at any point
 therefore leaves either the old file or the new one, with the user's other settings intact.
@@ -384,15 +401,28 @@ A "blocked" marker on an account's reading comes from two sources:
 
 Rules, for both:
 
-- **Blocked until** is the reset of the window the signal names; otherwise the latest reset among the
-  account's windows at or above 100%; otherwise "unknown".
-- An explicit signal outranks percentages: a blocked marker is set even when the cached percentages
-  read below 100%, and a replayed observation never clears it.
-- The marker clears when its blocked-until time has passed, or when a **fresh** observation covers
-  every window the account has a reading for, shows all of them below 100%, and (Codex) has a null
-  `rate_limit_reached_type`. A partial observation that updates one window never clears it.
-- A marker with an "unknown" blocked-until never clears by time and never merely because no
-  exhausted window is known; only the fresh, complete, all-below observation clears it.
+**The marker is a set of constraints, not one deadline.** Each signal adds a constraint: the window
+it names with that window's reset; otherwise every window at or above 100% with its reset; otherwise
+one "unknown" constraint. Constraints accumulate — a later signal naming the primary window never
+replaces a secondary-window constraint already present. **Blocked until** is the latest reset among
+the constraints, or "unknown" if any constraint is unknown.
+
+**Evidence is ordered by producer time.** The marker carries `blockedAt` (the newest signal's time:
+detection time for Claude, the rollout line's `timestamp` or receipt time for Codex) and `clearedAt`
+(the newest clearing evidence's time). The account is blocked while `blockedAt > clearedAt`.
+
+- A window constraint lapses when its reset time passes. An unknown constraint never lapses by time.
+- **Clearing evidence** is a fresh observation (Section 5.1) whose producer time is later than
+  `blockedAt`, that covers every window the account has a reading for, shows all of them below 100%,
+  and (Codex) has a null `rate_limit_reached_type`. It sets `clearedAt` to that time and empties the
+  constraints. An older observation — a replay, or a rewound Codex rollout event with its original
+  timestamp — never clears, whatever it shows; neither does a partial observation.
+- An explicit signal outranks percentages: a marker is set even when cached percentages read below
+  100%.
+- `blockedAt`, `clearedAt` and the constraint set are persisted in the reading and merged the same way
+  everywhere — producer, daemon, server: maximum `blockedAt`, maximum `clearedAt`, union of
+  constraints newer than `clearedAt`. Snapshots delivered in any order therefore converge, and a
+  cleared block cannot be reintroduced by an older snapshot, nor a newer block erased.
 - **Next reset** on the screen stays the earliest reset of any window; it is not "unblocked at".
 
 ### 5.5 Testing
@@ -409,7 +439,11 @@ Rules, for both:
   command edit then unwire keeps the edit; a `padding` edit with our command still installed survives
   unwire; interrupted install at each step, including a kill during the settings file write itself,
   with unrelated settings asserted intact; a malformed existing settings file is left untouched and
-  the account reports Broken.
+  the account reports Broken; Codex `config.toml` stays 0600 after an atomic rewrite (the existing
+  owner-only test).
+  Claude baseline: installing the wrapper on an idle existing session leaves its windows "freshness
+  unknown"; unchanged repeats after the baseline stay unknown; the next API-duration increase
+  confirms; a payload without the counter is never fresh.
 - **Readings:** a repeated Claude payload with an unchanged `total_api_duration_ms` does not move
   `confirmedAt`, while a new response with an equal value does; a fresh equal-valued Codex response
   moves it; a lower value with the same reset is ignored; a new window replaces; several `limit_id`s
@@ -419,7 +453,7 @@ Rules, for both:
 - **Identity:** a daemon building a snapshot between the registry update and the reading's deletion
   publishes no reading; a retired account with no reading still publishes its new generation; a new
   login with lower usage at the same reset time replaces the old login's higher value on the server;
-  two overlapping refreshes across a login change, completing in reverse order, leave the newer login.
+  two overlapping refreshes across a login change, completing in reverse order, leave the newer login. A single refresh discovering login B leaves B's identity and B's fresh limits.
 - **Codex:** rollout fixtures (primary only, both windows, several limit ids, credits, limit reached
   with and without a matching window, and a limit-reached event while cached percentages are below
   100% — each with its expected blocked state and Ready result);
@@ -428,7 +462,9 @@ Rules, for both:
 - **Limit hit:** block before any reading; two exhausted windows with different resets; a partial
   newer observation that must not clear the block; an unknown-reset block that survives time passing
   and a replayed all-below observation; clearing on the last reset and on a fresh, complete all-below
-  observation.
+  observation; successive signals naming the primary then the secondary window, and the reverse,
+  where passing the earlier reset does not unblock; block and clear snapshots delivered to the server
+  in reverse order; a rewound older Codex all-below event arriving after a newer block.
 
 ## 6. Part B — publishing and the screen
 
