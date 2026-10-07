@@ -47,9 +47,11 @@ public class PlanArtifactsClientTests {
     }
 
     [Test]
-    public async Task A_malformed_session_id_is_unavailable_without_a_request() {
+    [Arguments(".")]
+    [Arguments(" ")]
+    public async Task An_id_that_would_escape_the_route_is_unavailable_without_a_request(string id) {
         var (client, handler) = Build(HttpStatusCode.OK, Body);
-        var read = await client.ReadAsync("not-a-session", CancellationToken.None);
+        var read = await client.ReadAsync(id, CancellationToken.None);
         await Assert.That(read.Kind).IsEqualTo(SessionPlansReadKind.Unavailable);
         await Assert.That(handler.Requested).IsNull();
     }

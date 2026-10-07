@@ -11,7 +11,7 @@ public sealed class PlanArtifactsClient(HttpClient http, string serverUrl) {
     readonly string _base = serverUrl.TrimEnd('/');
 
     public async Task<PlanArtifactsRead> ReadAsync(string sessionId, CancellationToken ct) {
-        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } id || !IsValidSessionId(id)) return PlanArtifactsRead.Of(SessionPlansReadKind.Unavailable);
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } id) return PlanArtifactsRead.Of(SessionPlansReadKind.Unavailable);
 
         try {
             using var req  = new HttpRequestMessage(HttpMethod.Get, $"{_base}/api/sessions/{Uri.EscapeDataString(id)}/plan-artifacts?chain=true");
@@ -33,12 +33,4 @@ public sealed class PlanArtifactsClient(HttpClient http, string serverUrl) {
         e is OperationCanceledException
             ? !ct.IsCancellationRequested
             : e is HttpRequestException or JsonException or NotSupportedException or IOException;
-
-    static bool IsValidSessionId(string id) {
-        if (id.Length != 32) return false;
-        foreach (var c in id) {
-            if (!char.IsAsciiDigit(c) && !(c >= 'a' && c <= 'f')) return false;
-        }
-        return true;
-    }
 }
