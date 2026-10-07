@@ -496,11 +496,12 @@ public partial class App : Application {
         var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv);
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time);
         var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv);
+        var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
         var readers = new PullRequestReaderRegistry(pullRequests, [new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
-        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans);
+        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts);
 
         var machineId = new MachineId(_config).ReadPersisted();
         var sessionHttp = ServerHttp(profiles);
