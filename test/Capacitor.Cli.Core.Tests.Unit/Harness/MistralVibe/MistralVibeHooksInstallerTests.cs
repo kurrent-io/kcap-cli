@@ -13,7 +13,7 @@ public class MistralVibeHooksInstallerTests {
 
     [Test]
     public async Task Install_adds_one_entry_per_type_and_is_idempotent() {
-        var path = Tmp.PathTo("hooks.toml");
+        var path = Tmp.GetResolvedPath("hooks.toml");
 
         await Assert.That(MistralVibeHooksInstaller.Install(path)).IsEqualTo(TomlConfigFile.Outcome.Updated);
         await Assert.That(MistralVibeHooksInstaller.IsInstalled(path)).IsTrue();
@@ -27,8 +27,9 @@ public class MistralVibeHooksInstallerTests {
 
     [Test]
     public async Task Install_preserves_user_hooks_and_remove_strips_only_ours() {
-        var path = Tmp.CreateFile("hooks.toml",
+        Tmp.CreateFile("hooks.toml",
             "[[hooks]]\nname = \"mine\"\ntype = \"pre_tool\"\ncommand = \"echo hi\"\n");
+        var path = Tmp.GetResolvedPath("hooks.toml");
 
         MistralVibeHooksInstaller.Install(path);
         var arr = MistralVibeHooksParser.HooksArray(TomlConfigFile.Read(path)!);
@@ -43,8 +44,9 @@ public class MistralVibeHooksInstallerTests {
 
     [Test]
     public async Task Remove_on_a_file_without_our_hooks_is_a_no_op() {
-        var path = Tmp.CreateFile("hooks.toml",
+        Tmp.CreateFile("hooks.toml",
             "[[hooks]]\nname = \"mine\"\ntype = \"pre_tool\"\ncommand = \"echo hi\"\n");
+        var path = Tmp.GetResolvedPath("hooks.toml");
 
         await Assert.That(MistralVibeHooksInstaller.Remove(path)).IsEqualTo(TomlConfigFile.Outcome.Unchanged);
     }

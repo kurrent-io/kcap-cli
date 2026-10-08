@@ -15,7 +15,7 @@ public class MistralVibeConfigTomlTests {
 
     [Test]
     public async Task Register_writes_a_stdio_entry_per_server_and_is_idempotent() {
-        var path = Tmp.PathTo("config.toml");
+        var path = Tmp.GetResolvedPath("config.toml");
 
         await Assert.That(MistralVibeConfigToml.RegisterKcapMcpServers(path, Kcap)).IsEqualTo(TomlConfigFile.Outcome.Updated);
         await Assert.That(MistralVibeConfigToml.OwnsAnything(path)).IsTrue();
@@ -29,8 +29,9 @@ public class MistralVibeConfigTomlTests {
 
     [Test]
     public async Task Unregister_removes_ours_and_preserves_a_user_server() {
-        var path = Tmp.CreateFile("config.toml",
+        Tmp.CreateFile("config.toml",
             "[[mcp_servers]]\nname = \"mine\"\ntransport = \"stdio\"\ncommand = \"foo\"\n");
+        var path = Tmp.GetResolvedPath("config.toml");
 
         MistralVibeConfigToml.RegisterKcapMcpServers(path, Kcap);
         await Assert.That(MistralVibeConfigToml.UnregisterKcapMcpServers(path)).IsEqualTo(TomlConfigFile.Outcome.Updated);
@@ -42,8 +43,9 @@ public class MistralVibeConfigTomlTests {
 
     [Test]
     public async Task A_user_server_sharing_a_kcap_name_but_not_the_kcap_command_is_left_alone() {
-        var path = Tmp.CreateFile("config.toml",
+        Tmp.CreateFile("config.toml",
             "[[mcp_servers]]\nname = \"kcap-review\"\ntransport = \"stdio\"\ncommand = \"notkcap\"\n");
+        var path = Tmp.GetResolvedPath("config.toml");
 
         await Assert.That(MistralVibeConfigToml.UnregisterKcapMcpServers(path)).IsEqualTo(TomlConfigFile.Outcome.Unchanged);
         await Assert.That(Servers(path).Count).IsEqualTo(1);

@@ -31,6 +31,7 @@ public static class HostedHarnessCatalog {
         { "opencode",    "acp" },
         { "antigravity", "rpc" },
         { "pi",          "rpc" },
+        { "mistral-vibe", "pty" },
     };
 
     /// The vendors with an EXPLICIT family above — what the guard test reads, since Build's
@@ -168,6 +169,7 @@ public static class HostedHarnessCatalog {
         ["opencode"]    = ("Oc", "#F1F3F7"),
         ["antigravity"] = ("An", "#F4B860"),
         ["pi"]          = ("π", "#A994FF"),
+        ["mistral-vibe"] = ("Mv", "#FA520F"),
     };
 
     /// Glyph + tint for a vendor token; an unmapped token gets its first letter in neutral grey
