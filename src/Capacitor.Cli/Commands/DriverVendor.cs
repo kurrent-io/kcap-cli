@@ -42,7 +42,7 @@ public static class DriverVendor {
     // kcap nonetheless stamps, since it exports no distinctive env var. Validating here keeps a
     // malformed or stale registration from echoing arbitrary text as driver_vendor to the model.
     static readonly HashSet<string> NameableVendors =
-        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex").Append("vibe"),
+        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex").Append("mistral-vibe"),
             StringComparer.Ordinal);
 
     static string? Normalize(string? v) =>

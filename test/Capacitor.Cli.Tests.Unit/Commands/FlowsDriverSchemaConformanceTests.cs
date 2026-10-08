@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Mcp;
@@ -228,7 +229,8 @@ public class FlowsDriverSchemaConformanceTests {
         Action<PluginEnvironment>       OptIn,
         Func<PluginEnvironment, string> ConfigPath,
         Func<string, Projection>        Extract,
-        bool                            BareInstall = false);
+        bool                            BareInstall = false,
+        bool                            JsonProjected = true);
 
     /// <summary>Every environment variable any kcap path resolver consults. Kept together so a new
     /// override cannot be added without this list being the obvious place to add it.</summary>
@@ -276,6 +278,15 @@ public class FlowsDriverSchemaConformanceTests {
             [.. entry["args"]!.AsArray().Select(n => n!.GetValue<string>())]);
     };
 
+    /// <summary>Mistral Vibe keeps its servers in a <c>[[mcp_servers]]</c> array of tables keyed by
+    /// <c>name</c>, not Codex's table keyed by server.</summary>
+    static Projection FromVibeToml(string path) {
+        var servers = (TomlTableArray)TomlSerializer.Deserialize<TomlTable>(File.ReadAllText(path))!["mcp_servers"]!;
+        var entry   = servers.Single(t => (string)t["name"]! == "kcap-flows");
+        return new("Mistral Vibe", (string)entry["command"]!,
+            [.. ((TomlArray)entry["args"]!).Select(a => (string)a!)]);
+    }
+
     static Projection FromToml(string path) {
         var servers = (TomlTable)TomlSerializer.Deserialize<TomlTable>(File.ReadAllText(path))!["mcp_servers"]!;
         var entry   = (TomlTable)servers["kcap-flows"]!;
@@ -321,6 +332,12 @@ public class FlowsDriverSchemaConformanceTests {
             env => { Directory.CreateDirectory(Path.GetDirectoryName(env.Harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin)!);
                      File.WriteAllText(env.Harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin, "// stale"); },
             env => env.Harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson, Json("OpenCode", "mcp", argvArray: true)),
+
+        // TOML, so it stamps its driver like the JSON harnesses but has no HarnessMcpProjections entry.
+        new("Mistral Vibe", "--mistral-vibe",
+            env => MistralVibeHooksInstaller.Install(env.Harnesses.Of<MistralVibeHarness>().Paths.HooksToml),
+            env => env.Harnesses.Of<MistralVibeHarness>().Paths.ConfigToml, FromVibeToml,
+            JsonProjected: false),
 
         // Codex installs unconditionally rather than through the `--if-installed` refresh branch, so
         // it takes the bare-install path and needs a planted plugin root. Flagged here rather than
@@ -501,7 +518,7 @@ public class FlowsDriverSchemaConformanceTests {
     [Test]
     public async Task The_projection_list_matches_the_json_installer_arms() {
         var projected = HarnessMcpProjections.All.Select(p => p.Harness).ToArray();
-        var installed = Arms.Where(a => !a.BareInstall).Select(a => a.Flag.TrimStart('-')).ToArray();
+        var installed = Arms.Where(a => a is { BareInstall: false, JsonProjected: true }).Select(a => a.Flag.TrimStart('-')).ToArray();
 
         await Assert.That(projected).IsEquivalentTo(installed);
     }

@@ -472,8 +472,8 @@ sealed class SetupCommand(
         var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
         var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
-        var skipVibeFlag     = args.Contains("--skip-vibe-hooks");
-        var skipVibeMcpFlag  = args.Contains("--skip-vibe-mcp");
+        var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
+        var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
         var skipImport       = args.Contains("--skip-import");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -715,8 +715,8 @@ sealed class SetupCommand(
             SkipPiMcp: skipPiMcpFlag,
             SkipPiInstructions: skipPiInstructionsFlag,
             InstallAgents: installAgents,
-            SkipVibe: skipVibeFlag,
-            SkipVibeMcp: skipVibeMcpFlag);
+            SkipMistralVibe: skipVibeFlag,
+            SkipMistralVibeMcp: skipVibeMcpFlag);
 
         stepOptions = SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 

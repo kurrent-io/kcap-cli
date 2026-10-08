@@ -25,7 +25,7 @@ public static class HarnessOverrides {
             HarnessId.Pi          => "KCAP_PI_PATH",
             HarnessId.OpenCode    => "KCAP_OPENCODE_PATH",
             HarnessId.Antigravity => "KCAP_ANTIGRAVITY_PATH",
-            HarnessId.MistralVibe => "KCAP_VIBE_PATH",
+            HarnessId.MistralVibe => "KCAP_MISTRAL_VIBE_PATH",
         };
 
         /// <summary>Overrides the model a hosted agent of this vendor runs. Null where we hand the

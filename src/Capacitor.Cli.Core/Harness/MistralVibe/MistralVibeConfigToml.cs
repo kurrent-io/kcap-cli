@@ -44,7 +44,7 @@ public static class MistralVibeConfigToml {
         var array   = existing as TomlTableArray;
         var changed = false;
 
-        foreach (var descriptor in KcapMcpServers.ForHarness("vibe")) {
+        foreach (var descriptor in KcapMcpServers.ForHarness("mistral-vibe")) {
             var desired = BuildEntry(descriptor, command);
             var index   = IndexOfNamed(array, descriptor.Name);
 

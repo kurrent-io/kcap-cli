@@ -14,7 +14,7 @@ namespace Capacitor.Cli.Harness.MistralVibe;
 /// Two on-disk shapes converge on one import: a legacy <c>session_&lt;ts&gt;/messages.jsonl</c> is sent
 /// line-for-line, and a unified <c>unified/&lt;id&gt;/</c> directory is flattened by
 /// <see cref="MistralVibeUnifiedStore"/> into the same ordered line stream before sending. Either way
-/// the raw lines are POSTed with <c>vendor: vibe</c>, and the SERVER's Vibe normalizer turns them into
+/// the raw lines are POSTed with <c>vendor: mistral-vibe</c>, and the SERVER's Vibe normalizer turns them into
 /// canonical events — the client-side projection
 /// (<see cref="Capacitor.Models.Transcripts.Harness.MistralVibe.MistralVibeTranscriptEvents"/>) is for
 /// local display, not ingestion.

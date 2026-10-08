@@ -33,7 +33,7 @@ Vendor filters (additive — pass one or more to restrict the run):
   --pi                    Import Pi (badlogic/pi-mono) session transcripts
   --opencode              Import SST OpenCode sessions (~/.local/share/opencode/opencode.db)
   --antigravity           Import Google Antigravity conversations (~/.gemini/antigravity/brain)
-  --vibe                  Import Mistral Vibe sessions (~/.vibe/logs/session)
+  --mistral-vibe          Import Mistral Vibe sessions (~/.vibe/logs/session)
 
 Scope (one of, required for non-interactive use):
   --all                   Import every discovered session

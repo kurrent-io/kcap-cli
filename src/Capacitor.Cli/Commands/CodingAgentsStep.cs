@@ -29,7 +29,7 @@ internal static class CodingAgentsStep {
             // `--no-prompt` gives them no consent moment in which to be told otherwise. Turning a
             // skip flag into something that writes MCP config would be a silent reversal.
             bool ToolsIndependentOfCapture = false,
-            bool SkipVibe = false, bool SkipVibeMcp = false);
+            bool SkipMistralVibe = false, bool SkipMistralVibeMcp = false);
 
     internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false, bool Vibe = false);
 
@@ -623,13 +623,13 @@ internal static class CodingAgentsStep {
 
         writeLine("  [green]✓[/] Mistral Vibe detected");
 
-        if (options.SkipVibe && (options.SkipVibeMcp || !options.ToolsIndependentOfCapture)) {
+        if (options.SkipMistralVibe && (options.SkipMistralVibeMcp || !options.ToolsIndependentOfCapture)) {
             writeLine("  [dim]· Mistral Vibe hooks skipped by flag[/]");
 
             return false;
         }
 
-        // hooks.toml writes the bare "kcap hook --vibe" command and relies on Vibe finding it on PATH.
+        // hooks.toml writes the bare "kcap hook --mistral-vibe" command and relies on Vibe finding it on PATH.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Vibe hooks not installed — 'kcap' is not on PATH.");
             writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
@@ -642,7 +642,7 @@ internal static class CodingAgentsStep {
         toolsEligible = true;
 
         // Only reachable with ToolsIndependentOfCapture: the flag-only opt-out returned above.
-        if (options.SkipVibe) {
+        if (options.SkipMistralVibe) {
             writeLine("  [dim]· Mistral Vibe capture declined — registering the MCP servers only[/]");
 
             return false;
@@ -667,7 +667,7 @@ internal static class CodingAgentsStep {
             Action<string> writeLine,
             bool           vibeToolsEligible
         ) {
-        if (installers.RegisterVibeMcp is null || !vibeToolsEligible || options.SkipVibeMcp) return false;
+        if (installers.RegisterVibeMcp is null || !vibeToolsEligible || options.SkipMistralVibeMcp) return false;
 
         var configPath = Markup.Escape(paths.VibeConfigPath);
 
@@ -1086,7 +1086,7 @@ internal static class CodingAgentsStep {
             Gemini   = Wanted(detected.Gemini, options.SkipGemini, options.SkipGeminiMcp),
             Pi       = Wanted(detected.Pi, options.SkipPi, options.SkipPiMcp),
             OpenCode = Wanted(detected.OpenCode, options.SkipOpenCode, options.SkipOpenCodeMcp),
-            Vibe     = Wanted(detected.Vibe, options.SkipVibe, options.SkipVibeMcp)
+            Vibe     = Wanted(detected.Vibe, options.SkipMistralVibe, options.SkipMistralVibeMcp)
         };
     }
 

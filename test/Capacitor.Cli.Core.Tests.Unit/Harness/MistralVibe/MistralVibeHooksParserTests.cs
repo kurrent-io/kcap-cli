@@ -4,10 +4,10 @@ namespace Capacitor.Cli.Core.Tests.Unit.Harness.MistralVibe;
 
 public class MistralVibeHooksParserTests {
     [Test]
-    [Arguments("kcap hook --vibe", true)]
-    [Arguments("/usr/local/bin/kcap hook --vibe", true)]   // path-qualified executable still matches
-    [Arguments("kcap.exe hook --vibe", true)]
-    [Arguments("echo kcap hook --vibe", false)]            // marker buried in an argument, not the exe
+    [Arguments("kcap hook --mistral-vibe", true)]
+    [Arguments("/usr/local/bin/kcap hook --mistral-vibe", true)]   // path-qualified executable still matches
+    [Arguments("kcap.exe hook --mistral-vibe", true)]
+    [Arguments("echo kcap hook --mistral-vibe", false)]            // marker buried in an argument, not the exe
     [Arguments("kcap hook --gemini", false)]
     [Arguments("kcap hook", false)]
     [Arguments("", false)]

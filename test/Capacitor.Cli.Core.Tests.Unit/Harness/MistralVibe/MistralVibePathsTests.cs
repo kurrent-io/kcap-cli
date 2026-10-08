@@ -1,4 +1,3 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.MistralVibe;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.MistralVibe;

@@ -51,10 +51,10 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--vibe", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--skills"];
 
     const string MutuallyExclusiveMsg =
-        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --vibe, and --skills are mutually exclusive.";
+        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, and --skills are mutually exclusive.";
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -100,7 +100,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--pi")) return InstallPi(args);
         if (args.Contains("--opencode")) return InstallOpenCode(args);
         if (args.Contains("--antigravity")) return InstallAntigravity(args);
-        if (args.Contains("--vibe")) return InstallVibe(args);
+        if (args.Contains("--mistral-vibe")) return InstallVibe(args);
 
         return InstallClaude(args);
     }
@@ -108,7 +108,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task<int> RefuseToolsOnlyAsync(string vendor, string reason) {
         await env.Stderr.WriteLineAsync(
             $"--tools-only is not supported for {vendor}: {reason}. "
-          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode and --antigravity."
+          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity and --mistral-vibe."
         );
 
         return 1;
@@ -138,7 +138,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--pi")) return await RemovePi(args);
         if (args.Contains("--opencode")) return await RemoveOpenCode(args);
         if (args.Contains("--antigravity")) return await RemoveAntigravity(args);
-        if (args.Contains("--vibe")) return await RemoveVibe(args);
+        if (args.Contains("--mistral-vibe")) return await RemoveVibe(args);
 
         return await RemoveClaude(args);
     }
@@ -2320,24 +2320,26 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
     async Task<int> InstallVibe(string[] args) {
         var vibe        = env.Harnesses.Of<MistralVibeHarness>().Paths;
-        var hooksPath   = GetArg(args, "--vibe-hooks-path")  ?? vibe.HooksToml;
-        var configPath  = GetArg(args, "--vibe-config-path") ?? vibe.ConfigToml;
-        var refreshOnly = args.Contains("--if-installed");
+        var hooksPath   = GetArg(args, "--mistral-vibe-hooks-path")  ?? vibe.HooksToml;
+        var configPath  = GetArg(args, "--mistral-vibe-config-path") ?? vibe.ConfigToml;
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = MistralVibeHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        if (refreshOnly && !MistralVibeHooksInstaller.IsInstalled(hooksPath)) return 0;
+        if (refreshOnly && !hooksInstalled && !MistralVibeConfigToml.OwnsAnything(configPath)) return 0;
 
-        // hooks.toml writes the bare `kcap hook --vibe` command, so Vibe must find kcap on PATH.
-        if (!refreshOnly && !KcapOnPath) {
+        // hooks.toml writes the bare `kcap hook --mistral-vibe` command, so Vibe must find kcap on PATH.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Vibe hooks: 'kcap' is not on PATH. "
-              + "Re-install kcap via npm: npm install -g @kurrent/kcap");
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
             return 1;
         }
 
         var hooksCurrent = refreshOnly && File.Exists(hooksPath)
                         && MistralVibeHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
         var freshHookFailure = false;
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (MistralVibeHooksInstaller.Install(hooksPath) != TomlConfigFile.Outcome.Failed) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly ? $"Vibe hooks refreshed ({hooksPath})" : $"Vibe hooks installed ({hooksPath})");
@@ -2355,11 +2357,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         // Register the kcap MCP servers in ~/.vibe/config.toml ([[mcp_servers]]) so Vibe picks them up
         // with no manual TOML edit. Non-destructive + idempotent; never fails the install.
-        if (!args.Contains("--skip-vibe-mcp"))
+        if (!args.Contains("--skip-mistral-vibe-mcp"))
             await RegisterVibeMcpServersAsync(configPath);
 
-        if (!args.Contains("--skip-vibe-skills"))
+        if (!args.Contains("--skip-mistral-vibe-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Vibe");
 
         return freshHookFailure ? 1 : 0;
     }
@@ -2379,8 +2383,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
     async Task<int> RemoveVibe(string[] args) {
         var vibe       = env.Harnesses.Of<MistralVibeHarness>().Paths;
-        var hooksPath  = GetArg(args, "--vibe-hooks-path")  ?? vibe.HooksToml;
-        var configPath = GetArg(args, "--vibe-config-path") ?? vibe.ConfigToml;
+        var hooksPath  = GetArg(args, "--mistral-vibe-hooks-path")  ?? vibe.HooksToml;
+        var configPath = GetArg(args, "--mistral-vibe-config-path") ?? vibe.ConfigToml;
 
         var hooksFailed = false;
         try {

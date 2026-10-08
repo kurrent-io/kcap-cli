@@ -9,7 +9,7 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
-/// Single-binary dispatcher for Mistral Vibe CLI hooks (<c>kcap hook --vibe</c>). Vibe's hook model
+/// Single-binary dispatcher for Mistral Vibe CLI hooks (<c>kcap hook --mistral-vibe</c>). Vibe's hook model
 /// is tool/turn-scoped — <c>pre_tool</c> / <c>post_tool</c> / <c>post_agent</c> — with NO
 /// session-start or session-end event. So kcap treats the FIRST hook it sees for a session as that
 /// session's start: it POSTs session-start and spawns the transcript watcher, gated on the watcher
@@ -118,7 +118,7 @@ sealed class MistralVibeHookCommand(
         if (string.IsNullOrEmpty(transcriptPath)) return; // can't tail nothing
 
         await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
-            agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: "vibe");
+            agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: "mistral-vibe");
     }
 
     static DateTimeOffset? TryGetIsoTimestamp(JsonNode? node, string fieldName) =>

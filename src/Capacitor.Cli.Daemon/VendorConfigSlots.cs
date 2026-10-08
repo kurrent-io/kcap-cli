@@ -22,7 +22,7 @@ internal static class VendorConfigSlots {
             HarnessId.Pi          => new(() => config.PiPath,          v => config.PiPath          = v),
             HarnessId.OpenCode    => new(() => config.OpenCodePath,    v => config.OpenCodePath    = v),
             HarnessId.Antigravity => new(() => config.AntigravityPath, v => config.AntigravityPath = v),
-            HarnessId.MistralVibe => new(() => config.VibePath,        v => config.VibePath        = v),
+            HarnessId.MistralVibe => new(() => config.MistralVibePath,        v => config.MistralVibePath        = v),
         };
 
         /// <summary>Null for the vendors we hand no model at all, which then pick their own. Exactly

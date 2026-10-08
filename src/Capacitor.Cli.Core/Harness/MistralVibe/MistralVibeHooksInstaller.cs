@@ -12,7 +12,7 @@ public static class MistralVibeHooksInstaller {
     public const string MarkerFileName = ".kcap-hooks-version";
 
     /// <summary>True when kcap's Vibe hooks were previously installed — a marker file, or an existing
-    /// <c>kcap hook --vibe</c> entry in <c>hooks.toml</c> (which covers an install whose marker was
+    /// <c>kcap hook --mistral-vibe</c> entry in <c>hooks.toml</c> (which covers an install whose marker was
     /// lost).</summary>
     public static bool IsInstalled(string hooksTomlPath) {
         var dir = Path.GetDirectoryName(hooksTomlPath);

@@ -6,6 +6,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Integration;
@@ -134,7 +135,7 @@ public class SessionStartVisibilityTests : IDisposable {
         var inv  = body["harness_inventory"];
         await Assert.That(inv).IsNotNull();
         await Assert.That(string.IsNullOrEmpty(inv!["machine_id"]?.GetValue<string>())).IsFalse();
-        await Assert.That(inv["vendors"]!.AsObject().Count).IsEqualTo(9);
+        await Assert.That(inv["vendors"]!.AsObject().Count).IsEqualTo(HarnessRegistry.Identities.Count);
         await Assert.That(inv["vendors"]!["claude"]!["wired"]).IsNotNull(); // per-vendor {detected,wired} shape
     }
 

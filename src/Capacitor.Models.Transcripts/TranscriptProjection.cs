@@ -17,7 +17,7 @@ public static class TranscriptProjection {
     public static ITranscriptProjection? For(string vendor) => vendor.ToLowerInvariant() switch {
         "claude" => ClaudeTranscriptEvents.Instance,
         "codex" => CodexRolloutEvents.Instance,
-        "vibe" => MistralVibeTranscriptEvents.Instance,
+        "mistral-vibe" => MistralVibeTranscriptEvents.Instance,
         _ => null,
     };
 }

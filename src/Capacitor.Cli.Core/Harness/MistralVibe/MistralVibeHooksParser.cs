@@ -14,7 +14,7 @@ public static class MistralVibeHooksParser {
     public const string HooksKey = "hooks";
 
     /// <summary>The single dispatcher command kcap installs for every type.</summary>
-    public const string HookCommand = "kcap hook --vibe";
+    public const string HookCommand = "kcap hook --mistral-vibe";
 
     /// <summary>
     /// Hook types Vibe fires. <c>pre_tool</c>/<c>post_tool</c> carry tool content kcap takes from the
@@ -48,7 +48,7 @@ public static class MistralVibeHooksParser {
      && c is string cmd
      && IsCapacitorVibeHookCommand(cmd);
 
-    /// <summary>True when <paramref name="command"/> invokes <c>kcap hook --vibe</c> — the real
+    /// <summary>True when <paramref name="command"/> invokes <c>kcap hook --mistral-vibe</c> — the real
     /// executable + arguments, basename-compared so a path-qualified <c>/usr/local/bin/kcap</c> still
     /// matches while a marker buried in a later argument does not.</summary>
     public static bool IsCapacitorVibeHookCommand(string? command) {
@@ -58,7 +58,7 @@ public static class MistralVibeHooksParser {
         if (tokens.Length == 0) return false;
 
         var exe   = ExecutableName(tokens[0]);
-        return exe is "kcap" or "kcap.exe" && tokens is [_, "hook", "--vibe"];
+        return exe is "kcap" or "kcap.exe" && tokens is [_, "hook", "--mistral-vibe"];
     }
 
     static string ExecutableName(string token) {
