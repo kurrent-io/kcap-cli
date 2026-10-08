@@ -8,6 +8,7 @@ namespace Capacitor.App.ViewModels;
 public static class KcapToolCatalogue {
     const string McpPrefix = "mcp__";
     const string Separator = "__";
+    const string PiPrefix = "kcap_";
 
     internal static readonly KcapToolEntry[] Entries = [
         // artefacts
@@ -96,7 +97,7 @@ public static class KcapToolCatalogue {
     public static KcapToolEntry? Match(string? toolName) {
         if (string.IsNullOrEmpty(toolName)) return null;
         var (server, tool) = Split(toolName);
-        if (server is not null && !server.StartsWith("kcap", StringComparison.Ordinal)) return null;
+        if (server is not null && !ServerCategories.ContainsKey(server)) return null;
         if (ByTool.TryGetValue(tool, out var entry)) return entry;
         if (server is not null && ServerCategories.TryGetValue(server, out var category))
             return new KcapToolEntry(tool, category, Humanise(tool), null);
@@ -111,9 +112,18 @@ public static class KcapToolCatalogue {
         return $"{Humanise(server)} · {tool.Replace('_', ' ')}";
     }
 
-    // (server, tool) for `mcp__<server>__<tool>`; (null, name) for a bare name. A plugin server
-    // segment (`plugin_kcap_kcap-plans`, `plugin_linear_linear`) keeps its last `_`-separated token.
+    // (server, tool) for `mcp__<server>__<tool>` or Pi's `kcap_<server>_<tool>`; (null, name) for a
+    // bare name. A plugin server segment (`plugin_kcap_kcap-plans`, `plugin_linear_linear`) keeps
+    // its last `_`-separated token.
     static (string? Server, string Tool) Split(string name) {
+        if (name.StartsWith(PiPrefix, StringComparison.Ordinal)) {
+            var piRest = name[PiPrefix.Length..];
+            var underscore = piRest.IndexOf('_');
+            if (underscore > 0 && underscore < piRest.Length - 1) {
+                var piServer = "kcap-" + piRest[..underscore];
+                if (ServerCategories.ContainsKey(piServer)) return (piServer, piRest[(underscore + 1)..]);
+            }
+        }
         if (!name.StartsWith(McpPrefix, StringComparison.Ordinal)) return (null, name);
         var rest = name[McpPrefix.Length..];
         var cut = rest.LastIndexOf(Separator, StringComparison.Ordinal);

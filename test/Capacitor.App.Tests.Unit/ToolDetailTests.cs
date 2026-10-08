@@ -62,7 +62,7 @@ public class ToolDetailTests {
     [Test]
     public async Task ForKey_reads_the_named_string_first_line_elided_and_nothing_else() {
         var long120 = new string('a', 120);
-        await Assert.That(ToolDetail.ForKey("""{"issue_key":"AI-3084","title":"x"}""", "issue_key")).IsEqualTo("AI-3084");
+        await Assert.That(ToolDetail.ForKey("""{"issue_key":"WK-3084","title":"x"}""", "issue_key")).IsEqualTo("WK-3084");
         await Assert.That(ToolDetail.ForKey("""{"prompt":"Fix the flaky test\nthen push"}""", "prompt")).IsEqualTo("Fix the flaky test");
         await Assert.That(ToolDetail.ForKey("""{"title":"x"}""", "issue_key")).IsEqualTo("");
         await Assert.That(ToolDetail.ForKey("""{"title":"x"}""", null)).IsEqualTo("");

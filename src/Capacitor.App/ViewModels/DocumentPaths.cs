@@ -11,5 +11,10 @@ public static class DocumentPaths {
         return left.EndsWith("/" + right, StringComparison.Ordinal) || right.EndsWith("/" + left, StringComparison.Ordinal);
     }
 
+    public static bool Exact(string a, string b) {
+        var left = Normalise(a);
+        return left.Length > 0 && left == Normalise(b);
+    }
+
     static string Normalise(string path) => path.Replace('\\', '/').TrimEnd('/');
 }

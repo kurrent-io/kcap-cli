@@ -42,7 +42,7 @@ public class ChatTabViewModelTests {
     const string PlanResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_P","content":"{}"}]}}""";
     const string PublishCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_pub","name":"mcp__plugin_kcap_kcap-artefacts__publish_artefact","input":{"title":"Retention brief","html":"<p>x</p>","visibility":"org"}}]}}""";
     const string PublishResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_pub","content":"{\"artefact\":{\"artefact_id\":\"01ec\",\"title\":\"Retention brief\",\"owner_user_id\":\"u1\",\"visibility\":\"org\",\"latest_version\":1,\"updated_at\":\"2026-10-07T10:00:00Z\",\"is_owner\":true,\"url\":\"https://kurrent.kcap.ai/artefacts/01ec\"}}"}]}}""";
-    const string WorkItemCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_wi","name":"mcp__plugin_kcap_kcap-workitems__declare_work_item","input":{"issue_key":"AI-3084"}}]}}""";
+    const string WorkItemCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_wi","name":"mcp__plugin_kcap_kcap-workitems__declare_work_item","input":{"issue_key":"WK-3084"}}]}}""";
     const string LinearCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_lin","name":"mcp__plugin_linear_linear__save_issue","input":{"title":"Add tests"}}]}}""";
     const string AgentCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A","name":"Agent","input":{"description":"Map desktop chat UI surfaces","prompt":"go","subagent_type":"Explore"}}]}}""";
     const string AgentLaunchLine = """{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_A","content":[{"type":"text","text":"Async agent launched successfully."}]}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}""";
@@ -349,7 +349,7 @@ public class ChatTabViewModelTests {
             var group = Group(h.Chat, 0);
             var work = group.Calls[0];
             await Assert.That(work.Label).IsEqualTo("Attached work item");
-            await Assert.That(work.Detail).IsEqualTo("AI-3084");
+            await Assert.That(work.Detail).IsEqualTo("WK-3084");
             await Assert.That(work.Category).IsEqualTo(ToolCategory.Work);
             var publish = group.Calls[1];
             await Assert.That(publish.Label).IsEqualTo("Published page");

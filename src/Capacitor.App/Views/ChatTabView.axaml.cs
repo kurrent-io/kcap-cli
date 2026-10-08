@@ -101,7 +101,12 @@ public partial class ChatTabView : UserControl {
     async void OnCopyLinkClick(object? sender, RoutedEventArgs e) {
         if (sender is not Control { Tag: string { Length: > 0 } url } control) return;
         if (TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard) return;
-        await clipboard.SetTextAsync(url);
+        try {
+            await clipboard.SetTextAsync(url);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: copy link failed: {ex.Message}");
+            return;
+        }
         ToolTip.SetTip(control, "Copied");
         ToolTip.SetIsOpen(control, true);
     }

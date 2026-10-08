@@ -184,9 +184,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             ShowsArtefactsTab = has;
             if (!has && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
         }).DisposeWith(_disposables);
-        _sessionIds.Where(sid => sid is { Length: > 0 }).DistinctUntilChanged()
+        _sessionIds.DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(sid => Artefacts.SwitchSession(sid!, null)).DisposeWith(_disposables);
+            .Subscribe(sid => Artefacts.SwitchSession(sid, null)).DisposeWith(_disposables);
+        _accessStates.Select(s => s == SessionAccessState.Established).DistinctUntilChanged().Where(ready => ready)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
 
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
         Chat = new ChatTabViewModel(

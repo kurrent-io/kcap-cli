@@ -25,9 +25,10 @@ public class ArtefactsTabViewModelTests {
         public Dictionary<string, byte[]> Disk { get; } = new(StringComparer.Ordinal);
         public ArtefactsTabViewModel Vm { get; }
 
-        public Harness() => Vm = new ArtefactsTabViewModel(Source, Activity, Time, path => Disk.TryGetValue(path, out var bytes) ? bytes : null);
+        public Harness(bool realFiles = false) => Vm = new ArtefactsTabViewModel(Source, Activity, Time,
+            realFiles ? null : path => Disk.TryGetValue(path.Replace('\\', '/'), out var bytes) ? new MemoryStream(bytes) : null);
 
-        public async Task SwitchAsync(string sessionId, string? root = "/repo") {
+        public async Task SwitchAsync(string? sessionId, string? root = "/repo") {
             Vm.SwitchSession(sessionId, root);
             await SettledAsync();
         }
@@ -245,6 +246,131 @@ public class ArtefactsTabViewModelTests {
             await Assert.That(h.Vm.Selected!.Path).IsEqualTo("docs/p.md");
             await Assert.That(h.Vm.Reader!.Body).IsEqualTo("# p v2");
             await Assert.That(h.Vm.Documents.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_exact_path_wins_over_a_suffix_match_whatever_the_list_order() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/spec.md", "# a"), Doc("2", "design", "spec.md", "# b")));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.Documents[0].Path).IsEqualTo("docs/spec.md");
+
+            await Assert.That(h.Vm.OpenDocument("spec.md")).IsTrue();
+            await Assert.That(h.Vm.Selected!.Path).IsEqualTo("spec.md");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_before_the_first_read_lands_selects_the_row_when_it_does() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var opens = 0;
+            h.Vm.OpenRequested += () => opens++;
+            var gate = h.Source.Gate();
+            h.Vm.SwitchSession(SessionA, "/repo");
+
+            await Assert.That(h.Vm.OpenDocument("docs/p.md")).IsFalse();
+            await Assert.That(opens).IsEqualTo(0);
+            gate.SetResult(Ready(Doc("1", "plan", "docs/p.md", "# p")));
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.Selected!.Path).IsEqualTo("docs/p.md");
+            await Assert.That(opens).IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_switch_drops_the_pending_open() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.Gate();
+            h.Vm.SwitchSession(SessionA, "/repo");
+            await Assert.That(h.Vm.OpenDocument("docs/p.md")).IsFalse();
+
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md", "# p")));
+            await h.SwitchAsync(SessionB);
+            gate.TrySetResult(Ready());
+
+            await Assert.That(h.Vm.Documents.Count).IsEqualTo(1);
+            await Assert.That(h.Vm.Selected).IsNull();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_null_session_id_clears_the_list_and_starts_no_read() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md", "# p")));
+            await h.SwitchAsync(SessionA);
+            await h.Vm.SelectCommand.Execute(h.Vm.Documents[0]);
+
+            await h.SwitchAsync(null);
+
+            await Assert.That(h.Vm.HasAny).IsFalse();
+            await Assert.That(h.Vm.Selected).IsNull();
+            await Assert.That(h.Source.Requested.Count).IsEqualTo(1);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_read_is_reported_until_a_ready_one_lands() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Unreachable, null));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.LastReadFailed).IsTrue();
+
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            h.Vm.Refresh();
+            await h.SettledAsync();
+            await Assert.That(h.Vm.LastReadFailed).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_file_over_the_hash_ceiling_has_no_drift_verdict() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Disk["/repo/docs/big.md"] = new byte[4 * 1024 * 1024 + 1];
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/big.md", "# big")));
+            await h.SwitchAsync(SessionA, root: "/repo");
+
+            await h.Vm.SelectCommand.Execute(h.Vm.Documents[0]);
+            await Assert.That(h.Vm.Reader!.HasNotice).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_symlink_that_leaves_the_checkout_is_never_read_for_drift() {
+        if (OperatingSystem.IsWindows()) return;
+        using var tmp = new TempDir();
+        var root = tmp.GetResolvedPath("repo");
+        Directory.CreateDirectory(Path.Combine(root, "docs"));
+        var outside = tmp.CreateFile("outside.md", "# outside");
+        File.CreateSymbolicLink(Path.Combine(root, "docs", "link.md"), outside);
+        await RunOnUiAsync(async () => {
+            var h = new Harness(realFiles: true);
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/link.md", "# different")));
+            await h.SwitchAsync(SessionA, root: root);
+
+            await h.Vm.SelectCommand.Execute(h.Vm.Documents[0]);
+            await Assert.That(h.Vm.Reader!.HasNotice).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }

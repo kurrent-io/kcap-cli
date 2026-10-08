@@ -154,7 +154,7 @@ public class RemoteSessionViewSmokeTests {
     public async Task The_artefacts_tab_hosts_the_list_and_reader_and_open_in_web_is_an_icon() {
         await AvaloniaSession.DispatchAsync(async () => {
             var source = new FakePlanArtifactSource();
-            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            source.Default = Ready(Doc("docs/x-design.md"));
             using var host = new Host(source, DocumentSession);
             await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
             await (host.Vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);

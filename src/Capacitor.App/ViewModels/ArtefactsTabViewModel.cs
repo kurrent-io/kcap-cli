@@ -21,20 +21,26 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         public CancellationTokenSource Cts { get; } = new();
         public Task? Pending;
         public bool RefreshPending;
+        public bool Settled;
         public bool IsReading => Pending is { IsCompleted: false };
     }
 
     readonly IPlanArtifactSource? _source;
     readonly PlanActivity _activity;
     readonly TimeProvider _time;
-    readonly Func<string, byte[]?> _readWorkingCopy;
+    const long MaxHashedBytes = 4 * 1024 * 1024;
+
+    readonly Func<string, Stream?> _openWorkingCopy;
     readonly AvaloniaList<DocumentRow> _documents = [];
     readonly List<ReadLease> _outstanding = [];
     readonly ITimer _settle;
     ReadLease? _current;
     bool _tornDown;
+    string? _pendingPath;
 
     public IAvaloniaReadOnlyList<DocumentRow> Documents => _documents;
+    /// The last applied read was not a Ready one, so the pane's poll retries it even with the tab hidden.
+    internal bool LastReadFailed { get; private set; }
     public bool HasAny => _documents.Count > 0;
     public string SummaryText => _documents.Count == 1 ? "1 document" : $"{_documents.Count} documents";
 
@@ -56,25 +62,27 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// Test-only seam: the current lease's read, or the last one started.
     internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
 
-    public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, byte[]?>? readWorkingCopy = null,
+    public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, Stream?>? openWorkingCopy = null,
             IUrlOpener? opener = null) {
         _source = source;
         _activity = activity;
         _time = time;
-        _readWorkingCopy = readWorkingCopy ?? ReadFile;
+        _openWorkingCopy = openWorkingCopy ?? OpenFile;
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
         OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _activity.PlanWritten += OnPlanWritten;
     }
 
-    public void SwitchSession(string sessionId, string? root) {
+    public void SwitchSession(string? sessionId, string? root) {
         if (_tornDown || _source is null) return;
         var old = _current;
-        _current = new ReadLease(sessionId, root);
+        _current = string.IsNullOrEmpty(sessionId) ? null : new ReadLease(sessionId, root);
         old?.Cts.Cancel();
+        _pendingPath = null;
+        LastReadFailed = false;
         Clear();
-        StartRead(_current);
+        if (_current is not null) StartRead(_current);
     }
 
     /// Reads now, or queues one follow-up behind the read in flight.
@@ -86,14 +94,24 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     public void RequestOpen() => OpenRequested?.Invoke();
 
-    /// Selects the row whose path matches and asks for the tab; false when no row does.
+    /// Selects the row whose path matches, an exact path before a suffix, and asks for the tab.
+    /// Before the first read settles a miss is remembered and opened when the read lands.
     public bool OpenDocument(string path) {
-        var row = _documents.FirstOrDefault(d => d.MatchesPath(path));
-        if (row is null) return false;
+        var row = Find(path);
+        if (row is null) {
+            if (_current is { Settled: false }) _pendingPath = path;
+            else return false;
+            if (!HasAny) return false;
+            RequestOpen();
+            return true;
+        }
         Select(row);
         RequestOpen();
         return true;
     }
+
+    DocumentRow? Find(string path) =>
+        _documents.FirstOrDefault(d => DocumentPaths.Exact(d.Path, path)) ?? _documents.FirstOrDefault(d => d.MatchesPath(path));
 
     void Select(DocumentRow row) {
         foreach (var document in _documents) document.IsSelected = ReferenceEquals(document, row);
@@ -109,10 +127,13 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             || relative.Split('/').Contains(".."))
             return DriftState.Unknown;
         var full = System.IO.Path.Combine(root, relative);
-        byte[]? bytes;
-        try { bytes = _readWorkingCopy(full); } catch (Exception) { return DriftState.Unknown; }
-        if (bytes is null) return DriftState.Missing;
-        return Convert.ToHexStringLower(SHA256.HashData(bytes)) == row.ContentHash ? DriftState.Same : DriftState.Changed;
+        if (!CanonicalPath.IsWithin(full, root)) return DriftState.Unknown;
+        try {
+            using var stream = _openWorkingCopy(full);
+            if (stream is null) return DriftState.Missing;
+            if (stream.Length > MaxHashedBytes) return DriftState.Unknown;
+            return Convert.ToHexStringLower(SHA256.HashData(stream)) == row.ContentHash ? DriftState.Same : DriftState.Changed;
+        } catch (Exception) { return DriftState.Unknown; }
     }
 
     void OnPlanWritten() {
@@ -156,8 +177,10 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     }
 
     void Apply(PlanArtifactsRead read) {
+        LastReadFailed = read.Kind != SessionPlansReadKind.Ready;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
+                if (_current is { } lease) lease.Settled = true;
                 Show(read.Body?.Artifacts ?? []);
                 return;
             case SessionPlansReadKind.Unreachable:
@@ -193,6 +216,13 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         var reopened = openPath is null ? null : _documents.FirstOrDefault(d => d.Path == openPath);
         if (reopened is not null) Select(reopened);
         else { Selected = null; Reader = null; }
+
+        var pending = _pendingPath;
+        _pendingPath = null;
+        if (pending is not null && Find(pending) is { } match) {
+            Select(match);
+            RequestOpen();
+        }
     }
 
     void Clear() {
@@ -209,13 +239,8 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     }
 
     /// Shared-read so an agent still writing the file on Windows is not refused.
-    static byte[]? ReadFile(string path) {
-        if (!File.Exists(path)) return null;
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        return buffer.ToArray();
-    }
+    static Stream? OpenFile(string path) =>
+        File.Exists(path) ? new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite) : null;
 
     public async Task TeardownAsync() {
         if (_tornDown) return;

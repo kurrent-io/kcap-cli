@@ -99,6 +99,37 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
             var rowButton = host.Window.GetVisualDescendants().OfType<Button>().Single(b => b.DataContext is PlanDocumentRow);
             await Assert.That(rowButton.Classes.Contains("copyValue")).IsTrue();
+
+            host.Vm.Plan.MarkOpen("docs/x-design.md");
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
+            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
+            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(purple.Color);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_tick_re_reads_a_failed_first_read_with_the_tab_hidden() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Unreachable, null));
+            await host.ShowAsync(KeyOnlyRead());
+            await Assert.That(host.Vm.Artefacts!.HasAny).IsFalse();
+            await Assert.That(host.Vm.Artefacts.IsShown).IsFalse();
+
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+                Artifacts = [new PlanArtifactDto {
+                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
+                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+                }],
+            }));
+            host.Time.Advance(WorkContextViewModel.PollInterval);
+            await (host.Vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(host.Vm.Artefacts.HasAny).IsTrue();
         });
     }
 

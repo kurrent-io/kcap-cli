@@ -16,11 +16,26 @@ public class KcapToolCatalogueTests {
         await Assert.That(entry.Card).IsEqualTo(ToolCardKind.Document);
     }
 
+    [Test]
+    public async Task Pi_spells_a_kcap_tool_with_its_server_between_underscores() {
+        var document = KcapToolCatalogue.Match("kcap_plans_declare_plan_document")!;
+        await Assert.That(document.Tool).IsEqualTo("declare_plan_document");
+        await Assert.That(document.Card).IsEqualTo(ToolCardKind.Document);
+
+        var work = KcapToolCatalogue.Match("kcap_workitems_declare_work_item")!;
+        await Assert.That(work.Category).IsEqualTo(ToolCategory.Work);
+        await Assert.That(work.Tool).IsEqualTo("declare_work_item");
+    }
+
     /// A suffix must be the whole bare name: `set_plan_tasks` is not `plan_tasks`, and a foreign
     /// server's `save_memory` is not ours when its server segment says otherwise.
     [Test]
     [Arguments("mcp__other__save_memory")]
     [Arguments("mcp__plugin_acme_acme__publish_artefact")]
+    [Arguments("mcp__kcapfoo__save_memory")]
+    [Arguments("kcap_unknown_save_memory")]
+    [Arguments("kcap_")]
+    [Arguments("kcap_plans")]
     [Arguments("xdeclare_plan_document")]
     [Arguments("Bash")]
     [Arguments("")]

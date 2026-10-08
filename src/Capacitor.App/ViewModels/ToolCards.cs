@@ -58,7 +58,7 @@ public static class ToolCards {
         if (Args(inputJson) is not { } args) return null;
         var kind = args.Str("kind") ?? args.Str("definition_id") ?? "";
         var title = kind.Length == 0 ? "Started flow" : $"Started {kind} flow";
-        return new ToolCard(ToolCardKind.Flow, title, kind, args.Str("reviewer_vendor") ?? "", null, null);
+        return new ToolCard(ToolCardKind.Flow, title, kind, args.Str("vendor") ?? "", null, null);
     }
 
     static ToolCard? Agent(string? inputJson) {

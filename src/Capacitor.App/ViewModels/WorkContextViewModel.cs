@@ -383,7 +383,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void OnTick() {
         if (_tornDown) return;
         Plan.Refresh();
-        if (Artefacts is { IsShown: true } artefacts) artefacts.Refresh();
+        if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
         if (_current is { IsReading: false } lease) StartRead(lease);
     }
 

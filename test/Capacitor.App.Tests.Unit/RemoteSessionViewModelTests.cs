@@ -550,13 +550,13 @@ public class RemoteSessionViewModelTests {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
             var source = new FakePlanArtifactSource();
-            source.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+            source.Default = new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
                 Artifacts = [new PlanArtifactDto {
                     ArtifactId = "a", Kind = "plan", Title = "p", Source = "declared", SessionId = "0123456789abcdef0123456789abcdef", Path = "docs/p.md",
                     Content = "# p", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
                     DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
                 }],
-            }));
+            });
             var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source);
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
@@ -566,6 +566,19 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.IsArtefactsActive).IsTrue();
             await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.ShowsArtefactsPane).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_tab_re_reads_when_access_becomes_ready() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePlanArtifactSource();
+            var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => source.Requested.Count >= 2, what: "re-read on ready");
             await vm.TeardownAsync();
         });
     }

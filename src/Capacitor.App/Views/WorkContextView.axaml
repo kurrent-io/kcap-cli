@@ -67,6 +67,9 @@
         <Style Selector="Button.copyValue.open /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
         </Style>
+        <Style Selector="Button.copyValue TextBlock.docName">
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
         <Style Selector="Button.copyValue.open TextBlock.docName">
             <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
         </Style>
@@ -732,7 +735,7 @@
                                             <Grid ColumnDefinitions="46,*,Auto" ColumnSpacing="6">
                                                 <TextBlock Text="{Binding Kind}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}" />
                                                 <TextBlock Grid.Column="1" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"
-                                                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                           TextTrimming="CharacterEllipsis" />
                                                 <Path Grid.Column="2" Width="8" Height="8" Stretch="None" VerticalAlignment="Center"
                                                       Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5" Data="M2,1 L5,4 L2,7" />
                                             </Grid>

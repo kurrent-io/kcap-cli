@@ -64,7 +64,7 @@ public class ToolCardsTests {
 
     [Test]
     public async Task Flow_and_agent_cards_come_from_the_arguments_and_carry_no_link() {
-        var flow = ToolCards.Build(ToolCardKind.Flow, """{"kind":"code-review","reviewer_vendor":"codex"}""", "started")!;
+        var flow = ToolCards.Build(ToolCardKind.Flow, """{"kind":"code-review","vendor":"codex"}""", "started")!;
         await Assert.That(flow.Title).IsEqualTo("Started code-review flow");
         await Assert.That(flow.Name).IsEqualTo("code-review");
         await Assert.That(flow.Meta).IsEqualTo("codex");
