@@ -227,7 +227,7 @@ public class AppMenuBarTests {
             return Layout(menu);
         });
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…");
+        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…|Set up Capacitor…");
         await Assert.That(opened).IsEqualTo(1);
     }
 
@@ -237,7 +237,7 @@ public class AppMenuBarTests {
     public async Task The_app_brings_its_own_app_menu() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(NativeMenu.GetMenu(Avalonia.Application.Current!)!));
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…");
+        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…|Set up Capacitor…");
     }
 
     [Test]

@@ -68,10 +68,10 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         var exit = await InstallHarness(args);
 
-        if (exit == 0) {
+        if (exit == 0 && !args.Contains(ToolsOnlyFlag)) {
             var gitHook = new GitHookInstaller(env.Home, env.ResolveMcpBinaryPath);
 
-            // A refresh of an existing install is no consent to a new git config entry.
+            // Refresh may repair a recording hook, but cannot opt into one.
             if (args.Contains("--if-installed")) gitHook.Refresh();
             else gitHook.Install();
         }
@@ -79,7 +79,17 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return exit;
     }
 
+    const string ToolsOnlyFlag = "--tools-only";
+
     Task<int> InstallHarness(string[] args) {
+        if (args.Contains(ToolsOnlyFlag)) {
+            if (args.Contains("--codex"))
+                return RefuseToolsOnlyAsync("Codex", "its hooks and skills install as one unit");
+
+            if (!ExclusiveTargetFlags.Any(args.Contains))
+                return RefuseToolsOnlyAsync("Claude Code", "its MCP servers and skills ship inside the plugin that records sessions");
+        }
+
         if (args.Contains("--codex")) return InstallCodex(args);
         if (args.Contains("--cursor")) return InstallCursor(args);
         if (args.Contains("--copilot")) return InstallCopilot(args);
@@ -91,6 +101,23 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         return InstallClaude(args);
     }
+
+    async Task<int> RefuseToolsOnlyAsync(string vendor, string reason) {
+        await env.Stderr.WriteLineAsync(
+            $"--tools-only is not supported for {vendor}: {reason}. "
+          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode and --antigravity."
+        );
+
+        return 1;
+    }
+
+    /// <summary>Whether to write only the tools: asked for, or a refresh of an install whose capture half
+    /// is absent — a refresh never adds capture to an install that has only the tools.</summary>
+    static bool ToolsOnly(string[] args, bool refreshOnly, bool captureInstalled) =>
+        args.Contains(ToolsOnlyFlag) || refreshOnly && !captureInstalled;
+
+    Task NoteCaptureSkippedAsync(string vendor) =>
+        env.Stdout.WriteLineAsync($"{vendor} capture unchanged (--tools-only): no recording hooks were added or removed.");
 
     async Task<int> Remove(string[] args) {
         if (HasConflictingTargets(args)) {
@@ -702,50 +729,53 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     async Task<int> InstallCursor(string[] args) {
-        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.Harnesses.Of<CursorHarness>().Paths.UserHooksJson;
+        var cursor    = env.Harnesses.Of<CursorHarness>().Paths;
+        var hooksPath = GetArg(args, "--cursor-hooks-path") ?? cursor.UserHooksJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = CursorHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        switch (refreshOnly) {
-            case true when !CursorHooksInstaller.IsInstalled(hooksPath):
-            case true when CursorHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
-                return 0;
-            // PATH precheck on the non-postinstall path. hooks.json writes the bare
-            // `kcap hook --cursor` command; we must verify Cursor will actually
-            // find it. Skip the precheck on the postinstall (--if-installed) path so
-            // an in-flight npm install doesn't fail just because the new symlink
-            // isn't on the child process's PATH yet.
-            case false when !KcapOnPath:
-                await env.Stderr.WriteLineAsync(
-                    "Cannot install Cursor hooks: 'kcap' is not on PATH. "
-                  + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
-                );
+        if (refreshOnly && !hooksInstalled && !HarnessMcpProjections.Cursor.OwnsAnything(cursor.UserMcpJson, env.Home))
+            return 0;
+
+        if (!toolsOnly) {
+            switch (refreshOnly) {
+                case true when CursorHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current():
+                    return 0;
+                // hooks.json writes the bare `kcap hook --cursor`. Not checked on the postinstall
+                // path, where an in-flight npm install may not have the new symlink on PATH yet.
+                case false when !KcapOnPath:
+                    await env.Stderr.WriteLineAsync(
+                        "Cannot install Cursor hooks: 'kcap' is not on PATH. "
+                      + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
+                    );
+
+                    return 1;
+            }
+
+            if (!InstallCursorHooks(hooksPath)) {
+                if (refreshOnly) return 0;
+
+                await env.Stderr.WriteLineAsync("Could not write Cursor hooks file.");
 
                 return 1;
+            }
+
+            await env.Stdout.WriteLineAsync(
+                refreshOnly
+                    ? $"Cursor hooks refreshed ({hooksPath})"
+                    : $"Cursor hooks installed ({hooksPath})"
+            );
         }
 
-        if (!InstallCursorHooks(hooksPath)) {
-            if (refreshOnly) return 0;
-
-            await env.Stderr.WriteLineAsync("Could not write Cursor hooks file.");
-
-            return 1;
-        }
-
-        await env.Stdout.WriteLineAsync(
-            refreshOnly
-                ? $"Cursor hooks refreshed ({hooksPath})"
-                : $"Cursor hooks installed ({hooksPath})"
-        );
-
-        // Register the kcap MCP servers in ~/.cursor/mcp.json so Cursor picks them up
-        // with no manual JSON edit. Non-destructive + idempotent. Never fails the
-        // install: a write error is a warning, not an error code (mirrors Codex).
         if (!args.Contains("--skip-cursor-mcp"))
             await RegisterCursorMcpServersAsync();
 
         if (!args.Contains("--skip-cursor-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Cursor");
 
         return 0;
     }
@@ -879,22 +909,24 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var refreshOnly      = args.Contains("--if-installed");
         var skipMcp          = args.Contains("--skip-pi-mcp");
         var skipInstructions = args.Contains("--skip-pi-instructions");
+        var ingestInstalled  = PiExtensionInstaller.IsInstalled(extensionPath);
+        var toolsOnly        = ToolsOnly(args, refreshOnly, ingestInstalled);
 
-        // Refresh-only mode never touches a machine that never opted into Pi. The
-        // live-ingest extension is the opt-in signal; if it's present, a refresh also
-        // heals the (newer) MCP bridge + AGENTS.md steering below — mirroring how the
-        // Gemini refresh heals MCP + instructions even when a prior version had hooks only.
-        if (refreshOnly && !PiExtensionInstaller.IsInstalled(extensionPath)) return 0;
+        // A refresh never touches a machine that never opted into Pi; once it has, the refresh also
+        // heals the MCP bridge + AGENTS.md steering below.
+        if (refreshOnly && !ingestInstalled
+         && !PiMcpExtensionInstaller.IsInstalled(mcpExtensionPath) && !AgentInstructionsWriter.IsInstalled(pi.AgentsMd))
+            return 0;
 
         // No stale-session report for Pi: it runs through a node shim, and node's process.title setter
         // rewrites the argv region — so the process is named `pi` with a command line of just "pi", or
         // named `node` with the package path intact, never both. A name this generic needs
         // corroboration, and the only corroborating signal disappears exactly when the name appears.
 
-        // Fresh install needs kcap on PATH: both extensions shell out to the bare
-        // `kcap` command (ingest → `kcap hook --pi`; bridge → `kcap mcp <name>`), so
-        // pi must find kcap on PATH. Skipped on the postinstall (--if-installed) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // Both extensions shell out to the bare `kcap` (ingest → `kcap hook --pi`, bridge → `kcap mcp
+        // <name>`), so even --tools-only needs it unless the bridge is skipped. Not checked on the
+        // postinstall path.
+        if (!refreshOnly && (!toolsOnly || !skipMcp) && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the Pi extension: 'kcap' is not on PATH. "
               + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
@@ -907,9 +939,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         // 1. Live-ingest extension (kcap.ts). On refresh, skip only when already current.
         var ingestCurrent = refreshOnly
-                         && PiExtensionInstaller.IsInstalled(extensionPath)
+                         && ingestInstalled
                          && PiExtensionInstaller.ReadMarker(extensionPath) == CapacitorVersion.Current();
-        if (!ingestCurrent) {
+        if (!toolsOnly && !ingestCurrent) {
             if (PiExtensionInstaller.Install(extensionPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -939,6 +971,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (!args.Contains("--skip-pi-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Pi");
 
         // Non-zero only when a FRESH ingest install failed (the integration is incomplete) —
         // the independent MCP bridge + AGENTS.md steering above were still installed.
@@ -1039,16 +1073,22 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     // ── OpenCode (SST): a TypeScript plugin, not a hooks.json ───────
 
     async Task<int> InstallOpenCode(string[] args) {
-        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? env.Harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin;
+        var opencode   = env.Harnesses.Of<OpenCodeHarness>().Paths;
+        var pluginPath = GetArg(args, "--opencode-plugin-path") ?? opencode.KcapPlugin;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly     = args.Contains("--if-installed");
+        var pluginInstalled = OpenCodeExtensionInstaller.IsInstalled(pluginPath);
+        var toolsOnly       = ToolsOnly(args, refreshOnly, pluginInstalled);
 
         // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !OpenCodeExtensionInstaller.IsInstalled(pluginPath)) return 0;
+        if (refreshOnly && !pluginInstalled
+         && !HarnessMcpProjections.OpenCode.OwnsAnything(opencode.McpConfigJson, env.Home)
+         && !AgentInstructionsWriter.IsInstalled(opencode.AgentsMd))
+            return 0;
 
-        // Fresh install needs kcap on PATH: the plugin shells out to the bare `kcap hook --opencode`
-        // command, so OpenCode must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // The plugin shells out to the bare `kcap hook --opencode`; the MCP entries carry an absolute
+        // path. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install the OpenCode plugin: 'kcap' is not on PATH. "
               + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
@@ -1065,7 +1105,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var pluginCurrent = refreshOnly
             && File.Exists(pluginPath)
             && OpenCodeExtensionInstaller.ReadMarker(pluginPath) == CapacitorVersion.Current();
-        if (!pluginCurrent) {
+        if (!toolsOnly && !pluginCurrent) {
             if (OpenCodeExtensionInstaller.Install(pluginPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1098,6 +1138,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (!args.Contains("--skip-opencode-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("OpenCode");
 
         return 0;
     }
@@ -1191,16 +1233,22 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
     // ── Antigravity — a named block in Antigravity's hooks.json ────────
     async Task<int> InstallAntigravity(string[] args) {
-        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? env.Harnesses.Of<AntigravityHarness>().Paths.GlobalHooksJson;
+        var agy       = env.Harnesses.Of<AntigravityHarness>().Paths;
+        var hooksPath = GetArg(args, "--antigravity-hooks-path") ?? agy.GlobalHooksJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = AntigravityHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !AntigravityHooksInstaller.IsInstalled(hooksPath)) return 0;
+        // Refresh-only mode never touches a machine that never opted in. GEMINI.md is no signal:
+        // the Gemini CLI writes the same block there.
+        if (refreshOnly && !hooksInstalled
+         && !HarnessMcpProjections.Antigravity.OwnsAnything(agy.McpConfigJson, env.Home)
+         && !AgentsSkillsInstaller.IsInstalled(agy.SkillsDir))
+            return 0;
 
-        // Fresh install needs kcap on PATH: hooks.json runs the bare `kcap hook --antigravity`
-        // command. Skipped on the --if-installed (postinstall) refresh path.
-        if (!refreshOnly && !KcapOnPath) {
+        // hooks.json runs the bare `kcap hook --antigravity`. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Antigravity hooks: 'kcap' is not on PATH. "
               + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
@@ -1216,7 +1264,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksCurrent = refreshOnly && File.Exists(hooksPath)
                         && AntigravityHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
         var freshHookFailure = false;
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (InstallAntigravityHooks(hooksPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1245,6 +1293,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // Install kcap skills into ~/.gemini/skills — Antigravity does NOT read ~/.agents/skills.
         if (!args.Contains("--skip-antigravity-skills"))
             await InstallAntigravitySkillsAsync(refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Antigravity");
 
         return freshHookFailure ? 1 : 0;
     }
@@ -1421,16 +1471,21 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     async Task<int> InstallCopilot(string[] args) {
-        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? env.Harnesses.Of<CopilotHarness>().Paths.KcapHooksJson;
+        var copilot   = env.Harnesses.Of<CopilotHarness>().Paths;
+        var hooksPath = GetArg(args, "--copilot-hooks-path") ?? copilot.KcapHooksJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = CopilotHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
         // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !CopilotHooksInstaller.IsInstalled(hooksPath)) return 0;
+        if (refreshOnly && !hooksInstalled
+         && !HarnessMcpProjections.Copilot.OwnsAnything(copilot.McpConfigJson, env.Home)
+         && !AgentInstructionsWriter.IsInstalled(copilot.InstructionsMd))
+            return 0;
 
-        // Fresh install needs kcap on PATH: kcap.json writes the bare `kcap hook --copilot` command,
-        // so Copilot must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // kcap.json writes the bare `kcap hook --copilot`. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Copilot hooks: 'kcap' is not on PATH. "
               + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
@@ -1443,7 +1498,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // hooks write is skipped, still (re)register MCP + install instructions below: they live in
         // separate files and must be healed if a prior write failed (warning-only) or was deleted.
         var hooksCurrent = refreshOnly && CopilotHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (InstallCopilotHooks(hooksPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -1476,6 +1531,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (!args.Contains("--skip-copilot-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Copilot");
 
         return 0;
     }
@@ -1632,32 +1689,34 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var mcpPath   = GetArg(args, "--kiro-mcp-path")   ?? kiro.SettingsMcpJson;
 
         var refreshOnly = args.Contains("--if-installed");
+        var skipSkills  = args.Contains("--skip-kiro-skills");
 
-        // Kiro's MCP lives in a SEPARATE file (~/.kiro/settings/mcp.json), independent of the agent
-        // clone — so a prior `--skip-kiro-hooks` (or a clone that failed because kiro-cli was missing)
-        // can leave an MCP-only install with no agent marker.
-        var mcpInstalled = HarnessMcpProjections.Kiro.OwnsAnything(mcpPath, env.Home);
-
+        // The MCP file and ~/.kiro/skills are independent of the agent clone, so `--skip-kiro-hooks`,
+        // --tools-only, or a clone that failed for want of kiro-cli leaves them installed without it.
         var kiroAlreadyInstalled = KiroHooksInstaller.IsInstalled(agentPath);
+        var toolsOnly            = ToolsOnly(args, refreshOnly, kiroAlreadyInstalled);
 
-        if (refreshOnly) {
-            // Never touch a machine that never opted in (neither hooks nor MCP).
-            if (!KiroHooksInstaller.IsInstalled(agentPath) && !mcpInstalled) return 0;
+        if (refreshOnly && !kiroAlreadyInstalled
+         && !HarnessMcpProjections.Kiro.OwnsAnything(mcpPath, env.Home)
+         && !AgentsSkillsInstaller.IsInstalled(kiro.SkillsDir))
+            return 0;
 
-            // MCP-only install: heal JUST the independent MCP file + skills — do NOT fall through to
-            // the agent clone below, which would install the hooks the user opted out of. (Neither
-            // needs kcap on PATH, and the refresh path skips the PATH precheck anyway.)
-            if (!KiroHooksInstaller.IsInstalled(agentPath)) {
-                if (!args.Contains("--skip-kiro-mcp"))
-                    await RegisterKiroMcpServersAsync(mcpPath);
-                if (!args.Contains("--skip-kiro-skills"))
-                    await InstallKiroSkillsAsync(refreshOnly);
+        // No agent clone, no default-agent flip, no Crew hook: those are what record sessions. The MCP
+        // entries carry an absolute path, so none of this needs kcap on PATH.
+        if (toolsOnly) {
+            if (!args.Contains("--skip-kiro-mcp"))
+                await RegisterKiroMcpServersAsync(mcpPath);
+            if (!skipSkills)
+                await InstallKiroSkillsAsync(refreshOnly);
 
-                return 0;
-            }
+            await InstallKiroCrewAsync(refreshOnly, installSkills: !skipSkills, installHook: false);
+
+            if (!refreshOnly) await NoteCaptureSkippedAsync("Kiro");
+
+            return 0;
         }
 
-        // Fresh install needs kcap on PATH: the agent + the MCP servers run the bare `kcap` command.
+        // Fresh install needs kcap on PATH: the agent's hook runs the bare `kcap` command.
         if (!refreshOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Kiro hooks: 'kcap' is not on PATH. "
@@ -1708,10 +1767,10 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         // Install kcap's skills into ~/.kiro/skills so Kiro's agent is steered toward the kcap MCP
         // tools (the cloned agent's resources include skill:///~/.kiro/skills/*/SKILL.md). Independent
         // of the agent clone; non-fatal (a copy error is a warning). Mirrors the Antigravity path.
-        if (!args.Contains("--skip-kiro-skills"))
+        if (!skipSkills)
             await InstallKiroSkillsAsync(refreshOnly);
 
-        await InstallKiroCrewAsync(refreshOnly, installSkills: !args.Contains("--skip-kiro-skills"));
+        await InstallKiroCrewAsync(refreshOnly, installSkills: !skipSkills, installHook: true);
 
         await ReportStaleAgentsAsync(kiroRunningBefore, installed: !hooksFailed);
 
@@ -1734,12 +1793,18 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// Crew regenerates, so they never carry kcap.json's hook or read <c>~/.kiro/skills</c>. A refresh
     /// wires a Crew installed since kcap, because the Kiro opt-in covers Crew — but once kcap has wired
     /// Crew, a refresh only keeps what is still there, so a hook or skills the user deleted stay
-    /// deleted. Never fails the install.
+    /// deleted. Without the hook, a refresh only tops up skills already there. Never fails the install.
     /// </summary>
-    async Task InstallKiroCrewAsync(bool refreshOnly, bool installSkills) {
+    async Task InstallKiroCrewAsync(bool refreshOnly, bool installSkills, bool installHook) {
         var kiro = env.Harnesses.Of<KiroHarness>();
         var crew = kiro.Crew;
         if (!crew.IsPresent()) return;
+
+        if (!installHook) {
+            if (installSkills) await InstallVendorSkillsAsync(crew.SkillsDir, "Kiro Crew", refreshOnly);
+
+            return;
+        }
 
         var wiredBefore = KiroCrewHookInstaller.IsInstalled(crew.SpawnHookScript) || KiroCrewHookInstaller.WasRemoved(crew.SpawnHookScript);
         var kcapDir     = env.Binaries.Resolve("kcap") is { } kcap ? Path.GetDirectoryName(kcap) : null;
@@ -2075,14 +2140,17 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task<int> InstallGemini(string[] args) {
         var settingsPath = GetArg(args, "--gemini-settings-path") ?? env.Harnesses.Of<GeminiHarness>().Paths.SettingsJson;
 
-        var refreshOnly = args.Contains("--if-installed");
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = GeminiHooksInstaller.IsInstalled(settingsPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
 
-        // Refresh-only mode never touches a machine that never opted in.
-        if (refreshOnly && !GeminiHooksInstaller.IsInstalled(settingsPath)) return 0;
+        // Refresh-only mode never touches a machine that never opted in. GEMINI.md is no signal:
+        // Antigravity writes the same block there.
+        if (refreshOnly && !hooksInstalled && !HarnessMcpProjections.Gemini.OwnsAnything(settingsPath, env.Home))
+            return 0;
 
-        // Fresh install needs kcap on PATH: settings.json writes the bare `kcap hook --gemini`
-        // command, so Gemini must find kcap on PATH. Skipped on the --if-installed (postinstall) path.
-        if (!refreshOnly && !KcapOnPath) {
+        // settings.json writes the bare `kcap hook --gemini`. Not checked on the postinstall path.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
             await env.Stderr.WriteLineAsync(
                 "Cannot install Gemini hooks: 'kcap' is not on PATH. "
               + "Re-install kcap: " + InstallProvenance.ReinstallCommand()
@@ -2102,7 +2170,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksCurrent = refreshOnly && File.Exists(settingsPath)
                         && GeminiHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
         var freshHookFailure = false;
-        if (!hooksCurrent) {
+        if (!toolsOnly && !hooksCurrent) {
             if (InstallGeminiHooks(settingsPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -2141,6 +2209,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (!args.Contains("--skip-gemini-skills"))
             await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Gemini");
 
         // Non-zero only when a FRESH hook install failed (the integration is incomplete) — the
         // independent GEMINI.md steering above was still installed.
@@ -2351,7 +2421,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
     static int PrintUsage() {
         Console.Error.WriteLine(
-            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--skills] [--if-installed]"
+            "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills] [--tools-only] [--if-installed]"
         );
 
         return 1;

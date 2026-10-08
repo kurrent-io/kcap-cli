@@ -50,6 +50,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
             LifecyclePrompt.KindUpdateReady    => "Restart now",
             LifecyclePrompt.KindRename         => "Rename and restart",
             LifecyclePrompt.KindRemoveProfile  => "Remove",
+            LifecyclePrompt.KindSetup          => "Restart and continue",
             _                                  => "Continue",
         };
 
@@ -73,6 +74,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         LifecyclePrompt.KindUpdateInfo    => "Software update",
         LifecyclePrompt.KindRename        => "Rename daemon",
         LifecyclePrompt.KindRemoveProfile => "Remove profile",
+        LifecyclePrompt.KindSetup         => "Reopen setup",
         _                                 => "Repair daemon service", // KindRepair and any future kind
     };
 }

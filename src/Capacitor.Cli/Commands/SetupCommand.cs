@@ -1405,11 +1405,10 @@ sealed class SetupCommand(
 
         PrintBackground(launch);
 
-        var analyticsAllowed = PlanEntitlementStore.Get(inputs.ServerUrl, config, time.GetUtcNow()).Allows(PlanFeature.Analytics);
-        var eligible          = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
-        var detectedVendors   = HandoffVendorEligibility.Detected(harnesses);
+        var eligible        = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
+        var detectedVendors = HandoffVendorEligibility.Detected(harnesses);
 
-        var handoff = HandoffDecision.Decide(outcome, launch.Status, analyticsAllowed, eligible.Count, detectedVendors);
+        var handoff = HandoffDecision.Decide(outcome, launch.Status, eligible.Count, detectedVendors);
 
         // Best-effort: Write's own contract already leaves no temp behind on failure, so the only
         // thing this step adds is the warning and the promise to carry on regardless.
@@ -1462,13 +1461,11 @@ sealed class SetupCommand(
     }
 
     /// <summary>A suppression tied to the import's own outcome (nothing new, nothing landed, or it
-    /// failed) prints nothing beyond what the step already said; one tied to eligibility (plan, skill,
+    /// failed) prints nothing beyond what the step already said; one tied to eligibility (skill,
     /// detection) names the reason. With no agent able to follow along, the two detection-tied
     /// reasons also point at the web UI, so the run is still watchable.</summary>
     static void PrintSuppressed(HandoffSuppressedReason reason, string serverUrl) {
         var line = reason switch {
-            HandoffSuppressedReason.AnalyticsNotInPlan =>
-                "  Insights isn't in this workspace's plan, so the eval-watch handoff is skipped.",
             HandoffSuppressedReason.SkillNotInstalled =>
                 $"  No detected agent has the kcap {EvalWatchSkillName} skill.",
             HandoffSuppressedReason.NoAgentDetected =>
@@ -2196,11 +2193,13 @@ sealed class SetupCommand(
 
     internal static string? ResolvePluginPath(string? overrideDir = null) {
         overrideDir ??= Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
+        return ResolvePluginPathForExecutable(Environment.ProcessPath, overrideDir);
+    }
+
+    internal static string? ResolvePluginPathForExecutable(string? exePath, string? overrideDir = null) {
         if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
             return overrideDir;
         }
-
-        var exePath = Environment.ProcessPath;
 
         if (exePath is null) return null;
 
@@ -2216,27 +2215,25 @@ sealed class SetupCommand(
 
         if (exeDir is null) return null;
 
-        // Try: <exe_dir>/../../../../plugin  (npm optional-deps layout)
-        // Binary is at <wrapper>/node_modules/@kurrent/<platform-pkg>/bin/kcap
-        // Plugin is at <wrapper>/plugin
+        var bundlePluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "Resources", "kcap"));
+        if (Directory.Exists(bundlePluginPath)) return bundlePluginPath;
+
+        // npm optional dependencies: <wrapper>/node_modules/@kurrent/<platform>/bin/kcap.
         var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kcap"));
 
         if (Directory.Exists(optDepsPluginPath))
             return optDepsPluginPath;
 
-        // Try: <exe_dir>/../../kcap/plugin  (npm flat layout)
         var npmPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap", "kcap"));
 
         if (Directory.Exists(npmPluginPath))
             return npmPluginPath;
 
-        // Try: <exe_dir>/../plugin  (wrapper package direct layout)
         var wrapperPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "kcap"));
 
         if (Directory.Exists(wrapperPluginPath))
             return wrapperPluginPath;
 
-        // Try: repo root layout (dev mode)
         var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
 
         return Directory.Exists(repoPlugin) ? repoPlugin : null;

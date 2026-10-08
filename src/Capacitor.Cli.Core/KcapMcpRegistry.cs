@@ -107,7 +107,7 @@ public static class KcapMcpRegistry {
             },
             ["kcap-sessions"] = new HashSet<string>(StringComparer.Ordinal) {
                 "search_sessions", "list_repo_sessions", "get_session_summary", "get_session_transcript",
-                "get_turn", "list_turns", "list_repo_plans", "get_declared_plans",
+                "get_turn", "list_turns", "list_repo_plans", "get_declared_plans", "get_session_evals",
             },
         };
 
