@@ -10,6 +10,7 @@ Getting Started:
   whoami                           Show current user; verify the server accepts your token
 
 Profiles:
+  accounts                         Manage the Claude and Codex accounts kcap records
   profile add <name> --server-url <url>  Add a server profile
   profile list                     Show all profiles
   profile remove <name>            Remove a profile

@@ -90,6 +90,7 @@ public static class CommandServices {
         // Shared by every hook lane and carrying no per-run state, unlike the commands below.
         services.AddSingleton<WatcherManager>();
 
+        services.AddTransient<AccountsCommand>();
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();

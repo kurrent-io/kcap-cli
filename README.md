@@ -343,6 +343,7 @@ At a glance — each links to its section below:
 | [`kcap agent`](#local-agents-kcap-agent) | Start, list, attach to, and stop daemon-hosted agents |
 | [`kcap repos`](#repository-paths) | Manage known repo paths for the launch dialog |
 | [`kcap projects` / `project`](#projects) | List and inspect projects |
+| [`kcap accounts`](#accounts) | Record every Claude and Codex account, not only the default |
 | [`kcap profile` / `use`](#profiles) | Manage and switch between servers/profiles |
 | [`kcap machine`](#machine-credentials-headless-recording) | Create credentials for CI runners and agent sandboxes |
 | [`kcap config`](#configuration) | Show and set configuration |
@@ -2118,6 +2119,20 @@ kcap project <slug>      # metadata, repo list, member list, and (owner/admin) p
 ```
 
 Requires the Team or Enterprise plan — the server 403s on Free with a message telling you so.
+
+### Accounts
+
+If you run more than one Claude Code config directory (`CLAUDE_CONFIG_DIR`) or Codex home (`CODEX_HOME`), for example one for work and one for personal use, kcap records each one as an *account*. An account is a vendor config directory, not a Capacitor server login: it is distinct from a profile (`kcap profile`), which selects a server.
+
+```bash
+kcap accounts                                  # list accounts, their recording state, and directories found but not added
+kcap accounts add claude ~/.claude-work        # add a directory and install recording into it
+kcap accounts rename ~/.claude-work Work       # change the label
+kcap accounts rewire [<id|dir>]                # reinstall recording into one or every account
+kcap accounts remove <id|dir>                  # remove kcap's recording and forget the account
+```
+
+`<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`.
 
 ### Profiles
 
