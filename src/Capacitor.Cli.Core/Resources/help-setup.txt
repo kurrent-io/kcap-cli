@@ -40,8 +40,9 @@ Options:
                               create, instead of being prompted for it. Requires
                               --org. A slug that is taken or malformed ends the run
                               naming it, rather than asking for another.
-  --no-prompt                 Non-interactive mode (requires --server-url, or
-                              --org + --slug to create a workspace as part of the run)
+  --no-prompt                 Non-interactive mode (requires <tenant> or
+                              --server-url, or --org + --slug to create a
+                              workspace as part of the run)
   --github                    Sign in with GitHub instead of org SSO during
                               the login step (default is org SSO when a
                               browser is available)
@@ -118,7 +119,8 @@ Options:
                               subscription auth working.
   --skip-import               Don't offer the Step 6 import of this machine's
                               past sessions. Also disables the import that
-                              --no-prompt performs by default.
+                              --no-prompt performs by default. An import you
+                              choose on the browser's Import screen still runs.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
@@ -186,15 +188,16 @@ current directory is a git repo. It's only offered when authentication
 requirements are satisfied (including no-auth servers, auth provider None);
 otherwise it's skipped with a one-line reason and the usual `kcap import` hint.
 If you answered the browser's Import screen, that import has already run and
-this step reports it instead of asking. Opt out with --skip-import.
+this step reports it instead of asking. Opt out with --skip-import, which
+does not cancel an import chosen in the browser.
 
 --no-prompt answers yes to this step too, so `kcap setup --no-prompt` uploads
 this machine's session history unless you add --skip-import.
 
 Recording starts with the next agent session: hooks load when a session
 starts, so restart any agent that was already running. A session you then
-start should appear in your workspace's dashboard; `kcap status` only shows
-that kcap can reach the server. Commits are filed under their agent session by
+start should appear in your workspace's dashboard; `kcap status` shows that
+kcap is configured and can reach the server, not that sessions are recorded. Commits are filed under their agent session by
 a git config hook that needs git 2.54 or later; an older git ignores it.
 
 For project-scope or post-setup re-installs, use:
