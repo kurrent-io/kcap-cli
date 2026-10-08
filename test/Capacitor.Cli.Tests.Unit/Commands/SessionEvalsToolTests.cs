@@ -82,6 +82,15 @@ public class SessionEvalsToolTests {
             """);
 
         await Assert.That(State(entry)).IsEqualTo("failed");
+        await Assert.That(entry["failure_reason"]!.GetValue<string>()).IsEqualTo("every question failed to judge");
+    }
+
+    [Test]
+    public async Task Project_leaves_the_reason_blank_when_the_server_gives_none() {
+        var entry = SessionEvalsTool.Project("s", HttpStatusCode.OK, """{"eval_run_id":"r1","is_terminal":true,"completed_result":null}""");
+
+        await Assert.That(State(entry)).IsEqualTo("failed");
+        await Assert.That(entry["failure_reason"]).IsNull();
     }
 
     [Test]
@@ -151,6 +160,17 @@ public class SessionEvalsToolTests {
         await Assert.That(await SessionEvalsTool.FetchAsync(new HttpClient(handler), "http://srv", ["a", "b"], new FakeTimeProvider())).IsNull();
     }
 
+    /// <summary>The other request never answers, so only cancellation on the 401 lets this return.</summary>
+    [Test]
+    public async Task FetchAsync_stops_the_fan_out_on_the_first_rejection() {
+        var handler = new RoutingHandler(path => path.Contains("/a/") ? (HttpStatusCode.Unauthorized, "") : (HttpStatusCode.NoContent, ""),
+                                         stall: path => path.Contains("/b/"));
+
+        var fetch = SessionEvalsTool.FetchAsync(new HttpClient(handler), "http://srv", ["a", "b"], TimeProvider.System);
+
+        await Assert.That(await fetch.WaitAsync(TimeSpan.FromSeconds(10))).IsNull();
+    }
+
     [Test]
     public async Task Sessions_server_lists_the_tool() {
         await Assert.That(McpSessionsServer.BuildToolsList().Select(t => t.Name)).Contains(SessionEvalsTool.Name);
@@ -161,11 +181,15 @@ public class SessionEvalsToolTests {
     static string Weakest(JsonObject entry) =>
         string.Join(",", entry["weakest_questions"]!.AsArray().Select(q => q!["question_id"]!.GetValue<string>()));
 
-    sealed class RoutingHandler(Func<string, (HttpStatusCode Status, string Body)> route) : HttpMessageHandler {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
-            var (status, body) = route(request.RequestUri!.AbsolutePath);
+    sealed class RoutingHandler(Func<string, (HttpStatusCode Status, string Body)> route, Func<string, bool>? stall = null) : HttpMessageHandler {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+            var path = request.RequestUri!.AbsolutePath;
 
-            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+            if (stall?.Invoke(path) == true) await Task.Delay(Timeout.Infinite, cancellationToken);
+
+            var (status, body) = route(path);
+
+            return new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         }
     }
 }

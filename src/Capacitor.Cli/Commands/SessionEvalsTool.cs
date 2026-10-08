@@ -83,6 +83,7 @@ static partial class SessionEvalsTool {
 
                         if (response.StatusCode == HttpStatusCode.Unauthorized) {
                             unauthorized = true;
+                            await cts.CancelAsync();
                             return;
                         }
 
@@ -120,12 +121,15 @@ static partial class SessionEvalsTool {
             return Error(sessionId, "unreadable eval-progress response");
         }
 
-        if (root.Obj("completed_result") is { } result && !IsFailureOnly(result)) return Completed(sessionId, root, result);
+        var result      = root.Obj("completed_result");
+        var failureOnly = result is { } r && IsFailureOnly(r);
 
-        if (root.Bool("is_terminal") == true || root.Obj("completed_result") is not null || root.Obj("failed_result") is not null) {
+        if (result is { } completed && !failureOnly) return Completed(sessionId, root, completed);
+
+        if (failureOnly || root.Bool("is_terminal") == true || root.Obj("failed_result") is not null) {
             var failed = State(sessionId, "failed");
             failed["eval_run_id"]    = root.Str("eval_run_id");
-            failed["failure_reason"] = root.Str("failure_reason") ?? "every question failed to judge";
+            failed["failure_reason"] = root.Str("failure_reason") ?? (failureOnly ? "every question failed to judge" : null);
             return failed;
         }
 
