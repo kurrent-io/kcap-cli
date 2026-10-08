@@ -49,6 +49,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public bool IsShown { get => _isShown; set => this.RaiseAndSetIfChanged(ref _isShown, value); }
 
     public ReactiveCommand<DocumentRow, Unit> SelectCommand { get; }
+    public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
     /// Something asked for the tab: a card's Open, a pane row, the pane summary.
     public event Action? OpenRequested;
 
@@ -62,6 +63,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         _time = time;
         _readWorkingCopy = readWorkingCopy ?? ReadFile;
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
+        OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _activity.PlanWritten += OnPlanWritten;
     }
@@ -215,6 +217,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         _activity.PlanWritten -= OnPlanWritten;
         _settle.Dispose();
         SelectCommand.Dispose();
+        OpenLinkCommand.Dispose();
         var leases = _outstanding.ToArray();
         foreach (var lease in leases) lease.Cts.Cancel();
         _current = null;

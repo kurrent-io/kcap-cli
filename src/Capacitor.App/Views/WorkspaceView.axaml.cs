@@ -34,6 +34,7 @@ public partial class WorkspaceView : UserControl {
         DataContextChanged += (_, _) => {
             _tabFocus?.Dispose();
             PullRequestHost.Content = null;
+            ArtefactsHost.Content = null;
             var model = DataContext as WorkspaceViewModel;
             _tabFocus = model?
                 .WhenAnyValue(vm => vm.ActiveTab, vm => vm.Chat)
@@ -41,6 +42,8 @@ public partial class WorkspaceView : UserControl {
                     if (!ReferenceEquals(model, DataContext) || model?.ActiveTab != pair.Item1) return;
                     if (pair.Item1 == WorkspaceTab.PullRequest && PullRequestHost.Content is null && model?.PullRequests is { } pullRequests)
                         PullRequestHost.Content = new PullRequestReader { DataContext = pullRequests };
+                    if (pair.Item1 == WorkspaceTab.Artefacts && ArtefactsHost.Content is null && model is not null)
+                        ArtefactsHost.Content = new ArtefactsView { DataContext = model.Artefacts };
                     if (PullRequestHost.Content is PullRequestReader reader) reader.IsVisible = pair.Item1 == WorkspaceTab.PullRequest;
                     if (pair.Item1 == WorkspaceTab.Chat && pair.Item2 is not null) ChatHost.FocusComposer();
                     else if (pair.Item1 == WorkspaceTab.Terminal) TerminalHost.Focus();

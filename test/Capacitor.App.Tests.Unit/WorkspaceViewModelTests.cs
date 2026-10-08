@@ -2,9 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
-using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -35,15 +33,6 @@ public class WorkspaceViewModelTests {
             new NoAttachmentUploader(), access: access, planArtifacts: planArtifacts);
 
     const string Session = "0123456789abcdef0123456789abcdef";
-
-    static PlanArtifactDto Doc(string path, string kind = "design") => new() {
-        ArtifactId = path, Kind = kind, Title = path, Source = "declared", SessionId = Session, Path = path, Content = "# x",
-        ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
-        DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
-    };
-
-    static PlanArtifactsRead Ready(params PlanArtifactDto[] docs) =>
-        new(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto { Artifacts = [.. docs] });
 
     /// The tab exists only while the session has a document, like Pull request with its changes.
     [Test]

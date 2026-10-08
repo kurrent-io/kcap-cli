@@ -1,0 +1,75 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.ArtefactsView"
+             x:DataType="vm:ArtefactsTabViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <UserControl.Styles>
+        <Style Selector="Button.artefactRow">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.artefactRow /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.artefactRow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        </Style>
+        <!-- Selection is info blue, as the rail row and the segment are. -->
+        <Style Selector="Button.artefactRow.selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+        </Style>
+    </UserControl.Styles>
+    <Grid ColumnDefinitions="240,*">
+        <Border Grid.Column="0" Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,1,0">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="10,14,10,14" Spacing="4">
+                    <TextBlock Text="DOCUMENTS" FontSize="11.5" FontWeight="Bold" LetterSpacing="1.2"
+                               Foreground="{StaticResource KcapMutedBrush}" Margin="10,0,0,6" />
+                    <ItemsControl x:Name="DocumentList" ItemsSource="{Binding Documents}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Spacing="2" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DocumentRow">
+                                <Button Classes="artefactRow" Classes.selected="{Binding IsSelected}"
+                                        Command="{Binding $parent[ItemsControl].((vm:ArtefactsTabViewModel)DataContext).SelectCommand}"
+                                        CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Text="{Binding FileName}" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <TextBlock Text="{Binding Kind}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                            <Border IsVisible="{Binding HasStateChip}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="4" Padding="5,0">
+                                                <TextBlock Text="{Binding StateChip}" FontSize="10.5" Foreground="{StaticResource KcapWarningBrush}" />
+                                            </Border>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+        <Panel Grid.Column="1">
+            <ContentControl x:Name="DocumentReaderHost" Content="{Binding Reader}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:DocumentReaderViewModel">
+                        <views:DocumentReader />
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
+            <TextBlock Text="Select a document to read it." FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       IsVisible="{Binding Reader, Converter={x:Static ObjectConverters.IsNull}}" />
+        </Panel>
+    </Grid>
+</UserControl>
