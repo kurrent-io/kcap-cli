@@ -3321,6 +3321,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 : "Failed";
 
             if (agent.Status is not "Completed" and not "Failed") {
+                if (!agent.Runtime.HasExited) LogOutputEndedWhileRunning(agent.Id);
+
                 // A startup failure means the process exited before establishing
                 // a real interactive session (CLI config error, auth issue, immediate
                 // crash). A real session keeps producing output throughout its
@@ -5807,6 +5809,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} exited with code {ExitCode}")]
     partial void LogAgentExited(string agentId, int? exitCode);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Output of agent {AgentId} ended while its process is still running; tearing the agent down")]
+    partial void LogOutputEndedWhileRunning(string agentId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Stopping agent {AgentId}")]
     partial void LogStopping(string agentId);
