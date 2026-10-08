@@ -34,10 +34,17 @@
                             <Button x:Name="TerminalTabButton" Content="Terminal" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsTerminalActive}" Command="{Binding ShowTerminalCommand}"
                                     IsVisible="{Binding ShowsTerminalTab}" />
+                            <Button x:Name="ArtefactsTabButton" Content="Artefacts" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsArtefactsActive}" Command="{Binding ShowArtefactsCommand}"
+                                    IsVisible="{Binding ShowsArtefactsTab}" />
                         </StackPanel>
                     </Border>
-                    <Button Content="Open in web" Command="{Binding OpenInWebCommand}"
-                            Classes="kcapGhost" Padding="10,5" FontSize="13.5" />
+                    <Button x:Name="OpenInWebButton" Command="{Binding OpenInWebCommand}"
+                            Classes="kcapGhost kcapIcon" ToolTip.Tip="Open in web" AutomationProperties.Name="Open in web">
+                        <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6"
+                              StrokeLineCap="Round" StrokeJoin="Round"
+                              Data="M14,3 H21 V10 M21,3 L11,13 M18,13 V20 H4 V6 H11" />
+                    </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
                             Padding="10,5" FontSize="13.5" />
                 </StackPanel>
@@ -92,6 +99,7 @@
                     </Grid>
                 </Border>
             </Grid>
+            <ContentControl x:Name="ArtefactsPane" IsVisible="{Binding ShowsArtefactsPane}" />
         </Grid>
     </Grid>
 </UserControl>

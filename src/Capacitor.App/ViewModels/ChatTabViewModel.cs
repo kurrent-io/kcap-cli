@@ -44,6 +44,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly IPermissionService _permissions;
     readonly SessionRuns _runs;
     readonly PlanActivity? _planActivity;
+    readonly Action<ToolCard>? _openCard;
     readonly CompositeDisposable _disposables = new();
     readonly CancellationTokenSource _lifetime = new();
     // Read once: the source is disposed at teardown, and a retry waking after that still needs a
@@ -88,6 +89,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The session the listed foreign rows belong to.
     string? _queueKey;
     string? _root;
+
     volatile FeedLease? _lease;
     ITimer? _timer;
     volatile Task? _pendingRead;
@@ -106,6 +108,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : queued == 0 ? $"{MessageCount(unconfirmed)} unconfirmed"
                 : $"{MessageCount(queued)} queued · {unconfirmed} unconfirmed";
         }
+    }
+
+    /// A foreign MCP call: the usual detail keys first, then whatever string it was given.
+    string FirstOrAny(string? inputJson, ToolCategory category) {
+        var known = ToolDetail.From(inputJson, _root, category);
+        return known.Length > 0 ? known : ToolDetail.FirstString(inputJson);
+    }
+
+    Action? CardOpener(ToolCard card) {
+        if (card.Url is null && card.DocumentPath is null) return null;
+        if (_openCard is { } open) return () => open(card);
+        if (card.Url is { } url) return () => LinkPolicy.Open(_opener, url);
+        return null;
     }
 
     static string MessageCount(int count) => $"{count} message{(count == 1 ? "" : "s")}";
@@ -445,18 +460,21 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             string agentId, IDaemonClientService daemon, ChatInput input, IAttachmentUploader uploader,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
-            IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null)
+            IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
+            Action<ToolCard>? openCard = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
-               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity) { }
+               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
             ChatInput input, IAttachmentUploader uploader, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
             IPermissionService permissions, SessionRuns runs, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
-            IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null) {
+            IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
+            Action<ToolCard>? openCard = null) {
         _planActivity = planActivity;
+        _openCard = openCard;
         _input = input;
         _uploader = uploader;
         _disposables.Add(input);
@@ -931,8 +949,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     case AcpEventKind.ToolCall: {
                         _openShell = null;
                         var name = e.ToolName ?? "tool";
-                        var category = ToolSummary.Categorize(name, e.ToolInputJson);
-                        var item = new ToolCallItem(name, ToolDetail.From(e.ToolInputJson, _root, category), category);
+                        var entry = KcapToolCatalogue.Match(name);
+                        var category = entry?.Category ?? ToolSummary.Categorize(name, e.ToolInputJson);
+                        var label = entry?.Label ?? KcapToolCatalogue.ForeignLabel(name);
+                        var detail = entry is not null ? ToolDetail.ForKey(e.ToolInputJson, entry.DetailKey)
+                            : label is not null ? FirstOrAny(e.ToolInputJson, category)
+                            : ToolDetail.From(e.ToolInputJson, _root, category);
+                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson);
                         if (e.ToolCallId is { } id) {
                             _pendingTools[id] = item;
                             if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
@@ -948,8 +971,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         if (e.ToolCallId is not { } resultId) break;
                         _settledTools.Add(resultId);
                         NoteQuestionResult(resultId, e.TimestampIso);
-                        if (_pendingTools.Remove(resultId, out var call))
+                        if (_pendingTools.Remove(resultId, out var call)) {
+                            if (!e.ToolIsError && call.CardKind != ToolCardKind.None
+                                && ToolCards.Build(call.CardKind, call.InputJson, e.ToolResult) is { } card)
+                                call.SetCard(card, CardOpener(card));
                             call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
+                        }
                         break;
                 }
             }
