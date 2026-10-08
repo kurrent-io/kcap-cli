@@ -128,6 +128,12 @@ sealed class DaemonServiceCommands(
     internal async Task<int> Refresh(bool force = false, Func<string, string>? stabilize = null) {
         stabilize ??= ScriptInstallLayout.Stabilize;
 
+        if (force && manager is not LaunchdServiceManager) {
+            await Console.Error.WriteLineAsync("refresh_outcome=unsupported");
+            await Console.Error.WriteLineAsync($"Daemon '{id}': --force reloads a launchd service; this platform's units are refreshed without it.");
+            return 1;
+        }
+
         if (manager is SystemdServiceManager systemd) {
             var unwritten = 0;
 
@@ -192,16 +198,18 @@ sealed class DaemonServiceCommands(
 
     /// <summary>One daemon, a forced restart, and one <c>refresh_outcome=</c> line for machine callers.</summary>
     async Task<int> RefreshForcedAsync(LaunchdServiceManager launchd, Func<string, string> stabilize) {
-        var started = time.GetTimestamp();
-        TimeSpan TimeLeft() => RefreshDeadline - time.GetElapsedTime(started);
-
         UnitRefresh outcome;
         string?     error = null;
         try {
             using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
-            outcome = txn is null
-                ? UnitRefresh.Contended
-                : launchd.RefreshUnit(id, () => RequestRestart(id, "force"), TimeLeft, out error, stabilize, requirePositiveSpawnType: true);
+            if (txn is null) {
+                outcome = UnitRefresh.Contended;
+            } else {
+                var started = time.GetTimestamp(); // the lock wait is not charged to the reload budget
+                outcome = launchd.RefreshUnit(
+                    id, () => RequestRestart(id, "force"), () => RefreshDeadline - time.GetElapsedTime(started),
+                    out error, stabilize, requirePositiveSpawnType: true);
+            }
         } catch (Exception ex) {
             outcome = UnitRefresh.Failed;
             error   = ex.Message;

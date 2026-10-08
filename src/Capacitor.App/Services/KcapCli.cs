@@ -84,6 +84,8 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+    /// The forced refresh may wait 10 s for the service transaction lock before its own 55 s deadline starts.
+    static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(75);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
     static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
@@ -177,7 +179,7 @@ public sealed class KcapCli : IKcapCli {
         return CliPath is not { } cliPath
             ? NoCliResult()
             : Run(cliPath, ["daemon", "service", "refresh", "--name", _daemonName, "--force"],
-                new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
+                new RunOptions(EnvOverlay: env, Timeout: ReloadTimeout), ct);
     }
 
     // The profile flag and environment overlay must agree with the identity the lane verifies.

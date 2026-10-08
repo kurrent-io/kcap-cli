@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Services;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -75,6 +76,60 @@ public class DaemonCommandsServiceRefreshTests {
         await Assert.That(unforcedExit).IsEqualTo(0);
         await Assert.That(unforced.GetCapturedOutput().Trim()).IsEqualTo("");
         await Assert.That(unforced.GetCapturedError().Trim()).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Forced_run_does_not_charge_the_lock_wait_to_the_reload_budget() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
+        var time = new FakeTimeProvider();
+        var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "a", TimeSpan.Zero, time);
+        using var console = ConsoleOutput.StartFullCapture();
+        var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root),
+            Manager([], new() { ["a"] = "adaptive (6)" }), "a", Home, time) { RestartRequester = (_, _) => true };
+
+        var run     = commands.Refresh(force: true, stabilize: s => s);
+        var release = time.GetUtcNow().AddSeconds(9);
+        for (var steps = 0; !run.IsCompleted; steps++) {
+            if (steps > 400) throw new TimeoutException("the forced refresh never finished under the fake clock");
+            if (held is not null && time.GetUtcNow() >= release) { held.Dispose(); held = null; }
+            time.Advance(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(5);
+        }
+        held?.Dispose();
+
+        await Assert.That(await run).IsEqualTo(0);
+        await Assert.That(console.GetCapturedError()).Contains("refresh_outcome=reloaded");
+    }
+
+    [Test]
+    public async Task Forced_run_off_launchd_is_unsupported_and_touches_no_unit() {
+        var manager = new UntouchableManager();
+        using var console = ConsoleOutput.StartFullCapture();
+        var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "a", Home, TimeProvider.System) {
+            RestartRequester = (_, _) => true,
+        };
+
+        var exit = await commands.Refresh(force: true, stabilize: s => s);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(console.GetCapturedError()).Contains("refresh_outcome=unsupported");
+    }
+
+    /// A non-launchd manager the forced run must never touch: every member throws.
+    sealed class UntouchableManager : IServiceManager {
+        static Exception Touched() => new InvalidOperationException("the forced run touched the service manager");
+        public string Describe() => throw Touched();
+        public string UnitDirectory => throw Touched();
+        public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => throw Touched();
+        public IReadOnlyList<string> ListInstalled() => throw Touched();
+        public ServiceStatus Status(string serviceId) => throw Touched();
+        public ServiceQuery Query(string serviceId) => throw Touched();
+        public void Install(ServiceSpec spec, bool startNow) => throw Touched();
+        public void WriteAndBootstrap(ServiceSpec spec) => throw Touched();
+        public bool Uninstall(string serviceId, out string? error) => throw Touched();
+        public bool Start(string serviceId, out string? error) => throw Touched();
+        public bool Stop(string serviceId, out string? error) => throw Touched();
     }
 
     [Test]
