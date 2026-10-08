@@ -37,6 +37,21 @@ partial class WatchCommand(
         ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
         GitProviderRouter router, TimeProvider time) {
     readonly CursorMarkers  _markers  = new(config, time);
+    readonly Dictionary<(string, string?), HeldLineRedaction> _heldLines = [];
+
+    /// <summary>The clock redaction budgets read, when not <c>time</c>.</summary>
+    internal TimeProvider? RedactionClock { get; init; }
+
+    internal HeldLineRedaction HeldLineFor(string sessionId, string? agentId) {
+        lock (_heldLines) {
+            if (!_heldLines.TryGetValue((sessionId, agentId), out var held)) {
+                held = new(new HeldLineStore(config, sessionId, agentId), time, RedactionClock ?? time, message => Log(time, message));
+                _heldLines[(sessionId, agentId)] = held;
+            }
+
+            return held;
+        }
+    }
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -2079,9 +2094,20 @@ partial class WatchCommand(
                 }
             }
 
-            var newLineNumbers = drainRead.LineNumbers;
-            var newLines = TranscriptCapture.EncodeLines(drainRead.Lines,
+            // Cut the read itself at a held line: the raw-line consumers below must see what follows
+            // it once, on the poll that delivers it.
+            var captured = HeldLineFor(sessionId, agentId).Capture(drainRead.Lines, drainRead.LineNumbers,
                 (reason, count) => Log(time, $"Capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
+            if (captured.Consumed < drainRead.Lines.Count) {
+                drainRead = drainRead with {
+                    Lines        = drainRead.Lines.GetRange(0, captured.Consumed),
+                    LineNumbers  = drainRead.LineNumbers.GetRange(0, captured.Consumed),
+                    NextPosition = drainRead.LineNumbers[captured.Consumed]
+                };
+            }
+
+            var newLineNumbers = drainRead.LineNumbers;
+            var newLines       = captured.Lines;
             var linesRead      = drainRead.NextPosition;
 
             state.Commits = state.Commits.Collect();
@@ -2579,23 +2605,34 @@ partial class WatchCommand(
 
         if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
-        var redacted = TranscriptCapture.EncodeLines(tail.Lines,
+        var redacted = TranscriptCapture.EncodeTail(tail.Lines,
             (reason, count) => Log(time, $"Shutdown capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
+        var unredacted = redacted.Consumed < tail.Lines.Count ? tail.LineNumbers[redacted.Consumed] : (int?)null;
         var batch = new TranscriptBatch {
             SessionId = sessionId, AgentId = agentId, Vendor = vendor,
-            Lines = [..redacted], LineNumbers = [..tail.LineNumbers], ObservedCommits = commits.Pending
+            Lines = [..redacted.Lines], LineNumbers = [..tail.LineNumbers.Take(redacted.Consumed)], ObservedCommits = commits.Pending
         };
         var result = TranscriptSpool.AppendResult.Appended;
-        foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
-            result = transcriptSpool.Append(sessionId,
-                BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
-            if (result != TranscriptSpool.AppendResult.Appended) break;
+        if (batch.Lines.Length > 0 || commits.Pending is { Length: > 0 }) {
+            foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
+                result = transcriptSpool.Append(sessionId,
+                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
+                if (result != TranscriptSpool.AppendResult.Appended) break;
+            }
+        }
+
+        if (result == TranscriptSpool.AppendResult.Appended && unredacted is { } line) {
+            Log(time, $"Line {line} of {sessionId} still cannot be redacted in time; spooled the {batch.Lines.Length} line(s) before it");
+            transcriptSpool.MarkNeedsImport(sessionId, $"shutdown tail: redaction of line {line} timed out");
+
+            return TranscriptSpool.AppendResult.MarkedNeedsImport;
         }
 
         switch (result) {
             case TranscriptSpool.AppendResult.Appended:
+                HeldLineFor(sessionId, agentId).ReleaseBelow(tail.NextPosition);
                 Log(time, $"Spooled {tail.Lines.Count} undelivered transcript line(s) at shutdown for "
-                  + $"{sessionId} (hub down) — will replay on the next global drain");
+                  + $"{sessionId} — will replay on the next global drain");
 
                 break;
             case TranscriptSpool.AppendResult.MarkedNeedsImport:
