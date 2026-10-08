@@ -3,9 +3,10 @@ kcap setup — Configure server, login, and install hooks
 Usage: kcap setup [<tenant>] [options]
 
 With no <tenant> or --server-url, setup discovers your workspace: it signs you
-in with your organization's single sign-on (--github for GitHub), then lets you
-pick from the workspaces you belong to, or offers to create one if you have
-none. The install scripts (https://www.kurrent.io/install, install.ps1) run
+in with your organization's single sign-on, then lets you pick from the
+workspaces you belong to, or offers to create one if you have none. --github
+signs in with GitHub instead, which never creates a workspace: without one,
+pass its URL. The install scripts (https://www.kurrent.io/install, install.ps1) run
 setup for you after a first install.
 
 Arguments:
