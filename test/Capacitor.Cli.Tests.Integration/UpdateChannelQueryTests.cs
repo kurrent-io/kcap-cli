@@ -96,9 +96,9 @@ public class UpdateChannelQueryTests : IDisposable {
     /// </summary>
     /// <remarks>
     /// The response outlasts the timeout, so a call that ignored the token could only end at 5 s or
-    /// later: the bound sits on that boundary rather than near the 200 ms cancel, which a loaded
-    /// runner overshoots by more than a second. That the token alone ends the fetch is pinned without
-    /// a clock by <c>UpdateCheckCancellationTests</c>.
+    /// later. The bound sits on that boundary, not near the 200 ms cancel, which scheduling delay alone
+    /// can cross. That the token alone ends the fetch is pinned without a clock by
+    /// <c>UpdateCheckCancellationTests</c>.
     /// </remarks>
     [Test]
     public async Task Response_slower_than_passive_token_is_cancelled_and_backs_off() {
