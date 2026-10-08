@@ -99,6 +99,16 @@ public class AccountWiringTests {
     }
 
     [Test]
+    [Arguments(HarnessId.Claude, ".claude-work", "settings.json")]
+    [Arguments(HarnessId.Codex, ".codex-work", "hooks.json")]
+    public async Task An_empty_settings_file_is_not_broken(HarnessId vendor, string dir, string file) {
+        var account = Account(vendor, dir);
+        File.WriteAllText(Home.PathTo(dir, file), " \n");
+
+        await Assert.That(AccountWiring.State(account, Home)).IsEqualTo(RecordingState.NotWired);
+    }
+
+    [Test]
     public async Task Claude_plugin_enabled_without_its_payload_is_broken() {
         var work = Account(HarnessId.Claude, ".claude-work");
         File.WriteAllText(Home.PathTo(".claude-work", "settings.json"), """{ "enabledPlugins": { "kcap@kcap": true } }""");

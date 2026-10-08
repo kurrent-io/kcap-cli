@@ -65,4 +65,32 @@ public class JsonSettingsFileTests {
         await Assert.That(result).IsEqualTo(SettingsEdit.Unchanged);
         await Assert.That(File.Exists(path)).IsFalse();
     }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("  \n\t ")]
+    public async Task Edit_treats_an_empty_file_as_an_empty_object(string content) {
+        var path = Tmp.CreateFile("settings.json", content);
+
+        var result = JsonSettingsFile.Edit(path, root => { root["a"] = 1; return true; });
+
+        await Assert.That(result).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(JsonNode.Parse(File.ReadAllText(path))!["a"]!.GetValue<int>()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Edit_keeps_a_symlinked_settings_file_a_symlink() {
+        Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI does not have");
+        var target = Tmp.CreateFile("dotfiles/settings.json", """{ "theme": "dark" }""");
+        var link   = Tmp.PathTo("settings.json");
+        File.CreateSymbolicLink(link, target);
+
+        var result = JsonSettingsFile.Edit(link, root => { root["a"] = 1; return true; });
+
+        await Assert.That(result).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
+        var root = JsonNode.Parse(File.ReadAllText(target))!;
+        await Assert.That(root["theme"]!.GetValue<string>()).IsEqualTo("dark");
+        await Assert.That(root["a"]!.GetValue<int>()).IsEqualTo(1);
+    }
 }

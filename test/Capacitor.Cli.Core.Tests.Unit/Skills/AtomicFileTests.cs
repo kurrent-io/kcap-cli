@@ -43,4 +43,58 @@ public class AtomicFileTests {
 
         await Assert.That(Directory.GetFiles(Tmp.Path)).IsEquivalentTo(new[] { path });
     }
+
+    [Test]
+    public async Task Replace_writes_through_a_symlink_and_keeps_the_link() {
+        Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI does not have");
+        var target = Tmp.CreateFile("dotfiles/settings.json", "old");
+        var link   = Tmp.PathTo("settings.json");
+        File.CreateSymbolicLink(link, target);
+
+        AtomicFile.Replace(link, "new");
+
+        await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
+        await Assert.That(File.ReadAllText(target)).IsEqualTo("new");
+        await Assert.That(Directory.GetFiles(Tmp.PathTo("dotfiles"))).IsEquivalentTo(new[] { target });
+    }
+
+    [Test]
+    public async Task Replace_through_a_symlink_keeps_the_targets_mode() {
+        if (OperatingSystem.IsWindows()) return;
+        var target = Tmp.CreateFile("dotfiles/settings.json", "old");
+        File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        var link = Tmp.PathTo("settings.json");
+        File.CreateSymbolicLink(link, target);
+
+        AtomicFile.Replace(link, "new");
+
+        await Assert.That(File.GetUnixFileMode(target)).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    [Test]
+    public async Task Replace_through_a_dangling_link_creates_the_file_it_names() {
+        Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI does not have");
+        var target = Tmp.CreateDir("dotfiles").PathTo("settings.json");
+        var link   = Tmp.PathTo("settings.json");
+        File.CreateSymbolicLink(link, target);
+
+        AtomicFile.Replace(link, "new");
+
+        await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
+        await Assert.That(File.ReadAllText(target)).IsEqualTo("new");
+    }
+
+    [Test]
+    public async Task Replace_without_following_replaces_the_link_itself() {
+        Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI does not have");
+        var target = Tmp.CreateFile("elsewhere/SKILL.md", "old");
+        var link   = Tmp.PathTo("SKILL.md");
+        File.CreateSymbolicLink(link, target);
+
+        AtomicFile.Replace(link, "new", followLink: false);
+
+        await Assert.That(new FileInfo(link).LinkTarget).IsNull();
+        await Assert.That(File.ReadAllText(link)).IsEqualTo("new");
+        await Assert.That(File.ReadAllText(target)).IsEqualTo("old");
+    }
 }

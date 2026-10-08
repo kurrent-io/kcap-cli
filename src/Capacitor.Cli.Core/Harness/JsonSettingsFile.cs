@@ -14,8 +14,10 @@ public static class JsonSettingsFile {
             JsonObject root;
 
             if (File.Exists(path)) {
+                var text = File.ReadAllText(path);
                 JsonNode? parsed;
-                try { parsed = JsonNode.Parse(File.ReadAllText(path)); } catch (JsonException) { return SettingsEdit.Malformed; }
+                try { parsed = string.IsNullOrWhiteSpace(text) ? new JsonObject() : JsonNode.Parse(text); }
+                catch (JsonException) { return SettingsEdit.Malformed; }
                 if (parsed is not JsonObject obj) return SettingsEdit.Malformed;
                 root = obj;
             } else {

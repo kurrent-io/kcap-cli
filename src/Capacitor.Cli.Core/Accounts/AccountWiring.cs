@@ -95,7 +95,8 @@ public static class AccountWiring {
     static bool IsMalformed(string path) {
         if (!File.Exists(path)) return false;
         try {
-            return JsonNode.Parse(File.ReadAllTextShared(path)) is not JsonObject;
+            var text = File.ReadAllTextShared(path);
+            return !string.IsNullOrWhiteSpace(text) && JsonNode.Parse(text) is not JsonObject;
         } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
             return true;
         }
