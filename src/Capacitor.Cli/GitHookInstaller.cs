@@ -52,6 +52,8 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
             && Events.All(hookEvent => Git("--add", events, hookEvent) is not null);
     }
 
+    public string ConfigFilePath => ConfigFile();
+
     // The file `git config --global` would write: ~/.gitconfig, unless only the XDG file exists.
     string ConfigFile() {
         var dotfile = Path.Combine(home.Path, ".gitconfig");

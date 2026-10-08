@@ -117,7 +117,9 @@ via ~/.pi/ or the pi binary on PATH; SST OpenCode via ~/.config/opencode/ (or
 detected agents, then asks a single yes/no prompt to install kcap (hooks,
 skills, instructions, MCP) for all of them, instead of one prompt per agent.
 Hooks are installed user-wide (Pi, OpenCode, and Antigravity install a
-plugin/hooks-block rather than a shell-hooks file).
+plugin/hooks-block rather than a shell-hooks file). The closing summary lists
+every file and directory the run installed kcap into, including the git config
+that carries the commit hook, under "Changed on this machine".
 
 Codex runs only hooks you have trusted. After Codex hooks install, the next
 `codex` CLI launch prompts to trust them — accept once to trust them all, or

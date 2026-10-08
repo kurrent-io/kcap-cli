@@ -136,6 +136,48 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
+    /// Every file or directory this run put kcap into, in install order and without repeats. Read off
+    /// the result rather than collected by the installers, so a path appears only for a write the step
+    /// reports as done.
+    /// </summary>
+    internal static IReadOnlyList<string> InstalledPaths(Result r, Paths p) {
+        var paths = new List<string>();
+
+        void Add(bool done, string path) {
+            if (done && !string.IsNullOrEmpty(path) && !paths.Contains(path)) paths.Add(path);
+        }
+
+        Add(r.ClaudeInstalled, p.ClaudeSettingsPath);
+        Add(r.CodexHooksInstalled, p.CodexHooksPath);
+        Add(r.CodexNetworkAccessApplied || r.CodexMcpRegistered, p.CodexConfigTomlPath);
+        Add(r.AgentSkillsInstalled, p.AgentsSkillsDir);
+        Add(r.CursorHooksInstalled, p.CursorHooksPath);
+        Add(r.CursorMcpRegistered, p.CursorMcpPath);
+        Add(r.CopilotHooksInstalled, p.CopilotHooksPath);
+        Add(r.CopilotMcpRegistered, p.CopilotMcpPath);
+        Add(r.CopilotInstructionsInstalled, p.CopilotInstructionsPath);
+        Add(r.GeminiHooksInstalled || r.GeminiMcpRegistered, p.GeminiSettingsPath);
+        Add(r.GeminiInstructionsInstalled, p.GeminiInstructionsPath);
+        Add(r.KiroHooksInstalled, p.KiroHooksPath);
+        Add(r.KiroMcpRegistered, p.KiroMcpPath);
+        Add(r.KiroSkillsInstalled, p.KiroSkillsDir);
+        Add(r.KiroCrewHookInstalled, p.KiroCrewHookScript);
+        Add(r.KiroCrewSkillsInstalled, p.KiroCrewSkillsDir);
+        Add(r.PiExtensionInstalled, p.PiExtensionPath);
+        Add(r.PiMcpInstalled, p.PiMcpExtensionPath);
+        Add(r.PiInstructionsInstalled, p.PiAgentsMdPath);
+        Add(r.OpenCodeExtensionInstalled, p.OpenCodeExtensionPath);
+        Add(r.OpenCodeMcpRegistered, p.OpenCodeMcpPath);
+        Add(r.OpenCodeInstructionsInstalled, p.OpenCodeInstructionsPath);
+        Add(r.AntigravityHooksInstalled, p.AntigravityHooksPath);
+        Add(r.AntigravityMcpRegistered, p.AntigravityMcpPath);
+        Add(r.AntigravityInstructionsInstalled, p.AntigravityInstructionsPath);
+        Add(r.AntigravitySkillsInstalled, p.AntigravitySkillsDir);
+
+        return paths;
+    }
+
+    /// <summary>
     /// Drives the agent-detection branches and dispatches to the installer
     /// delegates. Subsequent tasks fill in Claude, Codex hooks, Codex skills,
     /// Cursor hooks, and neither-detected behaviour.

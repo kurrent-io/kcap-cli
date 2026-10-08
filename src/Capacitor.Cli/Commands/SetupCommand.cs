@@ -818,8 +818,13 @@ sealed class SetupCommand(
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
-        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
+        var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
+        var gitHook        = new GitHookInstaller(home);
+
+        if (installResult.AnyHooksInstalled && gitHook.Install()) {
             WriteLine(GitHookLine(GitHookInstaller.InstalledGitVersion()));
+            installedPaths.Add(gitHook.ConfigFilePath);
+        }
 
         if (CodexTrustReminder(installResult) is { } codexTrust) WriteLine(codexTrust);
 
@@ -1097,6 +1102,8 @@ sealed class SetupCommand(
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath(config)));
 
         AnsiConsole.Write(new Padder(grid).Padding(2, 0, 0, 0));
+
+        foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
 
         // hooks only load at coding-agent session start. The common case is a user
         // running `kcap setup` from inside an already-running session, which won't stream
@@ -2396,6 +2403,24 @@ sealed class SetupCommand(
         ? "  [yellow]![/] Codex records nothing until you trust the kcap hooks: accept the prompt on the next "
         + "[cyan]codex[/] launch, or in the Codex desktop app use Settings → Hooks."
         : null;
+
+    /// <summary>
+    /// The closing list of everything outside kcap's own config that this run changed, so nothing it
+    /// wrote into an agent or git is a surprise later. Empty when it changed nothing.
+    /// </summary>
+    internal static IEnumerable<string> InstalledInLines(IReadOnlyCollection<string> paths, string home) {
+        if (paths.Count == 0) yield break;
+
+        yield return "\n  [bold]Changed on this machine[/]";
+
+        foreach (var path in paths) {
+            var shown = path.StartsWith(home + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                ? "~" + path[home.Length..]
+                : path;
+
+            yield return $"    {Markup.Escape(shown)}";
+        }
+    }
 
     /// <summary>
     /// the end-of-setup reminder that live recording only starts on a
