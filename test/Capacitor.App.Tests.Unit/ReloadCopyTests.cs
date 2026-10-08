@@ -31,6 +31,8 @@ public class ReloadCopyTests {
             .IsEqualTo("This kcap is too old for this app. Update kcap, then press Reload again.");
         await Assert.That(ReloadCopy.For(State(new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention))))
             .IsEqualTo("kcap CLI not found. Can't manage the daemon from this app.");
+        await Assert.That(ReloadCopy.For(State(new MutationOutcome.Refused("not_loaded", RecoverySurface.Attention))))
+            .IsEqualTo("The daemon service for alexey is not loaded. Run `kcap daemon service start --name alexey`.");
     }
 
     [Test]

@@ -28,11 +28,12 @@ public static class ReloadCopy {
             return $"The daemon reload is not yet confirmed — check `kcap daemon status --name {name}`.";
 
         if (state.Kind == ReloadOutcomeKind.Refused) {
-            return state.Token switch {
+            var refused = state.Token switch {
                 "reload_unsupported" => "This kcap CLI cannot reload the daemon service. Update kcap, then press Reload again.",
                 "cli_below_floor"    => "This kcap is too old for this app. Update kcap, then press Reload again.",
-                _ => App.AttentionCopyFor(state.Token) ?? $"The daemon reload for {name} did not succeed ({state.Token}). {check}; details are in the app log.",
+                _                    => App.AttentionCopyFor(state.Token),
             };
+            if (refused is not null) return refused;
         }
 
         if (state.Kind is ReloadOutcomeKind.Skew or ReloadOutcomeKind.Repair) {

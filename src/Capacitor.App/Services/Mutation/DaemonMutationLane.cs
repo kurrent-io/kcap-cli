@@ -254,6 +254,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         // capability is proven on the executable that will run the mutation, before anything is spawned.
         if (request.Verb == MutationVerb.Reload) {
             var status = await executor.ServiceStatusAsync(ct).ConfigureAwait(false);
+            // A label that is not loaded reports no spawn type either; that is a state to name, not an old CLI.
+            if (status is not null && ServiceStateClassifier.Parse(status.State) == ServiceState.NotInstalled)
+                return new MutationOutcome.Refused("not_loaded", RecoverySurface.Attention);
             if (status?.LoadedSpawnType is null) return new MutationOutcome.Refused("reload_unsupported", RecoverySurface.Attention);
         }
 

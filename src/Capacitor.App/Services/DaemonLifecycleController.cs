@@ -93,6 +93,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     long _sequence;      // under _lock: both outcome records and read starts
     ReloadState? _standing; // under _lock: the authoritative reload state; the subject only publishes it
     bool _background;       // under _lock
+    long _backgroundSeq;    // under _lock: the start stamp of the read _background reflects
     readonly Lock _publish = new();
 
     IDisposable? _subscription;
@@ -240,18 +241,27 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         var changedBackground = false;
         var clear = false;
         lock (_lock) {
+            if (readStart <= _backgroundSeq) return; // reads overlap: one that started earlier and finished last carries older evidence
+            var notLoaded = ServiceStateClassifier.Parse(snap.State) == ServiceState.NotInstalled;
             switch (SpawnTypes.Classify(snap.LoadedSpawnType)) {
                 case SpawnTypeReading.BackgroundBand:
+                    _backgroundSeq = readStart;
                     _background = true;
                     changedBackground = true;
                     break;
                 case SpawnTypeReading.Positive:
+                    _backgroundSeq = readStart;
                     _background = false;
                     changedBackground = true;
                     if (_standing is { } standing && ReloadCopy.ResolvedByPositivePriority(standing.Token) && standing.Sequence < readStart) {
                         _standing = null;
                         clear = true;
                     }
+                    break;
+                case SpawnTypeReading.Unknown when notLoaded: // nothing is loaded, so nothing runs in the band
+                    _backgroundSeq = readStart;
+                    _background = false;
+                    changedBackground = true;
                     break;
             }
         }
@@ -496,25 +506,34 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         if (Interlocked.CompareExchange(ref _reloadClaim, 1, 0) != 0) return;
         _isReloading.OnNext(true);
         try {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+            var token = linked.Token;
             if (RequireAppRestart()) return;
             var gen0   = CurrentGeneration();
             var prompt = new LifecyclePrompt(LifecyclePrompt.KindReloadService, null, CliVersion, false, ReloadDisclosure(_latestActiveAgents));
-            var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
+            var accepted = await _surface.ConfirmAsync(prompt, token).ConfigureAwait(false);
             if (!accepted || RequireAppRestart()) return;
             if (CurrentGeneration() != gen0) {
                 _surface.Status(PromptStaleStatus);
                 return;
             }
 
-            var profileName = await _resolveProfileName().ConfigureAwait(false);
-            var refusal = MutationRequestFactory.TryBuild(MutationVerb.Reload, profileName, _canonicalServer, _client.DaemonName, out var request);
-            var outcome = refusal ?? await _runMutation(request!, ct).ConfigureAwait(false);
-            Record(outcome);
-            if (RequireAppRestart()) return;
-            if (refusal is null) _ = _client.RestartLoopAsync(); // the mutation may have restarted the daemon; reattach is idempotent
-            if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) _surface.Status(StandardPriorityStatus);
+            // From consent on, the mutation and its follow-up read hold the gate like every other mutating
+            // branch, so disposal waits for them and the startup matrix never runs beside them.
+            await _gate.WaitAsync(token).ConfigureAwait(false);
+            try {
+                var profileName = await _resolveProfileName().ConfigureAwait(false);
+                var refusal = MutationRequestFactory.TryBuild(MutationVerb.Reload, profileName, _canonicalServer, _client.DaemonName, out var request);
+                var outcome = refusal ?? await _runMutation(request!, token).ConfigureAwait(false);
+                Record(outcome);
+                if (RequireAppRestart()) return;
+                if (refusal is null) _ = _client.RestartLoopAsync(); // the mutation may have restarted the daemon; reattach is idempotent
+                if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) _surface.Status(StandardPriorityStatus);
 
-            await ReadStatusAsync(ct).ConfigureAwait(false); // the indicator follows evidence, not the click
+                await ReadStatusAsync(token).ConfigureAwait(false); // the indicator follows evidence, not the click
+            } finally {
+                _gate.Release();
+            }
         } catch (OperationCanceledException) {
             // shutdown or caller cancel: nothing left to render
         } finally {

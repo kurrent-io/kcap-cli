@@ -1118,19 +1118,23 @@ public class DaemonLifecycleControllerTests {
         var slowRead = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var reads = 0;
         h.Cli.StatusBehavior = _ => ++reads switch {
-            1 => slowRead.Task,
-            2 => Task.FromResult<ServiceSnapshot?>(null),
+            1 => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "adaptive" }),
+            2 => slowRead.Task,
+            3 => Task.FromResult<ServiceSnapshot?>(null),
             _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" }),
         };
         h.Start();
-        h.PushConnected(); // the arm: read 1 is its slow reconciliation read
+        h.PushConnected();
+        await WaitUntilAsync(h.Background, what: "the arm read marking the band");
+        h.PushConnecting(); h.PushConnected(); // read 2: a passive read that stays in flight across the record
+        await WaitUntilAsync(() => reads == 2, what: "the slow read starting");
 
         h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "contended", RecoverySurface.Attention));
-        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await h.Controller.ReloadServiceAsync(CancellationToken.None); // read 3 is its follow-up, and reads nothing
         await Assert.That(h.Reload()!.Token).IsEqualTo("contended");
 
         slowRead.SetResult(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" });
-        await h.Controller.QuiescedAsync(); // the reconciliation holds the gate until its read has been noted
+        await WaitUntilAsync(() => !h.Background(), what: "the slow read lowering the indicator");
         await Assert.That(h.Reload()!.Token).IsEqualTo("contended");
 
         h.PushConnecting(); h.PushConnected(); // a read that starts after the record
@@ -1142,6 +1146,70 @@ public class DaemonLifecycleControllerTests {
         var text = DaemonLifecycleController.ReloadDisclosure(2);
         await Assert.That(text).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
         await Assert.That(DaemonLifecycleController.ReloadDisclosure(1)).Contains("1 agent now");
+    }
+
+    [Test]
+    public async Task Disposal_during_a_reload_cancels_its_mutation_wait_and_quiesces() {
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Lane.Behavior = (_, ct) => {
+            var tcs = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+            ct.Register(() => tcs.TrySetCanceled(ct));
+            return tcs.Task;
+        };
+
+        var reload = h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the reload reaching the lane");
+
+        await h.Controller.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await reload.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(h.Reloading()).IsFalse();
+        await Assert.That(h.Client.RestartCount).IsEqualTo(0);
+        await Assert.That(h.Reload()).IsNull();
+    }
+
+    [Test]
+    public async Task An_older_read_finishing_last_does_not_overwrite_newer_priority_evidence() {
+        await using var h = new Harness();
+        var slow = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        h.Cli.StatusBehavior = _ => ++reads switch {
+            1 => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "adaptive" }),
+            2 => slow.Task,
+            _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" }),
+        };
+        var seen = new List<bool>();
+        using var watching = h.Controller.BackgroundPriority.Subscribe(seen.Add);
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(h.Background, what: "the arm read marking the band");
+        h.PushConnecting(); h.PushConnected(); // read 2 stays in flight
+        await WaitUntilAsync(() => reads == 2, what: "the older read starting");
+        h.PushConnecting(); h.PushConnected(); // read 3 starts later and finishes first
+        await WaitUntilAsync(() => !h.Background(), what: "the newer positive read lowering the indicator");
+
+        slow.SetResult(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "adaptive" });
+        await Task.Delay(100);
+
+        await Assert.That(h.Background()).IsFalse();
+        await Assert.That(seen.SkipWhile(x => !x).SkipWhile(x => x).All(x => !x)).IsTrue(); // never raised again once lowered
+    }
+
+    [Test]
+    public async Task A_snapshot_with_nothing_loaded_lowers_the_indicator() {
+        await using var h = new Harness();
+        var reads = 0;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(++reads == 1
+            ? Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "adaptive" }
+            : Snap(unitPresent: true, state: "not_installed"));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(h.Background, what: "the arm read marking the band");
+
+        h.PushConnecting(); h.PushConnected();
+
+        await WaitUntilAsync(() => !h.Background(), what: "the not-loaded read lowering the indicator");
     }
 
     // ---- harness ----

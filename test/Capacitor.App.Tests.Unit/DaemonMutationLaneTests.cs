@@ -1592,6 +1592,20 @@ public class DaemonMutationLaneTests {
     }
 
     [Test]
+    public async Task Reload_is_refused_as_not_loaded_when_the_label_is_not_loaded() {
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(jobPid: null, daemonPid: null, state: "not_installed", loadedSpawnType: null)),
+        };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory);
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("not_loaded", RecoverySurface.Attention));
+        await Assert.That(cli.ReloadCallCount).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Reload_dispatches_the_forced_refresh_once_the_field_is_present() {
         var cli = new FakeKcapCli { StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")) };
         var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
