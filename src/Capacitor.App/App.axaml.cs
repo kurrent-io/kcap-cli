@@ -668,7 +668,9 @@ public partial class App : Application {
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
                 openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, adopt: TakeAdoptableWindow(),
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
-                historyImport: _historyImport?.Run)),
+                historyImport: _historyImport?.Run,
+                backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
+                isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -1259,7 +1261,9 @@ public partial class App : Application {
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null, MainWindow? adopt = null,
-            Action? requestSetup = null, HistoryImportRun? historyImport = null) {
+            Action? requestSetup = null, HistoryImportRun? historyImport = null,
+            IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1307,7 +1311,8 @@ public partial class App : Application {
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport);
+            settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon);
         var window = adopt ?? new MainWindow();
         window.DataContext = vm;
         window.Notifier = notifier;
@@ -1498,6 +1503,15 @@ public partial class App : Application {
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
             HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null,
             Func<string, string?>? attentionCopy = null) {
+        // The controller that started a reload awaits its outcome and renders it as state in the rail;
+        // posting it here too would put a withdrawable condition on a lane nothing can withdraw from.
+        if (envelope.Request.Verb == MutationVerb.Reload) {
+            var (_, reloadToken) = ClassifyForPresentation(envelope.Outcome);
+            Console.Error.WriteLine($"kcap: daemon reload outcome {envelope.Outcome.GetType().Name} ({reloadToken ?? "-"}) is presented by the lifecycle controller");
+            markPresented?.Invoke();
+            return;
+        }
+
         if (envelope.Request.RetireServiceId is not null &&
             envelope.Outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) {
             surface.Attention(SettingsRenameMessage.For(envelope.Request, envelope.Outcome));
@@ -1569,6 +1583,7 @@ public partial class App : Application {
         MutationVerb.Replace       => "replace",
         MutationVerb.StartVerified => "verified start",
         MutationVerb.DetachedStart => "daemon start",
+        MutationVerb.Reload        => "reload",
         _                          => verb.ToString(),
     };
 

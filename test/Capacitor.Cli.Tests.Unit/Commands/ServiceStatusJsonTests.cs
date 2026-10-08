@@ -76,4 +76,20 @@ public class ServiceStatusJsonTests {
         await Assert.That(r.GetProperty("unit_expected_server").IsNull).IsTrue();
         await Assert.That(r.GetProperty("unit_consent_seed").IsNull).IsTrue();
     }
+
+    [Test]
+    public async Task Render_carries_the_loaded_spawn_type() {
+        var q = new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/u/kcap-daemon", 42, LoadedSpawnType: "adaptive");
+        var (json, _) = ServiceStatusRender.Render(q, "default", "/i/kcap-daemon", 42, false, false);
+        using var doc = JsonDocument.Parse(json!);
+        await Assert.That(doc.RootElement.GetProperty("loaded_spawn_type").GetString()).IsEqualTo("adaptive");
+    }
+
+    [Test]
+    public async Task Render_emits_null_spawn_type_for_an_unloaded_label() {
+        var q = new ServiceQuery(LabelProbe.Absent, true, ServiceState.NotInstalled, "/u/kcap-daemon", null);
+        var (json, _) = ServiceStatusRender.Render(q, "default", null, null, false, false);
+        using var doc = JsonDocument.Parse(json!);
+        await Assert.That(doc.RootElement.GetProperty("loaded_spawn_type").IsNull).IsTrue();
+    }
 }
