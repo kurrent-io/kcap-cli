@@ -19,6 +19,9 @@ public sealed class TempDaemonStore : IDisposable {
 
     public string Directory => Store.Directory;
 
+    /// <summary>The fixture's own directory, the parent of <see cref="Directory"/>.</summary>
+    public string Root => _dir.Path;
+
     /// <param name="hint">Names the directory instead of the caller's file.</param>
     public TempDaemonStore(string? hint = null, [CallerFilePath] string callerFilePath = "") {
         _dir  = new TempDir(Cut(hint ?? callerFilePath));

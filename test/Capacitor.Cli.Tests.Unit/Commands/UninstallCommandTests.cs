@@ -618,21 +618,21 @@ public class UninstallCommandTests {
     }
 
     static VendorAccount RegisterWiredClaudeAccount(AccountStore accounts, Fixture fixture, string dirName) {
-        var plugin = Directory.CreateDirectory(Path.Combine(fixture.Home, "plugin")).FullName;
+        var plugin = fixture.Temp.CreateDir("plugin").Path;
         foreach (var n in AgentsSkillsInstaller.SourceNames)
-            File.WriteAllText(Path.Combine(Directory.CreateDirectory(Path.Combine(plugin, "skills", n)).FullName, "SKILL.md"), "---\nname: " + n + "\n---\n");
+            fixture.Temp.CreateFile(["plugin", "skills", n, "SKILL.md"], "---\nname: " + n + "\n---\n");
 
-        var dir     = Directory.CreateDirectory(Path.Combine(fixture.Home, dirName)).FullName;
+        var dir     = fixture.Temp.CreateDir(dirName).Path;
         var account = new VendorAccount(dirName, HarnessId.Claude, AccountDirectory.Normalize(dir), dirName, DateTimeOffset.UnixEpoch);
 
         accounts.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
-        AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, Path.Combine(fixture.Home, ".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null));
+        AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, fixture.Temp.PathTo(".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null));
 
         return account;
     }
 
-    Task<int> RunUninstall(Fixture fixture, params string[] args) =>
-        new UninstallCommand(Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", .. args]);
+    Task<int> RunUninstall(Fixture fixture, string? workdir = null, params string[] args) =>
+        new UninstallCommand(Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(workdir ?? AppContext.BaseDirectory), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", .. args]);
 
     [Test]
     public async Task Uninstall_unwires_every_registered_account_and_deletes_the_registry() {
@@ -657,7 +657,7 @@ public class UninstallCommandTests {
         var accounts = AccountStore.Beside(Daemons.Store);
         RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
 
-        var exit = await RunUninstall(fixture, "--keep-config");
+        var exit = await RunUninstall(fixture, args: "--keep-config");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
@@ -686,7 +686,7 @@ public class UninstallCommandTests {
         using var tmp = new TempDir();
         tmp.CreateDir(".git");
 
-        var exit = await new UninstallCommand(Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(tmp.Path), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", "--project"]);
+        var exit = await RunUninstall(fixture, tmp.Path, "--project");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
@@ -697,6 +697,8 @@ public class UninstallCommandTests {
 
         public required string Home      { get; init; }
         public required string ConfigDir { get; init; }
+
+        public TempHome Temp => _tempHome!;
 
         public ConfigRoot Root     => new(ConfigDir);
         public UserHome   UserHome => new(Home);
