@@ -819,7 +819,9 @@ sealed class SetupCommand(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
         if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
-            WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
+            WriteLine(GitHookLine(GitHookInstaller.InstalledGitVersion()));
+
+        if (CodexTrustReminder(installResult) is { } codexTrust) WriteLine(codexTrust);
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -2335,6 +2337,25 @@ sealed class SetupCommand(
             Debug($"failed — {e.GetType().Name}: {e.Message}");
         }
     }
+
+    /// <summary>
+    /// The git hook's line. An older git ignores the entry silently, so setup says so rather than
+    /// reporting a hook that will never run. An unknown version gets the plain line.
+    /// </summary>
+    internal static string GitHookLine(Version? git) =>
+        git is not null && git < GitHookInstaller.MinimumGit
+            ? $"  [yellow]![/] Git hook added, but git {git.ToString(3)} ignores it [dim](needs {GitHookInstaller.MinimumGit}+)[/]. "
+            + "Commits are filed from the agent's shell commands until you upgrade git."
+            : "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]";
+
+    /// <summary>
+    /// Codex runs only hooks the user has trusted, so installed hooks record nothing until then. Null when
+    /// this run installed no Codex hooks.
+    /// </summary>
+    internal static string? CodexTrustReminder(CodingAgentsStep.Result result) => result.CodexHooksInstalled
+        ? "  [yellow]![/] Codex records nothing until you trust the kcap hooks: accept the prompt on the next "
+        + "[cyan]codex[/] launch, or in the Codex desktop app use Settings → Hooks."
+        : null;
 
     /// <summary>
     /// the end-of-setup reminder that live recording only starts on a
