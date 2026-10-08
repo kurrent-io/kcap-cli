@@ -18,15 +18,18 @@ internal static class TranscriptCapture {
     }
 
     /// <summary>
-    /// Encodes a shutdown tail under one budget for all of it. Stops at a line that cannot redact in
-    /// time: spooling what follows would make the server drop that line later.
+    /// Encodes a shutdown tail under one budget for all of it, taking a line's finished retry from
+    /// <paramref name="redacted"/> when there is one. Stops at a line that cannot redact in time:
+    /// spooling what follows would make the server drop that line later.
     /// </summary>
     public static CapturedLines EncodeTail(
-            IReadOnlyList<string> rawLines, RedactionBudget budget, Action<RedactionLossReason, int> reportLoss) {
+            IReadOnlyList<string> rawLines, IReadOnlyList<int> lineNumbers, RedactionBudget budget,
+            Func<int, string, RedactionOutcome?> redacted, Action<RedactionLossReason, int> reportLoss) {
         var lines = new List<string>(rawLines.Count);
         var losses = new int[ReasonCount];
-        foreach (var raw in rawLines) {
-            var captured = SecretRedactor.RedactLineWithOutcome(raw, budget, SecretRedactor.WatcherPatterns);
+        for (var i = 0; i < rawLines.Count; i++) {
+            var captured = redacted(lineNumbers[i], rawLines[i])
+                        ?? SecretRedactor.RedactLineWithOutcome(rawLines[i], budget, SecretRedactor.WatcherPatterns);
             if (captured.Loss is { } reason) {
                 if (reason.IsTransient()) break;
                 losses[(int)reason]++;

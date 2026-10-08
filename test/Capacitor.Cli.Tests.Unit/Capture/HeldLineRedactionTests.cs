@@ -209,4 +209,23 @@ public class HeldLineRedactionTests {
         await Assert.That(again.Lines).IsEquivalentTo(delivered.Lines);
         await Assert.That(redaction.Held).IsNull();
     }
+
+    [Test]
+    public async Task A_shutdown_tail_reuses_a_finished_retry_of_the_same_line_only() {
+        var redaction = NewRedaction();
+        Capture(redaction, [Raw[1]], [5]);
+        _clock.Exhausted = false;
+        var delivered = await CaptureUntil(() => {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            return Capture(redaction, [Raw[1]], [5]);
+        }, c => c.Consumed == 1);
+        _clock.Exhausted = true;
+        var budget = new RedactionBudget(_clock, TimeSpan.FromSeconds(1));
+
+        var reused  = TranscriptCapture.EncodeTail([Raw[1]], [5], budget, redaction.Redacted, (_, _) => { });
+        var changed = TranscriptCapture.EncodeTail([Raw[0]], [5], budget, redaction.Redacted, (_, _) => { });
+
+        await Assert.That(reused.Lines).IsEquivalentTo(delivered.Lines);
+        await Assert.That(changed.Consumed).IsEqualTo(0);
+    }
 }

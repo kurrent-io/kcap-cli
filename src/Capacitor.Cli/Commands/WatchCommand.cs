@@ -2616,7 +2616,8 @@ partial class WatchCommand(
         if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
         var limit    = redactionLimit is { } l && l > MinShutdownTailRedaction ? l : MinShutdownTailRedaction;
-        var redacted = TranscriptCapture.EncodeTail(tail.Lines, new RedactionBudget(RedactionClock ?? time, limit),
+        var redacted = TranscriptCapture.EncodeTail(tail.Lines, tail.LineNumbers, new RedactionBudget(RedactionClock ?? time, limit),
+            HeldLineFor(sessionId, agentId).Redacted,
             (reason, count) => Log(time, $"Shutdown capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
         var unredacted = redacted.Consumed < tail.Lines.Count ? tail.LineNumbers[redacted.Consumed] : (int?)null;
         var batch = new TranscriptBatch {

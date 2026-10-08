@@ -47,6 +47,19 @@ internal sealed class HeldLineRedaction(HeldLineStore store, TimeProvider time, 
         return new(lines, consumed);
     }
 
+    /// <summary>
+    /// A redaction of this exact line a retry has already finished, so the shutdown tail need not
+    /// race the kill grace to redact it again.
+    /// </summary>
+    public RedactionOutcome? Redacted(int lineNumber, string raw) {
+        if (_settled is { } settled && settled.LineNumber == lineNumber && settled.Sha256 == Sha256(raw)) return settled.Outcome;
+        if (Held is not { } held || held.LineNumber != lineNumber) return null;
+        if (_attempt is not { IsCompletedSuccessfully: true } done || _attemptSha256 != held.LineSha256) return null;
+        if (done.Result.Loss is { } reason && reason.IsTransient()) return null;
+
+        return held.LineSha256 == Sha256(raw) ? done.Result : null;
+    }
+
     /// <summary>Forgets a held line that reached the server some other way.</summary>
     public void ReleaseBelow(int nextLineNumber) {
         if (Held is { } held && held.LineNumber < nextLineNumber) Release();
