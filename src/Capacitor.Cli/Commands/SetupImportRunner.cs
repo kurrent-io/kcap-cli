@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
@@ -10,7 +11,7 @@ namespace Capacitor.Cli.Commands;
 /// <summary>The real import, aimed at the server this run chose rather than the one startup resolved.</summary>
 sealed class SetupImportRunner(
         ConfigRoot config, UserHome home, HarnessRegistry harnesses, ChosenServerHttp http,
-        GitProviderRouter router, TimeProvider time) : ISetupImportRunner {
+        GitProviderRouter router, TimeProvider time, AccountStore accounts) : ISetupImportRunner {
     public async Task<SetupImportDiscovery> DiscoverAsync(ProfileContext profiles) {
         ImportCommand.ImportDiscoveryResult? found = null;
 
@@ -19,7 +20,7 @@ sealed class SetupImportRunner(
 
             await Command(profiles, scoped).HandleImport(
                 filterCwd:    null,
-                sources:      SetupCommand.BuildImportSources(config, harnesses, router, time),
+                sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, accounts: accounts.TryLoad(), home: home),
                 discoverOnly: true,
                 onDiscovered: r => found = r,
                 nested:       true);
@@ -42,7 +43,7 @@ sealed class SetupImportRunner(
                 filterSession:           null,
                 minLines:                15,
                 generateSummaries:       false,
-                sources:                 SetupCommand.BuildImportSources(config, harnesses, router, time),
+                sources:                 SetupCommand.BuildImportSources(config, harnesses, router, time, accounts: accounts.TryLoad(), home: home),
                 explicitVendorSelection: false,
                 since:                   null,
                 scope:                   inv.Scope,
@@ -66,5 +67,5 @@ sealed class SetupImportRunner(
     }
 
     ImportCommand Command(ProfileContext profiles, ServiceProvider scoped) =>
-        new(config, profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>(), router, time);
+        new(config, profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>(), router, time, accounts);
 }

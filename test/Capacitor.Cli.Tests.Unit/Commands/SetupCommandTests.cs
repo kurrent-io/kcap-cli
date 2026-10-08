@@ -50,7 +50,7 @@ public class SetupCommandTests {
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None) {
+            TestBinaries.None, TestAccounts.None) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 

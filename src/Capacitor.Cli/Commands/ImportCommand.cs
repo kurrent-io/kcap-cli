@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -22,10 +23,24 @@ namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
+        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time, AccountStore? accounts = null) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
 
-    readonly CodexImportTitles _codexTitles = new(harnesses.Of<CodexHarness>().Paths.Home, time);
+    readonly Dictionary<string, CodexImportTitles> _codexTitles = new(StringComparer.Ordinal);
+
+    /// <summary>The index of the Codex home the rollout lives in: an account's titles are never read from
+    /// another home's index. A rollout outside every account uses the environment home.</summary>
+    CodexImportTitles CodexTitlesFor(string transcriptPath) {
+        var codexHome = accounts?.TryLoad() is { } registry
+                     && AccountPaths.CodexForRollout(transcriptPath, registry, home) is { } paths
+            ? paths.Home
+            : harnesses.Of<CodexHarness>().Paths.Home;
+
+        if (!_codexTitles.TryGetValue(codexHome, out var titles))
+            _codexTitles[codexHome] = titles = new CodexImportTitles(codexHome, time);
+
+        return titles;
+    }
 
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
@@ -3502,7 +3517,7 @@ class ImportCommand(
             CancellationToken           ct
         ) =>
         session.Vendor is HarnessId.Codex
-            ? _codexTitles.PostAsync(httpClient, baseUrl, session.SessionId, progress, ct)
+            ? CodexTitlesFor(session.FilePath).PostAsync(httpClient, baseUrl, session.SessionId, progress, ct)
             : Task.FromResult(false);
 
     /// <summary>Title-only pass for Codex sessions the server already holds: no transcript, lifecycle or generated

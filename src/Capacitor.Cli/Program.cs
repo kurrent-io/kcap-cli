@@ -4,6 +4,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Capture;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
@@ -720,7 +721,8 @@ switch (command) {
         var explicitVendorSelection = vsel.Vendors.Count > 0;
         var sources = SetupCommand.BuildImportSources(
             config, sp.GetRequiredService<HarnessRegistry>(), sp.GetRequiredService<GitProviderRouter>(), time,
-            explicitVendorSelection ? vsel.Vendors : null);
+            explicitVendorSelection ? vsel.Vendors : null,
+            sp.GetRequiredService<AccountStore>().TryLoad(), sp.GetRequiredService<UserHome>());
 
         if (repairCapture)
             return await Run<CaptureRepairCommand>().HandleAsync(filterSession!, args.Contains("--dry-run"), sources);

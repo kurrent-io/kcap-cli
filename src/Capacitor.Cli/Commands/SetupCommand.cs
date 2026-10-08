@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
@@ -239,7 +240,8 @@ sealed class SetupImportLane(
         HarnessRegistry harnesses,
         GitProviderRouter router,
         TimeProvider time,
-        Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null) : IFirstRunImportLane {
+        Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null,
+        AccountStore? accounts = null) : IFirstRunImportLane {
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
     internal sealed record Pass(
@@ -254,9 +256,9 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
             filterCwd:    null,
-            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors),
+            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors, accounts?.TryLoad(), home),
             discoverOnly: true,
             discoverJson: true,
             windowsAsOf:  asOf,
@@ -307,9 +309,9 @@ sealed class SetupImportLane(
     async Task<ImportCommand.ImportRunOutcome?> Run(Pass pass) {
         ImportCommand.ImportRunOutcome? outcome = null;
 
-        await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
+        await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
             filterCwd:          null,
-            sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
+            sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors, accounts?.TryLoad(), home),
             since:              pass.Since,
             scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
             skipConfirmation:   true,
@@ -422,7 +424,7 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries) {
+        BinaryProbe binaries, AccountStore accounts) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
@@ -1557,13 +1559,18 @@ sealed class SetupCommand(
     /// already scoped to what the user kept.</param>
     internal static IReadOnlyList<IImportSource> BuildImportSources(
             ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time,
-            IReadOnlyCollection<HarnessId>? vendors = null) {
+            IReadOnlyCollection<HarnessId>? vendors = null, AccountRegistry? accounts = null, UserHome? home = null) {
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
 
+        var claudeRoots = DistinctRoots(harnesses.Of<ClaudeHarness>().Paths.Projects, accounts, home, HarnessId.Claude,
+                                        dir => AccountLayouts.Claude(home!, dir).Projects);
+        var codexRoots  = DistinctRoots(harnesses.Of<CodexHarness>().Paths.Sessions, accounts, home, HarnessId.Codex,
+                                        dir => AccountLayouts.Codex(home!, dir).Sessions);
+
         IReadOnlyList<IImportSource> all = [
-            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
-            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
+            .. claudeRoots.Select(r => (IImportSource)new ClaudeImportSource(config, r, router, time)),
+            .. codexRoots.Select(r => (IImportSource)new CodexImportSource(config, r, router, time)),
             new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time, titlePaths: cursor),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
@@ -1580,6 +1587,20 @@ sealed class SetupCommand(
         var wanted = vendors.ToHashSet();
 
         return [.. all.Where(s => wanted.Contains(s.Vendor))];
+    }
+
+    /// <summary>The environment layout's root first, then each registered account's root that is not
+    /// the same directory.</summary>
+    static List<string> DistinctRoots(
+            string environmentRoot, AccountRegistry? accounts, UserHome? home, HarnessId vendor, Func<string, string> rootOf) {
+        var roots = new List<string> { environmentRoot };
+
+        if (accounts is null || home is null) return roots;
+
+        foreach (var root in accounts.Accounts.Where(a => a.Vendor == vendor).Select(a => rootOf(a.Directory)))
+            if (!roots.Any(r => AccountDirectory.Same(r, root))) roots.Add(root);
+
+        return roots;
     }
 
     /// <summary>
@@ -1797,7 +1818,7 @@ sealed class SetupCommand(
                     Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
                 importing = new SetupImportLane(
-                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time);
+                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time, accounts: accounts);
 
                 using var progress = new SpectreFirstRunFlowProgress(time);
 
