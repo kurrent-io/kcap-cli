@@ -2713,7 +2713,7 @@ record StartReviewFlowDto(
     // byte-identical to the v2 wire on any server version. A model requires a non-null Vendor
     // (StartFlowAsync rejects the pairing locally) and is invalid for dynamic (definition_yaml) flows.
     [property: JsonPropertyName("model")]                  string? Model = null,
-    // A server that predates participant session titles skips the member and titles the session from its prompt.
+    // Optional on the wire: a server that does not read it titles the participant session from its prompt.
     [property: JsonPropertyName("session_title")]          string? SessionTitle = null
 );
 
