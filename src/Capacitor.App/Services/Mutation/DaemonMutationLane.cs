@@ -392,27 +392,14 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return null;
     }
 
-    // The refresh returns as soon as bootstrap succeeds, before the successor binds its socket, and the
-    // one-shot observation never retries: the readiness window gives the new daemon time to answer.
     async Task<MutationOutcome> ClassifyReloadAsync(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
         if (result.ExitCode != 0)
             return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "refresh_outcome="), RecoverySurface.Attention);
 
-        var deadline = _time.GetUtcNow() + DetachedConfirmWindow;
-        while (true) {
-            var evidence = await observation.ObserveAsync(request, ct).ConfigureAwait(false);
-            var leg = EvidenceFailureLeg(evidence, request);
-            if (leg is null) break;
-
-            var remaining = deadline - _time.GetUtcNow();
-            if (remaining <= TimeSpan.Zero)
-                return leg == UnreachableLeg ? new MutationOutcome.UnconfirmedNoAttach() : new MutationOutcome.AttentionSkew(leg);
-
-            var wait = remaining < DetachedPollInterval ? remaining : DetachedPollInterval;
-            await Task.Delay(wait, _time, ct).ConfigureAwait(false);
-        }
+        var waited = await AwaitFullEvidenceAsync(request, observation, null, ct).ConfigureAwait(false);
+        if (waited is not null) return waited;
 
         return await ClassifyServiceSuccessAsync(request, executor, observation, ct, requirePositiveSpawnType: true).ConfigureAwait(false);
     }
@@ -439,30 +426,36 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return new MutationOutcome.Failed(result.ExitCode, null, RecoverySurface.Attention);
     }
 
-    // Polls up to DetachedConfirmWindow (marker checked first): full evidence resolves immediately, else the last leg decides at expiry. `attemptId` null is test-only and never attributes a marker.
+    // `attemptId` null skips the boot-refusal marker check.
     async Task<MutationOutcome> AwaitDetachedConfirmationAsync(
             MutationRequest request, IDaemonObservation observation, string? attemptId,
             Func<MutationOutcome> onFullEvidence, CancellationToken ct) {
+        // Marker-first: a refusing daemon never attaches, so checking the marker before evidence
+        // can never produce a false Refused, while evidence-first could let a pre-existing
+        // same-name daemon (or a transient mid-boot evidence shape) mask a real refusal.
+        MutationOutcome? MarkerCheck() =>
+            attemptId is not null && BootRefusalAttribution.TryAttribute(_store, request.DaemonName, attemptId, request.CanonicalServer) is { } refusal
+                ? new MutationOutcome.Refused(refusal.Token, ReasonRouting.ForBootRefusal(refusal.Token))
+                : null;
+
+        return await AwaitFullEvidenceAsync(request, observation, MarkerCheck, ct).ConfigureAwait(false) ?? onFullEvidence();
+    }
+
+    // The one-shot observation never retries, and a daemon that just booted or reloaded needs time to bind
+    // its socket. Returns null once evidence is fully positive, else the terminal outcome.
+    async Task<MutationOutcome?> AwaitFullEvidenceAsync(
+            MutationRequest request, IDaemonObservation observation, Func<MutationOutcome?>? preCheck, CancellationToken ct) {
         var deadline = _time.GetUtcNow() + DetachedConfirmWindow;
-        string lastLeg;
         while (true) {
-            // Marker-first: a refusing daemon never attaches, so checking the marker before evidence
-            // can never produce a false Refused, while evidence-first could let a pre-existing
-            // same-name daemon (or, here, a transient mid-boot evidence shape) mask a real refusal —
-            // checked fresh every iteration, so a refusal arriving mid-window is caught on the next poll.
-            if (attemptId is not null && BootRefusalAttribution.TryAttribute(_store, request.DaemonName, attemptId, request.CanonicalServer) is { } refusal)
-                return new MutationOutcome.Refused(refusal.Token, ReasonRouting.ForBootRefusal(refusal.Token));
+            if (preCheck?.Invoke() is { } early) return early;
 
             var evidence = await observation.ObserveAsync(request, ct).ConfigureAwait(false);
             var leg = EvidenceFailureLeg(evidence, request);
-            if (leg is null) return onFullEvidence();
-            lastLeg = leg;
+            if (leg is null) return null;
 
             var remaining = deadline - _time.GetUtcNow();
             if (remaining <= TimeSpan.Zero)
-                return lastLeg == UnreachableLeg
-                    ? new MutationOutcome.UnconfirmedNoAttach()
-                    : new MutationOutcome.AttentionSkew(lastLeg);
+                return leg == UnreachableLeg ? new MutationOutcome.UnconfirmedNoAttach() : new MutationOutcome.AttentionSkew(leg);
 
             var wait = remaining < DetachedPollInterval ? remaining : DetachedPollInterval;
             await Task.Delay(wait, _time, ct).ConfigureAwait(false);
