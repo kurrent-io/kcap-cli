@@ -477,10 +477,10 @@ public class WorkspaceViewModelTests {
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
 
-            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(vm.WorkContext.HasSubagents).IsTrue();
-            await Assert.That(vm.WorkContext.SubagentsHeader).IsEqualTo("1 running");
-            await Assert.That(vm.WorkContext.Subagents.Single().Name).IsEqualTo("Explore");
+            await Assert.That(vm.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(vm.WorkContext.HasRuns).IsTrue();
+            await Assert.That(vm.WorkContext.RunsHeader).IsEqualTo("1 running");
+            await Assert.That(vm.WorkContext.Runs.Single().Name).IsEqualTo("Explore");
             await vm.TeardownAsync();
         });
     }

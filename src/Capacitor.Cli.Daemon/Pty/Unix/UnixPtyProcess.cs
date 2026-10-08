@@ -266,11 +266,23 @@ public sealed class UnixPtyProcess : IPtyProcess {
             }
         }
 
-        if (!HasExited) {
-            SignalGroup(UnixPtyInterop.SIGKILL);
+        if (HasExited) return;
+
+        SignalGroup(UnixPtyInterop.SIGKILL);
+
+        // The kill lands asynchronously, and once this runtime is disposed nothing else will reap the
+        // child: a single immediate check leaves a zombie behind whenever the host is busy.
+        var reapDeadline = _time.GetUtcNow().UtcDateTime + KillReapBound;
+
+        CheckExited();
+
+        while (!HasExited && _time.GetUtcNow().UtcDateTime < reapDeadline) {
+            await Task.Delay(ExitPollGap, _time);
             CheckExited();
         }
     }
+
+    static readonly TimeSpan KillReapBound = TimeSpan.FromSeconds(5);
 
     /// <summary>Serializes the reap (<see cref="CheckExited"/>'s waitpid) against group signalling
     /// (<see cref="SignalGroup"/>). The leader's unreaped zombie is what pins its pid AND pgid

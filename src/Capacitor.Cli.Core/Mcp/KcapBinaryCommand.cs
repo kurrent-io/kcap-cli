@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.Install;
+
 namespace Capacitor.Cli.Core.Mcp;
 
 /// <summary>
@@ -15,7 +17,9 @@ public static class KcapBinaryCommand {
         string? path = null;
         try { path = resolveBinaryPath is null ? Environment.ProcessPath : resolveBinaryPath(); }
         catch { /* fall back to the PATH-resolved wrapper command */ }
-        return string.IsNullOrWhiteSpace(path) ? KcapMcpServers.Command : path;
+        if (string.IsNullOrWhiteSpace(path)) return KcapMcpServers.Command;
+
+        return resolveBinaryPath is null ? ScriptInstallLayout.Stabilize(path) : path;
     }
 
     /// <summary>
@@ -40,12 +44,12 @@ public static class KcapBinaryCommand {
         if (string.IsNullOrWhiteSpace(processPath)) return null;
 
         if (string.Equals(Path.GetFileNameWithoutExtension(processPath), "kcap", StringComparison.OrdinalIgnoreCase))
-            return processPath;
+            return ScriptInstallLayout.Stabilize(processPath);
 
         var dir = Path.GetDirectoryName(processPath);
         if (string.IsNullOrEmpty(dir)) return null;
 
         var sibling = Path.Combine(dir, OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
-        return File.Exists(sibling) ? sibling : null;
+        return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
     }
 }

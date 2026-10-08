@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace Capacitor.Cli.Core;
 
@@ -15,7 +16,10 @@ public enum TimeoutKillScope {
     ProcessOnly,
 }
 
-public sealed record ProcessResult(int ExitCode, string Stdout, string Stderr, bool TimedOut);
+public sealed record ProcessResult(int ExitCode, string Stdout, string Stderr, bool TimedOut) {
+    /// Set by <see cref="IProcessRunner.RunBoundedAsync"/> when a stream passed its limit; both captures are then empty.
+    public bool Oversized { get; init; }
+}
 
 public sealed record RunOptions(
     IReadOnlyDictionary<string, string>? EnvOverlay = null, // adds/overrides; rest of env untouched
@@ -35,6 +39,17 @@ public sealed record StreamingResult(int ExitCode, bool TimedOut, IReadOnlyList<
 /// System.Diagnostics.Process.
 public interface IProcessRunner {
     Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct);
+
+    /// <summary>
+    /// <see cref="RunAsync"/> with each stream capped at <paramref name="outputLimit"/> UTF-8 bytes. The default only
+    /// applies the cap after a full capture, so a fake answers like the real runner without bounding anything.
+    /// </summary>
+    async Task<ProcessResult> RunBoundedAsync(string fileName, string[] args, RunOptions options, int outputLimit, CancellationToken ct) {
+        var result = await RunAsync(fileName, args, options, ct).ConfigureAwait(false);
+        return !result.TimedOut && (Encoding.UTF8.GetByteCount(result.Stdout) > outputLimit || Encoding.UTF8.GetByteCount(result.Stderr) > outputLimit)
+            ? result with { Stdout = "", Stderr = "", Oversized = true }
+            : result;
+    }
 
     /// Cancellation always kills the tree and awaits exit first — unlike RunAsync, ignores RunOptions.CancelMode.
     Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
@@ -60,27 +75,62 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
         // let a detached/killed child block on a full pipe buffer.
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        return await CollectAsync(process, stdoutTask, stderrTask, options, CancellationToken.None, ct).ConfigureAwait(false);
+    }
 
+    /// Stops capturing once either stream passes <paramref name="outputLimit"/> bytes and, if the child is still running,
+    /// kills its tree and awaits its exit. A descendant of a child that already exited is out of the tree's reach.
+    public async Task<ProcessResult> RunBoundedAsync(string fileName, string[] args, RunOptions options, int outputLimit, CancellationToken ct) {
+        var psi = StartInfo(fileName, args, options);
+
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start '{fileName}'.");
+        // Not disposed: a drain abandoned on the cancellation path may still signal it after this method returns.
+        var overflow = new CancellationTokenSource();
+        var stdoutTask = DrainAsync(process.StandardOutput.BaseStream, outputLimit, overflow);
+        var stderrTask = DrainAsync(process.StandardError.BaseStream, outputLimit, overflow);
+        var result = await CollectAsync(process, stdoutTask, stderrTask, options, overflow.Token, ct).ConfigureAwait(false);
+        return overflow.IsCancellationRequested && !result.TimedOut ? result with { Stdout = "", Stderr = "", Oversized = true } : result;
+    }
+
+    static async Task<string> DrainAsync(Stream stream, int limit, CancellationTokenSource overflow) {
+        using var captured = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, CancellationToken.None).ConfigureAwait(false)) > 0) {
+            if (captured.Length + read > limit) {
+                overflow.Cancel();
+                return "";
+            }
+            captured.Write(chunk, 0, read);
+        }
+        return Encoding.UTF8.GetString(captured.GetBuffer(), 0, (int)captured.Length);
+    }
+
+    async Task<ProcessResult> CollectAsync(Process process, Task<string> stdoutTask, Task<string> stderrTask, RunOptions options,
+            CancellationToken overflow, CancellationToken ct) {
         using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout, time) : null;
-        using var waitCts = timeoutCts is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts?.Token ?? CancellationToken.None, overflow);
 
         try {
-            await process.WaitForExitAsync(waitCts?.Token ?? ct).ConfigureAwait(false);
+            await process.WaitForExitAsync(waitCts.Token).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             if (ct.IsCancellationRequested) {
                 if (options.CancelMode == CancelMode.KillTree)
                     await KillAndAwaitAsync(process).ConfigureAwait(false);
 
-                // The drains outlive this method on the abandoned-wait path — observe them
-                // so a later fault surfaces nowhere instead of as an unobserved task
-                // exception. Under KillTree the child is already dead, so this still
-                // completes promptly; it just isn't awaited before the throw below.
+                // The drains outlive this method on the abandoned-wait path; observed so a later
+                // fault is not an unobserved task exception.
                 Observe(stdoutTask);
                 Observe(stderrTask);
                 throw;
             }
 
-            // Only the internal timeout could have fired the linked token.
+            if (overflow.IsCancellationRequested) {
+                await KillAndAwaitAsync(process).ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result, TimedOut: false);
+            }
+
             await KillAndAwaitAsync(process, options.TimeoutKill == TimeoutKillScope.Tree).ConfigureAwait(false);
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result, TimedOut: true);

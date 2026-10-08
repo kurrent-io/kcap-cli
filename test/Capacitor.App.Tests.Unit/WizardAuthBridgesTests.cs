@@ -273,7 +273,7 @@ public class WizardAuthBridgesTests {
         await Assert.That(polls.Count).IsEqualTo(WizardTenantProvisioner.MaxPolls);
         // A Notice, not an Error: the workspace is being created, nothing has gone wrong.
         await Assert.That(progress.Notices)
-            .Contains("Still provisioning — finish later by joining 'acme' from the Connect step.");
+            .Contains("Still provisioning — finish later by signing in to 'acme' with \"I have a workspace URL\".");
     }
 
     [Test]

@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
@@ -746,7 +747,7 @@ public sealed class DaemonCommands(
             claude.UserConfigJson, claude.UserSettings,
             McpDoctorSection.DefaultJsonRegistrations(harnesses),
             harnesses.Of<CodexHarness>().Paths.ConfigToml,
-            Environment.ProcessPath);
+            Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null);
         await Console.Out.WriteLineAsync();
 
         store.EnsureDirectory();

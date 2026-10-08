@@ -163,4 +163,23 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("codex")).IsFalse();
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("cursor")).IsFalse();
     }
+
+    /// The daemon validates these exact Codex CLI tokens and forwards them to argv.
+    [Test]
+    public async Task Codex_posture_choices_are_the_tokens_the_daemon_accepts() {
+        await Assert.That(HostedHarnessCatalog.CodexSandboxes.Select(m => m.Token))
+            .IsEquivalentTo(["read-only", "workspace-write", "danger-full-access"], CollectionOrdering.Matching);
+        await Assert.That(HostedHarnessCatalog.CodexApprovals.Select(m => m.Token))
+            .IsEquivalentTo(["untrusted", "on-request", "never"], CollectionOrdering.Matching);
+        await Assert.That(HostedHarnessCatalog.CodexSandboxes.Select(m => m.Token)).Contains(HostedHarnessCatalog.DefaultCodexSandbox);
+        await Assert.That(HostedHarnessCatalog.CodexApprovals.Select(m => m.Token)).Contains(HostedHarnessCatalog.DefaultCodexApproval);
+    }
+
+    [Test]
+    public async Task Only_codex_takes_a_launch_time_posture() {
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("codex")).IsTrue();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("Codex")).IsTrue();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("claude")).IsFalse();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("cursor")).IsFalse();
+    }
 }
