@@ -5,6 +5,8 @@ namespace Capacitor.Cli.Tests.Unit.Harness.MistralVibe;
 public class MistralVibeUnifiedStoreTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
     // Layout and record shapes as vibe 2.26.0's store writes them: snake_case store documents,
     // camelCase history entries.
     const string Generation = "0000000000000001";
@@ -168,5 +170,19 @@ public class MistralVibeUnifiedStoreTests {
         await Assert.That(lines.Length).IsEqualTo(2);
         await Assert.That(lines[0]).Contains("\"m1\"");
         await Assert.That(lines[1]).Contains("\"outputText\":\"done\"");
+    }
+
+    [Test]
+    public async Task Discard_deletes_kcaps_copy_and_never_a_transcript_vibe_owns() {
+        var copy = MistralVibeLiveTranscript.PathFor(Config.Root, "s1");
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+        File.WriteAllText(copy, "{}");
+        var vibeOwned = Tmp.CreateFile("session_1/messages.jsonl", "{}");
+
+        MistralVibeLiveTranscript.Discard(Config.Root, "s1", copy);
+        MistralVibeLiveTranscript.Discard(Config.Root, "s1", vibeOwned);
+
+        await Assert.That(File.Exists(copy)).IsFalse();
+        await Assert.That(File.Exists(vibeOwned)).IsTrue();
     }
 }

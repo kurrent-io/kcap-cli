@@ -22,6 +22,7 @@ using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
@@ -1072,6 +1073,9 @@ partial class WatchCommand(
         if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
+
+        if (endReason is not null && agentId is null && vendor == "mistral-vibe")
+            MistralVibeLiveTranscript.Discard(config, sessionId, transcriptPath);
 
         // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
         // on a recycled pid (KillWatcher's token guard is the crash-exit backstop).

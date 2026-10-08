@@ -18,6 +18,15 @@ internal static class MistralVibeLiveTranscript {
     public static string PathFor(ConfigRoot config, string sessionId) =>
         config.Path("mistral-vibe", $"{sessionId}.jsonl");
 
+    /// <summary>Deletes the copy once its session has ended. A resumed session rebuilds it in the
+    /// same order, so the server's line positions still line up. Only kcap's own copy is touched:
+    /// a legacy session tails Vibe's <c>messages.jsonl</c> itself.</summary>
+    public static void Discard(ConfigRoot config, string sessionId, string transcriptPath) {
+        if (!string.Equals(Path.GetFullPath(transcriptPath), Path.GetFullPath(PathFor(config, sessionId)), StringComparison.Ordinal)) return;
+
+        try { File.Delete(transcriptPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
     public static void Sync(string sessionDir, string transcriptPath) {
         var finished = MistralVibeUnifiedStore.ReadLines(sessionDir);
         if (finished.Count == 0 && File.Exists(transcriptPath)) return;
