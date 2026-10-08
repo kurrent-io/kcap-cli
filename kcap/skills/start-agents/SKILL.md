@@ -88,6 +88,10 @@ Call `start_agent` once for each agent.
   should work in. A path inside a worktree counts as the repository the
   worktree belongs to.
 - `prompt`: the whole task. See the next section.
+- `title`: required. A short phrase naming this agent's task, specific
+  enough to tell its session apart from the others in the repository. It is
+  the session's title from the start, and titles generated later do not
+  replace it.
 - `work_item`: required, and there is no default. Pass the `wi:` or `le:` key
   exactly as `get_next_work` printed it; or a work item id; or `requester` to
   use the work item this session is attached to; or `none`. Leaving it out is
