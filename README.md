@@ -82,7 +82,7 @@ kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt
 
 ### Other ways to install
 
-- **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs `--server-url`, or `--org` and `--slug` to create a workspace; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
+- **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
 - **npm:** `npm install -g @kurrent/kcap`, then `kcap setup`. This needs Node.js; see [npm installs and upgrades](#npm-installs-and-upgrades) for npm 11's install-script gate.
 - **Desktop app:** on macOS or Windows the [desktop app](#desktop-app) bundles `kcap` and the daemon.
 
