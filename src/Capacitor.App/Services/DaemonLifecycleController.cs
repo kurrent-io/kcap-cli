@@ -513,15 +513,18 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             var prompt = new LifecyclePrompt(LifecyclePrompt.KindReloadService, null, CliVersion, false, ReloadDisclosure(_latestActiveAgents));
             var accepted = await _surface.ConfirmAsync(prompt, token).ConfigureAwait(false);
             if (!accepted || RequireAppRestart()) return;
-            if (CurrentGeneration() != gen0) {
-                _surface.Status(PromptStaleStatus);
-                return;
-            }
 
             // From consent on, the mutation and its follow-up read hold the gate like every other mutating
             // branch, so disposal waits for them and the startup matrix never runs beside them.
             await _gate.WaitAsync(token).ConfigureAwait(false);
             try {
+                // The prompt and the gate wait are both windows an attach transition can land in, and the
+                // consent was for the daemon the prompt described.
+                if (CurrentGeneration() != gen0) {
+                    _surface.Status(PromptStaleStatus);
+                    return;
+                }
+
                 var profileName = await _resolveProfileName().ConfigureAwait(false);
                 var refusal = MutationRequestFactory.TryBuild(MutationVerb.Reload, profileName, _canonicalServer, _client.DaemonName, out var request);
                 var outcome = refusal ?? await _runMutation(request!, token).ConfigureAwait(false);

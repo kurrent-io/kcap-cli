@@ -1078,6 +1078,28 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
+    public async Task Reload_cancels_when_the_attach_changed_while_waiting_for_the_gate() {
+        await using var h = new Harness();
+        var slowArm = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        h.Cli.StatusBehavior = _ => ++reads == 1 ? slowArm.Task : Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => reads == 1, what: "the arm's read holding the gate");
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+
+        var reload = h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the consent, after which the reload waits on the gate");
+        h.PushConnecting(); h.PushConnected(); // the attachment changes while the gate is held
+        slowArm.SetResult(Snap(state: "running", jobPid: 100, daemonPid: 100));
+        await reload.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.StatusMessages.Last()).IsEqualTo(DaemonLifecycleController.PromptStaleStatus);
+        await Assert.That(h.Reloading()).IsFalse();
+    }
+
+    [Test]
     public async Task Reload_without_a_canonical_server_records_the_refusal_and_releases_the_claim() {
         await using var h = new Harness(canonicalServer: null);
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
