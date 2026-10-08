@@ -817,7 +817,8 @@ sealed class SetupCommand(
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
-        new AccountSetupStep(accounts, pluginEnv, time).Run(stepOptions, PromptYesNo, WriteLine);
+        new AccountSetupStep(accounts, pluginEnv, time).Run(
+            stepOptions, AnsiConsole.Profile.Capabilities.Interactive, PromptYesNo, WriteLine);
 
         if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
             WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");

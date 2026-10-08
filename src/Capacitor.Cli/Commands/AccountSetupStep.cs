@@ -7,16 +7,18 @@ using Spectre.Console;
 namespace Capacitor.Cli.Commands;
 
 internal sealed class AccountSetupStep(AccountStore accounts, PluginEnvironment env, TimeProvider time) {
-    internal void Run(CodingAgentsStep.Options options, Func<string, bool> promptYesNo, Action<string> writeLine) {
+    internal void Run(CodingAgentsStep.Options options, bool interactive, Func<string, bool> promptYesNo, Action<string> writeLine) {
+        if (!options.InstallAgents) return;
+
         try {
-            Adopt(options, promptYesNo, writeLine);
+            Adopt(options, interactive, promptYesNo, writeLine);
         } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException
                                          or TimeoutException or WaitHandleCannotBeOpenedException) {
             writeLine($"  [yellow]![/] Skipped vendor accounts, the registry in {Markup.Escape(accounts.Directory)} could not be used: {Markup.Escape(ex.Message)}");
         }
     }
 
-    void Adopt(CodingAgentsStep.Options options, Func<string, bool> promptYesNo, Action<string> writeLine) {
+    void Adopt(CodingAgentsStep.Options options, bool interactive, Func<string, bool> promptYesNo, Action<string> writeLine) {
         var vendors = new List<HarnessId>();
         if (!options.SkipClaude) vendors.Add(HarnessId.Claude);
         if (!options.SkipCodex) vendors.Add(HarnessId.Codex);
@@ -37,12 +39,22 @@ internal sealed class AccountSetupStep(AccountStore accounts, PluginEnvironment 
             var name = candidate.Vendor.ToString().ToLowerInvariant();
             var dir  = Markup.Escape(candidate.Directory);
 
-            if (options.NoPrompt) {
-                writeLine($"  Also found {dir}, add it with: kcap accounts add {name} {dir}");
+            var hint = $"  Also found {dir} — add it with: kcap accounts add {name} {dir}";
+
+            if (options.NoPrompt || !interactive) {
+                writeLine(hint);
                 continue;
             }
 
-            if (!promptYesNo($"Record {candidate.Vendor} sessions from {dir} too?")) continue;
+            bool yes;
+            try {
+                yes = promptYesNo($"Record {candidate.Vendor} sessions from {dir} too?");
+            } catch (InvalidOperationException) {
+                writeLine(hint);
+                continue;
+            }
+
+            if (!yes) continue;
 
             var account = AccountAdoption.EnsureDefault(accounts, candidate.Vendor, candidate.Directory, time);
             Report(account, Wire(account, options), writeLine);
