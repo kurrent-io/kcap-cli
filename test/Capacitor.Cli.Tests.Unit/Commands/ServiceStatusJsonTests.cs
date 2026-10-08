@@ -90,6 +90,6 @@ public class ServiceStatusJsonTests {
         var q = new ServiceQuery(LabelProbe.Absent, true, ServiceState.NotInstalled, "/u/kcap-daemon", null);
         var (json, _) = ServiceStatusRender.Render(q, "default", null, null, false, false);
         using var doc = JsonDocument.Parse(json!);
-        await Assert.That(doc.RootElement.GetProperty("loaded_spawn_type").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(doc.RootElement.GetProperty("loaded_spawn_type").IsNull).IsTrue();
     }
 }
