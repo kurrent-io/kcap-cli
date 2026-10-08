@@ -105,8 +105,15 @@ overwrite each other's entries.
 Mechanism — a detached-only plan file, not new CLI flags:
 
 - The lane writes `import-plan-<runId>.json` (owner-only, `OwnerOnlyFile.CreateNew`, best-effort
-  deleted by the child on exit and pruned with the handoff files' 7-day retention). It holds, per
-  chosen level in order (`OnlyMe` first): level, repositories, `since`, vendors, skip-titles.
+  deleted by the child on exit and pruned with the handoff files' 7-day retention). It holds the
+  **server URL the foreground imported to**, and, per chosen level in order (`OnlyMe` first): level,
+  repositories, `since`, vendors, skip-titles.
+- **The server travels in the plan because the profile does not have it yet.** The browser leg runs
+  before setup saves the chosen server to the profile, which is why the foreground imports through
+  `SetupCommand.ImportContext(profiles, serverUrl)`. The child builds its context the same way — its
+  pinned profile's identity (name, tokens) with the plan's server — so on a first run it does not
+  resolve no server, and on a re-run it does not use the profile's previous one. `KCAP_URL` cannot
+  carry it: a URL override resolves to no profile.
 - `BackgroundImportSpawner` spawns `kcap import --yes` with the existing detached variables
   (`KCAP_IMPORT_DETACHED_LOG`, config dir, profile, visibility) plus `KCAP_IMPORT_PLAN=<path>`.
 - `Program.cs`, when both the detached log and the plan variable are present, reads the plan and calls
@@ -153,15 +160,16 @@ pinned, and the agent's `kcap-sessions` MCP server resolved its profile when it 
 environment and working directory). Checking a fresh `kcap whoami` is not proof of what that server
 uses, so the check moves to the connection itself:
 
-- `get_session_evals` (`SessionEvalsTool`) returns, beside its entries, the `server_url` and `profile`
-  the MCP server is using.
-- eval-watch's section 4 ("Bind to the server") makes one `get_session_evals` call on the first cohort
-  id and compares both fields to the file's before reading any result. A mismatch closes with no eval
-  shown and the existing remediation, extended: set `KCAP_PROFILE=<profile>`, unset `KCAP_URL`, start
-  the agent from that shell (restarting it, since its MCP server is already running), then prompt
-  again. The `kcap whoami` comparison stays as a pre-check for a clearer message when kcap itself is
-  not logged in.
-- An older MCP server without the fields: the skill falls back to today's `whoami` server check.
+- `kcap-sessions` gains a tool, `get_connection`, that returns the `server_url` and `profile` the MCP
+  server resolved at start. It makes no network call.
+- eval-watch's section 4 ("Bind to the server") calls `get_connection` before any eval lookup and
+  compares both fields to the file's. A mismatch closes with no lookup and the existing remediation,
+  extended: set `KCAP_PROFILE=<profile>`, unset `KCAP_URL`, start the agent from that shell (restarting
+  it, since its MCP server is already running), then prompt again.
+- **Fail closed on an older MCP server.** If `get_connection` is not among the agent's tools, the skill
+  makes no lookup and closes telling the user to update kcap and restart the agent. The `kcap whoami`
+  comparison is not a substitute — it is a separate process and cannot speak for the running server —
+  so it stays only as a pre-check that gives a clearer message when kcap itself is not logged in.
 
 ### 5. Outcome report (CLI → server contract)
 
@@ -205,9 +213,18 @@ foreground passes only.
 - **Arrangement.** The in-progress arrangement stays (fractions, progress bar, recent-sessions frame).
   The progress fraction is capped below 100% while in this arm, because the discovery-time expected
   total is not what will land and must not read as done.
-- **Polling.** On the report, the component starts a fresh `PollAsync` if none is running (a poll that
-  already ended on quiet before the report arrived is restarted), with a 30-minute budget measured from
-  the report. In this arm quiet does not end the reads; only the budget, or the user leaving, does.
+- **Polling — the report transition.** The first render that sees `BackgroundRunning` performs one
+  transition, guarded so it runs once per report:
+  1. Cancel the current poll's cancellation source (whether it is reading, waiting out an owed
+     outcome, or already finished) and await its task; replace the source.
+  2. Reset `_quiet` to false and the quiet-tick counter to zero.
+  3. If `_settled` was set before the report by anything but `NothingImported` or a missing figures
+     seam, clear it and `_mayLeave`'s dependence on it, so the arrangement reopens.
+  4. Start a new `PollAsync` whose deadline is the report time plus the 30-minute budget.
+
+  In this arm `PollAsync` does not break on quiet; only the deadline, or the user leaving (component
+  disposal), ends the reads. The poll exposes its completion (task), not just a non-null field, so
+  "is a poll running" is answered by the task rather than by `_polling`.
 - **Ending.** At the budget, the screen settles into the "wait gave up" arrangement with background
   copy: "The rest is still importing in the background — it keeps landing in your workspace." Nothing
   in this arm ever says the import finished.
@@ -264,7 +281,9 @@ CLI (TUnit):
   performs the visibility write.
 - Merge: candidate order; one unknown level yields `partial_exact`; both unknown yields `unknown`;
   remaining count includes failed selected sessions.
-- `SessionEvalsTool` returns `server_url` and `profile`.
+- `get_connection` returns the resolved `server_url` and `profile` without a network call.
+- Child context: the plan's server with the pinned profile's identity, on a profile that has no
+  server and on one that has a different server.
 - `BrowserFirstRunFlow`: outcome carries `background`, `background_remaining` and exactly one of
   prompt/suppressed, including on `run_failed`; handoff-file write failure reports the suppression.
 
@@ -272,13 +291,15 @@ Server:
 - Endpoint validation of the new fields, including alongside a reason; event round-trip with and
   without them.
 - `DoneStep`: a `background: running` report does not settle or announce finished; a poll that ended
-  on quiet before the report restarts; quiet does not end reads in the background arm; the fraction
+  on quiet before the report restarts with reset quiet state; a poll still reading gets the new
+  deadline; a screen that settled before the report reopens; quiet does not end reads in the
+  background arm; the fraction
   never shows 100% in that arm; budget exhaustion settles with the background copy and announcement;
   each panel state renders.
 
 ## Delivery
 
 Two PRs: the server change first (accepts the fields, settles on them, renders the panel; inert
-without them), then the CLI change, which includes the eval-watch skill and `SessionEvalsTool`
-changes. The CLI bumps kcap-server's `src/cli` submodule pin only when the server needs the shared
-models.
+without them), then the CLI change, which includes the eval-watch skill and the new
+`get_connection` tool. The CLI bumps kcap-server's `src/cli` submodule pin only when the server needs
+the shared models.
