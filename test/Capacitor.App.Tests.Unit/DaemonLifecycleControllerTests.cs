@@ -973,6 +973,13 @@ sealed class FakeKcapCli : IKcapCli {
         return StartVerifiedBehavior(ct);
     }
 
+    public int ReloadCallCount;
+    public Func<CancellationToken, Task<ProcessResult>> ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "", false));
+    public Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
+        ReloadCallCount++;
+        return ReloadBehavior(ct);
+    }
+
     public int InstallVerifiedCallCount;
     public bool? LastInstallReplace;
     public string? LastRetireServiceId;

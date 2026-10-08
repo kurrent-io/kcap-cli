@@ -6,9 +6,11 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
+/// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
+/// CLI predates the field; read it through SpawnTypes.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -49,6 +51,10 @@ public interface IKcapCli {
     Task<bool> SupportsServiceRetireAsync(CancellationToken ct);
 
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
+
+    /// <c>daemon service refresh --name &lt;name&gt; --force</c>: reloads this daemon's launchd job to Standard, ending
+    /// whatever it hosts. One <c>refresh_outcome=&lt;token&gt;</c> line on stderr; exit 0 only for reloaded/current.
+    Task<ProcessResult> ServiceReloadAsync(CancellationToken ct);
 
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
@@ -150,6 +156,14 @@ public sealed class KcapCli : IKcapCli {
         return CliPath is not { } cliPath
             ? NoCliResult()
             : Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
+                new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
+    }
+
+    public Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
+        var env = MutationEnv(); // throws before any spawn if the instance carries no server
+        return CliPath is not { } cliPath
+            ? NoCliResult()
+            : Run(cliPath, ["daemon", "service", "refresh", "--name", _daemonName, "--force"],
                 new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
     }
 
