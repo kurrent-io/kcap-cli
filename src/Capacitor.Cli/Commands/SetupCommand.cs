@@ -424,7 +424,7 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries, AccountStore accounts) {
+        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
@@ -816,6 +816,8 @@ sealed class SetupCommand(
 
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
+
+        new AccountSetupStep(accounts, pluginEnv, time).Run(stepOptions, PromptYesNo, WriteLine);
 
         if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
             WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
