@@ -130,11 +130,12 @@ sealed partial class LaunchdServiceManager(
     /// the daemon hosts. So a running job is reloaded only once <paramref name="requestRestart"/>
     /// reports that the daemon accepted an idle-only restart. A busy daemon refuses that restart, and
     /// the reload waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
-    /// <see cref="ReloadBudget"/>.
+    /// <see cref="ReloadBudget"/>. A job that is not stale counts as <see cref="UnitRefresh.Current"/>
+    /// whatever its spawn type unless <paramref name="requirePositiveSpawnType"/> asks for a positive one.
     /// </summary>
     public UnitRefresh RefreshUnit(
             string serviceId, Func<bool> requestRestart, Func<TimeSpan> timeLeft, out string? error,
-            Func<string, string>? stabilize = null) {
+            Func<string, string>? stabilize = null, bool requirePositiveSpawnType = false) {
         error = null;
         var path = LaunchdUnit.PlistPath(home, serviceId);
 
@@ -147,7 +148,7 @@ sealed partial class LaunchdServiceManager(
         if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return UnitRefresh.UnitUnsupported;
 
         try {
-            return RefreshValidatedUnit(serviceId, path, original!, upgraded, requestRestart, timeLeft, stabilize, out error);
+            return RefreshValidatedUnit(serviceId, path, original!, upgraded, requestRestart, timeLeft, stabilize, requirePositiveSpawnType, out error);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
                                       or System.ComponentModel.Win32Exception) {
             error = ex.Message;
@@ -157,7 +158,7 @@ sealed partial class LaunchdServiceManager(
 
     UnitRefresh RefreshValidatedUnit(
             string serviceId, string path, string original, string? upgraded,
-            Func<bool> requestRestart, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, out string? error) {
+            Func<bool> requestRestart, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType, out string? error) {
         error = null;
         var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
         var probe = printTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(printExit, printOut, printErr);
@@ -177,7 +178,7 @@ sealed partial class LaunchdServiceManager(
         if (upgraded is not null) _writeUnit(path, upgraded, null);
         if (probe == LabelProbe.Unknown) return UnitRefresh.Unverified;
         if (probe == LabelProbe.Absent) return UnitRefresh.NotLoaded;
-        if (!stale) return SpawnTypes.IsPositive(spawn) ? UnitRefresh.Current : UnitRefresh.Unverified;
+        if (!stale) return !requirePositiveSpawnType || SpawnTypes.IsPositive(spawn) ? UnitRefresh.Current : UnitRefresh.Unverified;
         if (timeLeft() < ReloadBudget) return UnitRefresh.Deferred;
 
         // A loaded job with no running daemon hosts nothing, and there is no socket to ask.

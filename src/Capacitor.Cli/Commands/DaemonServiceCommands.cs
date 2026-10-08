@@ -201,7 +201,7 @@ sealed class DaemonServiceCommands(
             using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
             outcome = txn is null
                 ? UnitRefresh.Contended
-                : launchd.RefreshUnit(id, () => RequestRestart(id, "force"), TimeLeft, out error, stabilize);
+                : launchd.RefreshUnit(id, () => RequestRestart(id, "force"), TimeLeft, out error, stabilize, requirePositiveSpawnType: true);
         } catch (Exception ex) {
             outcome = UnitRefresh.Failed;
             error   = ex.Message;

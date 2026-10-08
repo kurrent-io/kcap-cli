@@ -370,11 +370,19 @@ public class LaunchdUnitRefreshTests {
     }
 
     [Test]
-    public async Task Failed_print_and_unknown_spawn_type_are_unverified() {
+    public async Task Failed_print_is_unverified_whether_or_not_a_positive_spawn_type_is_required() {
         Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
         Seed(LaunchdUnit.Plist(Spec()));
         await Assert.That(Manager([], "daemon (3)", printFails: true).RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.Unverified);
-        await Assert.That(Manager([], "app (1)").RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.Unverified);
+        await Assert.That(Manager([], "daemon (3)", printFails: true).RefreshUnit("test", () => true, Plenty, out _, requirePositiveSpawnType: true)).IsEqualTo(UnitRefresh.Unverified);
+    }
+
+    [Test]
+    public async Task Unknown_spawn_type_is_current_by_default_and_unverified_when_a_positive_one_is_required() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(LaunchdUnit.Plist(Spec()));
+        await Assert.That(Manager([], "app (1)").RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.Current);
+        await Assert.That(Manager([], "app (1)").RefreshUnit("test", () => true, Plenty, out _, requirePositiveSpawnType: true)).IsEqualTo(UnitRefresh.Unverified);
     }
 
     [Test]

@@ -60,6 +60,24 @@ public class DaemonCommandsServiceRefreshTests {
     }
 
     [Test]
+    public async Task An_unknown_spawn_type_is_unverified_when_forced_and_silent_when_not() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")));
+
+        using (var forced = ConsoleOutput.StartFullCapture()) {
+            var exit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", (_, _) => true).Refresh(force: true, stabilize: s => s);
+            await Assert.That(exit).IsNotEqualTo(0);
+            await Assert.That(forced.GetCapturedError()).Contains("refresh_outcome=unverified");
+        }
+
+        using var unforced = ConsoleOutput.StartFullCapture();
+        var unforcedExit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", (_, _) => true).Refresh(stabilize: s => s);
+        await Assert.That(unforcedExit).IsEqualTo(0);
+        await Assert.That(unforced.GetCapturedOutput().Trim()).IsEqualTo("");
+        await Assert.That(unforced.GetCapturedError().Trim()).IsEqualTo("");
+    }
+
+    [Test]
     public async Task Forced_run_on_a_missing_unit_is_unit_missing_and_touches_nothing_else() {
         Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
         Seed("b", LaunchdUnit.Plist(Spec("b")).Replace("Standard", "Adaptive"));
