@@ -57,9 +57,19 @@ internal sealed partial class AcpInteractionBridge(
         // The launch's working directory, which a relative tool-call path is resolved against. Without
         // it such a frame normalizes to Other and no path rule can match it, while the preset arm —
         // which reads the raw frame kind — would still auto-approve.
-        string?                                                                       policyCwd = null
+        string?                                                                       policyCwd = null,
+        // The server's policy judge, consulted for a call no rule decided when the launch's policy
+        // enables it. Null leaves an undecided call exactly as it is without one.
+        PolicyJudgeGateway?                                                           policyJudge = null,
+        TimeSpan?                                                                     judgeBudget = null
     ) {
     static readonly IReadOnlySet<string> EmptyAdmitted = new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>The agent is already blocked on the permission request, as it would be on a human,
+    /// so the judge gets the server's full ceiling.</summary>
+    internal static readonly TimeSpan JudgeBudget = TimeSpan.FromSeconds(5);
+
+    readonly AcpRefusalLedger _refusals = new();
 
     /// <summary>
     /// A permission frame this bridge cannot even parse. Always answers <c>cancelled</c>; under
@@ -235,39 +245,47 @@ internal sealed partial class AcpInteractionBridge(
         // falls through unchanged. A throwing evaluation leaves the request on the lane rather than
         // deciding it.
         var policyForcedAsk = false;
+        CanonicalAction? policyAction = null;
 
         if (unattendedPolicy == AcpUnattendedInteractionPolicy.Disabled
          && policySnapshot is { IsEmpty: false } snapshot) {
-            CanonicalAction?  action     = null;
             PolicyEvaluation? evaluation = null;
 
             try {
-                action     = AcpActionNormalizer.Normalize(parsed.ToolCall, policyVendor ?? "unknown", policyCwd);
-                evaluation = PolicyEngine.Evaluate(snapshot, action, EvaluationMode.Full);
+                policyAction = AcpActionNormalizer.Normalize(parsed.ToolCall, policyVendor ?? "unknown", policyCwd);
+                evaluation   = PolicyEngine.Evaluate(snapshot, policyAction, EvaluationMode.Full);
             } catch (Exception ex) {
                 LogPolicyEvaluationFailed(ex, agentId);
             }
 
-            if (action is { } act && evaluation is { } eval) {
+            if (policyAction is { } act && evaluation is { } eval) {
                 var correlationId = TryGetToolCallId(parsed.ToolCall);
+                var judged = eval.Outcome == PolicyOutcome.None && snapshot.JudgeEnabled && policyJudge is { } judge
+                    ? await ConsultJudgeAsync(judge, snapshot, act, parsed.SessionId, ct).ConfigureAwait(false)
+                    : null;
 
-                switch (eval.Outcome) {
+                switch (judged?.Outcome ?? eval.Outcome) {
                     case PolicyOutcome.Deny:
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "deny", "deny");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "deny", "deny", judged);
 
                         return DenyResult(options);
                     case PolicyOutcome.Allow when TrySelectSingleAllowOnce(options) is { } policyChoice:
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "allow");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "allow", judged);
 
                         return SelectedResult(policyChoice);
                     case PolicyOutcome.Allow:
                         // Nothing offered unambiguously means allow-once. Degrade to the layers below
                         // rather than answering with an option id the agent never offered.
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "pass_through");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "allow", "pass_through", judged);
                         break;
                     case PolicyOutcome.Ask:
-                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "ask", "parked");
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "ask", "parked", judged);
                         policyForcedAsk = true;
+                        break;
+                    // A judge that did not decide leaves the layers below exactly as they would be
+                    // without it, and is recorded with why.
+                    case PolicyOutcome.None when judged is not null:
+                        TryNotifyPolicyDecision(snapshot, act, eval, parsed.SessionId, correlationId, "pass_through", "pass_through", judged);
                         break;
                 }
             }
@@ -358,6 +376,10 @@ internal sealed partial class AcpInteractionBridge(
 
         var mapped  = MapPermissionDecision(decision, options);
         var matched = decision.SelectedOptionId is { } sid && options.Any(o => o.OptionId == sid);
+
+        if (policySnapshot is { JudgeEnabled: true } && IsHumanRefusal(decision, options))
+            _refusals.Record(parsed.SessionId, TryGetToolCallId(parsed.ToolCall),
+                TryGetToolKind(parsed.ToolCall) ?? TryGetToolTitle(parsed.ToolCall), policyAction);
         LogPermissionDecisionReceived(agentId, decision.Outcome, decision.SelectedOptionId ?? "(none)", matched);
         LogInteractionResolved(agentId, "permission", OutcomeLabel(mapped));
 
@@ -783,17 +805,48 @@ internal sealed partial class AcpInteractionBridge(
     /// evaluated request, so there is nothing ambiguous about which call it answers.</summary>
     void TryNotifyPolicyDecision(
             PolicySnapshot snapshot, CanonicalAction action, PolicyEvaluation evaluation,
-            string sessionId, string? correlationId, string requested, string effective) {
+            string sessionId, string? correlationId, string requested, string effective, PolicyJudgeResult? judged = null) {
         try {
             notifyPolicyDecision?.Invoke(PolicyWire.Decision(
                 sessionId: sessionId, agentId: agentId, vendor: policyVendor ?? "unknown", seam: PolicySeams.AcpRequestPermission,
                 snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: requested, effectiveOutcome: effective,
                 action: PolicyWire.ToWire(action), matchedRules: PolicyWire.ToWire(evaluation.MatchedRules), time: time,
-                correlationId: correlationId));
+                failureClass: judged?.FailureClass, correlationId: correlationId, judge: judged?.Consultation));
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: policy decision audit notify threw for agent {AgentId}; ignoring", agentId);
         }
     }
+
+    /// <summary>
+    /// Consults the judge for a call no rule decided. Windowless: an ACP agent has no transcript the
+    /// server can verify a turn against, so the request declares only the refusals this bridge
+    /// relayed. No snapshot travels inline: the orchestrator staged it under the agent id before the
+    /// launch, and the server resolves it from there.
+    /// </summary>
+    async Task<PolicyJudgeResult> ConsultJudgeAsync(
+            PolicyJudgeGateway judge, PolicySnapshot snapshot, CanonicalAction action, string sessionId,
+            CancellationToken ct) {
+        try {
+            var wire     = PolicyWire.ToWire(action);
+            var refusals = _refusals.Declare(sessionId);
+
+            return await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
+                    sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
+                    PolicyEngine.Version, wire, Turns: null, refusals, Snapshot: null, budgetMs),
+                judgeBudget ?? JudgeBudget, ct).ConfigureAwait(false);
+        } catch (Exception ex) {
+            logger.LogDebug(ex, "ACP: policy judge consultation threw for agent {AgentId}; passing through", agentId);
+            return PolicyJudgeResult.PassThrough(PolicyJudgeResult.Error);
+        }
+    }
+
+    /// <summary>A human said no to this call: the negative outcome, or an affirmative one that picked
+    /// a reject option. A cancel is the turn going away, not a refusal.</summary>
+    static bool IsHumanRefusal(AcpInteractionDecision decision, IReadOnlyList<PermissionOptionDto> options) =>
+        NegativeOutcomes.Contains(decision.Outcome)
+     || (AffirmativeOutcomes.Contains(decision.Outcome)
+      && decision.SelectedOptionId is { } id
+      && options.FirstOrDefault(o => o.OptionId == id)?.Kind is { } kind && RejectKinds.Contains(kind));
 
     static JsonElement SelectedResult(PermissionOptionDto chosen) =>
         JsonSerializer.SerializeToElement(

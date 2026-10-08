@@ -9,6 +9,7 @@ public sealed record PolicyJudgeResult(
     public const string TransportError = "judge_transport_error";
     public const string HttpError = "judge_http_error";
     public const string MalformedResponse = "judge_malformed_response";
+    public const string Error = "judge_error";
 
     public static PolicyJudgeResult PassThrough(string failureClass, PolicyJudgeConsultationV1? consultation = null) =>
         new(PolicyOutcome.None, consultation, failureClass);

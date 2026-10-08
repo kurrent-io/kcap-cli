@@ -5,7 +5,6 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Harness.Claude;
-using Capacitor.Cli.Policy;
 using Capacitor.Cli.Tests.Unit.Policy;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;

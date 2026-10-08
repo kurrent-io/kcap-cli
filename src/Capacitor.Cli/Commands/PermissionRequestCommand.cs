@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Harness.Claude;
-using Capacitor.Cli.Policy;
+using Capacitor.Cli.Core.Policy;
 
 // ReSharper disable MethodHasAsyncOverload
 
@@ -164,9 +164,10 @@ class PermissionRequestCommand(
     }
 
     /// The server payload plus what the daemon reads for attribution (agent_id when this process
-    /// runs inside a hosted agent, the hook's cwd) and for the pending card's tool_use_id, which
-    /// is what lets the desktop app retire the card once the transcript shows the tool's result.
-    /// The server-bound payload carries none of these.
+    /// runs inside a hosted agent, the hook's cwd), for the pending card's tool_use_id, which
+    /// is what lets the desktop app retire the card once the transcript shows the tool's result,
+    /// and for the policy judge's declarations (transcript_path). The server-bound payload carries
+    /// none of these.
     internal static JsonObject BuildBridgePayload(JsonNode node, string sessionId, string? agentId) {
         var payload = new JsonObject {
             ["session_id"]             = sessionId,
@@ -177,6 +178,7 @@ class PermissionRequestCommand(
         if (agentId is not null) payload["agent_id"] = agentId;
         if (node["cwd"] is JsonValue cwd && cwd.TryGetValue<string>(out var c)) payload["cwd"] = c;
         if (node["tool_use_id"] is JsonValue toolUse && toolUse.TryGetValue<string>(out var id)) payload["tool_use_id"] = id;
+        if (node["transcript_path"] is JsonValue transcript && transcript.TryGetValue<string>(out var path)) payload["transcript_path"] = path;
         // The hook's agent_id is the subagent's; agent_id on this wire is the hosted agent.
         if (node["agent_id"] is JsonValue sub && sub.TryGetValue<string>(out var subagentId) && subagentId.Length > 0) payload["subagent_id"] = subagentId;
         return payload;

@@ -1,13 +1,11 @@
-using Capacitor.Cli.Core.Http;
-
-namespace Capacitor.Cli.Commands;
+namespace Capacitor.Cli.Core.Http;
 
 /// <summary>
 /// Bounds a hook's client creation, the one step that can wait on the cross-process refresh lock
 /// for the whole WorkOS replay budget. Every host kills a hook long before that, so a hook that
 /// cannot authenticate inside its cap takes its spool path instead of being killed on the way there.
 /// </summary>
-internal static class BoundedAuth {
+public static class BoundedAuth {
     /// <summary>
     /// The client and its auth outcome if created within <paramref name="cap"/>; null when the cap
     /// elapsed first. The abandoned creation is observed to completion so a late fault never surfaces
@@ -15,7 +13,7 @@ internal static class BoundedAuth {
     /// <paramref name="onAbandoned"/> runs whenever creation is given up on: the process may exit
     /// with a rotation in flight, so the caller hands the refresh to something that will outlive it.
     /// </summary>
-    internal static async Task<AuthAttempt?> CreateClientWithinAsync(
+    public static async Task<AuthAttempt?> CreateClientWithinAsync(
             Func<Task<AuthAttempt>> factory, TimeSpan cap, TimeProvider time, Action? onAbandoned = null) {
         if (cap <= TimeSpan.Zero) {
             onAbandoned?.Invoke();
