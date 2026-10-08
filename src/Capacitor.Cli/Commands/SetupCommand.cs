@@ -875,6 +875,10 @@ sealed class SetupCommand(
                     useProviderApiKey = parsed.Value;
                 }
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
+            } else if (browserAgents is not null) {
+                // The browser has no question for this, and a terminal prompt after it has said setup
+                // finished goes unseen. Keep the setting and say how to change it.
+                AnsiConsole.MarkupLine(ProviderApiKeyKeptLine(useProviderApiKey));
             } else {
                 useProviderApiKey = AnsiConsole.Prompt(
                     new ConfirmationPrompt("  Use these API keys for kcap's headless calls?") { DefaultValue = useProviderApiKey });
@@ -892,6 +896,11 @@ sealed class SetupCommand(
         if (noPrompt) {
             daemonName = GetArg(args, "--daemon-name") ?? defaultName;
             await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else if (browserAgents is not null) {
+            // Not asked: the browser has no daemon-name screen, and its service request waits on this
+            // name. The profile's own name comes first so a re-run never renames a daemon in use.
+            daemonName = existing?.Daemon?.Name is { Length: > 0 } kept ? kept : defaultName;
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
         } else {
             daemonName = AnsiConsole.Prompt(
                 new TextPrompt<string>("Daemon name:")
@@ -904,6 +913,8 @@ sealed class SetupCommand(
         var loggedInto   = new ProfileContext(
             new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
 
+        var suffixedForBrowser = false;
+
         while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
             AnsiConsole.MarkupLine(
                 $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
@@ -914,6 +925,16 @@ sealed class SetupCommand(
                 await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
 
                 return 1;
+            }
+
+            // The browser path takes the suffixed name the prompt would have offered, once. If that is
+            // taken too, the prompt is the only way left to get a name.
+            if (browserAgents is not null && !suffixedForBrowser) {
+                suffixedForBrowser = true;
+                daemonName         = $"{daemonName}-{MachineSlug()}";
+                await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+
+                continue;
             }
 
             daemonName = AnsiConsole.Prompt(
@@ -953,6 +974,8 @@ sealed class SetupCommand(
         // Here rather than in the browser leg, and after the write above rather than before it: the unit
         // bakes the profile, the expected server and the daemon name, and `saved` is the only context that
         // carries what this run actually chose.
+        FirstRunMachineActionResult? daemonService = null;
+
         if (browserAnswers.FlowId is { } browserFlowId) {
             try {
                 // Every flow route is authenticated, and a poll that 401s answers an empty body —
@@ -988,7 +1011,7 @@ sealed class SetupCommand(
                         ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
                         : null;
 
-                    await SetupDaemonService.RunAsync(
+                    daemonService = await SetupDaemonService.RunAsync(
                         channel, serverUrl, browserFlowId, config, saved, home, time);
                 }
                 else
@@ -1100,7 +1123,7 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        AnsiConsole.MarkupLine("\n  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
+        AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -2335,6 +2358,23 @@ sealed class SetupCommand(
             Debug($"failed — {e.GetType().Name}: {e.Message}");
         }
     }
+
+    /// <summary>The provider-key line for a run the browser answered, which keeps the stored setting.</summary>
+    internal static string ProviderApiKeyKeptLine(bool useProviderApiKey) => useProviderApiKey
+        ? "  Use provider API key: yes [dim](kept; turn off with[/] [cyan]kcap config set use_provider_api_key false[/][dim])[/]"
+        : "  Use provider API key: no [dim](kept; turn on with[/] [cyan]kcap config set use_provider_api_key true[/][dim])[/]";
+
+    /// <summary>
+    /// The closing daemon line. Suggesting <c>kcap daemon start -d</c> after the browser's request put
+    /// the daemon under a service would start a second one beside it.
+    /// </summary>
+    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => service?.Outcome switch {
+        FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled =>
+            "  [green]✓[/] The agent daemon runs as a background service.",
+        FirstRunMachineActionOutcomes.EnabledUnverified =>
+            "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
+        _ => "  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]"
+    };
 
     /// <summary>
     /// the end-of-setup reminder that live recording only starts on a

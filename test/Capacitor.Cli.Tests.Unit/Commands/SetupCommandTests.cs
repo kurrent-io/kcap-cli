@@ -584,6 +584,36 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
+    /// <summary>A service the browser's request put in place replaces the start-it-yourself advice, which
+    /// would otherwise start a second daemon beside it.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionOutcomes.Enabled)]
+    [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
+    [Arguments(FirstRunMachineActionOutcomes.EnabledUnverified)]
+    public async Task DaemonClosingLine_drops_the_start_hint_once_a_service_runs(string outcome) {
+        var line = SetupCommand.DaemonClosingLine(new FirstRunMachineActionResult(outcome, null));
+
+        await Assert.That(line).DoesNotContain("kcap daemon start");
+        await Assert.That(line).Contains("background service");
+    }
+
+    /// <summary>No request, or one that did not end in a service, keeps the optional start hint.</summary>
+    [Test]
+    public async Task DaemonClosingLine_keeps_the_start_hint_without_a_service() {
+        await Assert.That(SetupCommand.DaemonClosingLine(null)).Contains("kcap daemon start -d");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon start -d");
+    }
+
+    /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
+    /// changes it, in the direction that would change it.</summary>
+    [Test]
+    public async Task ProviderApiKeyKeptLine_names_the_command_that_flips_the_kept_value() {
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(false)).Contains("use_provider_api_key true");
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(true)).Contains("use_provider_api_key false");
+    }
+
     [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(

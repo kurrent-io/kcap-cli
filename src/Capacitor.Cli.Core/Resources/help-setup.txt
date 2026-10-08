@@ -144,6 +144,14 @@ setup applies it instead of asking again, per agent and per choice, and says
 which agents you picked. A --skip-<agent> flag still wins, so a scripted opt-out
 is never overridden. Answering "Not now" installs nothing.
 
+After a browser answer the terminal asks nothing more. The daemon keeps this
+profile's name (your user name on a first run), and takes a name suffixed with
+this machine's if another machine already holds it. The provider API key
+setting is kept as it is; change it with
+`kcap config set use_provider_api_key true|false`. When the browser's Done
+screen ran the daemon as a service, setup says so instead of suggesting
+`kcap daemon start -d`.
+
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
 asks how to continue: create one for you (organization name + workspace slug) and
 wait for it to go live, point at a workspace you already belong to (enter its slug
