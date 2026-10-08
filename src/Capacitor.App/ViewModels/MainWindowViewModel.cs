@@ -102,10 +102,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<bool>? _isReloading;
     public bool IsReloading => _isReloading?.Value ?? false;
 
-    ObservableAsPropertyHelper<bool>? _canReload;
-    /// Connected and no reload in flight: the reload needs a daemon to ask.
-    public bool CanReload => _canReload?.Value ?? false;
-
     ObservableAsPropertyHelper<bool>? _showsReloadBlock;
     public bool ShowsReloadBlock => _showsReloadBlock?.Value ?? false;
 
@@ -468,11 +464,6 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             _isReloading = reloadingSource
                 .ToProperty(this, x => x.IsReloading, false)
-                .DisposeWith(disposables);
-            _canReload = status
-                .CombineLatest(reloadingSource, (st, reloading) => st.State == AttachState.Connected && !reloading)
-                .DistinctUntilChanged()
-                .ToProperty(this, x => x.CanReload, false)
                 .DisposeWith(disposables);
 
             var failureText = reloadSource.Select(state => state is null ? null : ReloadCopy.For(state));

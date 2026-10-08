@@ -43,6 +43,16 @@ public class ReloadCopyTests {
     }
 
     [Test]
+    [Arguments("unreachable_with_recorded_owner")]
+    [Arguments("unreachable")]
+    public async Task Unreachable_evidence_legs_render_as_could_not_be_verified(string token) {
+        var state = State(new MutationOutcome.AttentionSkew(token));
+        await Assert.That(state.Kind).IsEqualTo(ReloadOutcomeKind.Skew);
+        await Assert.That(ReloadCopy.For(state))
+            .IsEqualTo($"The daemon service could not be verified ({token}). Check `kcap daemon status --name alexey`.");
+    }
+
+    [Test]
     public async Task Unknown_tokens_fall_back_with_or_without_an_exit_code() {
         await Assert.That(ReloadCopy.For(State(new MutationOutcome.Failed(7, null, RecoverySurface.Attention))))
             .IsEqualTo("The daemon reload for alexey failed (exit 7). Check `kcap daemon status --name alexey`; details are in the app log.");

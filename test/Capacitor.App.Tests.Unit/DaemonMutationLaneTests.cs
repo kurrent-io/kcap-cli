@@ -1600,6 +1600,21 @@ public class DaemonMutationLaneTests {
         await Assert.That(cli.ReloadCallCount).IsEqualTo(1);
     }
 
+    [Test, NotInParallel]
+    public async Task Reload_failure_logs_the_cli_detail_line() {
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(1, "", "refresh_outcome=failed\nlaunchctl bootstrap failed (exit 5); the previous unit was restored and reloaded\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        using var capture = ConsoleOutput.StartErrorCapture();
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(1, "failed", RecoverySurface.Attention));
+        await Assert.That(capture.GetCapturedError()).Contains("launchctl bootstrap failed (exit 5)");
+    }
+
     [Test]
     public async Task Reload_timeout_is_unconfirmed_and_nonzero_exit_carries_the_token() {
         var timedOut = new FakeKcapCli {

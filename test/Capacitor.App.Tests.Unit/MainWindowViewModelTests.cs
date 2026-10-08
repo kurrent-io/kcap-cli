@@ -1172,22 +1172,24 @@ public class MainWindowViewModelTests {
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
                 backgroundPriority: background, reloadState: reload, isReloading: reloading, reloadDaemon: _ => Task.CompletedTask);
             using var activation = vm.Activator.Activate();
+            var canReload = false;
+            using var canExecuteSub = vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canReload = x);
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
             await Assert.That(vm.BackgroundPriority).IsFalse();
             await Assert.That(vm.BackgroundPriorityText).IsNull();
-            await Assert.That(vm.CanReload).IsFalse();
+            await Assert.That(canReload).IsFalse();
             await Assert.That(vm.ReloadFailureText).IsEqualTo(ReloadCopy.For(reload.Value!));
             await Assert.That(vm.ShowsReloadBlock).IsTrue();
 
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             await Assert.That(vm.BackgroundPriority).IsTrue();
             await Assert.That(vm.BackgroundPriorityText).IsEqualTo(MainWindowViewModel.BackgroundPriorityMessage);
-            await Assert.That(vm.CanReload).IsTrue();
+            await Assert.That(canReload).IsTrue();
 
             reloading.OnNext(true);
             await Assert.That(vm.IsReloading).IsTrue();
-            await Assert.That(vm.CanReload).IsFalse();
+            await Assert.That(canReload).IsFalse();
 
             reloading.OnNext(false);
             reload.OnNext(null);

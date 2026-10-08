@@ -982,6 +982,25 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
+    public async Task Reload_cancelled_by_the_lane_completes_quietly_and_releases_the_claim() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" });
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Lane.Behavior = (_, _) => Task.FromException<MutationOutcome>(new TaskCanceledException());
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None); // must not throw
+
+        await Assert.That(h.Reloading()).IsFalse();
+
+        h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded());
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(2); // the claim was released: the second click prompted again
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(2);
+        await Assert.That(h.Reload()).IsNull();
+    }
+
+    [Test]
     public async Task Reload_records_a_failure_and_a_later_success_clears_it() {
         await using var h = new Harness();
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);

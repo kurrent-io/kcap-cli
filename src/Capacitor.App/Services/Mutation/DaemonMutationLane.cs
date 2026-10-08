@@ -395,8 +395,10 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     async Task<MutationOutcome> ClassifyReloadAsync(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
-        if (result.ExitCode != 0)
+        if (result.ExitCode != 0) {
+            LogReloadFailure(request, result);
             return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "refresh_outcome="), RecoverySurface.Attention);
+        }
 
         var waited = await AwaitFullEvidenceAsync(request, observation, null, ct).ConfigureAwait(false);
         if (waited is not null) return waited;
@@ -481,6 +483,13 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (!KcapCliCompatibility.Satisfies(evidence.DaemonVersion)) return "daemon_below_floor";
 
         return null;
+    }
+
+    static void LogReloadFailure(MutationRequest request, ProcessResult result) {
+        var detail = result.Stderr.Trim();
+        Console.Error.WriteLine(
+            $"DaemonMutationLane: reload exit {result.ExitCode} daemon={request.DaemonName}" +
+            (detail.Length == 0 ? "" : $": {detail}"));
     }
 
     static void LogWaiterlessSuccess(MutationRequest request, MutationOutcome outcome) =>

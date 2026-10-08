@@ -510,14 +510,16 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             var refusal = MutationRequestFactory.TryBuild(MutationVerb.Reload, profileName, _canonicalServer, _client.DaemonName, out var request);
             var outcome = refusal ?? await _runMutation(request!, ct).ConfigureAwait(false);
             Record(outcome);
+            if (RequireAppRestart()) return;
             if (refusal is null) _ = _client.RestartLoopAsync(); // the mutation may have restarted the daemon; reattach is idempotent
             if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) _surface.Status(StandardPriorityStatus);
 
-            try { await ReadStatusAsync(ct).ConfigureAwait(false); } // the indicator follows evidence, not the click
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            await ReadStatusAsync(ct).ConfigureAwait(false); // the indicator follows evidence, not the click
+        } catch (OperationCanceledException) {
+            // shutdown or caller cancel: nothing left to render
         } finally {
-            _isReloading.OnNext(false);
             Volatile.Write(ref _reloadClaim, 0);
+            _isReloading.OnNext(false);
         }
     }
 

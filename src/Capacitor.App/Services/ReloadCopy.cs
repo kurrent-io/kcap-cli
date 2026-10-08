@@ -12,6 +12,7 @@ public static class ReloadCopy {
         "stale_txn_marker", "running_without_daemon_pid", "daemon_running_outside_service", "ownership_mismatch",
         "ownership_unknown", "instance_pid_mismatch", "instance_changed_during_classification", "server_or_name_mismatch",
         "pre_slice_evidence", "identity_inconsistent", "missing_capability_consent_3", "daemon_below_floor",
+        "unreachable_with_recorded_owner", "unreachable",
     }.ToFrozenSet(StringComparer.Ordinal);
 
     /// A positive passive read clears only a failure whose sole complaint was the priority state or a
