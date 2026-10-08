@@ -413,4 +413,22 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(startThrows.RefreshUnit("test", () => true, Plenty, out var startError)).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(startError).Contains("launchctl missing");
     }
+
+    [Test]
+    public async Task Bootstrap_that_exits_zero_but_still_reads_background_band_is_not_a_reload() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(AdaptivePlist());
+        var loaded = true;
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, c, _) => File.WriteAllText(p, c),
+            runBounded: (_, args, _) => args[0] switch {
+                "print"     => loaded ? (0, Print("adaptive (6)"), "", false) : (113, "", "Could not find service", false),
+                "bootout"   => ((Func<(int, string, string, bool)>)(() => { loaded = false; return (0, "", "", false); }))(),
+                "bootstrap" => ((Func<(int, string, string, bool)>)(() => { loaded = true; return (0, "", "", false); }))(),
+                _           => (0, "", "", false),
+            });
+        var outcome = manager.RefreshUnit("test", () => true, Plenty, out var error);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("still reports spawn type");
+    }
 }
