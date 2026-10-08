@@ -11,17 +11,59 @@ static class LaunchdUnit {
     public static string Label(string id) => LabelPrefix + id;
 
     // Adaptive lets macOS hold the job at background priority 4, and under load that starves the hub
-    // heartbeat into a reconnect storm. Plists written before Standard still carry the Adaptive line
-    // byte for byte, and UpgradeProcessType matches it exactly.
-    const string AdaptiveProcessTypeLine = "  <key>ProcessType</key><string>Adaptive</string>\n";
+    // heartbeat into a reconnect storm. Background does the same.
     const string StandardProcessTypeLine = "  <key>ProcessType</key><string>Standard</string>\n";
+    const string AdaptiveValue   = "Adaptive";
+    const string BackgroundValue = "Background";
 
-    /// <summary>The plist with this writer's Adaptive line switched to Standard, or null when it has no
-    /// such line — already current, or not shaped the way this writer writes it.</summary>
-    public static string? UpgradeProcessType(string plistXml) =>
-        plistXml.Contains(AdaptiveProcessTypeLine, StringComparison.Ordinal)
-            ? plistXml.Replace(AdaptiveProcessTypeLine, StandardProcessTypeLine, StringComparison.Ordinal)
-            : null;
+    /// <summary>The plist with its top-level <c>ProcessType</c> value switched from Adaptive or Background to
+    /// Standard, every other byte intact; null when there is nothing to splice — no such key, a value that
+    /// is not one of those two, a value with markup inside it, or a document that does not parse. Null is
+    /// not a verdict on the plist: the caller validates <c>upgraded ?? original</c> itself.</summary>
+    public static string? UpgradeProcessType(string plistXml) {
+        XDocument doc;
+        try { doc = XDocument.Parse(plistXml, LoadOptions.SetLineInfo); }
+        catch (System.Xml.XmlException) { return null; }
+
+        var topDict = doc.Root?.Element("dict");
+        if (topDict is null) return null;
+
+        XElement? value;
+        try { value = TopLevelValue(topDict, "ProcessType"); }
+        catch (InvalidDataException) { return null; }
+        if (value is null || value.Name != "string") return null;
+
+        // Exactly one plain text node: a comment or CDATA inside the element is not a value this
+        // writer produced, and the byte check below would not describe it.
+        if (value.FirstNode is not XText text || text is XCData || text.NextNode is not null) return null;
+        if (text.Value is not (AdaptiveValue or BackgroundValue)) return null;
+
+        // LinePosition is the column of the element name's first character; the '<' is one before.
+        var info = (System.Xml.IXmlLineInfo)value;
+        if (!info.HasLineInfo()) return null;
+        var start = OffsetOf(plistXml, info.LineNumber, info.LinePosition - 1);
+        if (start < 0) return null;
+
+        var element = $"<string>{text.Value}</string>";
+        if (start + element.Length > plistXml.Length || string.CompareOrdinal(plistXml, start, element, 0, element.Length) != 0) return null;
+
+        var valueStart = start + "<string>".Length;
+        var rewritten  = string.Concat(plistXml.AsSpan(0, valueStart), "Standard", plistXml.AsSpan(valueStart + text.Value.Length));
+        return DeclaresStandardProcessType(rewritten) ? rewritten : null;
+    }
+
+    /// <summary>Character offset of a 1-based line and column, walking the source's own line endings so
+    /// LF and CRLF documents both map correctly; -1 when the position is outside the text.</summary>
+    static int OffsetOf(string source, int line, int column) {
+        var offset = 0;
+        for (var current = 1; current < line; current++) {
+            var newline = source.IndexOf('\n', offset);
+            if (newline < 0) return -1;
+            offset = newline + 1;
+        }
+        var position = offset + column - 1;
+        return position >= 0 && position <= source.Length ? position : -1;
+    }
 
     /// <summary>True when the plist's top-level <c>ProcessType</c> is Standard, however it is formatted.
     /// An unparseable plist is not.</summary>

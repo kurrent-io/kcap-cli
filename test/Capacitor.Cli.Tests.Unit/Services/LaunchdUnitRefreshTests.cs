@@ -215,14 +215,13 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(asked).IsFalse();
     }
 
-    /// <summary>A plist whose Adaptive value is not in this writer's exact line would reload as Adaptive,
-    /// so the daemon is neither asked nor restarted.</summary>
+    /// <summary>A plist whose ProcessType is a value this writer does not upgrade is left alone, and the
+    /// daemon is neither asked nor restarted.</summary>
     [Test]
     public async Task Adaptive_plist_this_writer_cannot_upgrade_is_left_alone() {
         Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
 
-        var foreign = AdaptivePlist().Replace("<key>ProcessType</key><string>Adaptive</string>",
-            "<key>ProcessType</key>\n\t<string>Adaptive</string>");
+        var foreign = AdaptivePlist().Replace("<string>Adaptive</string>", "<string>Interactive</string>");
         var path  = Seed(foreign);
         var calls = new List<string[]>();
         var asked = false;
