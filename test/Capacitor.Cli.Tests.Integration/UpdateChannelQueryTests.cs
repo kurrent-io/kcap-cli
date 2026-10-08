@@ -90,51 +90,42 @@ public class UpdateChannelQueryTests : IDisposable {
     }
 
     /// <summary>
-    /// A response slower than the passive caller's own cancellation bound is
-    /// cancelled at that bound, not at the 5s <c>HttpClient.Timeout</c> — the
-    /// fetch is cut off, a backoff record is written, and a subsequent
-    /// within-1h passive run makes no further HTTP request.
+    /// A response slower than the passive caller's own token is cut off by that token, not by the
+    /// 5 s <c>HttpClient.Timeout</c>, and the backoff it arms keeps the next passive run off the
+    /// network even once the endpoint answers at once.
     /// </summary>
     /// <remarks>
-    /// Verified via elapsed time, not <see cref="WireMockServer.FindLogEntries"/>:
-    /// WireMock.Net only appends a request log entry once it finishes
-    /// composing a response (including its configured delay), so a request
-    /// the client itself cancelled mid-flight never gets logged — a 0 hit
-    /// count would be true for a genuinely-skipped call AND a
-    /// cancelled-before-logging one, so it can't distinguish them. Elapsed
-    /// time can: if the second call incorrectly re-hit the network it would
-    /// take ~2s (the endpoint's configured delay, uncapped this time since no
-    /// short-lived token is passed), whereas a cache/backoff hit returns
-    /// near-instantly.
+    /// The response outlasts the timeout, so a call that ignored the token could only end at 5 s or
+    /// later: the bound sits on that boundary rather than near the 200 ms cancel, which a loaded
+    /// runner overshoots by more than a second. That the token alone ends the fetch is pinned without
+    /// a clock by <c>UpdateCheckCancellationTests</c>.
     /// </remarks>
     [Test]
     public async Task Response_slower_than_passive_token_is_cancelled_and_backs_off() {
         const string channel = "test-passive-cancel";
         _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.13.0"}""")
-                .WithDelay(TimeSpan.FromSeconds(2)));
+                .WithDelay(TimeSpan.FromSeconds(10)));
 
         using var passiveBound = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-        var firstSw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var first = await UpdateCommand.CheckForUpdateAsync(
             forceCheck: false, channel, Config.Root, Npm, TimeProvider.System, passiveBound.Token);
-        firstSw.Stop();
+        sw.Stop();
+
         await Assert.That(first.Latest).IsNull();
         await Assert.That(first.FromCache).IsTrue();
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
 
-        // Cancelled at the ~200ms passive bound, not at the 2s response delay
-        // or the 5s HttpClient.Timeout — with slack for CI jitter.
-        await Assert.That(firstSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+        _server.ResetMappings();
+        _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.13.0"}"""));
 
-        var secondSw = System.Diagnostics.Stopwatch.StartNew();
         var second = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm, time: TimeProvider.System);
-        secondSw.Stop();
-        await Assert.That(second.Latest).IsNull();
-        await Assert.That(second.FromCache).IsTrue();
 
-        // Well under the endpoint's 2s configured delay — proves the second
-        // call served the backoff record rather than re-hitting the network.
-        await Assert.That(secondSw.Elapsed).IsLessThan(TimeSpan.FromSeconds(1));
+        await Assert.That(second.Latest).IsNull()
+            .Because("a re-fetch would have read 0.13.0 from the now-prompt endpoint");
+        await Assert.That(second.FromCache).IsTrue();
     }
 
     /// <summary>
