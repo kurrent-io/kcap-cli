@@ -62,6 +62,52 @@ public class AccountStoreTests {
             .IsEqualTo((UnixFileMode)0);
         await Assert.That(File.GetUnixFileMode(Path.Combine(store.Directory, "accounts.json")))
             .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        store.HostId();
+        await Assert.That(File.GetUnixFileMode(Path.Combine(store.Directory, "host.json")))
+            .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    [Test]
+    public async Task A_looser_existing_directory_is_tightened() {
+        if (OperatingSystem.IsWindows()) return;
+        var dir = Tmp.CreateDir("accounts");
+        File.SetUnixFileMode(dir, (UnixFileMode)0b111_111_101);
+        var store = new AccountStore(dir);
+
+        store.Mutate(r => (r with { Accounts = [Claude("/h/.claude")] }, 0));
+
+        await Assert.That(File.GetUnixFileMode(dir)).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    [Test]
+    public async Task HostId_refuses_a_file_without_a_host_id() {
+        var store = Store();
+        Directory.CreateDirectory(store.Directory);
+        await File.WriteAllTextAsync(Path.Combine(store.Directory, "host.json"), "{}");
+
+        await Assert.That(store.HostId).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task HostId_refuses_a_corrupt_file() {
+        var store = Store();
+        Directory.CreateDirectory(store.Directory);
+        await File.WriteAllTextAsync(Path.Combine(store.Directory, "host.json"), "not json");
+
+        await Assert.That(store.HostId).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task The_registry_is_written_with_snake_case_keys_and_a_string_vendor() {
+        var store = Store();
+        store.Mutate(r => (r with { Accounts = [Claude("/h/.claude")] }, 0));
+
+        var json = await File.ReadAllTextAsync(Path.Combine(store.Directory, "accounts.json"));
+
+        await Assert.That(json).Contains("\"vendor\": \"Claude\"");
+        await Assert.That(json).Contains("\"added_at\"");
+        await Assert.That(json).Contains("\"revision\"");
     }
 
     [Test]

@@ -46,9 +46,15 @@ public sealed class AccountStore(string directory) {
 
     public string HostId() {
         using var _ = Lock();
-        if (File.Exists(HostPath)
-         && JsonSerializer.Deserialize(File.ReadAllText(HostPath), AccountRegistryJsonContext.Default.HostIdentity) is { } id)
-            return id.HostId;
+        if (File.Exists(HostPath)) {
+            try {
+                if (JsonSerializer.Deserialize(File.ReadAllText(HostPath), AccountRegistryJsonContext.Default.HostIdentity) is { HostId: { Length: > 0 } existing })
+                    return existing;
+            } catch (JsonException ex) {
+                throw new InvalidDataException($"{HostPath} is not a valid host identity.", ex);
+            }
+            throw new InvalidDataException($"{HostPath} has no host_id.");
+        }
 
         var created = new HostIdentity(Guid.NewGuid().ToString("N"));
         EnsureDirectory();
@@ -63,6 +69,9 @@ public sealed class AccountStore(string directory) {
 
     void EnsureDirectory() {
         if (OperatingSystem.IsWindows()) System.IO.Directory.CreateDirectory(Directory);
-        else System.IO.Directory.CreateDirectory(Directory, OwnerOnlyDir);
+        else {
+            System.IO.Directory.CreateDirectory(Directory, OwnerOnlyDir);
+            File.SetUnixFileMode(Directory, OwnerOnlyDir);
+        }
     }
 }

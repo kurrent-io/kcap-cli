@@ -19,8 +19,9 @@ namespace Capacitor.Cli.Core;
 /// session 0 while the CLI runs in the login session. The lock therefore uses <c>Global\</c>
 /// explicitly, created with a DACL granting access to the CURRENT USER only, so another local
 /// user cannot squat or hold the name (an existing mutex we cannot open surfaces as an
-/// exception → callers fail closed). On non-Windows, .NET named mutexes are already
-/// machine-wide (per-user shared-memory files), so the plain name suffices. The name hashes
+/// exception → callers fail closed). On non-Windows, an unprefixed .NET named mutex is scoped to
+/// the login session, so the mutex is created current-user-only and not session-scoped: a shell
+/// in another terminal, the desktop app and a launchd/systemd daemon then exclude one another. The name hashes
 /// the canonical config path, which itself contains the user's home — distinct users get
 /// distinct names even before the DACL.</para>
 ///
@@ -47,7 +48,8 @@ public static class ConfigFileLock {
     }
 
     static Mutex CreateMutex(string name) {
-        if (!OperatingSystem.IsWindows()) return new Mutex(false, name);
+        if (!OperatingSystem.IsWindows())
+            return new Mutex(false, name, new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false }, out _);
 
         // Global\ = cross-session (service daemon in session 0 vs. the login-session CLI);
         // the current-user-only DACL keeps other local users from squatting the name.

@@ -6,7 +6,7 @@ public static class AccountDirectory {
         try {
             if (new DirectoryInfo(full).ResolveLinkTarget(returnFinalTarget: true) is { } target)
                 return Path.TrimEndingDirectorySeparator(target.FullName);
-        } catch (IOException) { }
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         return full;
     }
 
