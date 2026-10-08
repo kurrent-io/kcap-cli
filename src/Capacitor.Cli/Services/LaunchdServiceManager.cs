@@ -72,7 +72,10 @@ sealed partial class LaunchdServiceManager(
         // masquerade as a real classification; report Unknown so nothing destructive follows.
         var probe = timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(code, stdout, stderr);
         var state = probe == LabelProbe.Loaded ? LaunchdUnit.StatusFromPrint(code, stdout) : ServiceState.NotInstalled;
-        return new ServiceQuery(probe, unitPresent, state, bin, probe == LabelProbe.Loaded ? LaunchdUnit.PidFromPrint(stdout) : null);
+        var loaded = probe == LabelProbe.Loaded;
+        return new ServiceQuery(probe, unitPresent, state, bin,
+            loaded ? LaunchdUnit.PidFromPrint(stdout) : null,
+            loaded ? LaunchdUnit.LoadedSpawnType(stdout) : null);
     }
 
     /// <summary>Total plist-evidence read: <c>File.ReadAllText</c> + <see cref="LaunchdUnit.BinaryFromPlist"/>
