@@ -1,5 +1,7 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Harness.MistralVibe;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.MistralVibe;
@@ -7,7 +9,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.MistralVibe;
 public class MistralVibeImportSourceTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
-    MistralVibeImportSource Source() => new(Tmp.PathTo("logs", "session"), TimeProvider.System);
+    MistralVibeImportSource Source() => new(new MistralVibePaths(new UserHome(Tmp.PathTo("home")), Tmp.Path), TimeProvider.System);
 
     static DiscoveryFilters NoFilters => new(FilterCwd: null, FilterSession: null, Since: null, MinLines: 1);
 

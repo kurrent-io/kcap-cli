@@ -1587,7 +1587,7 @@ sealed class SetupCommand(
                     Path.Combine(opencode.DataDir, "opencode.db"),
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
-            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths.SessionLogsDir, time)
+            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time)
         ];
 
         if (vendors is null) return all;

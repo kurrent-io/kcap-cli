@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.PrDetection;
@@ -93,7 +94,8 @@ sealed class MistralVibeHookCommand(
         if (!Directory.Exists(transcriptPath)) return transcriptPath;
 
         var live = MistralVibeLiveTranscript.PathFor(config, sessionId);
-        MistralVibeLiveTranscript.Follow(transcriptPath, live);
+        MistralVibeLiveTranscript.Follow(transcriptPath, live,
+            MistralVibeConfigToml.ConfiguredModel(harnesses.Of<MistralVibeHarness>().Paths.ConfigToml));
         return live;
     }
 

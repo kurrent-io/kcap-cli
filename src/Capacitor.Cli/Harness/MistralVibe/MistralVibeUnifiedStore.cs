@@ -34,16 +34,36 @@ internal static class MistralVibeUnifiedStore {
      || Directory.Exists(Path.Combine(dir, "journal"));
 
     /// <summary>The finished transcript entries of one unified session, in history order.</summary>
-    public static IReadOnlyList<string> ReadLines(string sessionDir) =>
-        [.. Fold(sessionDir).Where(e => e is { IsTranscript: true, Completed: true }).Select(e => e.Raw)];
+    public static IReadOnlyList<string> ReadLines(string sessionDir) => Read(sessionDir).Lines;
 
-    readonly record struct HistoryEntry(string? Id, string Raw, bool IsTranscript, bool Completed);
+    public static MistralVibeSession Read(string sessionDir) {
+        var fold = Fold(sessionDir);
+        return new(
+            [.. fold.Entries.Where(e => e is { IsTranscript: true, Completed: true }).Select(e => e.Raw)],
+            fold.Usage,
+            [.. fold.Entries.Select(e => e.Subagent).OfType<MistralVibeSubagent>().DistinctBy(s => s.ChildSessionId)]);
+    }
+
+    readonly record struct HistoryEntry(string? Id, string Raw, bool IsTranscript, bool Completed, MistralVibeSubagent? Subagent);
+
+    /// <summary>The history being folded, and the running token total from the session envelope.</summary>
+    sealed class FoldState {
+        public List<HistoryEntry>     Entries { get; set; } = [];
+        public MistralVibeTokenUsage? Usage   { get; set; }
+
+        public void TakeEnvelope(JsonElement? state) {
+            if (MistralVibeTokenUsage.From(state?.Obj("session")?.Obj("tokenUsage")) is { } usage) Usage = usage;
+        }
+    }
 
     static HistoryEntry Capture(JsonElement entry) => new(
         entry.Str("id"),
         OneLine(entry),
         entry.Str("type") is { } type && TranscriptEntryTypes.Contains(type),
-        entry.Str("generationStatus") is null or "completed");
+        entry.Str("generationStatus") is null or "completed",
+        entry.Str("type") == "effect" && entry.Obj("detail") is { } detail && detail.Str("childSessionId") is { Length: > 0 } child
+            ? new MistralVibeSubagent(child, detail.Obj("input")?.Str("agent") ?? detail.Str("agentName"))
+            : null);
 
     /// <summary>Each entry becomes one JSONL line, so whitespace from a document written indented
     /// must not survive into it.</summary>
@@ -56,15 +76,15 @@ internal static class MistralVibeUnifiedStore {
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
-    static List<HistoryEntry> Fold(string sessionDir) {
-        var (entries, segments) = Snapshot(sessionDir);
-        foreach (var (path, firstSequence) in segments) Replay(path, firstSequence, entries);
-        return entries;
+    static FoldState Fold(string sessionDir) {
+        var (state, segments) = Snapshot(sessionDir);
+        foreach (var (path, firstSequence) in segments) Replay(path, firstSequence, state);
+        return state;
     }
 
     /// <summary>The published generation's history and the journal segment that continues it. A
     /// session with no readable generation yet replays every segment from an empty history.</summary>
-    static (List<HistoryEntry> Entries, IReadOnlyList<(string Path, long FirstSequence)> Segments) Snapshot(string sessionDir) {
+    static (FoldState State, IReadOnlyList<(string Path, long FirstSequence)> Segments) Snapshot(string sessionDir) {
         if (ReadJson(Path.Combine(sessionDir, "CURRENT")) is { } current) {
             using (current)
                 if (current.RootElement.Str("generation") is { Length: > 0 } generation && generation.All(char.IsAsciiDigit)
@@ -76,15 +96,22 @@ internal static class MistralVibeUnifiedStore {
         var segments   = Directory.Exists(journalDir)
             ? Directory.GetFiles(journalDir, "*.jsonl").OrderBy(JournalSeq).Select(f => (f, 0L)).ToList()
             : [];
-        return ([], segments);
+        return (new FoldState(), segments);
     }
 
-    static (List<HistoryEntry>, IReadOnlyList<(string, long)>)? Generation(string sessionDir, string generationDir) {
+    static (FoldState, IReadOnlyList<(string, long)>)? Generation(string sessionDir, string generationDir) {
         using var manifest = ReadJson(Path.Combine(generationDir, "manifest.json"));
         if (manifest?.RootElement.Obj("projection_state") is not { } projection) return null;
         if (FileName(projection.Str("path")) is not { } projectionFile) return null;
 
-        var entries = new List<HistoryEntry>();
+        var state   = new FoldState();
+        var entries = state.Entries;
+
+        // The envelope rides the projection document whether its history is inline or pooled.
+        using var document = ReadJson(Path.Combine(generationDir, projectionFile));
+        var snapshot = document?.RootElement.Obj("snapshot");
+        state.TakeEnvelope(snapshot);
+
         if (projection.Arr("chunks") is { } chunks) {
             foreach (var digest in chunks.EnumerateArray()) {
                 if (digest.ValueKind != JsonValueKind.String || FileName(digest.GetString()) is not { } name) return null;
@@ -92,10 +119,8 @@ internal static class MistralVibeUnifiedStore {
                 if (chunk?.RootElement is not { ValueKind: JsonValueKind.Array } items) return null;
                 entries.AddRange(items.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
             }
-        } else {
-            using var state = ReadJson(Path.Combine(generationDir, projectionFile));
-            if (state?.RootElement.Obj("snapshot")?.Obj("history")?.Arr("entries") is { } inline)
-                entries.AddRange(inline.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
+        } else if (snapshot?.Obj("history")?.Arr("entries") is { } inline) {
+            entries.AddRange(inline.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
         }
 
         var segment = manifest.RootElement.Obj("recovery_journal_segment");
@@ -106,12 +131,12 @@ internal static class MistralVibeUnifiedStore {
             segments.Add((Path.Combine(sessionDir, "journal", journalFile), first));
         }
 
-        return (entries, segments);
+        return (state, segments);
     }
 
     /// <summary>Applies one segment's <c>projection_delta</c> ops. A torn final line (Vibe still
     /// appending) or an op naming an absent entry is skipped rather than failing the read.</summary>
-    static void Replay(string segmentPath, long firstSequence, List<HistoryEntry> entries) {
+    static void Replay(string segmentPath, long firstSequence, FoldState state) {
         IEnumerable<string> lines;
         try { lines = File.ReadLinesShared(segmentPath).ToList(); } catch (IOException) { return; } catch (UnauthorizedAccessException) { return; }
 
@@ -126,12 +151,13 @@ internal static class MistralVibeUnifiedStore {
                 if (root.TryGetProperty("sequence", out var s) && s.TryGetInt64(out var sequence) && sequence < firstSequence) continue;
                 if (root.Obj("payload")?.Arr("delta") is not { } delta) continue;
 
-                foreach (var op in delta.EnumerateArray()) Apply(op, entries);
+                foreach (var op in delta.EnumerateArray()) Apply(op, state);
             }
         }
     }
 
-    static void Apply(JsonElement op, List<HistoryEntry> entries) {
+    static void Apply(JsonElement op, FoldState state) {
+        var entries = state.Entries;
         switch (op.Str("op")) {
             case "append_entry" when op.Obj("entry") is { } entry:
                 entries.Add(Capture(entry));
@@ -146,6 +172,9 @@ internal static class MistralVibeUnifiedStore {
             case "set_history_entries" when op.Arr("entries") is { } all:
                 entries.Clear();
                 entries.AddRange(all.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
+                break;
+            case "set_envelope":
+                state.TakeEnvelope(op.Obj("state"));
                 break;
         }
     }

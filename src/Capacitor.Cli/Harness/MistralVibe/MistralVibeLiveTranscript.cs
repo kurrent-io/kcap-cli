@@ -13,8 +13,8 @@ namespace Capacitor.Cli.Harness.MistralVibe;
 /// </summary>
 /// <remarks>
 /// Appends only, keyed on entry id, because the watcher resumes from a line offset: rewriting a
-/// line it has already read would never reach the server. One writer at a time — a second hook that
-/// finds the file locked skips its sync, and the next hook appends what it would have.
+/// line it has already read would never reach the server. One writer at a time — a sync that finds
+/// the file locked appends nothing, and the next one appends what it would have.
 /// </remarks>
 internal static class MistralVibeLiveTranscript {
     public static string PathFor(ConfigRoot config, string sessionId) =>
@@ -24,24 +24,40 @@ internal static class MistralVibeLiveTranscript {
 
     static readonly ConcurrentDictionary<string, (long Size, long Ticks)> LastSynced = new(StringComparer.Ordinal);
 
-    /// <summary>Syncs the copy from <paramref name="sessionDir"/> and remembers that store for
-    /// <see cref="Refresh"/>.</summary>
-    public static void Follow(string sessionDir, string transcriptPath) {
-        Sync(sessionDir, transcriptPath);
-        try { File.WriteAllText(SourceFileFor(transcriptPath), sessionDir); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    /// <summary>Records which store, and which configured model, the copy follows, then syncs it.</summary>
+    public static void Follow(string sessionDir, string transcriptPath, string? model) {
+        Directory.CreateDirectory(Path.GetDirectoryName(transcriptPath)!);
+        try { File.WriteAllLines(SourceFileFor(transcriptPath), [sessionDir, model ?? ""]); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+
+        Sync(sessionDir, transcriptPath, model);
     }
 
-    /// <summary>Brings the copy up to date from the store its hook recorded, when that store has
-    /// changed since the last sync.</summary>
-    public static void Refresh(string transcriptPath) {
-        string sessionDir;
-        try { sessionDir = File.ReadAllText(SourceFileFor(transcriptPath)).Trim(); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return; }
-        if (!Directory.Exists(sessionDir)) return;
+    /// <summary>The store directory and configured model a copy follows, or null for a copy no
+    /// hook has recorded.</summary>
+    public static (string SessionDir, string? Model)? SourceOf(string transcriptPath) {
+        string[] lines;
+        try { lines = File.ReadAllLines(SourceFileFor(transcriptPath)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
 
-        var signature = StoreSignature(sessionDir);
-        if (LastSynced.TryGetValue(transcriptPath, out var seen) && seen == signature) return;
-        if (Sync(sessionDir, transcriptPath)) LastSynced[transcriptPath] = signature;
+        return lines is [{ Length: > 0 } dir, ..]
+            ? (dir, lines.Length > 1 && lines[1].Length > 0 ? lines[1] : null)
+            : null;
+    }
+
+    /// <summary>Brings the copy up to date when its store has changed since the last sync, and
+    /// returns the subagents that store has spawned; empty when nothing changed.</summary>
+    public static IReadOnlyList<MistralVibeSubagent> Refresh(string transcriptPath) {
+        if (SourceOf(transcriptPath) is not { } source || !Directory.Exists(source.SessionDir)) return [];
+
+        var signature = StoreSignature(source.SessionDir);
+        if (LastSynced.TryGetValue(transcriptPath, out var seen) && seen == signature) return [];
+
+        var session = Sync(source.SessionDir, transcriptPath, source.Model);
+        if (session is null) return [];
+
+        LastSynced[transcriptPath] = signature;
+        return session.Subagents;
     }
 
     /// <summary>A publish rewrites <c>CURRENT</c> and every change between publishes appends to the
@@ -59,20 +75,24 @@ internal static class MistralVibeLiveTranscript {
         return (size, ticks);
     }
 
-    /// <summary>Deletes the copy once its session has ended. A resumed session rebuilds it in the
-    /// same order, so the server's line positions still line up. Only kcap's own copy is touched:
-    /// a legacy session tails Vibe's <c>messages.jsonl</c> itself.</summary>
+    /// <summary>Deletes the copy, and its subagents' copies, once the session has ended. A resumed
+    /// session rebuilds them in the same order, so the server's line positions still line up. Only
+    /// kcap's own copies are touched: a legacy session tails Vibe's <c>messages.jsonl</c> itself.</summary>
     public static void Discard(ConfigRoot config, string sessionId, string transcriptPath) {
-        if (!string.Equals(Path.GetFullPath(transcriptPath), Path.GetFullPath(PathFor(config, sessionId)), StringComparison.Ordinal)) return;
+        var own = PathFor(config, sessionId);
+        if (!string.Equals(Path.GetFullPath(transcriptPath), Path.GetFullPath(own), StringComparison.Ordinal)) return;
 
-        foreach (var file in new[] { transcriptPath, SourceFileFor(transcriptPath) })
+        var dir      = Path.GetDirectoryName(own)!;
+        var children = Directory.Exists(dir) ? Directory.EnumerateFiles(dir, $"{sessionId}-*").ToList() : [];
+        foreach (var file in children.Append(own).Append(SourceFileFor(own)))
             try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    /// <summary>False when another writer holds the copy, so nothing was appended.</summary>
-    public static bool Sync(string sessionDir, string transcriptPath) {
-        var finished = MistralVibeUnifiedStore.ReadLines(sessionDir);
-        if (finished.Count == 0 && File.Exists(transcriptPath)) return true;
+    /// <summary>Appends the entries finished since the last sync, stamping the tokens counted since
+    /// the last stamp. Null when another writer holds the copy, so nothing was appended.</summary>
+    public static MistralVibeSession? Sync(string sessionDir, string transcriptPath, string? model) {
+        var session = MistralVibeUnifiedStore.Read(sessionDir);
+        if (session.Lines.Count == 0 && File.Exists(transcriptPath)) return session;
 
         Directory.CreateDirectory(Path.GetDirectoryName(transcriptPath)!);
 
@@ -80,23 +100,25 @@ internal static class MistralVibeLiveTranscript {
         try {
             stream = new FileStream(transcriptPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
         } catch (IOException) {
-            return false;
+            return null;
         }
 
         using (stream) {
-            var written = new HashSet<string>(StringComparer.Ordinal);
+            var existing = new List<string>();
             using (var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true)) {
-                while (reader.ReadLine() is { } line)
-                    if (EntryKey(line) is { } key) written.Add(key);
+                while (reader.ReadLine() is { } line) existing.Add(line);
             }
+
+            var written = existing.Select(EntryKey).OfType<string>().ToHashSet(StringComparer.Ordinal);
+            var fresh   = session.Lines.Where(line => EntryKey(line) is { } key && written.Add(key)).ToList();
+            var stamped = MistralVibeUsageStamp.Apply(fresh, MistralVibeUsageStamp.LastStamped(existing), session.Usage, model);
 
             stream.Seek(0, SeekOrigin.End);
             using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { NewLine = "\n" };
-            foreach (var line in finished)
-                if (EntryKey(line) is { } key && written.Add(key)) writer.WriteLine(line);
+            foreach (var line in stamped) writer.WriteLine(line);
         }
 
-        return true;
+        return session;
     }
 
     /// <summary>The entry's id, or the line itself for an entry that carries none.</summary>

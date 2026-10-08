@@ -30,6 +30,22 @@ public static class MistralVibeConfigToml {
     public static TomlConfigFile.Outcome UnregisterKcapMcpServers(string configPath) =>
         TomlConfigFile.Edit(configPath, RemoveMutate);
 
+    /// <summary>The model Vibe is configured to run: <c>active_model</c> resolved through the
+    /// <c>[[models]]</c> table that defines its alias. Null when unset or not defined there, since
+    /// Vibe then falls back to a default kcap cannot see, and a guessed model would misprice.</summary>
+    public static string? ConfiguredModel(string configPath) {
+        if (TomlConfigFile.Read(configPath) is not { } root) return null;
+        if (!root.TryGetValue("active_model", out var a) || a is not string { Length: > 0 } active) return null;
+        if (!root.TryGetValue("models", out var m) || m is not TomlTableArray models) return null;
+
+        foreach (var model in models)
+            if (model.TryGetValue("alias", out var alias) && alias as string == active
+             || model.TryGetValue("name", out var named) && named as string == active)
+                return model.TryGetValue("name", out var name) ? name as string : null;
+
+        return null;
+    }
+
     /// <summary>Whether kcap currently owns any <c>[[mcp_servers]]</c> entry — the "is MCP already
     /// installed?" probe.</summary>
     public static bool OwnsAnything(string configPath) =>

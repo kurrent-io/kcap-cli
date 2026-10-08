@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 
 namespace Capacitor.Cli.Harness.MistralVibe;
 
@@ -23,12 +24,14 @@ namespace Capacitor.Cli.Harness.MistralVibe;
 /// line shape are reconstructed from documentation; confirm against a real <c>vibe</c> install.
 /// Subagents (Vibe's <c>parent_session_id</c> child sessions) are not yet imported.</para>
 /// </summary>
-internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvider time) : IImportSource {
+internal sealed class MistralVibeImportSource(MistralVibePaths paths, TimeProvider time) : IImportSource {
+    readonly string _sessionLogsDir = paths.SessionLogsDir;
+
     const string FormatKey = "Format";
     const string DirKey    = "Dir";
 
     public HarnessId Vendor => HarnessId.MistralVibe;
-    public bool IsAvailable => Directory.Exists(sessionLogsDir);
+    public bool IsAvailable => Directory.Exists(_sessionLogsDir);
     public bool SupportsTitleGeneration => false; // the server computes a fallback title at session-end
     public bool AttachesChildContentOnReplay => false; // no subagent import yet
 
@@ -50,7 +53,7 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
         var result = new List<DiscoveredSession>();
         var seen   = new HashSet<string>(StringComparer.Ordinal);
 
-        if (!Directory.Exists(sessionLogsDir)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
+        if (!Directory.Exists(_sessionLogsDir)) return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
 
         foreach (var (dir, format) in EnumerateSessionDirs(ct)) {
             ct.ThrowIfCancellationRequested();
@@ -78,14 +81,14 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
     }
 
     IEnumerable<(string Dir, string Format)> EnumerateSessionDirs(CancellationToken ct) {
-        var unifiedRoot = Path.Combine(sessionLogsDir, "unified");
+        var unifiedRoot = Path.Combine(_sessionLogsDir, "unified");
         if (Directory.Exists(unifiedRoot))
             foreach (var dir in Directory.EnumerateDirectories(unifiedRoot)) {
                 ct.ThrowIfCancellationRequested();
                 yield return (dir, "unified");
             }
 
-        foreach (var dir in Directory.EnumerateDirectories(sessionLogsDir, "session_*")) {
+        foreach (var dir in Directory.EnumerateDirectories(_sessionLogsDir, "session_*")) {
             ct.ThrowIfCancellationRequested();
             if (File.Exists(Path.Combine(dir, "messages.jsonl"))) yield return (dir, "legacy");
         }
@@ -170,12 +173,16 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
 
     // ── format resolution ────────────────────────────────────────────────────────────────────────
 
-    static IReadOnlyList<string> MaterializeLines(IReadOnlyDictionary<string, object?> sourceMeta) {
+    /// <summary>A unified session's whole token total rides its last assistant message, the same
+    /// stamp a live recording spreads across turns.</summary>
+    IReadOnlyList<string> MaterializeLines(IReadOnlyDictionary<string, object?> sourceMeta) {
         var dir    = (string)sourceMeta[DirKey]!;
         var format = (string)sourceMeta[FormatKey]!;
-        return format == "unified"
-            ? MistralVibeUnifiedStore.ReadLines(dir)
-            : File.ReadLinesShared(Path.Combine(dir, "messages.jsonl")).ToList();
+        if (format != "unified") return File.ReadLinesShared(Path.Combine(dir, "messages.jsonl")).ToList();
+
+        var session = MistralVibeUnifiedStore.Read(dir);
+        return MistralVibeUsageStamp.Apply(session.Lines, MistralVibeTokenUsage.Zero, session.Usage,
+            MistralVibeConfigToml.ConfiguredModel(paths.ConfigToml));
     }
 
     static (string Path, bool IsTemp) ResolveTranscriptFile(IReadOnlyDictionary<string, object?> sourceMeta, IReadOnlyList<string> lines) {

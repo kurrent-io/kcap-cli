@@ -157,14 +157,14 @@ public class MistralVibeUnifiedStoreTests {
             Delta(2, Append(Effect("effect-1", "in_progress", """{"status":"running","outputText":""}"""))),
         });
 
-        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), live);
-        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), live);
+        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), live, model: null);
+        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), live, model: null);
         await Assert.That(File.ReadAllLines(live).Length).IsEqualTo(1);
 
         File.AppendAllLines(Tmp.PathTo("s/journal/0000000000000002.jsonl"), [
             Delta(3, Replace("effect-1", Effect("effect-1", "completed", """{"status":"completed","outputText":"done"}"""))),
         ]);
-        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), live);
+        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), live, model: null);
 
         var lines = File.ReadAllLines(live);
         await Assert.That(lines.Length).IsEqualTo(2);
@@ -193,7 +193,7 @@ public class MistralVibeUnifiedStoreTests {
         PublishInline("s", Message("m1", "user", "go"));
         Tmp.CreateFile("s/journal/0000000000000002.jsonl", new[] { Delta(2, Append(Message("m2", "assistant", "partial", "in_progress"))) });
 
-        MistralVibeLiveTranscript.Follow(Tmp.PathTo("s"), live);
+        MistralVibeLiveTranscript.Follow(Tmp.PathTo("s"), live, model: null);
         await Assert.That(File.ReadAllLines(live).Length).IsEqualTo(1);
 
         File.AppendAllLines(Tmp.PathTo("s/journal/0000000000000002.jsonl"), [Delta(3, Replace("m2", Message("m2", "assistant", "done")))]);
@@ -202,5 +202,21 @@ public class MistralVibeUnifiedStoreTests {
         var lines = File.ReadAllLines(live);
         await Assert.That(lines.Length).IsEqualTo(2);
         await Assert.That(lines[1]).Contains("done");
+    }
+
+    [Test]
+    public async Task Read_takes_the_running_token_total_and_the_spawned_subagents() {
+        Publish("s", """{"path":"projection-state.json","sha256":"x"}""");
+        Tmp.CreateFile($"s/generations/{Generation}/projection-state.json",
+            "{\"snapshot\":{\"session\":{\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":2,\"cachedInputTokens\":0}},\"history\":{\"entries\":[" + Message("m1", "user", "go") + "]}}}");
+        Tmp.CreateFile("s/journal/0000000000000002.jsonl", new[] {
+            Delta(2, Append("""{"type":"effect","id":"effect-s","generationStatus":"completed","detail":{"kind":"subagent","toolName":"subagent.spawn","childSessionId":"child-abc123","input":{"task":"look","agent":"explore"}},"state":{"status":"completed","outputText":""}}"""),
+                     """{"op":"set_envelope","state":{"session":{"tokenUsage":{"inputTokens":90,"outputTokens":7,"cachedInputTokens":40}}}}"""),
+        });
+
+        var session = MistralVibeUnifiedStore.Read(Tmp.PathTo("s"));
+
+        await Assert.That(session.Usage).IsEqualTo(new MistralVibeTokenUsage(90, 7, 40));
+        await Assert.That(session.Subagents.Single()).IsEqualTo(new MistralVibeSubagent("child-abc123", "explore"));
     }
 }

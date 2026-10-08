@@ -50,4 +50,26 @@ public class MistralVibeConfigTomlTests {
         await Assert.That(MistralVibeConfigToml.UnregisterKcapMcpServers(path)).IsEqualTo(TomlConfigFile.Outcome.Unchanged);
         await Assert.That(Servers(path).Count).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task The_configured_model_resolves_its_alias_through_the_models_table() {
+        Tmp.CreateFile("model.toml", """
+            active_model = "codestral"
+
+            [[models]]
+            name = "codestral-latest"
+            provider = "mistral"
+            alias = "codestral"
+            """);
+        Tmp.CreateFile("default.toml", """
+            [[models]]
+            name = "codestral-latest"
+            alias = "codestral"
+            """);
+        Tmp.CreateFile("undefined.toml", """active_model = "mistral-medium-latest" """);
+
+        await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("model.toml"))).IsEqualTo("codestral-latest");
+        await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("default.toml"))).IsNull();
+        await Assert.That(MistralVibeConfigToml.ConfiguredModel(Tmp.PathTo("undefined.toml"))).IsNull();
+    }
 }

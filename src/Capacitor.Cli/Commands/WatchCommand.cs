@@ -579,8 +579,10 @@ partial class WatchCommand(
         // exists, so it can never observe a half-applied reconnect rewind (see cursorRewindGate's
         // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
         // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
+        var vibeSubagents = new List<MistralVibeSubagent>();
+
         Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
-            if (vendor == "mistral-vibe" && agentId is null) MistralVibeLiveTranscript.Refresh(transcriptPath);
+            if (vendor == "mistral-vibe") vibeSubagents.AddRange(MistralVibeLiveTranscript.Refresh(transcriptPath));
 
             return GatedDrainNewLinesAsync(
                 cursorRewindGate, hubConnection, sessionId, transcriptPath, agentId, state, vendor, drainCt,
@@ -868,6 +870,8 @@ partial class WatchCommand(
                         codexRolloutMtimes, spawnedChildWatcherKeys, cts.Token);
                 } else if (agentId is null && vendor == "antigravity") {
                     await ScanAntigravitySubagentLinks(sessionId, drained, state.PostedSubagentLinks, cts.Token);
+                } else if (agentId is null && vendor == "mistral-vibe") {
+                    await ScanMistralVibeSubagents(sessionId, transcriptPath, vibeSubagents, seenSubagents, spawnedChildWatcherKeys, cts.Token);
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -1139,6 +1143,52 @@ partial class WatchCommand(
             spawnedChildKeys.Add($"{sessionId}-{agentId}");
 
             Log(time, $"Gemini subagent {agentId} ({agentType}) registered + child watcher spawned");
+        }
+    }
+
+    /// <summary>
+    /// Vibe fires no hooks for a subagent; the child runs in its own <c>child-&lt;hex&gt;</c> store
+    /// beside the parent's, named only by the parent's <c>subagent.spawn</c> effect. The parent
+    /// watcher registers each one (<c>subagent-start</c>, fail-closed), keeps a copy of its store, and
+    /// spawns a child watcher to stream that copy. A child whose store is not there yet, or whose
+    /// registration failed, is retried on the next tick.
+    /// </summary>
+    async Task ScanMistralVibeSubagents(
+            string                    sessionId,
+            string                    transcriptPath,
+            List<MistralVibeSubagent> found,
+            HashSet<string>           seen,
+            ICollection<string>       spawnedChildKeys,
+            CancellationToken         ct
+        ) {
+        if (found.Count == 0 || MistralVibeLiveTranscript.SourceOf(transcriptPath) is not { } source) return;
+        if (Path.GetDirectoryName(source.SessionDir) is not { } storeRoot) return;
+
+        var pending = found.ToList();
+        found.Clear();
+
+        foreach (var subagent in pending) {
+            if (ct.IsCancellationRequested) return;
+            if (subagent.AgentId is not { } agentId || seen.Contains(agentId)) continue;
+
+            var childDir = Path.Combine(storeRoot, subagent.ChildSessionId);
+            if (!Directory.Exists(childDir)) { found.Add(subagent); continue; }
+
+            var key       = $"{sessionId}-{agentId}";
+            var childCopy = MistralVibeLiveTranscript.PathFor(config, key);
+            MistralVibeLiveTranscript.Follow(childDir, childCopy, source.Model);
+
+            if (!await PostSubagentStartAsync(sessionId, agentId, subagent.AgentType ?? "subagent", childCopy, ct)) {
+                found.Add(subagent);
+                continue;
+            }
+
+            seen.Add(agentId);
+            await watchers.EnsureWatcherRunning(key: key, transcriptPath: childCopy,
+                agentId: agentId, sessionIdOverride: sessionId, vendor: "mistral-vibe");
+            spawnedChildKeys.Add(key);
+
+            Log(time, $"Mistral Vibe subagent {agentId} registered + child watcher spawned");
         }
     }
 

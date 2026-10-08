@@ -1,7 +1,9 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Copilot;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Claude;
@@ -107,7 +109,7 @@ public class ReplayChildContentCapabilityTests {
             "pi"          => new PiImportSource(Config.Root, PiHarness.FromEnvironment(Home).Paths.SessionsDir, router: new GitProviderRouter(), time: TimeProvider.System),
             "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger"), TimeProvider.System),
             "antigravity" => new AntigravityImportSource(new(new(scratch), ""), TimeProvider.System),
-            "mistralvibe" => new MistralVibeImportSource(scratch, TimeProvider.System),
+            "mistralvibe" => new MistralVibeImportSource(new MistralVibePaths(new UserHome(scratch), null), TimeProvider.System),
             _             => throw new ArgumentOutOfRangeException(nameof(vendor), vendor, "unclassified import source"),
         };
     }
