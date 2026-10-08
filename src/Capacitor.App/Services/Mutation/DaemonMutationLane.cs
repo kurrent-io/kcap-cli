@@ -250,6 +250,13 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         var version = await executor.VersionAsync(ct).ConfigureAwait(false);
         if (!KcapCliCompatibility.Satisfies(version)) return new MutationOutcome.Refused("cli_below_floor", RecoverySurface.Attention);
 
+        // An older CLI ignores --force and the daemon name and runs its all-daemon idle refresh, so the
+        // capability is proven on the executable that will run the mutation, before anything is spawned.
+        if (request.Verb == MutationVerb.Reload) {
+            var status = await executor.ServiceStatusAsync(ct).ConfigureAwait(false);
+            if (status?.LoadedSpawnType is null) return new MutationOutcome.Refused("reload_unsupported", RecoverySurface.Attention);
+        }
+
         var attemptId = request.Verb == MutationVerb.DetachedStart ? Guid.NewGuid().ToString("N") : null;
 
         // The runner starts the child before consulting ct, and an already-exited child's own wait
@@ -272,6 +279,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             MutationVerb.Replace       => executor.ServiceInstallVerifiedAsync(replace: true, ct, request.RetireServiceId),
             MutationVerb.StartVerified => executor.ServiceStartVerifiedAsync(ct),
             MutationVerb.DetachedStart => executor.DetachedStartAsync(attemptId!, ct),
+            MutationVerb.Reload        => executor.ServiceReloadAsync(ct),
             // Fail closed, never permissive: an unnamed enum value must halt, not silently pick a verb.
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Verb, "unknown MutationVerb"),
         };
@@ -281,9 +289,11 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     Task<MutationOutcome> ClassifyOutcomeAsync(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation,
             string? attemptId, CancellationToken ct) =>
-        request.Verb == MutationVerb.DetachedStart
-            ? ClassifyDetachedStartAsync(request, result, observation, attemptId, ct)
-            : ClassifyServiceVerbAsync(request, result, executor, observation, ct);
+        request.Verb switch {
+            MutationVerb.DetachedStart => ClassifyDetachedStartAsync(request, result, observation, attemptId, ct),
+            MutationVerb.Reload        => ClassifyReloadAsync(request, result, executor, observation, ct),
+            _                          => ClassifyServiceVerbAsync(request, result, executor, observation, ct),
+        };
 
     // Install/Replace/StartVerified: the CLI's own ServiceVerify transaction engine already
     // performed its readiness poll — exit code alone routes every non-success case.
@@ -324,7 +334,8 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     // Positive evidence only: every leg below must independently hold for Succeeded — any
     // gap degrades to AttentionSkew/AttentionRepair/UnconfirmedNoAttach, never a guessed success.
     static async Task<MutationOutcome> ClassifyServiceSuccessAsync(
-            MutationRequest request, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {
+            MutationRequest request, IKcapCli executor, IDaemonObservation observation, CancellationToken ct,
+            bool requirePositiveSpawnType = false) {
         var evidence  = await observation.ObserveAsync(request, ct).ConfigureAwait(false);
         var ownership = await executor.ServiceStatusAsync(ct).ConfigureAwait(false);
 
@@ -344,6 +355,12 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
         if (ownership is null)
             return new MutationOutcome.AttentionSkew("ownership_unknown");
+
+        if (requirePositiveSpawnType) {
+            var spawn = ownership.LoadedSpawnType;
+            if (SpawnTypes.IsBackgroundBand(spawn)) return new MutationOutcome.AttentionSkew("background_band");
+            if (!SpawnTypes.IsPositive(spawn)) return new MutationOutcome.AttentionSkew("spawn_type_unknown");
+        }
 
         if (ownership.JobPid is null || ownership.DaemonPid is null || ownership.JobPid != ownership.DaemonPid)
             return new MutationOutcome.AttentionSkew("ownership_mismatch");
@@ -373,6 +390,31 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (ownership.UnitPresent && state == ServiceState.NotInstalled && ownership.DaemonPid is not null) return "daemon_running_outside_service";
 
         return null;
+    }
+
+    // The refresh returns as soon as bootstrap succeeds, before the successor binds its socket, and the
+    // one-shot observation never retries: the readiness window gives the new daemon time to answer.
+    async Task<MutationOutcome> ClassifyReloadAsync(
+            MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {
+        if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
+        if (result.ExitCode != 0)
+            return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "refresh_outcome="), RecoverySurface.Attention);
+
+        var deadline = _time.GetUtcNow() + DetachedConfirmWindow;
+        while (true) {
+            var evidence = await observation.ObserveAsync(request, ct).ConfigureAwait(false);
+            var leg = EvidenceFailureLeg(evidence, request);
+            if (leg is null) break;
+
+            var remaining = deadline - _time.GetUtcNow();
+            if (remaining <= TimeSpan.Zero)
+                return leg == UnreachableLeg ? new MutationOutcome.UnconfirmedNoAttach() : new MutationOutcome.AttentionSkew(leg);
+
+            var wait = remaining < DetachedPollInterval ? remaining : DetachedPollInterval;
+            await Task.Delay(wait, _time, ct).ConfigureAwait(false);
+        }
+
+        return await ClassifyServiceSuccessAsync(request, executor, observation, ct, requirePositiveSpawnType: true).ConfigureAwait(false);
     }
 
     // DetachedStart has no CLI-side verify engine — the lane itself confirms via a bounded post-spawn observation window.
