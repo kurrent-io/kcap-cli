@@ -55,4 +55,36 @@ public class AccountDiscoveryTests {
 
         await Assert.That(AccountDiscovery.Find(Home, new AccountRegistry(), NoEnv).Count).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task Does_not_match_files_named_claude_json_or_codex_json() {
+        Home.CreateFile(".claude.json", "{}");
+        Home.CreateFile(".codex.json", "");
+        Home.CreateFile(".claude-work/settings.json", "{}");
+
+        var found = AccountDiscovery.Find(Home, new AccountRegistry(), NoEnv);
+
+        await Assert.That(found.Select(c => Path.GetFileName(c.Directory)))
+            .IsEquivalentTo(new[] { ".claude-work" });
+    }
+
+    [Test]
+    public async Task Handles_unreadable_directories_without_throwing() {
+        if (OperatingSystem.IsWindows()) return;
+
+        Home.CreateFile(".claude-a/settings.json", "{}");
+        var swapBase = OperatingSystem.IsLinux() ? ".local/share/claude-swap" : ".claude-swap-backup";
+        var sessionsDir = Home.PathTo($"{swapBase}/sessions");
+        Directory.CreateDirectory(sessionsDir);
+
+        File.SetUnixFileMode(sessionsDir, UnixFileMode.None);
+        try {
+            var found = AccountDiscovery.Find(Home, new AccountRegistry(), NoEnv);
+
+            await Assert.That(found.Select(c => Path.GetFileName(c.Directory)))
+                .IsEquivalentTo(new[] { ".claude-a" });
+        } finally {
+            File.SetUnixFileMode(sessionsDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
 }
