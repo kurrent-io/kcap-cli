@@ -25,9 +25,9 @@ namespace Capacitor.Cli.Core;
 /// the canonical config path, which itself contains the user's home — distinct users get
 /// distinct names even before the DACL.</para>
 ///
-/// <para>Note: kcap versions predating this helper used a bare, differently-prefixed name for
-/// the Codex config lock, so mutual exclusion across a version transition is best-effort —
-/// accepted: the lock guards rare, explicit admin operations.</para>
+/// <para>An older kcap still running beside this one may lock with a session-scoped mutex, which
+/// does not exclude this one; exclusion across mixed versions is best-effort, accepted because the
+/// lock guards rare, explicit admin operations.</para>
 /// </summary>
 public static class ConfigFileLock {
     /// <summary>Acquires the lock for <paramref name="configPath"/>, waiting up to
