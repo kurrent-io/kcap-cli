@@ -20,16 +20,11 @@ namespace Capacitor.Cli.Commands;
 public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdir) {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand   = "kcap hook --codex";
     const string CursorHookCommand  = "kcap hook --cursor";
     const string CopilotHookCommand = "kcap hook --copilot";
     const string KiroHookCommand    = "kcap hook --kiro";
 
-    // PermissionRequest must wait for the dashboard's decision; the daemon-side
-    // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
-    // killing the hook before the user approves or denies.
-    const int PermissionRequestTimeout = 86400;
-    const int DefaultHookTimeout       = 30;
+    const int DefaultHookTimeout = 30;
 
     /// <summary>Whether the bare <c>kcap</c> those commands invoke resolves on the same search path
     /// the vendors were found on — a hook writing a command this cannot find never fires.</summary>
@@ -577,66 +572,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// non-kcap entries are preserved; existing kcap entries are
     /// replaced (so the timeout/command stay current after a CLI upgrade).
     /// </summary>
-    public static bool InstallCodexHooks(string hooksPath) {
-        try {
-            JsonObject root = [];
-
-            if (File.Exists(hooksPath)) {
-                try {
-                    if (JsonNode.Parse(File.ReadAllText(hooksPath)) is JsonObject obj) root = obj;
-                } catch {
-                    // Malformed — start fresh
-                }
-            }
-
-            if (root["hooks"] is not JsonObject hooks) {
-                hooks         = [];
-                root["hooks"] = hooks;
-            }
-
-            foreach (var evt in CodexHooksParser.CodexHookEvents) {
-                var timeout = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
-
-                var kcapEntry = new JsonObject {
-                    ["hooks"] = new JsonArray(
-                        new JsonObject {
-                            ["type"]    = "command",
-                            ["command"] = CodexHookCommand,
-                            ["timeout"] = timeout
-                        }
-                    )
-                };
-
-                if (hooks[evt] is not JsonArray entries) {
-                    hooks[evt] = new JsonArray(kcapEntry);
-
-                    continue;
-                }
-
-                var preserved = new JsonArray();
-
-                foreach (var entry in entries) {
-                    if (entry is null) continue;
-
-                    if (!CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
-                        preserved.Add(entry.DeepClone());
-                    }
-                }
-
-                preserved.Add((JsonNode)kcapEntry);
-                hooks[evt] = preserved;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
-            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-
-            CodexHooksInstaller.WriteMarker(hooksPath);
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
+    public static bool InstallCodexHooks(string hooksPath) =>
+        CodexHooksWriter.Install(hooksPath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
 
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
@@ -645,39 +582,12 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// (caller decides how to surface partial writes); returns false only
     /// when there was genuinely nothing to remove.
     /// </summary>
-    public static bool RemoveCodexHooks(string hooksPath) {
-        if (!File.Exists(hooksPath)) return false;
-
-        if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
-        if (root["hooks"] is not JsonObject hooks) return false;
-
-        var changed = false;
-
-        foreach (var evt in CodexHooksParser.CodexHookEvents) {
-            if (hooks[evt] is not JsonArray entries) continue;
-
-            var preserved = new JsonArray();
-
-            foreach (var entry in entries) {
-                if (entry is null) continue;
-
-                if (CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
-                    changed = true;
-                } else {
-                    preserved.Add(entry.DeepClone());
-                }
-            }
-
-            hooks[evt] = preserved;
-        }
-
-        if (changed) {
-            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-            CodexHooksInstaller.DeleteMarker(hooksPath);
-        }
-
-        return changed;
-    }
+    public static bool RemoveCodexHooks(string hooksPath) =>
+        CodexHooksWriter.Remove(hooksPath) switch {
+            SettingsEdit.Changed => true,
+            SettingsEdit.Failed  => throw new IOException($"Could not write {hooksPath}."),
+            _                    => false,
+        };
 
     async Task<int> InstallCursor(string[] args) {
         var hooksPath = GetArg(args, "--cursor-hooks-path") ?? env.Harnesses.Of<CursorHarness>().Paths.UserHooksJson;
