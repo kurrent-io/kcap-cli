@@ -28,6 +28,11 @@ internal static class Program
             if (e.ExceptionObject is Exception ex) crashLog.Record("unhandled", ex);
         };
 
+        if (OperatingSystem.IsMacOS())
+            ActiveDisplayGate.WaitAsync(CoreVideoDisplayLink.Probe, TimeProvider.System,
+                onWaiting: () => Console.Error.WriteLine("Every display is asleep; the app starts once one wakes."))
+                .GetAwaiter().GetResult();
+
         // Avalonia.Native stops the run loop on an exception from any UI-thread callback and rethrows
         // it from here, bypassing Dispatcher.UnhandledException — so this is the one place that sees
         // every UI-thread fault. The rethrow still ends the process with a crash report.
