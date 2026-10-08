@@ -189,4 +189,13 @@ public class AccountStoreTests {
         await Assert.That(AccountPaths.ClaudeForTranscript(Tmp.PathTo("t.jsonl"), registry, home)).IsNull();
         await Assert.That(AccountPaths.CodexForRollout(Tmp.PathTo("r.jsonl"), registry, home)).IsNull();
     }
+
+    [Test]
+    public async Task The_test_none_store_loads_empty_and_refuses_every_write() {
+        await Assert.That(TestAccounts.None.Load().Accounts.Count).IsEqualTo(0);
+
+        await Assert.That(() => TestAccounts.None.Mutate(r => (r with { Accounts = [Claude("/h/.claude")] }, 0)))
+                    .Throws<IOException>();
+        await Assert.That(TestAccounts.None.HostId).Throws<IOException>();
+    }
 }
