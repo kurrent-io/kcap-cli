@@ -54,6 +54,7 @@ internal sealed partial class LocalPermissionBridge(
 
     readonly PermissionPromptBroker _broker      = broker ?? new();
     readonly PermissionDecisionLog? _decisionLog = decisionLog;
+    readonly PermissionRefusalLedger _refusals   = new();
     int _serverLegsInFlight;
 
     // One gate owns admission and the in-flight count together, so a snapshot taken under it
@@ -671,7 +672,7 @@ internal sealed partial class LocalPermissionBridge(
                         policy = await ClaudeHostedPolicySeam.EvaluateAsync(
                             new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
                                 node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node)),
-                            snapshot, time, policyJudge, judgeState, JudgeBudget, logger, ct);
+                            snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
                     }
@@ -705,6 +706,8 @@ internal sealed partial class LocalPermissionBridge(
                         LogRequestPermissionFailed(logger, ex, sessionId);
                         decision = new PermissionDecision("deny", null, null);
                     }
+
+                    RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, decision.Behavior);
                 } else {
                     var settlementTask = _broker.Register(pending, SubagentIdOf(node));
                     _ = RunServerLegAsync(pending, toolName, toolInput, suggestions, settlementTask, ct);
@@ -725,6 +728,7 @@ internal sealed partial class LocalPermissionBridge(
                     _decisionLog?.Record(new PermissionDecisionRecord(
                         time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
                         pending.ToolName, settlement.Outcome, settlement.Source));
+                    RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, settlement.Decision.Behavior);
                     await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor), time);
                     return;
                 }
@@ -858,6 +862,23 @@ internal sealed partial class LocalPermissionBridge(
 
     static string? ToolUseIdOf(JsonNode node) =>
         node["tool_use_id"] is JsonValue v && v.TryGetValue<string>(out var id) ? id : null;
+
+    /// <summary>Claude receives a human-lane deny as a hook deny, which its transcript does not mark
+    /// as a refusal, so the judge learns of it only from here. Any deny counts: one no human gave
+    /// can only make the judge stricter.</summary>
+    void RecordRefusal(string vendor, AttributedAgent? attributed, string? sessionId, JsonNode node,
+            string? toolName, JsonElement? toolInput, string behavior) {
+        if (vendor is not "claude" || behavior != PermissionSettlements.Deny || sessionId is null
+         || attributed is not { PolicySnapshot.JudgeEnabled: true } governed)
+            return;
+
+        try {
+            ClaudeHostedPolicySeam.RecordRefusal(_refusals, new ClaudeHostedPermissionCall(sessionId, governed.AgentId,
+                toolName, toolInput, node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node)));
+        } catch (Exception ex) {
+            logger.LogDebug(ex, "Recording a hosted refusal for session {SessionId} failed", sessionId);
+        }
+    }
 
     static string? TranscriptPathOf(JsonNode node) =>
         node["transcript_path"] is JsonValue v && v.TryGetValue<string>(out var path) && path.Length > 0 ? path : null;

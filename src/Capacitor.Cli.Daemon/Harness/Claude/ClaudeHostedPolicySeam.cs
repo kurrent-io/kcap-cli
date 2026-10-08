@@ -3,6 +3,7 @@ namespace Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
@@ -21,7 +22,7 @@ internal static class ClaudeHostedPolicySeam {
     internal static async Task<ClaudeHostedPolicyResult?> EvaluateAsync(
             ClaudeHostedPermissionCall call, PolicySnapshot snapshot, TimeProvider time,
             PolicyJudgeGateway? judge = null, ConfigRoot? judgeState = null, TimeSpan? judgeBudget = null,
-            ILogger? logger = null, CancellationToken ct = default) {
+            ILogger? logger = null, PermissionRefusalLedger? refusals = null, CancellationToken ct = default) {
         var action     = ClaudeActionNormalizer.Normalize(call.ToolName, call.ToolInput, call.Cwd);
         var evaluation = PolicyEngine.Evaluate(snapshot, action, EvaluationMode.Full);
 
@@ -34,7 +35,7 @@ internal static class ClaudeHostedPolicySeam {
 
         if (judge is null || !snapshot.JudgeEnabled) return null;
 
-        var judged = await ConsultAsync(call, snapshot, action, time, judge, judgeState, judgeBudget ?? JudgeBudget, logger, ct);
+        var judged = await ConsultAsync(call, snapshot, action, time, judge, judgeState, judgeBudget ?? JudgeBudget, logger, refusals, ct);
         return judged.Outcome switch {
             PolicyOutcome.Allow => Result(PolicyOutcome.Allow, "allow", "allow", judged),
             PolicyOutcome.Deny  => Result(PolicyOutcome.Deny,  "deny",  "deny",  judged),
@@ -56,21 +57,53 @@ internal static class ClaudeHostedPolicySeam {
     /// copy, and the server reads the inline one only when it holds no other.</summary>
     static async Task<PolicyJudgeResult> ConsultAsync(
             ClaudeHostedPermissionCall call, PolicySnapshot snapshot, CanonicalAction action, TimeProvider time,
-            PolicyJudgeGateway judge, ConfigRoot? judgeState, TimeSpan budget, ILogger? logger, CancellationToken ct) {
+            PolicyJudgeGateway judge, ConfigRoot? judgeState, TimeSpan budget, ILogger? logger,
+            PermissionRefusalLedger? refusals, CancellationToken ct) {
         try {
             var started      = time.GetTimestamp();
             var declarations = ClaudeJudgeDeclarationReader.Read(call.TranscriptPath, call.ToolUseId, call.Cwd,
                 judgeState?.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(call.SessionId)}.json"));
             var wire         = PolicyWire.ToWire(action);
             var inline       = PolicyWire.ToUpload(call.SessionId, snapshot);
+            var refused      = refusals is null ? declarations.Refusals : Merge(declarations.Refusals, refusals.Declare(call.SessionId));
 
             return await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
                     call.SessionId, call.AgentId, "claude", PolicySeams.HostedClaudePermission, snapshot.Id,
-                    PolicyEngine.Version, wire, declarations.Turns, declarations.Refusals, inline, budgetMs),
+                    PolicyEngine.Version, wire, declarations.Turns, refused, inline, budgetMs),
                 budget - time.GetElapsedTime(started), ct);
         } catch (Exception ex) {
             logger?.LogDebug(ex, "Hosted Claude policy judge consultation threw for agent {AgentId}; passing through", call.AgentId);
             return PolicyJudgeResult.PassThrough(PolicyJudgeResult.Error);
         }
+    }
+
+    /// <summary>A human-lane deny of a call in a run whose judge is on, kept for the judge's next
+    /// consultation in that session.</summary>
+    internal static void RecordRefusal(PermissionRefusalLedger refusals, ClaudeHostedPermissionCall call) {
+        CanonicalAction? action;
+        try {
+            action = ClaudeActionNormalizer.Normalize(call.ToolName, call.ToolInput, call.Cwd);
+        } catch {
+            action = null;
+        }
+
+        refusals.Record(call.SessionId, call.ToolUseId, call.ToolName, action);
+    }
+
+    /// <summary>
+    /// A human's no on a hosted card reaches Claude as a hook deny, which the transcript reader does
+    /// not count, so the bridge's own record is added to what the transcript holds. Card refusals go
+    /// first; the two sources cannot be interleaved in time, which only matters once the list is cut,
+    /// and a cut list is incomplete anyway.
+    /// </summary>
+    internal static PolicyJudgeRefusalsV1 Merge(PolicyJudgeRefusalsV1 transcript, PolicyJudgeRefusalsV1 bridge) {
+        var seen   = new HashSet<string>(StringComparer.Ordinal);
+        var merged = bridge.Entries.Concat(transcript.Entries).Where(e => seen.Add(e.ToolUseId)).ToArray();
+        var fits   = merged.Length <= ClaudeJudgeDeclarationReader.MaxRefusals;
+
+        return transcript with {
+            Complete = transcript.Complete && bridge.Complete && fits,
+            Entries  = fits ? merged : merged[..ClaudeJudgeDeclarationReader.MaxRefusals],
+        };
     }
 }

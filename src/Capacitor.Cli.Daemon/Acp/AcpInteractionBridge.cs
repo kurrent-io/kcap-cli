@@ -2,6 +2,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Acp;
@@ -69,7 +70,7 @@ internal sealed partial class AcpInteractionBridge(
     /// so the judge gets the server's full ceiling.</summary>
     internal static readonly TimeSpan JudgeBudget = TimeSpan.FromSeconds(5);
 
-    readonly AcpRefusalLedger _refusals = new();
+    readonly PermissionRefusalLedger _refusals = new();
 
     /// <summary>
     /// A permission frame this bridge cannot even parse. Always answers <c>cancelled</c>; under

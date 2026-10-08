@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -213,5 +214,56 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
         var result = await ClaudeHostedPolicySeam.EvaluateAsync(Call("git push"), JudgeOn, TimeProvider.System);
 
         await Assert.That(result).IsNull();
+    }
+
+    static PolicyJudgeDeclaredRefusalV1 Refused(string id) => new(id, "Bash", "git push", PromptId: null);
+
+    static PolicyJudgeRefusalsV1 TranscriptRefusals(bool complete, params string[] ids) =>
+        new(complete, PolicyJudgeRefusalsV1.SourceTranscript, [.. ids.Select(Refused)]);
+
+    static PolicyJudgeRefusalsV1 CardRefusals(bool complete, params string[] ids) =>
+        new(complete, PolicyJudgeRefusalsV1.SourceBridge, [.. ids.Select(Refused)]);
+
+    [Test]
+    public async Task Card_refusals_join_the_transcripts_first_once_each_under_its_source() {
+        var merged = ClaudeHostedPolicySeam.Merge(TranscriptRefusals(true, "t1", "c1"), CardRefusals(true, "c1", "c2"));
+
+        await Assert.That(merged.Complete).IsTrue();
+        await Assert.That(merged.Source).IsEqualTo(PolicyJudgeRefusalsV1.SourceTranscript);
+        await Assert.That(merged.Entries.Select(e => e.ToolUseId).ToArray()).IsEquivalentTo(new[] { "c1", "c2", "t1" });
+    }
+
+    [Test]
+    public async Task Either_source_incomplete_leaves_the_merge_incomplete() {
+        await Assert.That(ClaudeHostedPolicySeam.Merge(TranscriptRefusals(false), CardRefusals(true, "c1")).Complete).IsFalse();
+        await Assert.That(ClaudeHostedPolicySeam.Merge(TranscriptRefusals(true, "t1"), CardRefusals(false)).Complete).IsFalse();
+    }
+
+    [Test]
+    public async Task A_merge_over_the_cap_keeps_the_card_refusals_and_is_incomplete() {
+        var cards  = Enumerable.Range(1, 20).Select(i => $"c{i}").ToArray();
+        var native = Enumerable.Range(1, 20).Select(i => $"t{i}").ToArray();
+
+        var merged = ClaudeHostedPolicySeam.Merge(TranscriptRefusals(true, native), CardRefusals(true, cards));
+
+        await Assert.That(merged.Complete).IsFalse();
+        await Assert.That(merged.Entries.Length).IsEqualTo(32);
+        await Assert.That(merged.Entries[0].ToolUseId).IsEqualTo("c1");
+    }
+
+    [Test]
+    public async Task A_recorded_refusal_reaches_the_judge_in_the_same_session_only() {
+        Judge("ask");
+        var ledger = new PermissionRefusalLedger();
+        ClaudeHostedPolicySeam.RecordRefusal(ledger, Call("git push --force") with { ToolUseId = "toolu_0b" });
+        ClaudeHostedPolicySeam.RecordRefusal(ledger, Call("rm -rf /") with { SessionId = "another", ToolUseId = "toolu_x" });
+
+        await ClaudeHostedPolicySeam.EvaluateAsync(Call("git push"), JudgeOn, TimeProvider.System, Gateway, Config.Root, Ample,
+            refusals: ledger);
+
+        var entries = JudgeRequests().Single()["refusals"]!["entries"]!.AsArray();
+        await Assert.That(entries.Select(e => e!["tool_use_id"]!.GetValue<string>()).ToArray())
+            .IsEquivalentTo(new[] { "toolu_0b", "toolu_0" });
+        await Assert.That(entries[0]!["target"]!.GetValue<string>()).IsEqualTo("git push --force");
     }
 }

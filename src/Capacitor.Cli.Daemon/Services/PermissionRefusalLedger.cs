@@ -1,15 +1,15 @@
 using Capacitor.Cli.Core.Policy;
 
-namespace Capacitor.Cli.Daemon.Acp;
+namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// Every call a human refused through one interaction bridge, per ACP session: the refusals the
-/// judge is told about. The bridge relays every prompt of its runtime and delivers every answer, and
-/// it is built with the runtime whose <c>session/new</c> opened the session, so what it holds spans
-/// the run. Anything it could not describe makes the declaration incomplete rather than shorter,
-/// because the judge must not allow while a refusal may be missing from the list.
+/// Every call a human refused through one permission bridge, per session: the refusals the judge is
+/// told about. Its owner relays every prompt of the run and delivers every answer, and lives at least
+/// as long as the run, so what it holds spans the run. Anything it could not describe makes the
+/// declaration incomplete rather than shorter, because the judge must not allow while a refusal may
+/// be missing from the list.
 /// </summary>
-internal sealed class AcpRefusalLedger {
+internal sealed class PermissionRefusalLedger {
     const int MaxRefusals  = 32;
     const int MaxReference = 128;
     const int MaxTool      = 256;

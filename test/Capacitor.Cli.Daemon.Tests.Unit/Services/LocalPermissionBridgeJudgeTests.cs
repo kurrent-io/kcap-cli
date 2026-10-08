@@ -52,14 +52,23 @@ public class LocalPermissionBridgeJudgeTests {
 
         public async Task StartAsync() => await Bridge.StartAsync(CancellationToken.None);
 
-        public Task<HttpResponseMessage> PostAsync(string command) =>
+        string? _transcript;
+
+        string Transcript() => _transcript ??= Tmp.CreateFile("t.jsonl",
+            """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"go"}}""" + "\n");
+
+        public Task<HttpResponseMessage> PostAsync(string command, string toolUseId = "toolu_1") =>
             Client.PostAsync($"{Bridge.BaseUrl}/claude/permission-request",
                 JsonContent.Create(new {
                     session_id = Session, tool_name = "Bash", tool_input = new { command },
-                    agent_id = "agent-1", cwd = "/wt", tool_use_id = "toolu_1",
-                    transcript_path = Tmp.CreateFile("t.jsonl",
-                        """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"go"}}""" + "\n"),
+                    agent_id = "agent-1", cwd = "/wt", tool_use_id = toolUseId, transcript_path = Transcript(),
                 }));
+
+        public JsonElement JudgeRequestFor(string toolUseId) => JudgeRequests().Single(r =>
+            r.GetProperty("turns").GetProperty("tool_use_id").GetString() == toolUseId);
+
+        IEnumerable<JsonElement> JudgeRequests() =>
+            Judge.LogEntries.Select(e => JsonDocument.Parse(e.RequestMessage.Body!).RootElement);
 
         public static async Task<string> BehaviorOf(HttpResponseMessage response) {
             using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
@@ -120,5 +129,32 @@ public class LocalPermissionBridgeJudgeTests {
         var evt = h.Server.PolicyEvents().Single();
         await Assert.That(evt.EffectiveOutcome).IsEqualTo("pass_through");
         await Assert.That(evt.FailureClass).IsEqualTo(PolicyJudgeResult.Uncertain);
+    }
+
+    /// <summary>A human's no on the card reaches Claude as a hook deny its transcript does not mark,
+    /// so only the bridge can tell the judge about it on the retry.</summary>
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task A_card_deny_is_declared_to_the_next_consultation_in_the_session() {
+        await using var h = new Harness();
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        var first = h.PostAsync("git push", "toolu_1");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("deny", null, null), "deny", "app");
+        await Assert.That(await Harness.BehaviorOf(await first)).IsEqualTo("deny");
+
+        var retry = h.PostAsync("git push", "toolu_2");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+        await retry;
+
+        var before = h.JudgeRequestFor("toolu_1").GetProperty("refusals");
+        await Assert.That(before.GetProperty("entries").GetArrayLength()).IsEqualTo(0);
+
+        var after   = h.JudgeRequestFor("toolu_2").GetProperty("refusals");
+        var refused = after.GetProperty("entries").EnumerateArray().Single();
+        await Assert.That(after.GetProperty("complete").GetBoolean()).IsTrue();
+        await Assert.That(refused.GetProperty("tool_use_id").GetString()).IsEqualTo("toolu_1");
+        await Assert.That(refused.GetProperty("tool").GetString()).IsEqualTo("Bash");
+        await Assert.That(refused.GetProperty("target").GetString()).IsEqualTo("git push");
     }
 }
