@@ -176,11 +176,14 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         if (lease.RefreshPending) StartRead(lease);
     }
 
+    /// Only an unreachable read is worth a retry on the poll: a signed-out or unavailable answer is
+    /// what sign-in and the next plan write repair, and polling it would cost a body-carrying request
+    /// per workspace per tick for nothing.
     void Apply(PlanArtifactsRead read) {
-        LastReadFailed = read.Kind != SessionPlansReadKind.Ready;
+        LastReadFailed = read.Kind == SessionPlansReadKind.Unreachable;
+        if (_current is { } lease) lease.Settled = true;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
-                if (_current is { } lease) lease.Settled = true;
                 Show(read.Body?.Artifacts ?? []);
                 return;
             case SessionPlansReadKind.Unreachable:
