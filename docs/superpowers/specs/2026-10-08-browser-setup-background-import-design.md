@@ -122,6 +122,11 @@ Mechanism — a detached-only plan file, not new CLI flags:
   `SetupImportLane.RunPassAsync` once per level, sequentially, ignoring scope flags. A plan that cannot
   be read fails the child with a logged error. Without the detached log the plan variable is ignored,
   so it is not a user-facing input.
+- **The plan mode is dispatched before the "No server configured" gate.** On a first run the profile
+  has no server yet, so `baseUrl` is null and `Program.cs` would exit 1 before reaching import. The
+  bypass is narrow: `command == "import"`, the detached log variable set, and a plan that parses and
+  names an absolute `https://` (or `http://localhost`) server. Anything else falls through to the gate
+  unchanged.
 - The terminal flow's spawn is unchanged (`import --all --yes --skip-title`, no plan).
 - One log, `import-<runId>.log`, as in the terminal flow.
 
@@ -147,7 +152,7 @@ terminal flow writes, through `ImportHandoffFile.Compose`, from a merged `Foregr
   all-complete stop rule never treats a half-enumerated cohort as exact. Otherwise the existing
   500-id rule decides.
 - `background` / `background_log`: the single child's status and log.
-- `scope`: `"repos"` for this flow (the skill does not read it; it stays truthful).
+- `scope`: `"repos"` for this flow. eval-watch reads it for retry advice (section 4).
 - `handoff_offered` / `handoff_suppressed`: `HandoffDecision.Decide` over the merged outcome, with the
   eligible-vendor count from `HandoffVendorEligibility.Eligible` — the terminal flow's predicate, so
   the page offers the prompt exactly when the terminal would have offered an agent.
@@ -269,11 +274,19 @@ foreground passes only.
   failed (shared), and the child's uncapped pass retries the write.
 - A spawn failure: `background: failed`; the page shows the re-run-setup warning; the prompt can still
   be offered for what landed (`HandoffDecision` already distinguishes these).
-- **Retry advice never names plain `kcap import`** on this flow. `SetupImportLane`'s existing
-  terminal lines ("Run `kcap import` to retry it") and `PrintBackground`'s failure line, when printed
-  for the browser flow, say to run `kcap setup` again with the same repositories, for the visibility
-  reason above. The terminal flow's own lines are unchanged (its import is `--all` at the profile
-  default, which plain `kcap import --all` reproduces).
+- **Retry advice never names plain `kcap import` for a browser-flow run**, because plain import applies
+  the profile's default visibility, which can be wider than an "only me" choice. Every retry path
+  says to run `kcap setup` again with the same repositories instead:
+  - CLI: `SetupImportLane`'s per-pass lines, `PrintBackground`'s failure line when printed for this
+    flow, and `BrowserImportSummary`'s failure and unreadable-answer lines.
+  - Server: every Done page line that names `kcap import` — the failed-count row, the reason texts,
+    and the announcements. The Done page only ever follows a browser-flow (repository-scoped,
+    per-level) import, older CLIs' included, so the change is unconditional there.
+  - eval-watch: the `import_failed` advice keys on the handoff file's `scope` — `"all"` keeps
+    `kcap import --all --yes`; `"repos"` says to run `kcap setup` again with the same repositories.
+
+  The terminal flow's own lines are unchanged: its import is `--all` at the profile default, which
+  `kcap import --all` reproduces.
 - A plan-file write failure: no child is spawned and `background` is `failed`.
 - Cancellation during the foreground passes cancels as today; no child is spawned after cancellation.
 
@@ -295,6 +308,9 @@ CLI (TUnit):
 - Child context and client: the plan's server with the pinned profile's identity, and requests reach
   the plan's server, on a profile that has no server and on one that has a different server.
 - Browser-flow failure lines name `kcap setup`, not `kcap import`.
+- `Program` gate: a detached import with a valid plan and no configured server reaches the plan mode;
+  without the detached log, or with an unreadable plan or a non-absolute server, it still exits
+  "No server configured".
 - `BrowserFirstRunFlow`: outcome carries `background`, `background_remaining` and exactly one of
   prompt/suppressed, including on `run_failed`; handoff-file write failure reports the suppression.
 
