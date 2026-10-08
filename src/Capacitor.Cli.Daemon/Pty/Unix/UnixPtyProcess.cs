@@ -274,9 +274,11 @@ public sealed class UnixPtyProcess : IPtyProcess {
         // child: a single immediate check leaves a zombie behind whenever the host is busy.
         var reapDeadline = _time.GetUtcNow().UtcDateTime + KillReapBound;
 
+        CheckExited();
+
         while (!HasExited && _time.GetUtcNow().UtcDateTime < reapDeadline) {
+            await Task.Delay(ExitPollGap, _time);
             CheckExited();
-            if (!HasExited) await Task.Delay(ExitPollGap, _time);
         }
     }
 

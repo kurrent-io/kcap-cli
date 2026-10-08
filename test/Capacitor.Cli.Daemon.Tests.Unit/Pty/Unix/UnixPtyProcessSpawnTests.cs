@@ -100,8 +100,9 @@ public class UnixPtyProcessSpawnTests {
 
             await proc.TerminateAsync(TimeSpan.FromMilliseconds(300));
 
+            // HasExited is set only when the runtime's own waitpid returned the leader, so it means
+            // reaped. Waiting on the pid again could steal a recycled pid from another test's child.
             await Assert.That(proc.HasExited).IsTrue();
-            await Assert.That(UnixPtyInterop.waitpid(proc.Pid, out _, UnixPtyInterop.WNOHANG)).IsEqualTo(-1);
         } finally {
             await proc.DisposeAsync();
         }
