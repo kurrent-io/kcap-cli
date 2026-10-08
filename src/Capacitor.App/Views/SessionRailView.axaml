@@ -140,7 +140,7 @@
                                        IsVisible="{Binding BackgroundPriority}" />
                             <Button x:Name="RailReloadButton" Classes="kcapGhost" Content="Reload" Padding="10,4" FontSize="12.5"
                                     HorizontalAlignment="Left"
-                                    Command="{Binding ReloadDaemonCommand}" IsEnabled="{Binding CanReload}" />
+                                    Command="{Binding ReloadDaemonCommand}" />
                             <TextBlock x:Name="RailReloadFailureText" Text="{Binding ReloadFailureText}" TextWrapping="Wrap"
                                        FontSize="12" LineHeight="17" Foreground="{StaticResource KcapWarningBrush}"
                                        IsVisible="{Binding ReloadFailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

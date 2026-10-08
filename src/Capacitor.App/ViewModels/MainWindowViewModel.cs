@@ -376,7 +376,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var reloadAction = reloadDaemon ?? (_ => Task.CompletedTask);
         ReloadDaemonCommand = ReactiveCommand.CreateFromTask(
             (CancellationToken ct) => reloadAction(ct),
-            this.WhenAnyValue(x => x.CanReload).ObserveOn(RxSchedulers.MainThreadScheduler));
+            service.Status
+                .CombineLatest(isReloading ?? Observable.Return(false), (st, reloading) => st.State == AttachState.Connected && !reloading)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler));
 
         this.WhenActivated(disposables => {
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);

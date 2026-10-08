@@ -1212,6 +1212,23 @@ public class MainWindowViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Reload_command_can_execute_when_activated_while_already_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                backgroundPriority: new BehaviorSubject<bool>(true), isReloading: new BehaviorSubject<bool>(false),
+                reloadDaemon: _ => Task.CompletedTask);
+            using var activation = vm.Activator.Activate();
+
+            var canExecute = false;
+            using (vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canExecute = x)) { }
+            await Assert.That(canExecute).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Reload_command_runs_the_controller_action_only_when_it_can() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();

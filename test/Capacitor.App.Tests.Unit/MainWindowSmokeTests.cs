@@ -1344,13 +1344,13 @@ public class MainWindowSmokeTests {
             var button  = rail.FindControl<Button>("RailReloadButton")!;
             var failure = rail.FindControl<TextBlock>("RailReloadFailureText")!;
 
-            var withFailureOnly = (Block: block.IsVisible, Line: line.IsVisible, Button: button.IsEnabled, Failure: failure.IsVisible, FailureText: failure.Text,
+            var withFailureOnly = (Block: block.IsVisible, Line: line.IsVisible, Button: button.IsEffectivelyEnabled, Failure: failure.IsVisible, FailureText: failure.Text,
                 Warning: ReferenceEquals(failure.Foreground, window.FindResource("KcapWarningBrush")));
 
             background.OnNext(true);
             reloading.OnNext(true);
             Dispatcher.UIThread.RunJobs();
-            var whileReloading = (Line: line.IsVisible, Button: button.IsEnabled, LineText: line.Text);
+            var whileReloading = (Line: line.IsVisible, Button: button.IsEffectivelyEnabled, LineText: line.Text);
 
             reloading.OnNext(false);
             reload.OnNext(null);
