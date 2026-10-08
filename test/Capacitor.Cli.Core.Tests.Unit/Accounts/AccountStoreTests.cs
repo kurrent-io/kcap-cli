@@ -142,4 +142,19 @@ public class AccountStoreTests {
         await Assert.That(store.Find(HarnessId.Claude, dir + Path.DirectorySeparatorChar)).IsNotNull();
         await Assert.That(store.Find(HarnessId.Codex, dir)).IsNull();
     }
+
+    [Test]
+    public async Task TryLoad_returns_the_registry() {
+        var store = Store();
+        store.Mutate(r => (r with { Accounts = [Claude("/h/.claude")] }, 0));
+
+        await Assert.That(store.TryLoad()!.Accounts.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task TryLoad_of_a_corrupt_file_is_null() {
+        Tmp.CreateFile("accounts/accounts.json", "{not json");
+
+        await Assert.That(Store().TryLoad()).IsNull();
+    }
 }

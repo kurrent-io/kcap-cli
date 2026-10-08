@@ -76,7 +76,7 @@ public class ClaudeHookCommandTests {
             "version: 1\nrules:\n  - match: { kind: shell, command: \"git push --force*\" }\n    outcome: deny\n");
         var stdout = new StringWriter();
 
-        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"PreToolUse","session_id":"{{Sid}}","tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"/tmp"}"""),
                 () => throw new InvalidOperationException("the seam must decide before a client exists"),
@@ -101,7 +101,7 @@ public class ClaudeHookCommandTests {
             "version: 1\nrules:\n  - match: { kind: shell, command: \"git push --force*\" }\n    outcome: deny\n");
         var stdout = new ClosedPipeWriter();
 
-        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+        var exit = await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"PreToolUse","session_id":"{{Sid}}","tool_name":"Bash","tool_input":{"command":"git push --force"},"cwd":"/tmp"}"""),
                 () => throw new InvalidOperationException("the seam must decide before a client exists"),
@@ -124,7 +124,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -146,7 +146,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
             stdout: stdout);
@@ -171,7 +171,7 @@ public class ClaudeHookCommandTests {
         var stdout = new StringWriter { NewLine = "\n" };
 
         // Unusable URL: no client is ever built, so HandleWithDeps returns from the degraded arm.
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("not-a-url", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("not-a-url", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("not-a-url", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("not-a-url", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
                 () => throw new InvalidOperationException("no client is buildable for an unusable URL"),
@@ -193,7 +193,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(File.Exists(Config.Root.Path("policy", "journal", $"{Sid}.json"))).IsTrue();
         using var fx = new Fixture(Config.Root);
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""));
 
@@ -243,7 +243,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         MemoryStoreProbe.Poison(Config.Root);
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""));
 
@@ -256,7 +256,7 @@ public class ClaudeHookCommandTests {
         using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]"""; // decoy — must never be fetched
-        var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+        var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { DisableMemoryIndex = true }, serverUrl: "http://localhost"), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
@@ -278,7 +278,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root) { RespondJson = """{"version": "999.0.0"}""" };
         var stdout = new StringWriter();
 
-        var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { UpdateCheck = false }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { UpdateCheck = false }, serverUrl: fx.MemoryServerUrl), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+        var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { UpdateCheck = false }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { UpdateCheck = false }, serverUrl: fx.MemoryServerUrl), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
@@ -302,7 +302,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root) { RespondJson = """{"version": "999.0.0"}""" };
         var stdout = new StringWriter();
 
-        var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { UpdateCheck = true }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { UpdateCheck = true }, serverUrl: fx.MemoryServerUrl), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+        var hook = new ClaudeHookCommand(Config.Root, Resolutions.Of(new Profile { UpdateCheck = true }, serverUrl: fx.MemoryServerUrl), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.Of(new Profile { UpdateCheck = true }, serverUrl: fx.MemoryServerUrl), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
 
         var exit = await hook.HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
@@ -945,7 +945,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
 
@@ -968,7 +968,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"{{AbsentCwd(absent)}}"}"""),
             stdout: stdout);
@@ -1007,7 +1007,7 @@ public class ClaudeHookCommandTests {
         var unwritable = new HookSpool(tmp.PathTo("blocker", "spool"), time: TimeProvider.System); // a directory under a file
         using var capture = ConsoleOutput.StartErrorCapture("\n");
 
-        await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        await new ClaudeHookCommand(Config.Root, fx.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, fx.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, unwritable, new StringReader(
                 $$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""));
 
@@ -1025,13 +1025,13 @@ public class ClaudeHookCommandTests {
         rejecting.Spool.Append(Sid, "session-end", $$"""{"session_id":"{{Sid}}"}""");
         var stdout = new StringWriter { NewLine = "\n" };
 
-        await new ClaudeHookCommand(Config.Root, rejecting.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, rejecting.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        await new ClaudeHookCommand(Config.Root, rejecting.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, rejecting.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             rejecting.Client, AuthStatus.Ok, rejecting.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
             stdout: stdout);
         await Assert.That(rejecting.Spool.HasBacklog(Sid)).IsTrue();
 
-        await new ClaudeHookCommand(Config.Root, accepting.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, accepting.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        await new ClaudeHookCommand(Config.Root, accepting.Profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, accepting.Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             accepting.Client, AuthStatus.Ok, rejecting.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1075,7 +1075,7 @@ public class ClaudeHookCommandTests {
         // Past the 15s ceiling: no budget remains to reach for a client with, and the event must
         // still land in the spool — spooling is a local disk write that needs no client.
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(20)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(20)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleWithDeps(
             fx.Spool,
             new StringReader($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","transcript_path":"/none","cwd":"/tmp"}"""),
             slowFactory);
@@ -1223,7 +1223,7 @@ public class ClaudeHookCommandTests {
         // Past the 5s ceiling: no budget remains to reach for a client with, and the event must
         // still land in the spool.
         var sw   = System.Diagnostics.Stopwatch.StartNew();
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(8)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleWithDeps(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), Aged(TimeSpan.FromSeconds(8)), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleWithDeps(
             fx.Spool,
             new StringReader($$"""{"hook_event_name":"SubagentStop","session_id":"{{Sid}}","agent_id":"{{AgentId}}","transcript_path":"/none","cwd":"/tmp"}"""),
             slowFactory);
@@ -1297,7 +1297,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Expired, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
 
@@ -1313,7 +1313,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.WrongServer, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","cwd":"/tmp"}"""),
 
@@ -1329,7 +1329,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Expired, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1429,7 +1429,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1445,7 +1445,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.Unauthorized);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Notification","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1461,7 +1461,7 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
         var stdout = new StringWriter { NewLine = "\n" };
 
-        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+        var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://localhost", Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://localhost", Config.Root), new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
             fx.Client, AuthStatus.Ok, fx.Spool, new StringReader(
                 $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"/tmp"}"""),
             stdout: stdout);
@@ -1564,7 +1564,7 @@ public class ClaudeHookCommandTests {
             clock ??= elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
             _clock = clock;
 
-            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
+            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin), stdout);
         }
 

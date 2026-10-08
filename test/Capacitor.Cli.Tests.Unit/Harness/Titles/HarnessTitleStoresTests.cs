@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Copilot;
@@ -33,6 +34,19 @@ public class HarnessTitleStoresTests {
         var store = HarnessTitleStores.For("codex", null, Id.Replace("-", ""), transcript, Harnesses);
 
         await Assert.That(store!.Read()!.Title).IsEqualTo("Codex name");
+    }
+
+    [Test]
+    public async Task Codex_reads_the_index_of_the_account_that_wrote_the_rollout() {
+        Home.CreateFile([".codex-b", "session_index.jsonl"], $$"""{"id":"{{Id}}","thread_name":"From B","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+        var rollout  = Home.CreateFile([".codex-b", "sessions", "2026", "09", "29", $"rollout-2026-09-29T10-00-00-{Id}.jsonl"]);
+        var registry = new AccountRegistry {
+            Accounts = [new VendorAccount("b", HarnessId.Codex, AccountDirectory.Normalize(Home.PathTo(".codex-b")), "b", DateTimeOffset.UnixEpoch)]
+        };
+
+        var store = HarnessTitleStores.For("codex", null, Id.Replace("-", ""), rollout, Harnesses, registry, Home);
+
+        await Assert.That(store!.Read()!.Title).IsEqualTo("From B");
     }
 
     [Test]

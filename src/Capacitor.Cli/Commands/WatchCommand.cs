@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
@@ -35,7 +36,7 @@ namespace Capacitor.Cli.Commands;
 partial class WatchCommand(
         ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses,
         ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
-        GitProviderRouter router, TimeProvider time) {
+        GitProviderRouter router, TimeProvider time, AccountStore accounts, UserHome home) {
     readonly CursorMarkers  _markers  = new(config, time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -376,7 +377,7 @@ partial class WatchCommand(
         var state = new WatchState();
         state.LastActivityAt = time.GetUtcNow();
 
-        var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses);
+        var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses, accounts.TryLoad(), home);
         if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole

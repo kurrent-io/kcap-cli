@@ -33,6 +33,15 @@ public sealed class AccountStore(string directory) {
         }
     }
 
+    /// <summary>For hooks and watchers, which must never fail on the registry: null sends the caller to
+    /// the environment-derived layout.</summary>
+    public AccountRegistry? TryLoad() {
+        try { return Load(); }
+        catch (InvalidDataException) { return null; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
     public T Mutate<T>(Func<AccountRegistry, (AccountRegistry Next, T Result)> change) {
         using var _ = Lock();
         var current = Load();
