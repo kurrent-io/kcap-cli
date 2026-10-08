@@ -134,6 +134,41 @@ public class ArtefactsTabViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Hashless_entries_list_by_path_and_a_hashless_duplicate_path_lists_once() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Source.Enqueue(Ready(
+                Doc("1", "plan", "docs/a.md", hash: ""),
+                Doc("2", "spec", "docs/b.md", hash: ""),
+                Doc("3", "spec", "docs/b.md", hash: "", source: "repo_file")));
+            await h.SwitchAsync(SessionA);
+
+            await Assert.That(h.Vm.Documents.Select(d => d.Path).ToArray()).IsEquivalentTo(new[] { "docs/a.md", "docs/b.md" });
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_path_outside_the_checkout_is_never_read_for_drift() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Disk["/repo/../outside.md"] = Encoding.UTF8.GetBytes("# x");
+            h.Disk["/repo/outside.md"] = Encoding.UTF8.GetBytes("# x");
+            h.Disk["/etc/hosts"] = Encoding.UTF8.GetBytes("# x");
+            h.Source.Enqueue(Ready(Doc("1", "plan", "../outside.md"), Doc("2", "spec", "/etc/hosts")));
+            await h.SwitchAsync(SessionA, root: "/repo");
+
+            foreach (var document in h.Vm.Documents.ToArray()) {
+                await h.Vm.SelectCommand.Execute(document);
+                await Assert.That(h.Vm.Reader!.HasNotice).IsFalse();
+            }
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     /// A remote session has no root; the reader then says nothing about drift.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -174,13 +209,17 @@ public class ArtefactsTabViewModelTests {
     public async Task A_stale_read_never_applies_and_an_empty_session_clears_the_list() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            var gate = h.Source.Gate();
-            h.Vm.SwitchSession(SessionA, "/repo");
+            h.Source.Enqueue(Ready(Doc("1", "plan", "docs/p.md")));
+            await h.SwitchAsync(SessionA);
+            await Assert.That(h.Vm.HasAny).IsTrue();
+
+            var gate = h.Source.Gate(ignoreCancellation: true);
+            h.Vm.Refresh();
             var stale = h.Vm.PendingReadForTesting!;
 
             h.Source.Enqueue(Ready());
             await h.SwitchAsync(SessionB);
-            gate.SetResult(Ready(Doc("1", "plan", "docs/p.md")));
+            gate.SetResult(Ready(Doc("2", "spec", "docs/a-only.md")));
             await stale;
 
             await Assert.That(h.Vm.HasAny).IsFalse();

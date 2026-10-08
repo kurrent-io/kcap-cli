@@ -25,13 +25,21 @@ public class DocumentReaderViewModelTests {
         await Assert.That(reader.HasNotice).IsFalse();
         await Assert.That(reader.SizeLabel).IsEqualTo("2 KB");
         await Assert.That(reader.DeclaredLabel).IsEqualTo("Declared 12m ago");
+        await Assert.That(reader.MetaLabel).IsEqualTo("Declared 12m ago · 2 KB");
+    }
+
+    [Test]
+    public async Task A_document_nobody_declared_reads_written_and_a_missing_size_leaves_no_dangling_separator() {
+        var written = DocumentReaderViewModel.For(DocumentRow.From(Dto(source: "repo_file", bytes: null)), DriftState.Unknown, Now);
+        await Assert.That(written.DeclaredLabel).IsEqualTo("Written 12m ago");
+        await Assert.That(written.MetaLabel).IsEqualTo("Written 12m ago");
     }
 
     [Test]
     public async Task Truncated_and_unavailable_bodies_say_so() {
         var truncated = DocumentReaderViewModel.For(DocumentRow.From(Dto(content: "# Desi", state: "truncated", bytes: 400_000)), DriftState.Same, Now);
         await Assert.That(truncated.HasBody).IsTrue();
-        await Assert.That(truncated.Notice).IsEqualTo("Truncated: the server keeps the first 256 KB of a declared document.");
+        await Assert.That(truncated.Notice).IsEqualTo("Truncated: the server keeps the first 256 KB of a document.");
 
         var unavailable = DocumentReaderViewModel.For(DocumentRow.From(Dto(content: null, state: "unavailable")), DriftState.Unknown, Now);
         await Assert.That(unavailable.HasBody).IsFalse();

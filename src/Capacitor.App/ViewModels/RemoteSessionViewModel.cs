@@ -62,7 +62,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
     internal void OpenCard(ToolCard card) {
-        if (card.DocumentPath is { } path && Artefacts.OpenDocument(path)) return;
+        if (card.DocumentPath is { } path) {
+            if (Artefacts.OpenDocument(path)) return;
+            if (Artefacts.HasAny) { Artefacts.RequestOpen(); return; }
+        }
         if (card.Url is { } url) LinkPolicy.Open(_opener, url);
     }
 
@@ -316,8 +319,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public async Task TeardownAsync() {
         _disposables.Dispose();
         Artefacts.OpenRequested -= ShowArtefacts;
-        await Artefacts.TeardownAsync();
         await Chat.TeardownAsync();
         if (Terminal is { } terminal) await terminal.TeardownAsync();
+        await Artefacts.TeardownAsync();
     }
 }

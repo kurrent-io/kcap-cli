@@ -116,7 +116,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
     internal void OpenCard(ToolCard card) {
-        if (card.DocumentPath is { } path && Artefacts.OpenDocument(path)) return;
+        if (card.DocumentPath is { } path) {
+            if (Artefacts.OpenDocument(path)) return;
+            if (Artefacts.HasAny) { Artefacts.RequestOpen(); return; }
+        }
         if (card.Url is { } url) LinkPolicy.Open(_opener, url);
     }
 
@@ -161,7 +164,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             if (!has && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
         }).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
-        WorkContext.Plan.OpenDocument = path => Artefacts.OpenDocument(path);
+        WorkContext.Plan.OpenDocument = path => {
+            if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();
+        };
         Artefacts.WhenAnyValue(a => a.Selected).Subscribe(selected => WorkContext.Plan.MarkOpen(selected?.Path)).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);

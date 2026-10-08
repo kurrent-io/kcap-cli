@@ -60,7 +60,7 @@ public static class ToolDetail {
             using var doc = JsonDocument.Parse(inputJson);
             if (!doc.RootElement.IsObject) return "";
             foreach (var property in doc.RootElement.EnumerateObject())
-                if (property.Value.ValueKind == JsonValueKind.String && property.Value.GetString() is { } s && s.Trim().Length > 0)
+                if (property.Value.IsString && property.Value.GetString() is { } s && s.Trim().Length > 0)
                     return TextElision.End(FirstLine(s), MaxLength);
         } catch (JsonException) { }
         return "";

@@ -381,8 +381,7 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A page card follows the opener the workspace hands in when there is one, so slice 2 can
-    /// route a document into the tab without the chat knowing about tabs.
+    /// A page card follows the opener the workspace hands in and bypasses the browser.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_injected_card_opener_takes_precedence_over_the_browser() {

@@ -19,7 +19,7 @@
             <TextBlock x:Name="DocumentTitle" Text="{Binding FileName}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"
                        Foreground="{StaticResource KcapTextBrush}" />
             <TextBlock FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}">
-                <Run Text="{Binding DeclaredLabel}" /><Run Text=" · " /><Run Text="{Binding SizeLabel}" />
+                <Run Text="{Binding MetaLabel}" />
             </TextBlock>
             <Border x:Name="DocumentNotice" IsVisible="{Binding HasNotice}" HorizontalAlignment="Left"
                     Background="{StaticResource KcapWarningDimBrush}" CornerRadius="6" Padding="10,6">

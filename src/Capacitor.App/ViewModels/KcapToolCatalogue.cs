@@ -111,8 +111,8 @@ public static class KcapToolCatalogue {
         return $"{Humanise(server)} · {tool.Replace('_', ' ')}";
     }
 
-    /// (server, tool) for `mcp__&lt;server&gt;__&lt;tool&gt;`; (null, name) for a bare name. A plugin server
-    /// segment (`plugin_kcap_kcap-plans`, `plugin_linear_linear`) keeps its last `_`-separated token.
+    // (server, tool) for `mcp__<server>__<tool>`; (null, name) for a bare name. A plugin server
+    // segment (`plugin_kcap_kcap-plans`, `plugin_linear_linear`) keeps its last `_`-separated token.
     static (string? Server, string Tool) Split(string name) {
         if (!name.StartsWith(McpPrefix, StringComparison.Ordinal)) return (null, name);
         var rest = name[McpPrefix.Length..];

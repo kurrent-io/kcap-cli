@@ -13,6 +13,7 @@ public sealed class DocumentReaderViewModel {
     public bool HasNotice => !string.IsNullOrEmpty(Notice);
     public required string SizeLabel { get; init; }
     public required string DeclaredLabel { get; init; }
+    public string MetaLabel => SizeLabel.Length > 0 ? $"{DeclaredLabel} · {SizeLabel}" : DeclaredLabel;
 
     public static DocumentReaderViewModel For(DocumentRow row, DriftState drift, DateTimeOffset now) => new() {
         KindLabel = row.Kind switch { "plan" => "Plan", "spec" => "Spec", "design" => "Design", _ => "Document" },
@@ -21,12 +22,12 @@ public sealed class DocumentReaderViewModel {
         Body = row.Content ?? "",
         Notice = NoticeFor(row, drift),
         SizeLabel = row.OriginalBytes is { } bytes ? $"{Math.Max(1, bytes / Kilobyte)} KB" : "",
-        DeclaredLabel = $"Declared {RelativeTime.Format(row.DiscoveredAt, now)}",
+        DeclaredLabel = $"{(row.Source == "declared" ? "Declared" : "Written")} {RelativeTime.Format(row.DiscoveredAt, now)}",
     };
 
     /// A body problem outranks drift: a reader who cannot see the text has no use for a comparison.
     static string? NoticeFor(DocumentRow row, DriftState drift) => row.ContentState switch {
-        "truncated"   => "Truncated: the server keeps the first 256 KB of a declared document.",
+        "truncated"   => "Truncated: the server keeps the first 256 KB of a document.",
         "unavailable" => "No body is available: this document was declared by hash alone.",
         _ => drift switch {
             DriftState.Changed => "Working copy has changed since this was declared.",

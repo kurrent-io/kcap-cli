@@ -90,18 +90,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     string? _queueKey;
     string? _root;
 
-    /// A foreign MCP call: the usual detail keys first, then whatever string it was given.
-    string FirstOrAny(string? inputJson, ToolCategory category) {
-        var known = ToolDetail.From(inputJson, _root, category);
-        return known.Length > 0 ? known : ToolDetail.FirstString(inputJson);
-    }
-
-    Action? CardOpener(ToolCard card) {
-        if (card.Url is null && card.DocumentPath is null) return null;
-        if (_openCard is { } open) return () => open(card);
-        if (card.Url is { } url) return () => LinkPolicy.Open(_opener, url);
-        return null;
-    }
     volatile FeedLease? _lease;
     ITimer? _timer;
     volatile Task? _pendingRead;
@@ -120,6 +108,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : queued == 0 ? $"{MessageCount(unconfirmed)} unconfirmed"
                 : $"{MessageCount(queued)} queued · {unconfirmed} unconfirmed";
         }
+    }
+
+    /// A foreign MCP call: the usual detail keys first, then whatever string it was given.
+    string FirstOrAny(string? inputJson, ToolCategory category) {
+        var known = ToolDetail.From(inputJson, _root, category);
+        return known.Length > 0 ? known : ToolDetail.FirstString(inputJson);
+    }
+
+    Action? CardOpener(ToolCard card) {
+        if (card.Url is null && card.DocumentPath is null) return null;
+        if (_openCard is { } open) return () => open(card);
+        if (card.Url is { } url) return () => LinkPolicy.Open(_opener, url);
+        return null;
     }
 
     static string MessageCount(int count) => $"{count} message{(count == 1 ? "" : "s")}";

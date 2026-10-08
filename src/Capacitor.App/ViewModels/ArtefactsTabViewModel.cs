@@ -103,7 +103,12 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     DriftState Drift(DocumentRow row) {
         if (_current?.Root is not { Length: > 0 } root || row.Source != "declared") return DriftState.Unknown;
-        var full = System.IO.Path.Combine(root, row.Path.Replace('\\', '/'));
+        var relative = row.Path.Replace('\\', '/');
+        if (relative.Length == 0 || relative.StartsWith('/') || System.IO.Path.IsPathRooted(relative)
+            || (relative.Length >= 2 && char.IsAsciiLetter(relative[0]) && relative[1] == ':')
+            || relative.Split('/').Contains(".."))
+            return DriftState.Unknown;
+        var full = System.IO.Path.Combine(root, relative);
         byte[]? bytes;
         try { bytes = _readWorkingCopy(full); } catch (Exception) { return DriftState.Unknown; }
         if (bytes is null) return DriftState.Missing;
@@ -173,8 +178,9 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         foreach (var dto in artifacts
                      .Where(a => a.Kind != "checklist")
                      .OrderBy(a => a.Source == "declared" ? 0 : 1)) {
-            var key = dto.ContentHash is { Length: > 0 } hash ? "h:" + hash : "p:" + (dto.Path ?? dto.Title);
-            if (!seen.Add(key) || !seen.Add("p:" + (dto.Path ?? dto.Title))) continue;
+            var pathKey = "p:" + (dto.Path ?? dto.Title);
+            if (dto.ContentHash is { Length: > 0 } hash && !seen.Add("h:" + hash)) continue;
+            if (!seen.Add(pathKey)) continue;
             rows.Add(DocumentRow.From(dto));
         }
         var ordered = rows.OrderBy(r => KindRank(r.Kind)).ThenBy(r => r.IsPrimary ? 0 : 1).ThenBy(r => r.FileName, StringComparer.Ordinal).ToList();
