@@ -3,9 +3,11 @@ using System.Text.Json;
 namespace Capacitor.Cli.Capture;
 
 internal static class TranscriptCapture {
+    internal static readonly int ReasonCount = Enum.GetValues<RedactionLossReason>().Length;
+
     public static List<string> EncodeLines(IEnumerable<string> rawLines, Action<RedactionLossReason, int> reportLoss) {
         var lines = new List<string>();
-        var losses = new int[5];
+        var losses = new int[ReasonCount];
         foreach (var raw in rawLines) {
             var captured = Encode(raw);
             lines.Add(captured.Line);
@@ -16,14 +18,15 @@ internal static class TranscriptCapture {
     }
 
     /// <summary>
-    /// Encodes a tail no loop waits on, under the budget a whole-recording scan gets. Stops at a line
-    /// even that cannot redact in time: spooling what follows would make the server drop it later.
+    /// Encodes a shutdown tail under one budget for all of it. Stops at a line that cannot redact in
+    /// time: spooling what follows would make the server drop that line later.
     /// </summary>
-    public static CapturedLines EncodeTail(IReadOnlyList<string> rawLines, Action<RedactionLossReason, int> reportLoss) {
+    public static CapturedLines EncodeTail(
+            IReadOnlyList<string> rawLines, RedactionBudget budget, Action<RedactionLossReason, int> reportLoss) {
         var lines = new List<string>(rawLines.Count);
-        var losses = new int[5];
+        var losses = new int[ReasonCount];
         foreach (var raw in rawLines) {
-            var captured = SecretRedactor.RedactLineWithOutcome(raw, RedactionBudget.Unlimited, SecretRedactor.OutOfProcessPatterns.Value);
+            var captured = SecretRedactor.RedactLineWithOutcome(raw, budget, SecretRedactor.WatcherPatterns);
             if (captured.Loss is { } reason) {
                 if (reason.IsTransient()) break;
                 losses[(int)reason]++;

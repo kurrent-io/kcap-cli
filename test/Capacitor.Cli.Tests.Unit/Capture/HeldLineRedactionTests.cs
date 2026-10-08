@@ -177,4 +177,36 @@ public class HeldLineRedactionTests {
         await Assert.That(HeldLineRedaction.DelayAfter(2)).IsEqualTo(TimeSpan.FromSeconds(10));
         await Assert.That(HeldLineRedaction.DelayAfter(5000)).IsEqualTo(TimeSpan.FromMinutes(5));
     }
+
+    [Test]
+    public async Task A_new_hold_below_the_first_is_not_stalled_by_its_attempt() {
+        var redaction = NewRedaction();
+        Capture(redaction, [Raw[1]], [5]);
+        Capture(redaction, [Raw[0]], [4]);
+        _clock.Exhausted = false;
+
+        var captured = await CaptureUntil(() => {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            return Capture(redaction, [Raw[0]], [4]);
+        }, c => c.Consumed == 1);
+
+        await Assert.That(captured.Lines.Single()).IsEqualTo(Raw[0]);
+    }
+
+    [Test]
+    public async Task A_retried_line_read_again_after_a_failed_send_is_not_held_again() {
+        var redaction = NewRedaction();
+        Capture(redaction, [Raw[1]], [5]);
+        _clock.Exhausted = false;
+        var delivered = await CaptureUntil(() => {
+            _time.Advance(TimeSpan.FromMinutes(5));
+            return Capture(redaction, [Raw[1]], [5]);
+        }, c => c.Consumed == 1);
+        _clock.Exhausted = true;
+
+        var again = Capture(redaction, [Raw[1]], [5]);
+
+        await Assert.That(again.Lines).IsEquivalentTo(delivered.Lines);
+        await Assert.That(redaction.Held).IsNull();
+    }
 }

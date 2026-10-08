@@ -16,6 +16,10 @@ internal sealed class HeldLineRedaction(HeldLineStore store, TimeProvider time, 
     Task<RedactionOutcome>? _attempt;
     string? _attemptSha256;
 
+    // A retry's result outlives the hold until the source moves past the line: a failed send
+    // re-reads it, and the live budget that failed once would start the ladder over.
+    (int LineNumber, string Sha256, RedactionOutcome Outcome)? _settled;
+
     public HeldLine? Held {
         get {
             Load();
@@ -27,7 +31,7 @@ internal sealed class HeldLineRedaction(HeldLineStore store, TimeProvider time, 
             IReadOnlyList<string> rawLines, IReadOnlyList<int> lineNumbers, Action<RedactionLossReason, int> reportLoss) {
         Load();
         var lines  = new List<string>(rawLines.Count);
-        var losses = new int[Enum.GetValues<RedactionLossReason>().Length];
+        var losses = new int[TranscriptCapture.ReasonCount];
         var consumed = 0;
 
         for (; consumed < rawLines.Count; consumed++) {
@@ -49,6 +53,11 @@ internal sealed class HeldLineRedaction(HeldLineStore store, TimeProvider time, 
     }
 
     RedactionOutcome? Redact(string raw, int lineNumber) {
+        if (_settled is { } settled) {
+            if (lineNumber == settled.LineNumber && Sha256(raw) == settled.Sha256) return settled.Outcome;
+            if (lineNumber > settled.LineNumber) _settled = null;
+        }
+
         if (_held is { } held && lineNumber >= held.LineNumber) {
             if (lineNumber == held.LineNumber && Sha256(raw) == held.LineSha256) return Retry(held, raw);
             Release();
@@ -67,6 +76,8 @@ internal sealed class HeldLineRedaction(HeldLineStore store, TimeProvider time, 
             NextAttemptAt = time.GetUtcNow()
         };
         log($"Holding line {lineNumber} back: {first.Reason}; retrying off the loop");
+        _attempt       = null;
+        _attemptSha256 = null;
         Save(first);
 
         return Retry(first, raw);
@@ -79,6 +90,7 @@ internal sealed class HeldLineRedaction(HeldLineStore store, TimeProvider time, 
 
             if (outcome is { Loss: null }) log($"Held line {held.LineNumber} redacted on attempt {held.Attempts + 1}");
             if (outcome is { Loss: null } || outcome?.Loss is { } final && !final.IsTransient()) {
+                _settled = (held.LineNumber, held.LineSha256, outcome);
                 Release();
                 return outcome;
             }

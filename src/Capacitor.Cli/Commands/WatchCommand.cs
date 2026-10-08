@@ -962,6 +962,14 @@ partial class WatchCommand(
             state.BufferedLineNumbers.Clear();
         }
 
+        // A held line stops the buffer short of the threshold however long the session is, so it
+        // must not read as a short session whose lines are dropped.
+        if (agentId is null && !state.ThresholdReached && HeldLineFor(sessionId, null).Held is not null) {
+            state.ThresholdReached = true;
+            state.BufferedLines.Clear();
+            state.BufferedLineNumbers.Clear();
+        }
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -1005,7 +1013,8 @@ partial class WatchCommand(
             // dedicated TranscriptSpool so the global drain (task 3) replays it after recovery,
             // instead of silently dropping it.
             await SpoolUndeliveredTranscriptTailAsync(
-                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None);
+                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None,
+                ShutdownTailRedactionDeadline - time.GetElapsedTime(shutdownStarted));
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -2577,7 +2586,8 @@ partial class WatchCommand(
             string            vendor,
             int               linesProcessed,
             CommitObservation commits,
-            CancellationToken ct
+            CancellationToken ct,
+            TimeSpan?         redactionLimit = null
         ) {
         if (!File.Exists(transcriptPath)) return null;
 
@@ -2605,7 +2615,8 @@ partial class WatchCommand(
 
         if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
-        var redacted = TranscriptCapture.EncodeTail(tail.Lines,
+        var limit    = redactionLimit is { } l && l > MinShutdownTailRedaction ? l : MinShutdownTailRedaction;
+        var redacted = TranscriptCapture.EncodeTail(tail.Lines, new RedactionBudget(RedactionClock ?? time, limit),
             (reason, count) => Log(time, $"Shutdown capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
         var unredacted = redacted.Consumed < tail.Lines.Count ? tail.LineNumbers[redacted.Consumed] : (int?)null;
         var batch = new TranscriptBatch {
@@ -2624,6 +2635,7 @@ partial class WatchCommand(
         if (result == TranscriptSpool.AppendResult.Appended && unredacted is { } line) {
             Log(time, $"Line {line} of {sessionId} still cannot be redacted in time; spooled the {batch.Lines.Length} line(s) before it");
             transcriptSpool.MarkNeedsImport(sessionId, $"shutdown tail: redaction of line {line} timed out");
+            HeldLineFor(sessionId, agentId).ReleaseBelow(line + 1);
 
             return TranscriptSpool.AppendResult.MarkedNeedsImport;
         }
@@ -3533,6 +3545,11 @@ partial class WatchCommand(
     // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
     // the PR probe share this much of it, leaving the rest for the drain-complete signal.
     static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
+
+    // Inside the 5s a stop request allows before the kill, so the spool append or the needs-import
+    // marker is written before the process can be killed.
+    static readonly TimeSpan ShutdownTailRedactionDeadline = TimeSpan.FromSeconds(4);
+    static readonly TimeSpan MinShutdownTailRedaction = TimeSpan.FromSeconds(1);
 
     // A value the server has not settled is re-sent no sooner than this, however often the transcript drains.
     internal static readonly TimeSpan HarnessTitleRetryGap = TimeSpan.FromSeconds(30);

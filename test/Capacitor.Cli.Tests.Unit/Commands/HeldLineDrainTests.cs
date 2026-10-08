@@ -106,6 +106,7 @@ public class HeldLineDrainTests {
         var path = await TranscriptWithHeldLine(null);
         _clock.Exhausted = true;
         await Drain(path, null, 1);
+        _clock.Exhausted = false;
         var spool = new TranscriptSpool(Tmp.PathTo("spool"), _time);
 
         var result = await Watch.SpoolUndeliveredTranscriptTailAsync(
@@ -118,6 +119,22 @@ public class HeldLineDrainTests {
         await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.Appended);
         await Assert.That(batch["line_numbers"]!.AsArray().Select(n => n!.GetValue<int>())).IsEquivalentTo([1, 2]);
         await Assert.That(replay.Single()).DoesNotContain(Secret);
+        await Assert.That(Watch.HeldLineFor(Sid, null).Held).IsNull();
+    }
+
+    [Test]
+    public async Task A_line_the_shutdown_budget_cannot_redact_flags_needs_import() {
+        var path = await TranscriptWithHeldLine(null);
+        _clock.Exhausted = true;
+        await Drain(path, null, 1);
+        var spool = new TranscriptSpool(Tmp.PathTo("spool"), _time);
+
+        var result = await Watch.SpoolUndeliveredTranscriptTailAsync(
+            spool, path, Sid, null, "claude", 1, new CommitObservation.Uncovered(), CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(TranscriptSpool.AppendResult.MarkedNeedsImport);
+        await Assert.That(spool.NeedsImport(Sid)).IsTrue();
+        await Assert.That(spool.HasBacklog(Sid)).IsFalse();
         await Assert.That(Watch.HeldLineFor(Sid, null).Held).IsNull();
     }
 }
