@@ -160,7 +160,7 @@ public class SessionTakeoverTests {
 
         await Run(routes);
 
-        var order = routes.Posts.Select(p => p.Body!["work_item_id"]!.GetValue<string>()).ToList();
+        var order = routes.Posts.Where(p => p.Path == "/api/work-items/declare").Select(p => p.Body!["work_item_id"]!.GetValue<string>()).ToList();
         await Assert.That(order).IsEquivalentTo(new[] { "w1", "w3", "w2" }, CollectionOrdering.Matching);
     }
 
@@ -201,7 +201,7 @@ public class SessionTakeoverTests {
 
         await Run(routes);
 
-        await Assert.That(routes.Posts.Single().Path).IsEqualTo("/api/plans/p1/tasks/t3");
+        await Assert.That(routes.Posts.Single(p => p.Path.StartsWith("/api/plans/", StringComparison.Ordinal)).Path).IsEqualTo("/api/plans/p1/tasks/t3");
     }
 
     [Test]
@@ -228,7 +228,7 @@ public class SessionTakeoverTests {
 
         await Run(routes);
 
-        await Assert.That(routes.Posts.Single().Path).IsEqualTo("/api/plans/p1/tasks/t2");
+        await Assert.That(routes.Posts.Single(p => p.Path.StartsWith("/api/plans/", StringComparison.Ordinal)).Path).IsEqualTo("/api/plans/p1/tasks/t2");
     }
 
     [Test]
@@ -238,7 +238,7 @@ public class SessionTakeoverTests {
 
         var o = Outcome(await Run(routes));
 
-        await Assert.That(routes.Posts.Count).IsEqualTo(0);
+        await Assert.That(routes.Posts.Count(p => p.Path.StartsWith("/api/plans/", StringComparison.Ordinal))).IsEqualTo(0);
         await Assert.That(o["skipped_plans"]!.AsArray()[0]!["reason"]!.GetValue<string>()).IsEqualTo("not_adoptable");
     }
 
@@ -275,7 +275,7 @@ public class SessionTakeoverTests {
 
         var o = Outcome(await Run(routes));
 
-        await Assert.That(routes.Posts.Last().Path).IsEqualTo("/api/plans/cur/tasks/a");
+        await Assert.That(routes.Posts.Last(p => p.Path.StartsWith("/api/plans/", StringComparison.Ordinal)).Path).IsEqualTo("/api/plans/cur/tasks/a");
         await Assert.That(o["current_plan_id"]!.GetValue<string>()).IsEqualTo("cur");
     }
 
@@ -296,7 +296,7 @@ public class SessionTakeoverTests {
 
         await Run(routes);
 
-        await Assert.That(routes.Posts.Single().Body!["note"]!.GetValue<string>()).IsEqualTo("");
+        await Assert.That(routes.Posts.Single(p => p.Path == "/api/plans/p1/tasks/t1").Body!["note"]!.GetValue<string>()).IsEqualTo("");
     }
 
     [Test]
@@ -432,6 +432,56 @@ public class SessionTakeoverTests {
         var r = (TakeoverResult.Completed)await Run(routes);
 
         await Assert.That(r.Unsuccessful).IsTrue();
+    }
+
+    [Test]
+    public async Task Claim_adoption_runs_even_when_work_items_are_not_in_the_plan() {
+        var routes = Server(Ended(), items: null);
+        routes.Get($"/api/work-items/session/{Previous}", 403, """{"code":"work_items_not_in_plan"}""");
+        routes.Post("/api/loose-ends/adopt", 200, """{"results":[{"outcome":"transferred","attempted_claim_id":"old","claim":{"claim_id":"new","session_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}""");
+        var result = (TakeoverResult.Completed)await Run(routes);
+        var adoption = routes.Posts.Single(p => p.Path == "/api/loose-ends/adopt");
+        await Assert.That(adoption.Body!["previous_session_id"]!.GetValue<string>()).IsEqualTo(Previous);
+        await Assert.That(adoption.Body["session_id"]!.GetValue<string>()).IsEqualTo(Current);
+        await Assert.That(result.Outcome["loose_end_claims"]!["results"]![0]!["outcome"]!.GetValue<string>()).IsEqualTo("transferred");
+        await Assert.That(result.Unsuccessful).IsFalse();
+        await Assert.That(routes.Posts.Any(p => p.Path == "/api/work-items/declare")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_partial_claim_adoption_is_not_reported_as_a_successful_takeover() {
+        var routes = Server(Ended());
+        routes.Post("/api/loose-ends/adopt", 200, """{"results":[{"outcome":"transferred","attempted_claim_id":"old","claim":{"claim_id":"new"}},{"outcome":"ownership_lost","attempted_claim_id":"lost"}]}""");
+        var result = (TakeoverResult.Completed)await Run(routes);
+        await Assert.That(result.Unsuccessful).IsTrue();
+        await Assert.That(result.Outcome["loose_end_claims"]!["results"]![1]!["attempted_claim_id"]!.GetValue<string>()).IsEqualTo("lost");
+        await Assert.That(TakeoverReport.Render(result.Outcome)).Contains("ownership_lost");
+        await Assert.That(TakeoverReport.Render(result.Outcome)).Contains("lost");
+        await Assert.That(routes.Posts.Count(p => p.Path == "/api/loose-ends/adopt")).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(404, "", "unsupported", false)]
+    [Arguments(404, "{\"code\":\"next_work_unavailable\"}", "unavailable", true)]
+    [Arguments(404, "{\"code\":\"session_not_found\"}", "failed", true)]
+    [Arguments(503, "{\"code\":\"loose_end_claims_unavailable\"}", "failed", true)]
+    public async Task Claim_adoption_distinguishes_old_servers_from_failed_operations(int status, string body, string expected, bool unsuccessful) {
+        var routes = Server(Ended());
+        routes.Post("/api/loose-ends/adopt", status, body);
+        var result = (TakeoverResult.Completed)await Run(routes);
+        await Assert.That(result.Outcome["loose_end_claims"]!["status"]!.GetValue<string>()).IsEqualTo(expected);
+        await Assert.That(result.Unsuccessful).IsEqualTo(unsuccessful);
+        await Assert.That(routes.Posts.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_recorded_adoption_waiting_for_projection_retains_its_identity() {
+        var routes = Server(Ended());
+        routes.Post("/api/loose-ends/adopt", 200, """{"results":[{"outcome":"recorded_catching_up","attempted_claim_id":"old","claim":{"claim_id":"new"}}]}""");
+        var result = (TakeoverResult.Completed)await Run(routes);
+        await Assert.That(result.Unsuccessful).IsFalse();
+        await Assert.That(TakeoverReport.Render(result.Outcome)).Contains("recorded_catching_up");
+        await Assert.That(TakeoverReport.Render(result.Outcome)).Contains("new");
     }
 
     [Test]

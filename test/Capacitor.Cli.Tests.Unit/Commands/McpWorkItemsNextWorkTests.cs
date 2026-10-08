@@ -237,8 +237,10 @@ public class McpWorkItemsNextWorkTests {
         public string? Url { get; private set; }
         public HttpMethod? Method { get; private set; }
         public string? RequestBody { get; private set; }
+        public int Calls { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Calls++;
             Url         = request.RequestUri?.ToString();
             Method      = request.Method;
             RequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
@@ -264,6 +266,73 @@ public class McpWorkItemsNextWorkTests {
     const string LooseEnds = """
         {"items":[{"loose_end_id":"le1","text":"Add the retry test","source_family":"declared","repo_hash":"r1","latest_session_id":"s1","last_sighted_at":"2026-09-28T10:00:00Z","sighting_count":1,"closed_at":null}],"next_cursor":"c2"}
         """;
+
+    [Test]
+    [Arguments("claim_loose_end", "claim", "loose_end_id", "acquired")]
+    [Arguments("release_loose_end", "release", "claim_id", "released")]
+    public async Task Claim_tools_post_once_with_the_explicit_session(string tool, string route, string field, string outcome) {
+        var (h, response) = await DispatchToolAsync(tool, $$"""{"{{field}}":"end","session_id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"}""",
+            () => throw new InvalidOperationException("No repository lookup is needed"), HttpStatusCode.OK,
+            $$$"""{"outcome":"{{{outcome}}}","claim":{"claim_id":"attempt","status":"{{{(outcome == "released" ? "released" : "in_progress")}}}","loose_end_ids":["end"],"session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}""");
+        await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/" + route);
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(JsonNode.Parse(h.RequestBody!)!["session_id"]!.GetValue<string>()).IsEqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        await Assert.That(Result(response).IsError).IsFalse();
+        await Assert.That(Result(response).Text).Contains("attempt");
+        await Assert.That(Result(response).Text).Contains(outcome);
+    }
+
+    [Test, NotInParallel]
+    [Arguments("claim_loose_end", "loose_end_id")]
+    [Arguments("release_loose_end", "claim_id")]
+    public async Task Claim_tools_infer_the_harness_session_and_an_explicit_session_wins(string tool, string field) {
+        using var session = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "9dc27753-7645-4e46-91ec-c2d69973c152");
+        using var nested = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+        var (inferred, _) = await DispatchToolAsync(tool, $$"""{"{{field}}":"end"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.NotFound, "");
+        var (explicitId, _) = await DispatchToolAsync(tool, $$"""{"{{field}}":"end","session_id":"explicit"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.NotFound, "");
+        await Assert.That(JsonNode.Parse(inferred.RequestBody!)!["session_id"]!.GetValue<string>()).IsEqualTo("9dc2775376454e4691ecc2d69973c152");
+        await Assert.That(JsonNode.Parse(explicitId.RequestBody!)!["session_id"]!.GetValue<string>()).IsEqualTo("explicit");
+    }
+
+    [Test]
+    [Arguments(HttpStatusCode.NotFound, "", "unsupported")]
+    [Arguments(HttpStatusCode.Conflict, "{\"code\":\"already_claimed\"}", "already_claimed")]
+    [Arguments(HttpStatusCode.ServiceUnavailable, "{\"code\":\"loose_end_claims_unavailable\"}", "loose_end_claims_unavailable")]
+    public async Task Claim_refusals_never_fall_back_to_closing_dismissing_or_launching(HttpStatusCode status, string body, string expected) {
+        var (h, response) = await DispatchToolAsync("claim_loose_end", """{"loose_end_id":"end","session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), status, body);
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/claim");
+        await Assert.That(Result(response).Text).Contains(expected);
+        await Assert.That(Result(response).IsError).IsTrue();
+    }
+
+    [Test]
+    public async Task A_recorded_claim_waiting_for_projection_is_not_a_failed_acquisition() {
+        var (_, response) = await DispatchToolAsync("claim_loose_end", """{"loose_end_id":"end","session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.OK,
+            """{"outcome":"recorded_catching_up","claim":{"claim_id":"attempt","status":"in_progress","loose_end_ids":["end"],"session_id":"worker"}}""");
+        await Assert.That(Result(response).IsError).IsFalse();
+        await Assert.That(Result(response).Text).Contains("recorded_catching_up");
+        await Assert.That(Result(response).Text).Contains("attempt");
+    }
+
+    [Test]
+    [Arguments("reserved")]
+    [Arguments("in_progress")]
+    [Arguments("finishing")]
+    public async Task Ledger_claim_metadata_does_not_turn_open_work_into_closed_work(string status) {
+        var json = JsonNode.Parse(LooseEnds)!;
+        json["items"]![0]!["claims"] = JsonNode.Parse($$"""[{"claim_id":"attempt","status":"{{status}}","session_id":"worker","agent_id":"agent"}]""");
+        var text = McpWorkItemsServer.RenderLooseEndList(json.ToJsonString())!;
+        await Assert.That(text).Contains(status);
+        await Assert.That(text).Contains("attempt");
+        await Assert.That(text).Contains("worker");
+        await Assert.That(text).DoesNotContain("Closed");
+        await Assert.That(json["items"]![0]!["closed_at"]).IsNull();
+    }
 
     [Test]
     public async Task List_rendering_shows_ids_and_the_next_cursor() {

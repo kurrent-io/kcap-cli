@@ -31,13 +31,16 @@ When the user asks you to recap a session **and carry on with it** ("recap sessi
 kcap recap <X> --continue
 ```
 
-It attaches this session to X's work items and unfinished plans, prints what it attached, then prints the recap. `continue_session(session_id: X)` in the `kcap-handoff` MCP server does the same takeover without the recap.
+It attaches this session to X's work items and unfinished plans, asks the server to adopt X's loose-end claims, prints the outcomes, then prints the recap. `continue_session(session_id: X)` in the `kcap-handoff` MCP server does the same takeover without the recap. Claim adoption runs independently of work-item availability, including on Free.
 
 - **Exit 2 means it refused** — X may still be running, was not found, is this session itself, is not a session id, or no current session could be identified. Read the message and tell the user. Only when it says X may still be running, ask whether X is gone, and retry with `--force` (`force: true`) only when they confirm. Never pass it on your own judgement. When `continue_session` says there is no current session and you know this session's id, pass it as `current_session_id`.
 - **Exit 1 means nothing, or not everything, was linked** — a server read or write failed (the report names which). Tell the user; do not carry on as if the work was taken over. When it also says the server rejected the login, ask the user to run `kcap login`, then retry.
 - **More than one plan adopted?** Only the one reported as the current plan (`current_plan_id`) is implied; pass `plan_id` on every plan call for any other.
 - **Before resuming a plan task, verify it** as the `plans` skill's "Verify before continuing" says: a task left `in_progress` may be half-written.
-- Tell the user which work items and which plan task you took over. Work items reported as not available on this plan are expected on the Free plan.
+- **Read `loose_end_claims.results` individually.** Each `attempted_claim_id` identifies the predecessor; a transferred or reacquired claim supplies the current `claim_id`. Keep that new identity for completion or release. `recorded_catching_up` is recorded ownership, not a reason to acquire another attempt.
+- **Partial adoption is not success.** `ownership_lost`, `already_claimed` or unavailable ownership can coexist with successful transfers. Report which attempts failed; do not act as their owner, close them with the predecessor id, or launch duplicates. `--force` changes only the local liveness confirmation, not server ownership admission.
+- **`unsupported`** means the server has no claim-adoption route; report that separately from an ordinary API failure. Attachment alone does not prove ownership.
+- Tell the user which work items, plan task and claims you took over, including failures. Work items reported as not available on this plan are expected on the Free plan.
 
 ## Usage
 

@@ -116,7 +116,7 @@ public class McpWorkItemsServerTests {
             "get_work_item_topology",
             "merge_work_item", "detach_work_item",
             "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
-            "list_loose_ends", "close_loose_end", "reopen_loose_end",
+            "list_loose_ends", "claim_loose_end", "release_loose_end", "close_loose_end", "reopen_loose_end",
             "list_work_item_evals", "get_work_item_eval", "request_work_item_eval", "cancel_work_item_eval"
         });
     }
@@ -307,6 +307,32 @@ public class McpWorkItemsServerTests {
         await Assert.That(byName["list_loose_ends"].InputSchema.Required).IsEmpty();
         await Assert.That(byName["close_loose_end"].InputSchema.Required).IsEquivalentTo(new[] { "loose_end_id" });
         await Assert.That(byName["reopen_loose_end"].InputSchema.Required).IsEquivalentTo(new[] { "loose_end_id" });
+    }
+
+    [Test]
+    public async Task Claim_tools_require_the_target_and_keep_session_inference_optional() {
+        var tools = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
+        await Assert.That(tools["claim_loose_end"].InputSchema.Required).IsEquivalentTo(["loose_end_id"]);
+        await Assert.That(tools["release_loose_end"].InputSchema.Required).IsEquivalentTo(["claim_id"]);
+        await Assert.That(tools["claim_loose_end"].InputSchema.Properties.ContainsKey("session_id")).IsTrue();
+        await Assert.That(tools["release_loose_end"].InputSchema.Properties.ContainsKey("session_id")).IsTrue();
+        await Assert.That(tools["close_loose_end"].InputSchema.Properties.ContainsKey("claim_id")).IsTrue();
+        await Assert.That(tools["list_loose_ends"].InputSchema.Properties.ContainsKey("claimed_session_id")).IsTrue();
+    }
+
+    [Test]
+    public async Task Closing_claimed_work_forwards_the_claim_and_worker_ids() {
+        var body = McpWorkItemsServer.BuildCloseLooseEndBody(Args("""{"loose_end_id":"end","claim_id":"attempt","session_id":"explicit"}"""), "ambient");
+        await Assert.That(body["claim_id"]!.GetValue<string>()).IsEqualTo("attempt");
+        await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo("explicit");
+    }
+
+    [Test]
+    public async Task The_claimed_worker_filter_is_separate_from_sighting_provenance() {
+        var url = McpWorkItemsServer.BuildLooseEndsUrl("https://x", Args("""{"session_id":"source","claimed_session_id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA","status":"open"}"""), null);
+        await Assert.That(url).Contains("session_id=source");
+        await Assert.That(url).Contains("claimed_session_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        await Assert.That(url).Contains("status=open");
     }
 
     [Test]
@@ -756,6 +782,17 @@ public class McpWorkItemsServerTests {
         var (h, _) = await DispatchCloseAsync("""{"loose_end_id":"le1"}""");
 
         await Assert.That(h.Bodies[0]).IsEqualTo("""{"loose_end_id":"le1","session_id":"9dc2775376454e4691ecc2d69973c152"}""");
+    }
+
+    [Test, NotInParallel]
+    public async Task A_claimed_close_never_retries_without_ownership_when_the_defaulted_worker_is_unknown() {
+        using var session = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "9dc27753-7645-4e46-91ec-c2d69973c152");
+        using var nested = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+        var (handler, response) = await DispatchCloseAsync("""{"loose_end_id":"end","claim_id":"attempt"}""");
+        await Assert.That(handler.Bodies.Count).IsEqualTo(1);
+        await Assert.That(JsonNode.Parse(handler.Bodies[0])!["claim_id"]!.GetValue<string>()).IsEqualTo("attempt");
+        await Assert.That(response).Contains("session_not_found");
+        await Assert.That(response).DoesNotContain("Closed loose end");
     }
 
     [Test, NotInParallel]

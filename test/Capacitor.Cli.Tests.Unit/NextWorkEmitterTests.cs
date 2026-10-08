@@ -39,6 +39,16 @@ public class NextWorkEmitterTests {
     }
 
     [Test]
+    public async Task Server_filtered_work_is_not_reintroduced_from_an_earlier_nudge() {
+        var first = NextWorkEmitter.BuildFragment(JsonNode.Parse(Ack), disabled: false);
+        var filtered = NextWorkEmitter.BuildFragment(JsonNode.Parse("""{"next_work":{"rows":[]}}"""), disabled: false);
+        await Assert.That(first).Contains("Finish the retry test");
+        await Assert.That(filtered).IsNull();
+        var next = NextWorkEmitter.BuildFragment(JsonNode.Parse(Ack), disabled: false);
+        await Assert.That(next).IsEqualTo(first);
+    }
+
+    [Test]
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");

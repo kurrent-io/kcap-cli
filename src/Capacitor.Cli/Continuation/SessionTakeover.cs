@@ -1,18 +1,15 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Continuation;
 
-/// <summary>
-/// Attaches the current session to the work items and unfinished plans of the session it continues.
-/// A live local process refuses the takeover; a local exit record allows it whatever the server
-/// still believes, because a private daemon agent's death never reaches the server. Only with no
-/// local evidence does the server's status decide.
-/// </summary>
+/// <summary>A local exit record can authorize takeover even before the server observes the exit.
+/// Claim ownership is independently admitted by the server; force never bypasses that fence.</summary>
 sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
     /// <summary>The server's own threshold for treating an active session as stale.</summary>
     static readonly TimeSpan StaleAfter = TimeSpan.FromHours(1);
@@ -72,6 +69,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         };
 
         await AdoptPlansAsync(client, baseUrl, plans, plansError, currentWire, outcome, writes, ct);
+        outcome["loose_end_claims"] = await AdoptClaimsAsync(client, baseUrl, previousWire, currentWire, writes, ct);
 
         var readFailed = Str(outcome["work_items"]?["status"]) == "failed" || outcome["plans_error"] is not null;
 
@@ -198,6 +196,43 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
         if (currentPlan is not null) outcome["current_plan_id"] = currentPlan;
     }
+
+    static async Task<JsonObject> AdoptClaimsAsync(
+            HttpClient client, string baseUrl, string previous, string current, WriteCount writes, CancellationToken ct) {
+        var result = (JsonObject)JsonNode.Parse("""{"status":"failed","results":[]}""")!;
+        writes.Attempted++;
+        try {
+            var body = $"{{\"previous_session_id\":\"{JsonEncodedText.Encode(previous)}\",\"session_id\":\"{JsonEncodedText.Encode(current)}\"}}";
+            using var response = await client.PostAsync($"{baseUrl}/api/loose-ends/adopt", new StringContent(body, Encoding.UTF8, "application/json"), ct);
+            var json = ParseObject(await response.Content.ReadAsStringAsync(ct));
+            var code = Str(json?["code"]);
+            if (!response.IsSuccessStatusCode) {
+                if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed && code is null) {
+                    result["status"] = JsonString("unsupported");
+                    return result;
+                }
+                if (code == "next_work_unavailable") result["status"] = JsonString("unavailable");
+                result["error"] = JsonString($"HTTP {(int)response.StatusCode}" + (code is not null && NextWorkEmitter.IsCode(code) ? $" — {code}" : ""));
+                if (response.StatusCode == HttpStatusCode.Unauthorized) writes.Unauthorized = true;
+            } else if (json?["results"] is JsonArray results) {
+                result["results"] = results.DeepClone();
+                var partial = results.Any(entry => entry is not JsonObject item ||
+                    Str(item["outcome"]) is not ("acquired" or "already_owned" or "transferred" or "recorded_catching_up") ||
+                    item["claim"] is not JsonObject claim || Str(claim["claim_id"]) is null);
+                result["status"] = JsonString(partial ? "partial" : "ok");
+                if (partial) writes.Failed++;
+                return result;
+            } else {
+                result["error"] = JsonString(MalformedResponse);
+            }
+        } catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested) {
+            result["error"] = JsonString("Claim adoption could not be confirmed. Inspect the ledger before retrying.");
+        }
+        writes.Failed++;
+        return result;
+    }
+
+    static JsonNode JsonString(string value) => JsonNode.Parse($"\"{JsonEncodedText.Encode(value)}\"")!;
 
     static List<JsonObject> OpenTasks(JsonObject plan) =>
         plan["tasks"] is JsonArray tasks

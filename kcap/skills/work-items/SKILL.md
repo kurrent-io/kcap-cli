@@ -1,20 +1,12 @@
 ---
 name: work-items
 description: >-
-  This skill should be used when you are planning or discovering the SHAPE of a
-  work item — that it breaks into sub-tasks (a parent and its parts), or that
-  one piece must land before another (a blocks / blocked-by dependency) — and
-  you want that structure recorded so it shows up in Kurrent Capacitor's Home
-  "Blockers & dependencies" view and progress figures. Also use it the moment
-  you decide to defer a piece of work, to record it as a loose end in the
-  user's next-work ledger, and whenever the user asks what to work on next or
-  you are about to propose new work, to read the ranked next-work feed first.
-  Use the `kcap mcp workitems` MCP tools to DECLARE the breakdown, the
-  relations and the loose ends, and to read the feed. Do NOT declare STRUCTURE
-  for ordinary "attach this session to issue X" correlation alone (a single
-  `declare_work_item` call, no structure), or for a single indivisible task
-  with no parts and no dependencies — a loose end is worth declaring in either
-  case.
+  Use when planning a work item's parts or dependencies, correcting a duplicate
+  or wrong attachment, or deferring unfinished work as a loose end. Also use
+  when picking up, releasing or completing a loose end, continuing another
+  session's claimed work, or answering what to work on next. Records declared
+  structure and execution ownership through kcap-workitems. Ordinary attachment
+  alone needs declare_work_item, not a fabricated breakdown.
 ---
 
 # Work items — declaring breakdown and dependencies
@@ -99,9 +91,33 @@ session's primary item. When that is wrong, say where it belongs: `work_item_id`
 known item with no issue of its own, or `standalone: true` when it belongs to none of
 this session's work, such as an issue still to be filed. Set at most one of the two.
 
-When you finish a listed or declared loose end, close it with `close_loose_end`, naming it by
-the `loose_end_id` that `get_next_work`'s evidence or `list_loose_ends` shows. A later sighting
-of the same work reopens it on its own; `reopen_loose_end` undoes a mistaken close.
+### Pick up, give back, finish
+
+For work **this session will do**:
+
+1. Call `claim_loose_end(loose_end_id)` before starting. Keep its `claim_id` and
+   working `session_id`; an explicit session overrides the harness default.
+2. Work stays **open**, but the claim keeps it out of next-work suggestions.
+   `list_loose_ends(claimed_session_id: <worker>)` finds ownership;
+   `session_id` instead filters where work was sighted. Attachment to a work item
+   does not claim anything, and itemless work needs no new work item.
+3. When finished, call `close_loose_end(loose_end_id, claim_id)` with the working
+   session. When abandoning unfinished work, call `release_loose_end(claim_id)`
+   instead: it becomes available without being closed.
+
+For a **separate hosted agent**, pass `work_item: "le:<id>"` to `start_agent` after
+user approval; launch reserves ownership automatically. Do not claim it for
+this session first. Follow `start-agents` for dispatch outcomes.
+
+`recorded_catching_up` means ownership was recorded; retain the identity rather
+than starting another attempt. An unsupported server, conflict or unavailable
+ownership check is not permission to dismiss, close, or launch the work another
+way. Inspect the ledger and report the refusal. A predecessor cannot complete
+its successor's claim. Continuing another session uses `continue_session` or
+`kcap recap <X> --continue`; inspect every adoption outcome (see `recap`).
+
+Unclaimed completed work can still be closed without a claim id. A later sighting
+can reopen work; `reopen_loose_end` undoes a mistaken close, not a claim release.
 
 ## What to work on next
 
@@ -139,8 +155,10 @@ loose ends with `declare_loose_end` (one call per item, never "none"), then call
 | `get_session_work_items` | — | List what the current session is attached to. |
 | `get_next_work` | — | What the user should work on next, ranked, with because-clauses and evidence. `repo_hash` defaults to the current repository; `limit` defaults to 5 (max 20). |
 | `declare_loose_end` | `text` | Record one unfinished item in the user's next-work ledger. `subject` optionally names the issue it is about; `work_item_id` or `standalone` says which item it belongs under. `session_id` defaults to the current session. |
-| `list_loose_ends` | — | List loose ends with their `loose_end_id`: `status` open (default) or closed, `repo_hash` defaults to the current repository, `limit` 20 (max 50), `cursor` from `next_cursor`. |
-| `close_loose_end` | `loose_end_id` | Mark a finished loose end done. `session_id` defaults to the current session. |
+| `list_loose_ends` | — | List open (default) or closed work, including admitted claims. `claimed_session_id` filters the worker; `session_id` filters sightings. `repo_hash` defaults to the current repository; `limit` 20 (max 50), `cursor` from `next_cursor`. |
+| `claim_loose_end` | `loose_end_id` | Claim for the working `session_id` (current session by default); keep the returned `claim_id`. |
+| `release_loose_end` | `claim_id` | Give unfinished work back without closing it; working `session_id` defaults to this session. |
+| `close_loose_end` | `loose_end_id` | Complete work; pass `claim_id` for claimed work. Working `session_id` defaults to this session. |
 | `reopen_loose_end` | `loose_end_id` | Undo a close. |
 | `declare_work_breakdown` | `parent_id`, `part_ids` | Declare parent → parts. |
 | `retract_work_breakdown` | `parent_id`, `part_ids` | Detach parts from the parent. |
