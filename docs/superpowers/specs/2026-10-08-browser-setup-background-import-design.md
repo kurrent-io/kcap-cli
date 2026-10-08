@@ -111,9 +111,11 @@ Mechanism — a detached-only plan file, not new CLI flags:
 - **The server travels in the plan because the profile does not have it yet.** The browser leg runs
   before setup saves the chosen server to the profile, which is why the foreground imports through
   `SetupCommand.ImportContext(profiles, serverUrl)`. The child builds its context the same way — its
-  pinned profile's identity (name, tokens) with the plan's server — so on a first run it does not
-  resolve no server, and on a re-run it does not use the profile's previous one. `KCAP_URL` cannot
-  carry it: a URL override resolves to no profile.
+  pinned profile's identity (name, tokens) with the plan's server — **and its HTTP client from
+  `ChosenServerHttp.For(planServer, context)`**, passed to every pass: `ImportCommand` takes its URL
+  from the context but its client separately, and the process container's client is bound to the
+  profile's saved server. So on a first run it does not resolve no server, and on a re-run it does not
+  use the profile's previous one. `KCAP_URL` cannot carry it: a URL override resolves to no profile.
 - `BackgroundImportSpawner` spawns `kcap import --yes` with the existing detached variables
   (`KCAP_IMPORT_DETACHED_LOG`, config dir, profile, visibility) plus `KCAP_IMPORT_PLAN=<path>`.
 - `Program.cs`, when both the detached log and the plan variable are present, reads the plan and calls
@@ -243,8 +245,11 @@ foreground passes only.
   `/sessions?status=ended`, mirroring the terminal's fallback.
 - **Suppressed by the import itself** (`import_failed`, `no_new_sessions`, `nothing_landed`) or
   `handoff_file_unwritten`: no panel.
-- **`background` failed**: a warning line naming `kcap import` as the way to bring the rest over —
-  shown on `run_failed` too.
+- **`background` failed**: a warning line saying the rest did not start importing and that running
+  `kcap setup` again with the same repositories finishes it — shown on `run_failed` too. Not plain
+  `kcap import`: it applies `--private` only when asked and otherwise the profile's default
+  visibility, which can be wider than an "only me" choice. Setup's import lane re-applies each
+  repository's chosen level.
 - **`run_failed` with `background: running`**: the failure line says the rest, including what failed,
   is being retried in the background. Accurate, because the single child re-runs every chosen level.
 
@@ -262,8 +267,13 @@ foreground passes only.
   every chosen level, and the other level's foreground still feeds the handoff file and the prompt.
 - A failed foreground visibility write: the session is dropped from the foreground (private) or counted
   failed (shared), and the child's uncapped pass retries the write.
-- A spawn failure: `background: failed`; the page shows the `kcap import` warning; the prompt can still
+- A spawn failure: `background: failed`; the page shows the re-run-setup warning; the prompt can still
   be offered for what landed (`HandoffDecision` already distinguishes these).
+- **Retry advice never names plain `kcap import`** on this flow. `SetupImportLane`'s existing
+  terminal lines ("Run `kcap import` to retry it") and `PrintBackground`'s failure line, when printed
+  for the browser flow, say to run `kcap setup` again with the same repositories, for the visibility
+  reason above. The terminal flow's own lines are unchanged (its import is `--all` at the profile
+  default, which plain `kcap import --all` reproduces).
 - A plan-file write failure: no child is spawned and `background` is `failed`.
 - Cancellation during the foreground passes cancels as today; no child is spawned after cancellation.
 
@@ -282,8 +292,9 @@ CLI (TUnit):
 - Merge: candidate order; one unknown level yields `partial_exact`; both unknown yields `unknown`;
   remaining count includes failed selected sessions.
 - `get_connection` returns the resolved `server_url` and `profile` without a network call.
-- Child context: the plan's server with the pinned profile's identity, on a profile that has no
-  server and on one that has a different server.
+- Child context and client: the plan's server with the pinned profile's identity, and requests reach
+  the plan's server, on a profile that has no server and on one that has a different server.
+- Browser-flow failure lines name `kcap setup`, not `kcap import`.
 - `BrowserFirstRunFlow`: outcome carries `background`, `background_remaining` and exactly one of
   prompt/suppressed, including on `run_failed`; handoff-file write failure reports the suppression.
 
