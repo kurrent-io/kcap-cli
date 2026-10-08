@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
@@ -60,12 +61,16 @@ public sealed record PluginEnvironment(
     /// root.</summary>
     public AgentsPaths Agents => new(Home);
 
+    /// <summary>The account registry user-scope wiring iterates. Null wires only the one
+    /// environment-derived layout per vendor.</summary>
+    public AccountStore? Accounts { get; init; }
+
     public static PluginEnvironment FromProcess(
-            ProfileConfig profiles, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries) => new(
+            ProfileConfig profiles, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries, AccountStore accounts) => new(
         Home:              home,
         Profiles:          profiles,
         ResolvePluginPath: () => SetupCommand.ResolvePluginPath(),
         Stdout:            Console.Out,
         Stderr:            Console.Error
-    ) { Harnesses = harnesses, Binaries = binaries };
+    ) { Harnesses = harnesses, Binaries = binaries, Accounts = accounts };
 }

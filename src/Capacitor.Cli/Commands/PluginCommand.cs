@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -114,18 +115,26 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
-        // --if-installed: refresh-only mode used by the npm postinstall hook.
-        // Skip when the user never opted in; short-circuit when the marker
-        // already matches the current CLI version.
-        var refreshOnly = args.Contains("--if-installed");
+        // --if-installed: refresh-only mode used by the npm postinstall hook. It never adopts or
+        // rewrites a default layout the user never opted into, and skips one whose marker is current.
+        var refreshOnly      = args.Contains("--if-installed");
+        var defaultInstalled = ClaudePluginInstaller.IsInstalled(settingsPath);
 
-        switch (refreshOnly) {
-            case true when !ClaudePluginInstaller.IsInstalled(settingsPath):
-            case true when
-                ClaudePluginInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current():
-                return 0;
-        }
+        var skipDefault = refreshOnly
+            && (!defaultInstalled || ClaudePluginInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current());
 
+        var exit = skipDefault ? 0 : await InstallClaudeLayout(settingsPath, scope, refreshOnly);
+
+        if (exit != 0 || scope != "user") return exit;
+
+        var accountsWired = await WireUserAccountsAsync(
+            HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home,
+            adoptDefault: !refreshOnly || defaultInstalled, refreshOnly, enableNetwork: false);
+
+        return accountsWired || refreshOnly ? 0 : 1;
+    }
+
+    async Task<int> InstallClaudeLayout(string settingsPath, string scope, bool refreshOnly) {
         var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
@@ -174,6 +183,15 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
+        var exit = await RemoveClaudeLayout(settingsPath, scope);
+
+        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home))
+            exit = 1;
+
+        return exit;
+    }
+
+    async Task<int> RemoveClaudeLayout(string settingsPath, string scope) {
         if (!File.Exists(settingsPath)) {
             await env.Stdout.WriteLineAsync("Nothing to remove — settings file not found.");
 
@@ -329,21 +347,26 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var refreshOnly = args.Contains("--if-installed");
 
         if (refreshOnly) {
-            if (!CodexHooksInstaller.IsInstalled(hooksPath)) return 0;
+            var defaultInstalled = CodexHooksInstaller.IsInstalled(hooksPath);
 
             // The marker gates only the hooks write. The MCP registration is healed on every
             // refresh: the marker says nothing about config.toml, and a server that joined the
             // Codex set after the last full install is otherwise never registered.
             // Never fail the npm install path.
-            if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()) {
-                if (InstallCodexHooks(hooksPath))
-                    await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
-                else
-                    await env.Stderr.WriteLineAsync(
-                        $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+            if (defaultInstalled) {
+                if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()) {
+                    if (InstallCodexHooks(hooksPath))
+                        await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
+                    else
+                        await env.Stderr.WriteLineAsync(
+                            $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+                }
+
+                await RegisterCodexMcpServersAsync();
             }
 
-            await RegisterCodexMcpServersAsync();
+            if (scope == "user")
+                await WireUserAccountsAsync(HarnessId.Codex, codex.Home, adoptDefault: defaultInstalled, refreshOnly: true, enableNetwork: false);
 
             return 0;
         }
@@ -434,9 +457,15 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 "Note: Codex requires the project's .codex directory to be trusted. " +
                 "Run `codex` once in this directory and accept the trust prompt."
             );
+
+            return 0;
         }
 
-        return 0;
+        var accountsWired = await WireUserAccountsAsync(
+            HarnessId.Codex, codex.Home, adoptDefault: true, refreshOnly: false,
+            enableNetwork: !args.Contains("--skip-codex-network-access"));
+
+        return accountsWired ? 0 : 1;
     }
 
     /// <summary>
@@ -553,7 +582,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
-        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors) {
+        var accountsFailed = scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Codex, codex.Home);
+
+        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors || accountsFailed) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 1;
@@ -564,6 +595,77 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         return 0;
+    }
+
+    /// <summary>Every registered account of <paramref name="vendor"/> other than the
+    /// environment-derived one, which keeps its own install path. Null when the registry cannot be
+    /// read or written.</summary>
+    async Task<IReadOnlyList<VendorAccount>?> UserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault) {
+        if (env.Accounts is null) return [];
+
+        try {
+            if (adoptDefault) AccountAdoption.EnsureDefault(env.Accounts, vendor, defaultDirectory, TimeProvider.System);
+
+            return [.. AccountAdoption.Of(env.Accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, defaultDirectory))];
+        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
+            await env.Stderr.WriteLineAsync($"Could not access the {vendor} account registry ({env.Accounts.Directory}): {ex.Message}");
+
+            return null;
+        }
+    }
+
+    async Task<bool> WireUserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault, bool refreshOnly, bool enableNetwork) {
+        var accounts = await UserAccountsAsync(vendor, defaultDirectory, adoptDefault);
+        if (accounts is null) return false;
+
+        WiringOptions? options = null;
+        var            ok      = true;
+
+        foreach (var account in accounts) {
+            if (refreshOnly && MarkerIsCurrent(account)) continue;
+
+            options ??= Wiring(enableNetwork);
+            ok      &= await ReportAsync(account, AccountWiring.Wire(account, env.Home, options), "Wired", "wire");
+        }
+
+        return ok;
+    }
+
+    async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
+        var accounts = await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false);
+        if (accounts is null) return false;
+
+        var ok = true;
+
+        foreach (var account in accounts)
+            ok &= await ReportAsync(account, AccountWiring.Unwire(account, env.Home), "Unwired", "unwire");
+
+        return ok;
+    }
+
+    bool MarkerIsCurrent(VendorAccount account) => account.Vendor switch {
+        HarnessId.Claude => ClaudePluginInstaller.ReadMarker(AccountLayouts.Claude(env.Home, account.Directory).UserSettings) == CapacitorVersion.Current(),
+        HarnessId.Codex  => CodexHooksInstaller.ReadMarker(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson) == CapacitorVersion.Current(),
+        _                => false,
+    };
+
+    WiringOptions Wiring(bool enableNetwork) {
+        var domains = enableNetwork ? CodexConfigToml.BuildAllowDomains(env.Profiles.Profiles.Values.Select(p => p.ServerUrl)) : [];
+
+        return new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, domains.Count == 0 ? null : domains);
+    }
+
+    async Task<bool> ReportAsync(VendorAccount account, IReadOnlyList<WiringStep> steps, string done, string attempt) {
+        if (AccountWiring.Succeeded(steps)) {
+            await env.Stdout.WriteLineAsync($"{done} {account.Vendor} account {account.Label} ({account.Directory})");
+
+            return true;
+        }
+
+        var detail = string.Join(", ", steps.Where(s => !s.Succeeded).Select(s => $"{s.Name}: {s.Detail}"));
+        await env.Stderr.WriteLineAsync($"Could not {attempt} {account.Vendor} account {account.Label} ({account.Directory}): {detail}");
+
+        return false;
     }
 
     /// <summary>

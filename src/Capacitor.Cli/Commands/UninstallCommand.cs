@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
@@ -129,7 +130,7 @@ public sealed class UninstallCommand(
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
         if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
-        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries);
+        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries, AccountStore.Beside(store));
         var pluginCommand = new PluginCommand(env, workdir);
 
         // User-level agent integrations. Each remove command is idempotent and
