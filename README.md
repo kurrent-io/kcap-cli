@@ -208,6 +208,9 @@ In `--no-prompt` mode, the wizard installs hooks for every detected agent by def
 > **Need hooks for an agent installed after setup, or scoped to a single repo?**
 > Run `kcap plugin install [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--vibe]` (omit the flag for the Claude Code plugin), or pair Codex with `--project` for a per-repo install. Every per-vendor install also writes the agent skills to `~/.agents/skills/` (Kiro and Antigravity get their own copies under `~/.kiro/skills` and `~/.gemini/skills`), so `--skills` is only needed to install or refresh them on their own — for instance for an agent kcap has no integration for. Cursor uses user-scope only — `--project` has no effect with `--cursor`. After installing Codex hooks, the next `codex` launch prompts to trust the new hooks — accept once to trust them all (run `/hooks` inside Codex if you'd rather trust each entry individually). If you only use the Codex desktop app, it never prompts — trust the kcap hooks under Settings → Hooks in the app. After a `--project` install, also run `codex` once in the repo and accept the workspace trust prompt. Re-running after a kcap upgrade is rarely needed for user-scope installs — the npm postinstall hook auto-refreshes them on every `npm install -g @kurrent/kcap`, and `kcap update` refreshes them too (npm 11+ blocks install scripts by default — `kcap update` works regardless, or add `allow-scripts[]=@kurrent/kcap` to `~/.npmrc` to opt the postinstall in once).
 
+> **Want an agent's kcap tools without recording its sessions?**
+> Add `--tools-only` to `kcap plugin install --cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity`. It writes that agent's MCP servers, skills and steering instructions (the `--skip-<vendor>-mcp`, `--skip-<vendor>-skills` and `--skip-<vendor>-instructions` flags still apply) and nothing that records: no hooks, no Pi or OpenCode live-ingest file, no Antigravity capture plugin, no Kiro agent clone, default-agent switch or Kiro Crew hook, and no git hook. Only Pi's MCP bridge still needs `kcap` on `PATH`. Claude Code and Codex ship their tools with capture, so `--tools-only` is refused for them (exit code 1). The upgrade-time `--if-installed` refresh keeps a tools-only install tools-only: it refreshes the tools and never adds capture. `--tools-only --if-installed` refreshes only the tools of any install.
+
 > **Need at least one agent to capture sessions:** the setup wizard runs to completion without an agent CLI on `PATH` (it'll still configure your profile, auth, and daemon), but kcap only records work once Claude Code or Codex CLI is installed and the hooks are in place.
 
 > **Keep the daemon running:** `kcap daemon start -d` stops when the process dies (a crash, or an OS memory-pressure kill — macOS jetsam / Linux OOM). To auto-restart it and start it at login, install it as a per-user service: `kcap daemon service install`. See [Daemon](#daemon).
@@ -357,6 +360,7 @@ At a glance — each links to its section below:
 | [`kcap ignore`](#configuration) | Exclude paths from recording |
 | [`kcap allow`](#configuration) | Restrict recording to named paths |
 | [`kcap update`](#other-commands) | Upgrade the CLI and refresh agent plugins |
+| [`kcap refresh`](#other-commands) | Re-run the agent-integration refresh after an install or update |
 | [`kcap uninstall`](#uninstalling) | Remove kcap from this machine |
 | [`kcap status` / `whoami` / `login` / `logout`](#other-commands) | Health, identity, and auth |
 | [`kcap harness`](#new-harness-detection) | List / dismiss / reset the "set kcap up for this agent" nudges |
@@ -587,12 +591,13 @@ kcap mcp sessions
 
 Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex, Cursor, Copilot, Gemini, Antigravity) so they can search and recall prior work without leaving the chat. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it (alongside `kcap-review`) directly in `~/.codex/config.toml` under `[mcp_servers]`, so there's nothing extra to do — launch Codex from your repo directory so the server resolves the right repo. Enabling the kcap plugin through Codex's native plugin manager (`codex plugin add`) also provides them via the plugin's `.codex-mcp.json` descriptor. **Cursor:** `kcap setup` / `kcap plugin install --cursor` register it (alongside the other three kcap servers) in `~/.cursor/mcp.json`; opt out with `--skip-cursor-mcp`. **GitHub Copilot CLI:** `kcap setup` / `kcap plugin install --copilot` register it (alongside the other three kcap servers) in `~/.copilot/mcp-config.json`; opt out with `--skip-copilot-mcp`. **Gemini CLI:** `kcap setup` / `kcap plugin install --gemini` register it (alongside the other three kcap servers) in the shared `~/.gemini/settings.json`; opt out with `--skip-gemini-mcp`. **Google Antigravity:** `kcap setup` / `kcap plugin install --antigravity` register it (alongside the other three kcap servers) in `~/.gemini/config/mcp_config.json` — Antigravity's own MCP file, not the Gemini CLI's `settings.json`; opt out with `--skip-antigravity-mcp`.
 
-It provides eight tools:
+It provides nine tools:
 
 - **`search_sessions`** — keyword search over past sessions (and subagent transcripts). `query` takes one to three keywords or identifiers (a ticket id, a file name, a symbol), not a sentence: the literal lanes need every term inside one event or turn summary, so a sentence gets only embedding neighbours. Each hit carries `hit_kind` — `transcript` and `title` are literal matches, `turn_prose` and `semantic` may be nearest-neighbour hits that never contain the query. Searches the current repo first and automatically widens to every visible repo when results come back thin (the response then carries `widened_to_all_repos: true`, and each hit includes its own repo). Pass `repo: "all"` to search across every repo you can see up front, or `repo: "owner/name"` for a different one — an explicit `repo` (including `"all"`) never auto-widens. Filter by `author` / `author_github_id`. Returns ranked hits with `session_id`, snippet, and (for transcript hits) `hit_event_index` + `agent_id` for drilling in.
 - **`list_repo_sessions`** — the sessions you are allowed to see on a repository, or on every repository with `repo: "all"`, with `access_level`, `stale`, `repo`, branch, cwd, last prompt and Edit/Write attempt paths (blank below full access). Without a period: running first, ordered by last activity, and `state` defaults to `active`, so finished sessions are hidden unless you pass `ended` or `all`. With `since` and/or `until`: the sessions worked on in that period, newest start first, `state` defaulting to `all`; each bound takes an instant ending in `Z` or an offset, a date, or a duration back from now (`36h`, `14d`, `2w`). While the response carries `next_cursor`, call again with `cursor` and the same `repo`. `owner` is `me` or a canonical id; `touching_path` matches attempt paths on full-access rows only. An undeclared argument is ignored, not rejected.
 - **`list_repo_plans`** — the declared plans on a repository that you can see, unfinished ones by default, with progress, the next open task and the sessions attached to each. Use this to find work a session left behind.
 - **`get_declared_plans`** — a plan's documents and full task list, by `plan_id` or for every plan a `session_id` touched.
+- **`get_session_evals`** — the eval state of up to 25 sessions by id: not yet ingested, not evaluated, running, completed (overall score, category scores, weakest questions, judge summary) or failed. Unlike `kcap-analytics` it works on every plan; the eval-watch handoff at the end of `kcap setup` follows an import's evals through it.
 - **`get_session_summary`** — concise `summary_text` + `plan` for a session, plus `declared_plans`: a progress pointer for each plan the session declared. Use this to orient before reading the transcript.
 - **`get_session_transcript`** — speaker-tagged events from a session. Pair `around_event` (and `agent_id` if the hit was in a subagent) with the values returned by `search_sessions` to fetch the exact decision context.
 - **`get_turn`** — the full event transcript for one turn (user prompt, tool calls + results, assistant text) by `session_id` + `turn_index`. A turn is one user message and the assistant's full response up to the next user message.
@@ -1004,7 +1009,7 @@ kcap import --opencode --session ses_x --reimport  # force one OpenCode session 
 
 `--discover` reports what is on disk and exits without importing anything: sessions and most-recent date per repository, how many could not be matched to one (those are the sessions `--all` includes and any `--repo`/`--org` selection drops — usually a renamed directory, see `kcap remap`), and a total for each `--since` window the CLI offers. It needs no scope flag, since it is what you run to decide which one to use, and it needs no server or login — the whole report comes off local disk.
 
-`--discover --json` emits the same report as JSON on stdout and nothing else, so it can be piped. Each window carries its own `since` (null for "everything") rather than a label, so a consumer reads the boundaries off the report instead of re-deriving them. Each vendor is dated the way `--since` dates it — Codex by the rollout's day directory, Claude by the transcript's first timestamp — so a window's count predicts what importing with that `--since` would actually select.
+`--discover --json` emits the same report as JSON on stdout and nothing else, so it can be piped. Each window carries its own `since` (null for "everything") rather than a label, so a consumer reads the boundaries off the report instead of re-deriving them. Each repository carries its own `windows` too, in the same order, so the count for any selection of repositories in any window is a sum rather than a guess. Each vendor is dated the way `--since` dates it — Codex by the rollout's day directory, Claude by the transcript's first timestamp — so a window's count predicts what importing with that `--since` would actually select.
 
 `--reimport` forces OpenCode sessions to re-import even when the local completeness ledger (described above) records them as already loaded — the escape hatch for a session that was deleted server-side (e.g. via `kcap disable`) but is still marked complete locally, which a plain re-run would otherwise skip. Scope it with the usual vendor/`--repo`/`--cwd`/`--session` filters to force just the affected sessions; the re-send is idempotent, and a successful forced import refreshes the ledger entry. It has no effect on other vendors, which already re-classify every run.
 
@@ -1087,7 +1092,7 @@ kcap daemon service stop                   # stop the running service (stays ins
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
-kcap daemon service refresh                # bring installed macOS units up to this version; reloads only an idle daemon (runs after `kcap update`)
+kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; reloads only an idle daemon (runs after `kcap update`)
 kcap daemon service uninstall              # stop and remove the service
 ```
 
@@ -1599,6 +1604,7 @@ Cursor is detected by the presence of `~/.cursor/` — you don't need the `curso
 ```bash
 kcap plugin install --cursor                # writes ~/.cursor/hooks.json + agent skills + registers kcap MCP servers
 kcap plugin install --cursor --skip-cursor-mcp  # hooks only, skip ~/.cursor/mcp.json
+kcap plugin install --cursor --tools-only   # MCP servers + agent skills only, no hooks
 kcap plugin remove --cursor                 # remove Cursor hooks + kcap MCP servers
 ```
 
@@ -1659,6 +1665,7 @@ It further installs the **kcap skills** into `~/.kiro/skills` (as `kcap-<name>/S
 
 ```bash
 kcap plugin install --kiro                  # clone default agent + add hook, set as default
+kcap plugin install --kiro --tools-only     # MCP servers + skills only: no clone, default agent unchanged
 kcap plugin remove --kiro                   # restore previous default, delete kcap.json
 ```
 
@@ -1677,6 +1684,7 @@ Pi (`badlogic/pi-mono`) is detected via `~/.pi/agent/` or the `pi` binary on `PA
 ```bash
 kcap plugin install --pi                    # write kcap.ts + kcap-mcp.ts + AGENTS.md block + agent skills
 kcap plugin install --pi --skip-pi-mcp      # ingest + steering only, no MCP bridge
+kcap plugin install --pi --tools-only       # MCP bridge + steering + agent skills, no live-ingest extension
 kcap plugin remove --pi                     # delete both extensions + strip the AGENTS.md block
 ```
 
@@ -2440,9 +2448,10 @@ kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)
 kcap login --device # skip the browser, sign in with a device code instead
-kcap update         # upgrade the CLI and refresh agent plugins (npm-global installs)
+kcap update         # upgrade the CLI and refresh agent plugins (npm-global and script installs)
 kcap update --beta  # switch to the beta channel and update to the latest beta
 kcap update --stable # switch back to the stable channel (the default)
+kcap refresh        # re-run the agent-integration refresh an install or update runs
 kcap logout         # delete stored tokens
 kcap feedback --bug -m "the daemon crashed on stop"   # file a bug report
 kcap feedback --feedback                               # send feedback; prompts for the message on a TTY
@@ -2459,10 +2468,27 @@ kcap feedback --feedback                               # send feedback; prompts 
 > registry, runs `npm install -g @kurrent/kcap@<tag>`, then refreshes your
 > opted-in agent plugins — so it picks up new skills/hooks even when your package
 > manager blocks install scripts. It exits early if you're already up to date,
-> and tells you what to run instead for non-npm installs (e.g. Homebrew). On the
+> and tells you what to run instead for other installs (e.g. Homebrew). On the
 > stable channel it stops at your connected server's version when the server
 > trails npm, so it never installs a CLI newer than the server it talks to. Use
 > `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+>
+> **Script installs** (`curl -fsSL https://www.kurrent.io/install | bash`, or
+> `install.ps1` on Windows) update without npm: `kcap update` reads the
+> installer's channel manifest, downloads this platform's archive from GitHub
+> Releases and checks its sha256 against the manifest, installing nothing on a
+> mismatch. Each release gets its own `versions/<version>` directory and the
+> `current` link is switched to it, so running processes keep the files they
+> started from; then the new binary runs `kcap refresh`. A daemon service
+> installed from a script install is moved onto the `current` path, so it
+> follows updates. Switching from npm, a daemon service installed under npm keeps
+> running the npm binary: run `kcap daemon service install` again once the
+> script install is on your `PATH`.
+>
+> `kcap refresh` is the agent-integration refresh every installer runs: skills,
+> per-vendor hooks and plugins, the Claude Code plugin and installed daemon
+> service units, each only if you installed it before. Run it yourself when an
+> update reports a step that failed.
 >
 > **Windows:** the update works even while Claude Code sessions (whose kcap MCP
 > servers keep the binary locked) or the daemon are running — the old executable
