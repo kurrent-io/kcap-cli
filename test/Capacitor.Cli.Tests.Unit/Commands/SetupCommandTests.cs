@@ -584,6 +584,40 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
+    /// <summary>Paths under the home directory read with <c>~</c>, and a run that changed nothing prints no
+    /// heading over an empty list.</summary>
+    [Test]
+    public async Task InstalledInLines_lists_each_path_with_home_shortened() {
+        var home  = Path.Combine("users", "kcap-home");
+        var lines = SetupCommand.InstalledInLines(
+            [Path.Combine(home, ".gitconfig"), "/etc/elsewhere"], home).ToList();
+
+        await Assert.That(lines.Count).IsEqualTo(3);
+        await Assert.That(lines[1]).Contains($"~{Path.DirectorySeparatorChar}.gitconfig");
+        await Assert.That(lines[2]).Contains("/etc/elsewhere");
+        await Assert.That(SetupCommand.InstalledInLines([], home)).IsEmpty();
+    }
+
+    /// <summary>Only writes the step reports as done are listed, and a file two writes share (Gemini's
+    /// settings.json carries hooks and MCP) appears once.</summary>
+    [Test]
+    public async Task InstalledPaths_lists_reported_writes_once() {
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "/h/.claude/settings.json", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "/h/.codex/hooks.json", CursorHooksPath: "/h/.cursor/hooks.json",
+            CopilotHooksPath: "/h/.copilot/kcap.json", GeminiSettingsPath: "/h/.gemini/settings.json",
+            AgentsSkillsDir: "/h/.agents/skills", LegacyCodexSkillsDir: "/h/.codex/skills",
+            CodexConfigTomlPath: "/h/.codex/config.toml");
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: true, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            GeminiHooksInstalled: true, GeminiMcpRegistered: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).IsEquivalentTo(["/h/.claude/settings.json", "/h/.gemini/settings.json"]);
+    }
+
     [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(

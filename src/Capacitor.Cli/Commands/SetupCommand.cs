@@ -818,8 +818,13 @@ sealed class SetupCommand(
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
-        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
+        var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
+        var gitHook        = new GitHookInstaller(home);
+
+        if (installResult.AnyHooksInstalled && gitHook.Install()) {
             WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
+            installedPaths.Add(gitHook.ConfigFilePath);
+        }
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -1072,6 +1077,8 @@ sealed class SetupCommand(
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath(config)));
 
         AnsiConsole.Write(new Padder(grid).Padding(2, 0, 0, 0));
+
+        foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
 
         // hooks only load at coding-agent session start. The common case is a user
         // running `kcap setup` from inside an already-running session, which won't stream
@@ -2333,6 +2340,24 @@ sealed class SetupCommand(
         } catch (Exception e) {
             // Swallow — see method-doc. KCAP_DEBUG surfaces the reason.
             Debug($"failed — {e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The closing list of everything outside kcap's own config that this run changed, so nothing it
+    /// wrote into an agent or git is a surprise later. Empty when it changed nothing.
+    /// </summary>
+    internal static IEnumerable<string> InstalledInLines(IReadOnlyCollection<string> paths, string home) {
+        if (paths.Count == 0) yield break;
+
+        yield return "\n  [bold]Changed on this machine[/]";
+
+        foreach (var path in paths) {
+            var shown = path.StartsWith(home + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                ? "~" + path[home.Length..]
+                : path;
+
+            yield return $"    {Markup.Escape(shown)}";
         }
     }
 
