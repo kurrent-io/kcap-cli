@@ -1410,6 +1410,15 @@ public partial class App : Application {
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<CancellationToken, Task<string?>> terminalPathAsync, Func<string?> cliVersion, CancellationToken ct,
             HashSet<(MutationRequest Request, string Token)>? declinedTakeoverPairs = null, Action? markPresented = null) {
+        // The controller that started a reload awaits its outcome and renders it as state in the rail;
+        // posting it here too would put a withdrawable condition on a lane nothing can withdraw from.
+        if (envelope.Request.Verb == MutationVerb.Reload) {
+            var (_, reloadToken) = ClassifyForPresentation(envelope.Outcome);
+            Console.Error.WriteLine($"kcap: daemon reload outcome {envelope.Outcome.GetType().Name} ({reloadToken ?? "-"}) is presented by the lifecycle controller");
+            markPresented?.Invoke();
+            return;
+        }
+
         if (envelope.Request.RetireServiceId is not null &&
             envelope.Outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) {
             surface.Attention(SettingsRenameMessage.For(envelope.Request, envelope.Outcome));
