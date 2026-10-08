@@ -96,7 +96,7 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(error).IsNull();
         await Assert.That(asked).IsEqualTo(1);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
-        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap"]);
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "print"]);
     }
 
     [Test]
@@ -137,7 +137,7 @@ public class LaunchdUnitRefreshTests {
 
         var outcome = Manager(calls, "daemon (3)").RefreshUnit("test", () => asked = true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(UnitRefresh.Unchanged);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Current);
         await Assert.That(asked).IsFalse();
         await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
     }
@@ -154,7 +154,7 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("previous unit was restored and loaded");
         await Assert.That(File.ReadAllText(path)).IsEqualTo(AdaptivePlist());
-        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "bootstrap"]);
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "bootstrap", "print"]);
     }
 
     [Test]
@@ -228,10 +228,10 @@ public class LaunchdUnitRefreshTests {
 
         var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => asked = true, Plenty, out _);
 
-        await Assert.That(outcome).IsEqualTo(UnitRefresh.Unchanged);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.UnitUnsupported);
         await Assert.That(asked).IsFalse();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(foreign);
-        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
+        await Assert.That(calls).IsEmpty();
     }
 
     [Test]
@@ -304,5 +304,113 @@ public class LaunchdUnitRefreshTests {
         // Six calls after the daemon is asked, the most ReloadBudget reserves for.
         await Assert.That(calls.Select(c => c[0]).ToArray())
             .IsEquivalentTo(["print", "bootout", "print", "bootstrap", "print", "bootstrap", "print"]);
+    }
+
+    [Test]
+    public async Task Standard_plist_under_an_adaptive_loaded_job_is_reloaded_without_a_write() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        var path  = Seed(LaunchdUnit.Plist(Spec()));
+        var before = File.GetLastWriteTimeUtc(path);
+        var calls = new List<string[]>();
+
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => true, Plenty, out _);
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
+        await Assert.That(File.GetLastWriteTimeUtc(path)).IsEqualTo(before);
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "print"]);
+    }
+
+    [Test]
+    public async Task Background_plist_under_a_background_job_is_rewritten_and_reloaded() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        var path = Seed(LaunchdUnit.Plist(Spec()).Replace("<string>Standard</string>", "<string>Background</string>"));
+        var outcome = Manager([], "background (5)").RefreshUnit("test", () => true, Plenty, out _);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    [Test]
+    public async Task Queued_restart_answer_defers_without_a_bootout() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(AdaptivePlist());
+        var calls = new List<string[]>();
+        var outcome = Manager(calls, "adaptive (6)").RefreshUnit("test", () => false, Plenty, out _);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Deferred);
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print"]);
+    }
+
+    [Test]
+    public async Task Missing_and_unreadable_units_are_told_apart() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        var calls = new List<string[]>();
+        await Assert.That(Manager(calls, "adaptive (6)").RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.UnitMissing);
+        Directory.CreateDirectory(LaunchdUnit.PlistPath(Home, "test")); // a directory where the file should be
+        await Assert.That(Manager(calls, "adaptive (6)").RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.UnitUnreadable);
+        await Assert.That(calls).IsEmpty();
+    }
+
+    [Test]
+    public async Task Malformed_plist_is_unsupported_and_untouched() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        var path = Seed("<plist><dict><key>ProcessType</key>");
+        var calls = new List<string[]>();
+        await Assert.That(Manager(calls, "adaptive (6)").RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.UnitUnsupported);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo("<plist><dict><key>ProcessType</key>");
+        await Assert.That(calls).IsEmpty();
+    }
+
+    [Test]
+    public async Task Unloaded_label_with_a_current_plist_is_not_loaded() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(LaunchdUnit.Plist(Spec()));
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, c, _) => File.WriteAllText(p, c),
+            runBounded: (_, args, _) => args[0] == "print" ? (113, "", "Could not find service", false) : (0, "", "", false));
+        await Assert.That(manager.RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.NotLoaded);
+    }
+
+    [Test]
+    public async Task Failed_print_and_unknown_spawn_type_are_unverified() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(LaunchdUnit.Plist(Spec()));
+        await Assert.That(Manager([], "daemon (3)", printFails: true).RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.Unverified);
+        await Assert.That(Manager([], "app (1)").RefreshUnit("test", () => true, Plenty, out _)).IsEqualTo(UnitRefresh.Unverified);
+    }
+
+    [Test]
+    public async Task Timed_out_bootstrap_whose_print_has_no_spawn_type_is_not_a_reload() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(AdaptivePlist());
+        var (loaded, bootstrapped) = (true, false);
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, c, _) => File.WriteAllText(p, c),
+            runBounded: (_, args, _) => args[0] switch {
+                "print"     => !loaded ? (113, "", "Could not find service", false)
+                             : bootstrapped ? (0, $"gui/501/{Label} = {{\n\tstate = running\n}}\n", "", false)
+                             : (0, Print("adaptive (6)"), "", false),
+                "bootout"   => ((Func<(int, string, string, bool)>)(() => { loaded = false; return (0, "", "", false); }))(),
+                "bootstrap" => ((Func<(int, string, string, bool)>)(() => { (loaded, bootstrapped) = (true, true); return (137, "", "", true); }))(),
+                _           => (0, "", "", false),
+            });
+        var outcome = manager.RefreshUnit("test", () => true, Plenty, out var error);
+        await Assert.That(outcome).IsNotEqualTo(UnitRefresh.Reloaded);
+        await Assert.That(error).IsNotNull();
+    }
+
+    [Test]
+    public async Task Throwing_unit_writer_and_process_start_are_failed() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed(AdaptivePlist());
+        var writerThrows = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (_, _, _) => throw new IOException("disk full"),
+            runBounded: (_, _, _) => (0, Print("adaptive (6)"), "", false));
+        await Assert.That(writerThrows.RefreshUnit("test", () => true, Plenty, out var writeError)).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(writeError).Contains("disk full");
+
+        var startThrows = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, c, _) => File.WriteAllText(p, c),
+            runBounded: (_, _, _) => throw new System.ComponentModel.Win32Exception("launchctl missing"));
+        await Assert.That(startThrows.RefreshUnit("test", () => true, Plenty, out var startError)).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(startError).Contains("launchctl missing");
     }
 }
