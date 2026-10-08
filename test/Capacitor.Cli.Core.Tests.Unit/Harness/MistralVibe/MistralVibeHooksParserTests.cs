@@ -19,7 +19,7 @@ public class MistralVibeHooksParserTests {
     public async Task Build_entry_carries_name_type_and_command() {
         var entry = MistralVibeHooksParser.BuildKcapEntry("post_agent");
 
-        await Assert.That(entry["name"]).IsEqualTo("kcap");
+        await Assert.That(entry["name"]).IsEqualTo("kcap-post_agent");
         await Assert.That(entry["type"]).IsEqualTo("post_agent");
         await Assert.That(entry["command"]).IsEqualTo(MistralVibeHooksParser.HookCommand);
     }

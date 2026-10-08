@@ -43,10 +43,12 @@ public static class MistralVibeHooksInstaller {
         if (root.TryGetValue(MistralVibeHooksParser.HooksKey, out var existing) && existing is not TomlTableArray)
             return false;
 
-        var array     = MistralVibeHooksParser.HooksArray(root);
-        var kcapCount = array.Count(MistralVibeHooksParser.EntryReferencesCapacitorVibeHook);
-        if (kcapCount == MistralVibeHooksParser.VibeHookTypes.Length &&
-            MistralVibeHooksParser.HasCapacitorHooksFor(root, MistralVibeHooksParser.VibeHookTypes))
+        var array = MistralVibeHooksParser.HooksArray(root);
+        var ours  = array.Where(MistralVibeHooksParser.EntryReferencesCapacitorVibeHook).ToList();
+        if (ours.Count == MistralVibeHooksParser.VibeHookTypes.Length
+         && MistralVibeHooksParser.VibeHookTypes.All(type => ours.Any(e =>
+                e.TryGetValue("type", out var t) && t as string == type
+             && e.TryGetValue("name", out var n) && n as string == MistralVibeHooksParser.HookName(type))))
             return false; // already exactly our set
 
         var rebuilt = new TomlTableArray();

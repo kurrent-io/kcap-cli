@@ -51,6 +51,27 @@ public class MistralVibeHooksInstallerTests {
         await Assert.That(MistralVibeHooksInstaller.Remove(path)).IsEqualTo(TomlConfigFile.Outcome.Unchanged);
     }
 
+    [Test]
+    public async Task Every_installed_hook_has_a_distinct_name() {
+        // Vibe keeps only the first hook of a repeated name, so a shared name would install one type.
+        var path = Tmp.GetResolvedPath("hooks.toml");
+        MistralVibeHooksInstaller.Install(path);
+
+        var names = MistralVibeHooksParser.HooksArray(TomlConfigFile.Read(path)!).Select(e => (string)e["name"]).ToList();
+        await Assert.That(names.Distinct().Count()).IsEqualTo(MistralVibeHooksParser.VibeHookTypes.Length);
+    }
+
+    [Test]
+    public async Task An_install_whose_hooks_share_one_name_is_rewritten() {
+        Tmp.CreateFile("hooks.toml", string.Concat(MistralVibeHooksParser.VibeHookTypes.Select(t =>
+            $"[[hooks]]\nname = \"kcap\"\ntype = \"{t}\"\ncommand = \"kcap hook --mistral-vibe\"\n")));
+        var path = Tmp.GetResolvedPath("hooks.toml");
+
+        await Assert.That(MistralVibeHooksInstaller.Install(path)).IsEqualTo(TomlConfigFile.Outcome.Updated);
+        await Assert.That(MistralVibeHooksParser.HooksArray(TomlConfigFile.Read(path)!).Select(e => (string)e["name"]))
+            .IsEquivalentTo(MistralVibeHooksParser.VibeHookTypes.Select(MistralVibeHooksParser.HookName));
+    }
+
     static bool UserHook(TomlTable entry) =>
         entry.TryGetValue("command", out var c) && c is "echo hi";
 }

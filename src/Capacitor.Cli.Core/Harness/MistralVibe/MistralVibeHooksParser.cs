@@ -27,12 +27,16 @@ public static class MistralVibeHooksParser {
         "post_agent"
     ];
 
+    /// <summary>Vibe drops a hook whose name repeats one already loaded from any hook file, so each
+    /// type's entry needs its own name.</summary>
+    public static string HookName(string type) => "kcap-" + type;
+
     /// <summary>The <c>[[hooks]]</c> entry kcap installs for one type: <c>{ name, type, command,
     /// timeout }</c>. Vibe's <c>timeout</c> is seconds (float); 30 matches the budget the other
     /// harnesses' entries use.</summary>
     public static TomlTable BuildKcapEntry(string type) =>
         new() {
-            ["name"]    = "kcap",
+            ["name"]    = HookName(type),
             ["type"]    = type,
             ["command"] = HookCommand,
             ["timeout"] = 30.0,
