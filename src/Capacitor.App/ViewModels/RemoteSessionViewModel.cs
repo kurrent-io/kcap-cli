@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -190,6 +191,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _accessStates.Select(s => s == SessionAccessState.Established).DistinctUntilChanged().Where(ready => ready)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
+        // No pane polls this lane, so a read the server could not answer is retried on the pane's
+        // cadence, and only while it stays unanswered.
+        _disposables.Add(time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => {
+            if (Artefacts.LastReadFailed) Artefacts.Refresh();
+        }), null, WorkContextViewModel.PollInterval, WorkContextViewModel.PollInterval));
 
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
         Chat = new ChatTabViewModel(

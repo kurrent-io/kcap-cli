@@ -582,4 +582,32 @@ public class RemoteSessionViewModelTests {
             await vm.TeardownAsync();
         });
     }
+
+    /// With no pane to poll it, the remote lane retries an unreachable read on the pane's cadence
+    /// and stops once a read is answered.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unreachable_artefacts_read_is_retried_on_the_poll_cadence_until_answered() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePlanArtifactSource { Default = new PlanArtifactsRead(SessionPlansReadKind.Unreachable, null) };
+            var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => source.Requested.Count >= 2, what: "re-read on ready");
+            await WaitUntilAsync(() => vm.Artefacts.LastReadFailed, what: "unreachable recorded");
+            var before = source.Requested.Count;
+
+            h.Time.Advance(WorkContextViewModel.PollInterval);
+            await WaitUntilAsync(() => source.Requested.Count > before, what: "retry after the poll interval");
+
+            source.Default = new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto());
+            h.Time.Advance(WorkContextViewModel.PollInterval);
+            await WaitUntilAsync(() => !vm.Artefacts.LastReadFailed, what: "an answered read clears the failure");
+            var answered = source.Requested.Count;
+
+            h.Time.Advance(WorkContextViewModel.PollInterval);
+            await Assert.That(source.Requested.Count).IsEqualTo(answered);
+            await vm.TeardownAsync();
+        });
+    }
 }
