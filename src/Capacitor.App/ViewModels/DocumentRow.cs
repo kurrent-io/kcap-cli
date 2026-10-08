@@ -32,12 +32,5 @@ public sealed class DocumentRow(string kind, string title, string path, string s
 
     /// True when the other path ends with this row's path, on a segment boundary, whichever
     /// separator either side uses.
-    public bool MatchesPath(string other) {
-        var mine = Normalise(Path);
-        var theirs = Normalise(other);
-        if (theirs == mine) return true;
-        return theirs.EndsWith("/" + mine, StringComparison.Ordinal) || mine.EndsWith("/" + theirs, StringComparison.Ordinal);
-    }
-
-    static string Normalise(string path) => path.Replace('\\', '/').TrimEnd('/');
+    public bool MatchesPath(string other) => DocumentPaths.Match(Path, other);
 }

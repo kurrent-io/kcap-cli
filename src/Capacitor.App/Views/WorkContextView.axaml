@@ -64,6 +64,12 @@
         <Style Selector="Button.copyValue:pressed">
             <Setter Property="RenderTransform" Value="scale(1)" />
         </Style>
+        <Style Selector="Button.copyValue.open /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+        </Style>
+        <Style Selector="Button.copyValue.open TextBlock.docName">
+            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+        </Style>
         <Style Selector="Border.pill.shipped">
             <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
         </Style>
@@ -648,6 +654,19 @@
                     </Border>
                 </StackPanel>
 
+                <!-- The Artefacts tab's summary; the tab itself lives in the centre. -->
+                <Button x:Name="ArtefactsSummaryRow" Classes="copyValue" Margin="0,18,0,0" HorizontalAlignment="Stretch"
+                        Command="{Binding OpenArtefactsCommand}"
+                        IsVisible="{Binding Artefacts.HasAny, FallbackValue=False}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBlock Text="ARTEFACTS" Classes="eyebrow" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
+                            <Path Classes="prChevron" />
+                        </StackPanel>
+                    </Grid>
+                </Button>
+
                 <!-- Plan: read from the server, so unlike SUBAGENTS it shows nothing while signed out. -->
                 <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.HasPlan}" Margin="0,18,0,0">
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable">
@@ -703,11 +722,17 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PlanDocumentRow">
-                                        <Grid ColumnDefinitions="46,*" ToolTip.Tip="{Binding Path}">
-                                            <TextBlock Text="{Binding Kind}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}" />
-                                            <TextBlock Grid.Column="1" Text="{Binding FileName}" FontSize="13" LineHeight="16"
-                                                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                        </Grid>
+                                        <Button Classes="copyValue" Classes.open="{Binding IsOpen}" HorizontalAlignment="Stretch"
+                                                Command="{Binding $parent[ItemsControl].((vm:WorkContextViewModel)DataContext).Plan.OpenDocumentCommand}"
+                                                CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
+                                            <Grid ColumnDefinitions="46,*,Auto" ColumnSpacing="6">
+                                                <TextBlock Text="{Binding Kind}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}" />
+                                                <TextBlock Grid.Column="1" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"
+                                                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                <Path Grid.Column="2" Width="8" Height="8" Stretch="None" VerticalAlignment="Center"
+                                                      Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5" Data="M2,1 L5,4 L2,7" />
+                                            </Grid>
+                                        </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
