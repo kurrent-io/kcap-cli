@@ -26,20 +26,22 @@ class ImportCommand(
         ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time, AccountStore? accounts = null) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
 
-    readonly Dictionary<string, CodexImportTitles> _codexTitles = new(StringComparer.Ordinal);
+    // Read from parallel workers; keyed by the normalized home so two spellings of one directory share an index.
+    readonly ConcurrentDictionary<string, CodexImportTitles> _codexTitles = new(
+        OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
+
+    readonly Lazy<AccountRegistry?> _registry = new(() => accounts?.TryLoad());
 
     /// <summary>The index of the Codex home the rollout lives in: an account's titles are never read from
     /// another home's index. A rollout outside every account uses the environment home.</summary>
     CodexImportTitles CodexTitlesFor(string transcriptPath) {
-        var codexHome = accounts?.TryLoad() is { } registry
+        var codexHome = _registry.Value is { } registry
                      && AccountPaths.CodexForRollout(transcriptPath, registry, home) is { } paths
             ? paths.Home
             : harnesses.Of<CodexHarness>().Paths.Home;
 
-        if (!_codexTitles.TryGetValue(codexHome, out var titles))
-            _codexTitles[codexHome] = titles = new CodexImportTitles(codexHome, time);
-
-        return titles;
+        return _codexTitles.GetOrAdd(AccountDirectory.Normalize(codexHome), static (_, a) => new CodexImportTitles(a.Home, a.Time),
+                                     (Home: codexHome, Time: time));
     }
 
     /// <summary>
@@ -886,9 +888,6 @@ class ImportCommand(
             return 0;
         }
 
-        // Build a vendor → source map for downstream lookups.
-        var byVendor = sources.ToDictionary(s => s.Vendor);
-
         // --- Cwd resolution for scope filtering ---
         // For file-based sources (Claude/Codex) extract cwd from the transcript.
         // For Cursor the workspace folder is already populated in DiscoveredSession.Cwd.
@@ -1211,6 +1210,14 @@ class ImportCommand(
         // Flatten classifications.
         var classifications = classificationsPerSource.SelectMany(c => c).ToList();
 
+        // One vendor can have a source per account root, so a session is routed back to the source that
+        // discovered it rather than to its vendor.
+        var sourceBySession = new Dictionary<(HarnessId Vendor, string SessionId), IImportSource>();
+
+        for (var i = 0; i < sources.Count; i++)
+            foreach (var c in classificationsPerSource[i])
+                sourceBySession.TryAdd((c.Vendor, c.SessionId), sources[i]);
+
         // Capture scope is decided here, over every source's output at once, and nowhere else.
         var captureScope = new CaptureScope(router, config, home,
                                             allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
@@ -1428,7 +1435,7 @@ class ImportCommand(
                 // Cursor sets SupportsTitleGeneration=false because the composer
                 // header carries a name that the server maps to a
                 // SessionTitleCreatedEvent at ingest time.
-                if (byVendor.TryGetValue(vnd, out var src) && !src.SupportsTitleGeneration) return;
+                if (sourceBySession.TryGetValue((vnd, sid), out var src) && !src.SupportsTitleGeneration) return;
 
                 Interlocked.Increment(ref titleTaskCount);
 
@@ -1526,7 +1533,7 @@ class ImportCommand(
         // they asked for, whatever the transcript did.
         var visibilityFailures = 0;
         // Read-only inside the parallel loops below; resolved from the sources actually in play.
-        var replayChildContentVendors = byVendor.Values
+        var replayChildContentVendors = sources
             .Where(s => s.AttachesChildContentOnReplay)
             .Select(s => s.Vendor)
             .ToHashSet();
@@ -1786,7 +1793,7 @@ class ImportCommand(
             );
 
             async Task<ImportSessionResult> ImportOne(SessionClassification c) {
-                if (!byVendor.TryGetValue(c.Vendor, out var src)) {
+                if (!sourceBySession.TryGetValue((c.Vendor, c.SessionId), out var src)) {
                     return ImportOutcome.Failed;
                 }
 
