@@ -68,11 +68,11 @@ Windows (PowerShell):
 irm https://www.kurrent.io/install.ps1 | iex
 ```
 
-The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, when run from a terminal, runs `kcap setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterwards). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
+The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, when run from a terminal, runs `kcap setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
 
 ### 2. Start a new agent session
 
-Hooks load when a session starts, so a session that was already running is not recorded live. Start a new one (or `claude --continue`) and give it a prompt.
+Use an agent you let setup install kcap into; one you declined is not recorded until you run `kcap plugin install` for it. Hooks load when a session starts, so a session that was already running is not recorded live. Start a new one (or `claude --continue`) and give it a prompt.
 
 ### 3. Check it in the dashboard
 

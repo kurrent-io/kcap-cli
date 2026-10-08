@@ -194,11 +194,13 @@ does not cancel an import chosen in the browser.
 --no-prompt answers yes to this step too, so `kcap setup --no-prompt` uploads
 this machine's session history unless you add --skip-import.
 
-Recording starts with the next agent session: hooks load when a session
+Recording starts with the next session of an agent kcap is installed into
+(declined ones need `kcap plugin install` first): hooks load when a session
 starts, so restart any agent that was already running. A session you then
 start should appear in your workspace's dashboard; `kcap status` shows that
-kcap is configured and can reach the server, not that sessions are recorded. Commits are filed under their agent session by
-a git config hook that needs git 2.54 or later; an older git ignores it.
+kcap is configured and can reach the server, not that sessions are recorded.
+Commits are filed under their agent session by a git config hook that needs
+git 2.54 or later; an older git ignores it.
 
 For project-scope or post-setup re-installs, use:
 
