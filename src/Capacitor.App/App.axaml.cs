@@ -1481,6 +1481,7 @@ public partial class App : Application {
         MutationVerb.Replace       => "replace",
         MutationVerb.StartVerified => "verified start",
         MutationVerb.DetachedStart => "daemon start",
+        MutationVerb.Reload        => "reload",
         _                          => verb.ToString(),
     };
 
