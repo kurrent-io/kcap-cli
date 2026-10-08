@@ -922,12 +922,19 @@ static partial class ProcessHelpers {
             return false;
         }
 
-        // Match the vendor token OR `{vendor}-cli`. The bounded `-cli` tolerance fixes the Kiro
+        // Match the vendor's process name OR `{name}-cli`. The bounded `-cli` tolerance fixes the Kiro
         // watchdog, whose durable process image is `kiro-cli` while its vendor token is `kiro`
         // The clean-stem gate above keeps it from over-matching unrelated processes.
-        return stem.Equals(vendor, StringComparison.OrdinalIgnoreCase)
-            || stem.Equals($"{vendor}-cli", StringComparison.OrdinalIgnoreCase);
+        var name = ProcessNameOf(vendor);
+        return stem.Equals(name, StringComparison.OrdinalIgnoreCase)
+            || stem.Equals($"{name}-cli", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>The executable a vendor runs as, where it is not the vendor token itself.</summary>
+    static string ProcessNameOf(string vendor) => vendor switch {
+        "mistral-vibe" => "vibe",
+        _              => vendor,
+    };
 
     /// <summary>
     /// Detaches the current process from its controlling terminal on Unix so that

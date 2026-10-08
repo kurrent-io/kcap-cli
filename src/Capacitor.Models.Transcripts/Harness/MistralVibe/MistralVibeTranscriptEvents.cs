@@ -21,11 +21,10 @@ public sealed class MistralVibeContext : TranscriptContext { }
 /// A line is unified when its top-level <c>type</c> is one of those tokens, otherwise it is read as a
 /// legacy message by its <c>role</c>.
 ///
-/// <para><b>Certification note:</b> the legacy mapping is the stable OpenAI shape. The unified
-/// <c>effect</c>/<c>reasoning</c> field layout is reconstructed from Vibe's documentation, not the
-/// running binary — field reads are defensive (an unreadable entry degrades to
-/// <see cref="ProjectionResult.Empty"/>, never a crash), and the exact field names must be confirmed
-/// against a real unified session before the unified path is trusted.</para>
+/// <para>Unified entries are camelCase. An <c>effect</c> is one tool call: <c>detail</c> holds the
+/// qualified <c>toolName</c>, its <c>kind</c> and <c>input</c>; <c>state</c> holds the settled
+/// <c>status</c> with <c>outputText</c>, or an <c>error</c> on failure. Reads are defensive — an
+/// unreadable entry degrades to <see cref="ProjectionResult.Empty"/>, never a crash.</para>
 /// </summary>
 public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
     public static readonly MistralVibeTranscriptEvents Instance = new();
@@ -88,26 +87,29 @@ public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
         return events.Count == 0 ? ProjectionResult.Empty : ProjectionResult.Of(events);
     }
 
-    // ── unified "effect": a tool/subagent invocation carrying its own result ────────────────────
+    // ── unified "effect": one tool call, carrying its own settled result ────────────────────────
 
     static ProjectionResult Effect(JsonElement effect, Guid recordId, DateTimeOffset at, string? recordTs, Timestamp ts) {
-        // The call sits under "call"/"tool_call" (or inline), the result under "result"/"output".
-        var call     = effect.Obj("call") ?? effect.Obj("tool_call") ?? effect;
-        var toolName = ToolName(call.Str("tool") ?? call.Str("tool_name") ?? call.Str("name") ?? "");
+        if (effect.Obj("detail") is not { } detail) return ProjectionResult.Empty;
+        var toolName = ToolName(detail.Str("toolName") ?? effect.Str("title") ?? "");
         if (toolName.Length == 0) return ProjectionResult.Empty;
 
-        var callId    = call.Str("id") ?? call.Str("call_id") ?? effect.Str("id") ?? recordId.ToString();
-        var arguments = call.Obj("arguments") is { } args ? StructOf(args) : ArgumentsStruct(call.Str("arguments"));
+        // The entry id is the call's identity; its result rides on the same entry, so nothing else
+        // has to pair with it.
+        var callId    = effect.Str("id") ?? recordId.ToString();
+        var arguments = detail.Obj("input") is { } input ? StructOf(input) : new Struct();
 
         var toolCall = new AssistantToolCallsGenerated { Timestamp = ts };
-        toolCall.ToolCalls.Add(Info(callId, toolName, arguments));
+        toolCall.ToolCalls.Add(new ToolCallInfo {
+            CallId = callId, ToolName = toolName, Arguments = arguments,
+            ToolKind = MistralVibeToolKinds.Of(detail.Str("kind"), toolName),
+        });
 
         var events = new List<CanonicalEvent> {
             new(CanonicalEventTypes.Of(toolCall), toolCall, recordId, at, recordTs),
         };
 
-        var resultText = EffectResultText(effect);
-        if (resultText is not null) {
+        if (effect.Obj("state") is { } state && EffectResultText(state) is { } resultText) {
             var result = new ToolResultReceived { CallId = callId, Result = resultText, Timestamp = ts };
             events.Add(new CanonicalEvent(CanonicalEventTypes.Of(result), result, TranscriptIds.Sibling(recordId, "result"), at, recordTs));
         }
@@ -115,10 +117,16 @@ public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
         return ProjectionResult.Of(events);
     }
 
-    static string? EffectResultText(JsonElement effect) {
-        if (effect.Obj("result") is { } result)
-            return result.Str("output") ?? result.Str("text") ?? result.Str("status") ?? result.GetRawText();
-        return effect.Str("output") ?? effect.Str("result");
+    /// The settled text of an effect's <c>state</c>, or null while it is still pending or running.
+    static string? EffectResultText(JsonElement state) {
+        var outputText = state.Str("outputText") is { Length: > 0 } text ? text : null;
+
+        return state.Str("status") switch {
+            "completed"             => outputText ?? (state.TryGetProperty("output", out var output) && output.ValueKind != JsonValueKind.Null ? output.GetRawText() : ""),
+            "failed"                => string.Join('\n', new[] { state.Obj("error")?.Str("message"), outputText }.OfType<string>()),
+            "cancelled" or "skipped" => state.Str("reason") ?? outputText ?? "",
+            _                       => null,
+        };
     }
 
     static AssistantThinkingGenerated Reasoning(JsonElement entry, Timestamp ts) {
@@ -146,7 +154,7 @@ public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
     }
 
     static ToolCallInfo Info(string callId, string toolName, Struct arguments) => new() {
-        CallId = callId, ToolName = toolName, Arguments = arguments, ToolKind = MistralVibeToolKinds.Of(toolName),
+        CallId = callId, ToolName = toolName, Arguments = arguments, ToolKind = MistralVibeToolKinds.Of(null, toolName),
     };
 
     /// Content is a plain string, or an array of typed text blocks, or (on a unified entry) a bare

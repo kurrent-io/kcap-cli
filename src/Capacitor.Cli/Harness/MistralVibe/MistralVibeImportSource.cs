@@ -139,7 +139,7 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
         // lifecycle POST would strand the session lifecycle-less. Re-runs are idempotent server-side.
         var startPayload = BuildSessionStartPayload(classification.SessionId, classification.Meta.Cwd, classification.Meta.FirstTimestamp);
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) startPayload["default_visibility"] = visibility;
-        if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/vibe", startPayload, ct)) return ImportOutcome.Failed;
+        if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/mistral-vibe", startPayload, ct)) return ImportOutcome.Failed;
 
         var startLine = classification.Status switch {
             ImportCommand.ClassificationStatus.Partial       => classification.ResumeFromLine,
@@ -161,7 +161,7 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
             if (isTemp) { try { File.Delete(filePath); } catch { /* best effort */ } }
         }
 
-        if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/vibe",
+        if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/mistral-vibe",
                 BuildSessionEndPayload(classification.SessionId, classification.Meta.LastTimestamp), ct)) return ImportOutcome.Failed;
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
@@ -242,7 +242,7 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
         var payload = new JsonObject {
             ["hook_event_name"] = "SessionEnd",
             ["session_id"]      = sessionId,
-            ["reason"]          = "vibe-import",
+            ["reason"]          = "mistral-vibe-import",
         };
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
         payload["origin"] = ImportOrigins.Historical;

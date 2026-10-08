@@ -4,6 +4,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -14,7 +15,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// session-start or session-end event. So kcap treats the FIRST hook it sees for a session as that
 /// session's start: it POSTs session-start and spawns the transcript watcher, gated on the watcher
 /// not already running so the repo-detection work happens once per session rather than on every tool
-/// call. Tool content is taken from the transcript the watcher tails, not from the hook payload.
+/// call. Tool content is taken from the transcript the watcher tails, not from the hook payload; for a
+/// unified-store session every hook first appends the entries finished since the last one.
 /// </summary>
 /// <remarks>
 /// Vibe's hook stdout contract is forgiving, unlike Gemini's: exit 0 with EMPTY stdout is a
@@ -71,16 +73,31 @@ sealed class MistralVibeHookCommand(
         if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths, activeProfile?.ExcludedPaths, home))
             return 0;
 
-        // Vibe has no session-start event, so the first hook we see starts recording. Once the watcher
-        // is alive the session is already recorded end-to-end from the transcript, and every later
-        // tool/turn hook is a no-op — which keeps the per-call cost off the hot path.
+        var transcriptPath = TranscriptToTail(node, sessionId);
+        if (transcriptPath is null) return 0;
+
+        // Vibe has no session-start event, so the first hook we see starts recording; every later hook
+        // only brings the tailed transcript up to date.
         if (watchers.IsWatcherAlive(sessionId)) return 0;
 
-        await StartRecording(node, sessionId, cwd, activeProfile);
+        await StartRecording(node, sessionId, cwd, activeProfile, transcriptPath);
         return 0;
     }
 
-    async Task StartRecording(JsonNode node, string sessionId, string? cwd, Profile? activeProfile) {
+    /// <summary>The file the watcher tails. The legacy store's <c>transcript_path</c> is that file
+    /// already; the unified store's is the session directory, so its finished entries are copied into
+    /// a JSONL file first.</summary>
+    string? TranscriptToTail(JsonNode node, string sessionId) {
+        var transcriptPath = TryGetString(node, "transcript_path");
+        if (string.IsNullOrEmpty(transcriptPath)) return null;
+        if (!Directory.Exists(transcriptPath)) return transcriptPath;
+
+        var live = MistralVibeLiveTranscript.PathFor(config, sessionId);
+        MistralVibeLiveTranscript.Sync(transcriptPath, live);
+        return live;
+    }
+
+    async Task StartRecording(JsonNode node, string sessionId, string? cwd, Profile? activeProfile, string transcriptPath) {
         var forwarded = new JsonObject {
             ["hook_event_name"] = "SessionStart",
             ["session_id"]      = sessionId,
@@ -107,15 +124,12 @@ sealed class MistralVibeHookCommand(
         }
 
         var spool   = new HookSpool(config, clock.Time);
-        var outcome = await _poster.PostOrSpoolAsync("session-start/vibe", enriched, "vibe-hook",
-            spool, sessionId, route: "session-start/vibe");
+        var outcome = await _poster.PostOrSpoolAsync("session-start/mistral-vibe", enriched, "mistral-vibe-hook",
+            spool, sessionId, route: "session-start/mistral-vibe");
 
         // Spawn on Posted OR Spooled (an auth lapse / outage must not withhold the watcher); only a
         // permanent failure skips it, and the next hook retries.
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return;
-
-        var transcriptPath = TryGetString(node, "transcript_path");
-        if (string.IsNullOrEmpty(transcriptPath)) return; // can't tail nothing
 
         await watchers.EnsureWatcherRunning(sessionId, transcriptPath,
             agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: "mistral-vibe");

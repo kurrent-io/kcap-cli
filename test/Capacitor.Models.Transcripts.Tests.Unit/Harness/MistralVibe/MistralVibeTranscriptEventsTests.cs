@@ -71,21 +71,49 @@ public class MistralVibeTranscriptEventsTests {
         await Assert.That(thinking.Content).IsEqualTo("let me think");
     }
 
+    // The shape vibe 2.26.0's projector writes for a finished tool call.
+    const string CompletedShell = """{"type":"effect","id":"effect-a1","sessionId":"s","turnId":"t1","createdAt":1000,"updatedAt":1200,"generationStatus":"completed","title":"file_system.bash","detail":{"kind":"shell","toolName":"file_system.bash","input":{"command":"ls"},"display":{"summary":"ls"}},"state":{"status":"completed","output":{"stdout":"a.txt\n","stderr":""},"outputText":"a.txt\n","durationMs":12.5,"display":{"success":true}}}""";
+
     [Test]
-    public async Task Unified_effect_emits_a_tool_call_and_a_paired_result() {
-        const string line = """{"type":"effect","createdAt":"2026-10-07T00:00:00Z","call":{"id":"c9","tool":"file_system.read","arguments":{"path":"a.txt"}},"result":{"output":"contents"}}""";
-        var events = E(line);
+    public async Task Unified_effect_emits_a_tool_call_and_its_settled_result() {
+        var events = E(CompletedShell);
         await Assert.That(events.Count).IsEqualTo(2);
 
-        var calls = (AssistantToolCallsGenerated)events[0].Payload;
-        await Assert.That(calls.ToolCalls[0].ToolName).IsEqualTo("read");
-        await Assert.That(calls.ToolCalls[0].ToolKind).IsEqualTo(AcpToolKind.Read);
-        await Assert.That(events[0].EventId).IsEqualTo(TranscriptIds.VibeRecord(line));
+        var call = ((AssistantToolCallsGenerated)events[0].Payload).ToolCalls[0];
+        await Assert.That(call.ToolName).IsEqualTo("bash");
+        await Assert.That(call.ToolKind).IsEqualTo(AcpToolKind.Execute);
+        await Assert.That(call.CallId).IsEqualTo("effect-a1");
+        await Assert.That(call.Arguments.Fields["command"].StringValue).IsEqualTo("ls");
+        await Assert.That(events[0].EventId).IsEqualTo(TranscriptIds.VibeEntry("effect-a1"));
 
         var result = (ToolResultReceived)events[1].Payload;
-        await Assert.That(result.CallId).IsEqualTo("c9");
-        await Assert.That(result.Result).IsEqualTo("contents");
-        await Assert.That(events[1].EventId).IsEqualTo(TranscriptIds.Sibling(TranscriptIds.VibeRecord(line), "result"));
+        await Assert.That(result.CallId).IsEqualTo("effect-a1");
+        await Assert.That(result.Result).IsEqualTo("a.txt\n");
+        await Assert.That(events[1].EventId).IsEqualTo(TranscriptIds.Sibling(TranscriptIds.VibeEntry("effect-a1"), "result"));
+    }
+
+    [Test]
+    public async Task A_failed_effect_reports_its_error_message() {
+        const string line = """{"type":"effect","id":"effect-f","createdAt":1,"generationStatus":"completed","detail":{"kind":"file_read","toolName":"file_system.read_file","input":{"file_path":"x"}},"state":{"status":"failed","error":{"message":"no such file"},"outputText":""}}""";
+        var events = E(line);
+
+        await Assert.That(((AssistantToolCallsGenerated)events[0].Payload).ToolCalls[0].ToolKind).IsEqualTo(AcpToolKind.Read);
+        await Assert.That(((ToolResultReceived)events[1].Payload).Result).IsEqualTo("no such file");
+    }
+
+    [Test]
+    public async Task A_running_effect_has_no_result_yet() {
+        const string line = """{"type":"effect","id":"effect-r","createdAt":1,"generationStatus":"in_progress","detail":{"kind":"shell","toolName":"file_system.bash","input":{"command":"sleep 5"}},"state":{"status":"running","outputText":""}}""";
+        await Assert.That(E(line).Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_generic_effect_is_classified_by_its_bare_name() {
+        const string line = """{"type":"effect","id":"effect-m","createdAt":1,"generationStatus":"completed","detail":{"kind":"tool","toolName":"web.grep","input":null},"state":{"status":"completed","output":null,"outputText":""}}""";
+        var call = ((AssistantToolCallsGenerated)E(line)[0].Payload).ToolCalls[0];
+
+        await Assert.That(call.ToolKind).IsEqualTo(AcpToolKind.Search);
+        await Assert.That(call.Arguments.Fields.Count).IsEqualTo(0);
     }
 
     [Test]

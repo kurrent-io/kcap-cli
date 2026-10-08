@@ -5,7 +5,18 @@ namespace Capacitor.Models.Transcripts.Harness.MistralVibe;
 /// that before classifying, so this maps the bare tool name. An MCP tool arrives under its
 /// server-side name and lands on <see cref="AcpToolKind.Other"/> like any unrecognised tool.
 public static class MistralVibeToolKinds {
-    public static string Of(string? toolName) => toolName switch {
+    /// A unified-store effect states its own <paramref name="effectKind"/>; a legacy tool call, or a
+    /// generic <c>tool</c> effect such as an MCP call, falls back to the bare name.
+    public static string Of(string? effectKind, string? toolName) => effectKind switch {
+        "shell"                         => AcpToolKind.Execute,
+        "file_read"                     => AcpToolKind.Read,
+        "file_edit" or "file_write"     => AcpToolKind.Edit,
+        "file_search"                   => AcpToolKind.Search,
+        "web_search" or "web_fetch"     => AcpToolKind.Fetch,
+        _                               => ByName(toolName),
+    };
+
+    static string ByName(string? toolName) => toolName switch {
         "bash" or "shell" or "run"                     => AcpToolKind.Execute,
         "read" or "read_file" or "view" or "cat"       => AcpToolKind.Read,
         "edit" or "write" or "write_file"
