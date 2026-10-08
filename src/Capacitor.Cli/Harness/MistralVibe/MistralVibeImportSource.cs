@@ -137,7 +137,7 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
 
         // Lifecycle-before-transcript ordering: a transcript advancing the watermark past a failed
         // lifecycle POST would strand the session lifecycle-less. Re-runs are idempotent server-side.
-        var startPayload = BuildSessionStartPayload(classification.SessionId, classification.Meta.Cwd, classification.Meta.FirstTimestamp);
+        var startPayload = BuildSessionStartPayload(classification.SessionId, SessionDir(classification), classification.Meta.Cwd, classification.Meta.FirstTimestamp);
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) startPayload["default_visibility"] = visibility;
         if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/mistral-vibe", startPayload, ct)) return ImportOutcome.Failed;
 
@@ -162,7 +162,7 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
         }
 
         if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/mistral-vibe",
-                BuildSessionEndPayload(classification.SessionId, classification.Meta.LastTimestamp), ct)) return ImportOutcome.Failed;
+                BuildSessionEndPayload(classification.SessionId, SessionDir(classification), classification.Meta.Cwd, classification.Meta.LastTimestamp), ct)) return ImportOutcome.Failed;
 
         if (sent == 0) return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Skipped;
         return startLine > 0 ? ImportOutcome.Resumed : ImportOutcome.Loaded;
@@ -223,26 +223,32 @@ internal sealed class MistralVibeImportSource(string sessionLogsDir, TimeProvide
 
     // ── synthetic lifecycle POSTs (mirror of the other routed sources) ────────────────────────────
 
-    static JsonObject BuildSessionStartPayload(string sessionId, string? cwd, DateTimeOffset? startedAt) {
+    static string SessionDir(ImportCommand.SessionClassification classification) =>
+        (string)classification.SourceMeta![DirKey]!;
+
+    // The generic session-start/end routes bind Claude-shaped records, which require transcript_path
+    // and cwd and take an end reason only from their own set.
+    static JsonObject BuildSessionStartPayload(string sessionId, string transcriptPath, string? cwd, DateTimeOffset? startedAt) {
         var payload = new JsonObject {
             ["hook_event_name"] = "SessionStart",
             ["session_id"]      = sessionId,
+            ["transcript_path"] = transcriptPath,
+            ["cwd"]             = cwd ?? "",
             ["source"]          = "startup",
         };
-        if (cwd is not null) {
-            payload["cwd"] = cwd;
-            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
-        }
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) payload["workspace_root"] = workspaceRoot;
         if (startedAt is { } ts) payload["started_at"] = ts.ToString("O");
         payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
 
-    static JsonObject BuildSessionEndPayload(string sessionId, DateTimeOffset? endedAt) {
+    static JsonObject BuildSessionEndPayload(string sessionId, string transcriptPath, string? cwd, DateTimeOffset? endedAt) {
         var payload = new JsonObject {
             ["hook_event_name"] = "SessionEnd",
             ["session_id"]      = sessionId,
-            ["reason"]          = "mistral-vibe-import",
+            ["transcript_path"] = transcriptPath,
+            ["cwd"]             = cwd ?? "",
+            ["reason"]          = "Other",
         };
         if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
         payload["origin"] = ImportOrigins.Historical;

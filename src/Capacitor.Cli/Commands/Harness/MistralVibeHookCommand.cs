@@ -103,12 +103,12 @@ sealed class MistralVibeHookCommand(
             ["session_id"]      = sessionId,
             ["source"]          = "startup",
             ["home_dir"]        = home.Path,
+            // The generic session-start route binds a Claude-shaped record, which requires both.
+            ["transcript_path"] = transcriptPath,
+            ["cwd"]             = cwd ?? "",
         };
 
-        if (cwd is not null) {
-            forwarded["cwd"] = cwd;
-            if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
-        }
+        if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
 
         if (TryGetIsoTimestamp(node, "timestamp") is { } startedAt) forwarded["started_at"] = startedAt.ToString("O");
         if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
