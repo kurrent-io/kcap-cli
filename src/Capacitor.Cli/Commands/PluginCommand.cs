@@ -476,7 +476,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task EnableCodexNetworkAccessAsync() {
         var codex = env.Harnesses.Of<CodexHarness>().Paths;
 
-        var domains = CodexConfigToml.BuildAllowDomains(env.Profiles.Profiles.Values.Select(p => p.ServerUrl));
+        var domains = env.CodexNetworkAllowDomains();
 
         if (domains.Count == 0) {
             await env.Stdout.WriteLineAsync(
@@ -661,22 +661,18 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     };
 
     WiringOptions Wiring(bool enableNetwork) {
-        var domains = enableNetwork ? CodexConfigToml.BuildAllowDomains(env.Profiles.Profiles.Values.Select(p => p.ServerUrl)) : [];
+        var domains = enableNetwork ? env.CodexNetworkAllowDomains() : [];
 
         return new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, domains.Count == 0 ? null : domains);
     }
 
-    // The sandbox network step is a warning, as it is for the default layout.
-    const string NetworkStep = "network";
-
     async Task<bool> ReportAsync(VendorAccount account, IReadOnlyList<WiringStep> steps, string done, string attempt) {
-        var failures = steps.Where(s => !s.Succeeded).ToList();
-        var fatal    = failures.Any(s => s.Name != NetworkStep);
+        var fatal = AccountWiring.HasFatalFailure(steps);
 
         if (!fatal) await env.Stdout.WriteLineAsync($"{done} {account.Vendor} account {account.Label} ({account.Directory})");
 
-        if (failures.Count > 0) {
-            var detail = string.Join(", ", failures.Select(s => $"{s.Name}: {s.Detail}"));
+        if (!AccountWiring.Succeeded(steps)) {
+            var detail = AccountWiring.FailureSummary(steps);
             await env.Stderr.WriteLineAsync(fatal
                 ? $"Could not {attempt} {account.Vendor} account {account.Label} ({account.Directory}): {detail}"
                 : $"Warning: {account.Vendor} account {account.Label} ({account.Directory}): {detail}");

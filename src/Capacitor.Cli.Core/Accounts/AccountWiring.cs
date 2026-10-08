@@ -7,7 +7,16 @@ using Capacitor.Cli.Core.Harness.Codex;
 namespace Capacitor.Cli.Core.Accounts;
 
 public static class AccountWiring {
+    const string NetworkStep = "network";
+
     public static bool Succeeded(IReadOnlyList<WiringStep> steps) => steps.All(s => s.Succeeded);
+
+    /// <summary>A failed sandbox-network step is a warning: the account still records.</summary>
+    public static bool HasFatalFailure(IReadOnlyList<WiringStep> steps) =>
+        steps.Any(s => !s.Succeeded && s.Name != NetworkStep);
+
+    public static string FailureSummary(IReadOnlyList<WiringStep> steps) =>
+        string.Join(", ", steps.Where(s => !s.Succeeded).Select(s => $"{s.Name}: {s.Detail}"));
 
     public static IReadOnlyList<WiringStep> Wire(VendorAccount account, UserHome home, WiringOptions options) =>
         account.Vendor switch {
@@ -62,7 +71,7 @@ public static class AccountWiring {
         }
 
         if (options.NetworkAllowDomains is { } domains)
-            steps.Add(Step("network", CodexConfigToml.EnableNetworkAccess(domains, paths.ConfigToml)));
+            steps.Add(Step(NetworkStep, CodexConfigToml.EnableNetworkAccess(domains, paths.ConfigToml)));
 
         steps.Add(Step("mcp", CodexConfigToml.RegisterKcapMcpServers(paths.ConfigToml, options.ResolveMcpBinaryPath)));
 

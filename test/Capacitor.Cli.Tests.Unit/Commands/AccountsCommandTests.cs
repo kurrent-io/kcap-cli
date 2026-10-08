@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 
@@ -177,5 +178,42 @@ public class AccountsCommandTests {
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(capture.GetCapturedError()).Contains("kcap accounts");
+    }
+
+    [Test]
+    public async Task Rewire_with_no_accounts_says_so_and_exits_0() {
+        using var capture = ConsoleOutput.StartCapture();
+
+        var exit = await Sut().HandleAsync(["accounts", "rewire"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput()).Contains("No accounts registered");
+    }
+
+    [Test]
+    public async Task Add_codex_enables_sandbox_network_access_for_every_profile_server() {
+        var dir = ClaudeDir(".codex-b");
+        var env = TestPluginEnvironment.For(Home, PluginDir()) with {
+            Profiles = new ProfileConfig { Profiles = new() { ["work"] = new() { ServerUrl = "https://cap.example.test" } } },
+        };
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await new AccountsCommand(Store, env, TimeProvider.System).HandleAsync(["accounts", "add", "codex", dir]);
+
+        await Assert.That(exit).IsEqualTo(0).Because(capture.GetCapturedError());
+        await Assert.That(File.ReadAllText(Path.Combine(dir, "config.toml"))).Contains("cap.example.test");
+    }
+
+    [Test]
+    public async Task Tilde_paths_resolve_to_the_home_directory() {
+        var dir = ClaudeDir();
+        using var capture = ConsoleOutput.StartCapture();
+        await Sut().HandleAsync(["accounts", "add", "claude", "~/.claude-work"]);
+
+        var exit = await Sut().HandleAsync(["accounts", "remove", "~/.claude-work"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Store.Load().Accounts.Count).IsEqualTo(0);
+        await Assert.That(Directory.Exists(dir)).IsTrue();
     }
 }

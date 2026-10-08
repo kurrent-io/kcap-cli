@@ -163,4 +163,28 @@ public class AccountWiringTests {
         await Assert.That(File.GetUnixFileMode(Home.PathTo(".codex-b", "config.toml")))
             .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
+
+    [Test]
+    public async Task A_failed_network_step_alone_is_not_fatal() {
+        WiringStep[] steps = [new("hooks", true, "Changed"), new("network", false, "Failed")];
+
+        await Assert.That(AccountWiring.HasFatalFailure(steps)).IsFalse();
+        await Assert.That(AccountWiring.Succeeded(steps)).IsFalse();
+    }
+
+    [Test]
+    public async Task Any_other_failed_step_is_fatal() {
+        WiringStep[] steps = [new("network", false, "Failed"), new("mcp", false, "Failed")];
+
+        await Assert.That(AccountWiring.HasFatalFailure(steps)).IsTrue();
+        await Assert.That(AccountWiring.HasFatalFailure([new WiringStep("hooks", true, "Changed")])).IsFalse();
+    }
+
+    [Test]
+    public async Task Failure_summary_lists_only_failed_steps() {
+        WiringStep[] steps = [new("hooks", true, "Changed"), new("network", false, "Failed"), new("mcp", false, "Malformed")];
+
+        await Assert.That(AccountWiring.FailureSummary(steps)).IsEqualTo("network: Failed, mcp: Malformed");
+        await Assert.That(AccountWiring.FailureSummary([new WiringStep("hooks", true, "x")])).IsEqualTo("");
+    }
 }
