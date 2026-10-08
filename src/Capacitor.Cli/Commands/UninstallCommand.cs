@@ -232,9 +232,8 @@ public sealed class UninstallCommand(
 
         // The registry is what the plugin removals above read to unwire each account, so it goes last,
         // and only once nothing failed: a re-run needs it to finish the unwiring. It is not part of
-        // the config directory, so --keep-config does not spare it; --project leaves registered
-        // accounts alone.
-        if (!hadFailures && !includeProject && Directory.Exists(accountStore.Directory)) {
+        // the config directory, so --keep-config does not spare it.
+        if (!hadFailures && Directory.Exists(accountStore.Directory)) {
             try {
                 Directory.Delete(accountStore.Directory, recursive: true);
                 await Console.Out.WriteLineAsync($"Removed account registry: {accountStore.Directory}");
