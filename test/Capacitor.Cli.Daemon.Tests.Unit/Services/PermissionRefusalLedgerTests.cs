@@ -58,9 +58,11 @@ public class PermissionRefusalLedgerTests {
     }
 
     [Test]
-    public async Task A_refusal_with_no_tool_name_is_declared_but_incomplete() {
+    [Arguments(null)]
+    [Arguments("   ")]
+    public async Task A_refusal_with_no_tool_name_is_declared_but_incomplete(string? tool) {
         var ledger = new PermissionRefusalLedger();
-        ledger.Record(Session, "call-1", tool: null, Shell("git push"));
+        ledger.Record(Session, "call-1", tool, Shell("git push"));
 
         var declared = ledger.Declare(Session);
 

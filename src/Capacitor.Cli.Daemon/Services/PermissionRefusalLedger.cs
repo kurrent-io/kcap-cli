@@ -34,8 +34,9 @@ internal sealed class PermissionRefusalLedger {
             }
 
             // An unnamed refusal is still declared, but the judge cannot match it reliably.
-            var name = tool is { Length: > 0 } t ? t : "unknown";
-            if (tool is not { Length: > 0 }) session.Incomplete = true;
+            var unnamed = string.IsNullOrWhiteSpace(tool);
+            var name    = unnamed ? "unknown" : tool!;
+            if (unnamed) session.Incomplete = true;
 
             var target = PolicyJudgeTarget.Of(action);
             if (name.Length > MaxTool) { name = name[..MaxTool]; session.Incomplete = true; }

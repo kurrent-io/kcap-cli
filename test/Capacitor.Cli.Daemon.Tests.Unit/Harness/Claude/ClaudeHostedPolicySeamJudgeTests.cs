@@ -230,7 +230,7 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
 
         await Assert.That(merged.Complete).IsTrue();
         await Assert.That(merged.Source).IsEqualTo(PolicyJudgeRefusalsV1.SourceTranscript);
-        await Assert.That(merged.Entries.Select(e => e.ToolUseId).ToArray()).IsEquivalentTo(new[] { "c1", "c2", "t1" });
+        await Assert.That(string.Join(",", merged.Entries.Select(e => e.ToolUseId))).IsEqualTo("c1,c2,t1");
     }
 
     [Test]
@@ -262,8 +262,8 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
             refusals: ledger);
 
         var entries = JudgeRequests().Single()["refusals"]!["entries"]!.AsArray();
-        await Assert.That(entries.Select(e => e!["tool_use_id"]!.GetValue<string>()).ToArray())
-            .IsEquivalentTo(new[] { "toolu_0b", "toolu_0" });
+        await Assert.That(string.Join(",", entries.Select(e => e!["tool_use_id"]!.GetValue<string>())))
+            .IsEqualTo("toolu_0b,toolu_0");
         await Assert.That(entries[0]!["target"]!.GetValue<string>()).IsEqualTo("git push --force");
     }
 }
