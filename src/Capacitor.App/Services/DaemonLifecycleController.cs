@@ -91,6 +91,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     int  _latestActiveAgents;
     int  _reloadClaim;   // 0 free, 1 claimed; Interlocked only
     long _sequence;      // under _lock: both outcome records and read starts
+    ReloadState? _standing; // under _lock: the authoritative reload state; the subject only publishes it
+    bool _background;       // under _lock
+    readonly Lock _publish = new();
 
     IDisposable? _subscription;
     bool _armClaimed;
@@ -234,22 +237,43 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     void NoteSnapshot(ServiceSnapshot? snap, long readStart) {
         if (snap is null) return;
-        bool? background = null;
+        var changedBackground = false;
         var clear = false;
         lock (_lock) {
             switch (SpawnTypes.Classify(snap.LoadedSpawnType)) {
                 case SpawnTypeReading.BackgroundBand:
-                    background = true;
+                    _background = true;
+                    changedBackground = true;
                     break;
                 case SpawnTypeReading.Positive:
-                    background = false;
-                    if (_reloadState.Value is { } standing && ReloadCopy.ResolvedByPositivePriority(standing.Token) && standing.Sequence < readStart)
+                    _background = false;
+                    changedBackground = true;
+                    if (_standing is { } standing && ReloadCopy.ResolvedByPositivePriority(standing.Token) && standing.Sequence < readStart) {
+                        _standing = null;
                         clear = true;
+                    }
                     break;
             }
         }
-        if (background is { } b) _backgroundPriority.OnNext(b);
-        if (clear) _reloadState.OnNext(null);
+        if (changedBackground) PublishBackground();
+        if (clear) PublishReloadState();
+    }
+
+    // Each publisher reads its field inside the publish lock, so emissions can never invert.
+    void PublishBackground() {
+        lock (_publish) {
+            bool current;
+            lock (_lock) current = _background;
+            _backgroundPriority.OnNext(current);
+        }
+    }
+
+    void PublishReloadState() {
+        lock (_publish) {
+            ReloadState? current;
+            lock (_lock) current = _standing;
+            _reloadState.OnNext(current);
+        }
     }
 
     async Task<(ServiceSnapshot? Snap, QueryOutcome Outcome)> QueryStatusAsync(CancellationToken ct) {
@@ -498,9 +522,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     void Record(MutationOutcome outcome) {
-        ReloadState? state;
-        lock (_lock) state = Services.ReloadState.From(outcome, _client.DaemonName, ++_sequence);
-        _reloadState.OnNext(state);
+        lock (_lock) _standing = Services.ReloadState.From(outcome, _client.DaemonName, ++_sequence);
+        PublishReloadState();
     }
 
     /// Preconditions the repair dialog needs — unlike FailingPreconditionAsync (the silent-install

@@ -394,7 +394,7 @@ public class DaemonLifecycleControllerTests {
     /// A reattach after the first Connected (the daemon relaunching itself onto a new binary, a
     /// reconnect) costs one passive status read for the spawn-type indicator: no dialog, no mutation.
     [Test]
-    public async Task Later_connected_transitions_neither_query_nor_prompt() {
+    public async Task Later_connected_transitions_only_read_status_and_neither_prompt_nor_mutate() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "installed"));
         h.Start();
@@ -1104,14 +1104,14 @@ public class DaemonLifecycleControllerTests {
             _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" }),
         };
         h.Start();
-        h.PushConnected(); // starts the slow passive read
+        h.PushConnected(); // the arm: read 1 is its slow reconciliation read
 
         h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "contended", RecoverySurface.Attention));
         await h.Controller.ReloadServiceAsync(CancellationToken.None);
         await Assert.That(h.Reload()!.Token).IsEqualTo("contended");
 
         slowRead.SetResult(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" });
-        await Task.Yield();
+        await h.Controller.QuiescedAsync(); // the reconciliation holds the gate until its read has been noted
         await Assert.That(h.Reload()!.Token).IsEqualTo("contended");
 
         h.PushConnecting(); h.PushConnected(); // a read that starts after the record
