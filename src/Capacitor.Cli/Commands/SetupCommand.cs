@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -2364,63 +2362,11 @@ sealed class SetupCommand(
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
-    static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
-
     /// <summary>
     /// Registers the kcap plugin in a Claude Code settings.json file by merging
     /// the marketplace source and enabling the plugin. Preserves all existing settings.
     /// </summary>
-    internal static bool InstallPlugin(string settingsPath, string marketplacePath) {
-        try {
-            JsonObject root = [];
+    internal static bool InstallPlugin(string settingsPath, string marketplacePath) =>
+        ClaudePluginWriter.Install(settingsPath, marketplacePath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
 
-            if (File.Exists(settingsPath)) {
-                try {
-                    if (JsonNode.Parse(File.ReadAllText(settingsPath)) is JsonObject obj)
-                        root = obj;
-                } catch {
-                    // Malformed JSON — start fresh
-                }
-            }
-
-            // Ensure extraKnownMarketplaces.kcap exists with the correct path
-            if (root["extraKnownMarketplaces"] is not JsonObject marketplaces) {
-                marketplaces                   = [];
-                root["extraKnownMarketplaces"] = marketplaces;
-            }
-
-            marketplaces["kcap"] = new JsonObject {
-                ["source"] = new JsonObject {
-                    ["source"] = "directory",
-                    ["path"]   = marketplacePath
-                }
-            };
-
-            // Remove stale marketplace entries from earlier shapes
-            marketplaces.Remove("kurrent");
-            marketplaces.Remove("kapacitor");
-
-            // Ensure enabledPlugins.kcap@kcap is true
-            if (root["enabledPlugins"] is not JsonObject enabled) {
-                enabled                = [];
-                root["enabledPlugins"] = enabled;
-            }
-
-            enabled["kcap@kcap"] = true;
-
-            // Remove stale plugin entries from earlier shapes
-            enabled.Remove("kcap@kurrent");
-            enabled.Remove("kapacitor@kapacitor");
-            enabled.Remove("kapacitor@kurrent");
-
-            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-            File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
-
-            ClaudePluginInstaller.WriteMarker(settingsPath);
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
 }

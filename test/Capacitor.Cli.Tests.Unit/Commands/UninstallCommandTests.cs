@@ -529,17 +529,16 @@ public class UninstallCommandTests {
         // platform; covering Unix is sufficient for regression purposes.
         await using var fixture = await Fixture.CreateAsync();
 
-        // Force PluginCommand's Claude remove to return 1 by leaving a valid
-        // kcap entry behind a read-only file: File.Exists passes, JSON
-        // parses cleanly, then File.WriteAllText hits UnauthorizedAccessException
-        // — which the remover's catch translates into exit code 1.
+        // Force PluginCommand's Claude remove to fail by leaving a valid kcap
+        // entry in a read-only directory: the atomic replace cannot create its
+        // temp file there, so the edit reports Failed and the remover throws.
         var claudeDir = Path.Combine(fixture.Home, ".claude");
         Directory.CreateDirectory(claudeDir);
         var settingsPath = Path.Combine(claudeDir, "settings.json");
         await File.WriteAllTextAsync(settingsPath, """
             {"enabledPlugins": {"kcap@kcap": true}}
             """);
-        File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        File.SetUnixFileMode(claudeDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
         var sentinel = Path.Combine(fixture.ConfigDir, "profiles.json");
         await File.WriteAllTextAsync(sentinel, """{"sentinel":"survives-partial-failure"}""");
@@ -552,7 +551,7 @@ public class UninstallCommandTests {
             await Assert.That(await File.ReadAllTextAsync(sentinel)).Contains("survives-partial-failure");
         } finally {
             // Restore write so the test fixture can be deleted.
-            File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.SetUnixFileMode(claudeDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
 

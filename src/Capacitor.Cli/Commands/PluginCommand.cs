@@ -220,35 +220,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the file exists
     /// but contains no kcap entries.
     /// </summary>
-    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
-        if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
-
-        var text = File.ReadAllText(settingsPath);
-
-        if (JsonNode.Parse(text) is not JsonObject root) return ClaudeRemovalOutcome.Malformed;
-
-        var changed = false;
-
-        if (root["enabledPlugins"] is JsonObject enabled) {
-            changed |= enabled.Remove("kcap@kcap");
-            changed |= enabled.Remove("kcap@kurrent");
-            changed |= enabled.Remove("kapacitor@kapacitor");
-            changed |= enabled.Remove("kapacitor@kurrent");
-        }
-
-        if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
-            changed |= marketplaces.Remove("kcap");
-            changed |= marketplaces.Remove("kurrent");
-            changed |= marketplaces.Remove("kapacitor");
-        }
-
-        if (!changed) return ClaudeRemovalOutcome.NotInstalled;
-
-        File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
-        ClaudePluginInstaller.DeleteMarker(settingsPath);
-
-        return ClaudeRemovalOutcome.Removed;
-    }
+    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) =>
+        ClaudePluginWriter.Remove(settingsPath) switch {
+            SettingsEdit.Changed   => ClaudeRemovalOutcome.Removed,
+            SettingsEdit.Malformed => ClaudeRemovalOutcome.Malformed,
+            SettingsEdit.Failed    => throw new IOException($"Could not write {settingsPath}."),
+            _                      => ClaudeRemovalOutcome.NotInstalled,
+        };
 
     public enum ClaudeRemovalOutcome {
         Removed,
