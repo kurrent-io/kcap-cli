@@ -25,6 +25,7 @@ public sealed class SessionRuns(TimeProvider time) {
     /// The rows of Rows that present as running, in arrival order.
     public IAvaloniaReadOnlyList<RunRow> Running => _running;
     public int RunningCount => Count(RunState.Running);
+    public int RunningCommandCount => _running.Count(row => row.IsShell);
 
     public int Count(RunState state) => _counts[(int)state];
 

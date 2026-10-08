@@ -21,10 +21,11 @@ public static class SessionStatusDots {
     public static bool NeedsAttention(AgentRow row) =>
         row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);
 
-    /// Running, and either mid-turn or with subagents the daemon still counts. A parent that is
-    /// also waiting still counts as working; the wait is a line on the status tip.
-    public static bool IsWorking(string status, bool? awaitingInput, int? liveSubagents) =>
-        status == "Running" && (awaitingInput == false || liveSubagents > 0);
+    /// Running, and either mid-turn or with subagents the daemon still counts or background
+    /// commands the app saw start. A parent that is also waiting still counts as working; the
+    /// wait is a line on the status tip.
+    public static bool IsWorking(string status, bool? awaitingInput, int? liveSubagents, int liveCommands = 0) =>
+        status == "Running" && (awaitingInput == false || liveSubagents > 0 || liveCommands > 0);
 
     /// The short word every session surface shows. Detail lives on <see cref="Present"/>.
     public static string Label(AgentStatusDto dto) =>
@@ -33,7 +34,7 @@ public static class SessionStatusDots {
 
     public static string Label(AgentRow row) => ForRow(row, pending: false).Label;
 
-    public static AgentStatusPresentation ForRow(AgentRow row, bool pending, bool answerExpected = false) =>
+    public static AgentStatusPresentation ForRow(AgentRow row, bool pending, bool answerExpected = false, int liveCommands = 0) =>
         Present(
             row.Status, row.AwaitingInput, WaitsOnUser(row), row.LiveSubagents, pending,
             UsageLimitSummary(row.UsageLimit),
@@ -41,7 +42,8 @@ public static class SessionStatusDots {
             elapsed: null,
             requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
             model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null,
-            harness: string.IsNullOrEmpty(row.Vendor) ? null : HostedHarnessCatalog.LabelFor(row.Vendor));
+            harness: string.IsNullOrEmpty(row.Vendor) ? null : HostedHarnessCatalog.LabelFor(row.Vendor),
+            liveCommands: liveCommands);
 
     /// First match wins, so two surfaces cannot draw different marks for the same facts.
     /// <paramref name="usageLimitSummary"/> is set only for a question the user must answer.
@@ -49,13 +51,13 @@ public static class SessionStatusDots {
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
             string? usageLimitSummary, string? launchStage, string? elapsed,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
-            string? model = null, string? harness = null, bool ended = false) {
+            string? model = null, string? harness = null, bool ended = false, int liveCommands = 0) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
             : pending || usageLimitSummary is not null ? AgentStatusKind.NeedsYou
             : status == "Starting" ? AgentStatusKind.Starting
-            : IsWorking(status, awaitingInput, liveSubagents) ? AgentStatusKind.Working
+            : IsWorking(status, awaitingInput, liveSubagents, liveCommands) ? AgentStatusKind.Working
             : waitsOnUser ? AgentStatusKind.Idle
             : status == "Completed" ? AgentStatusKind.Done
             : AgentStatusKind.Other;
@@ -87,6 +89,8 @@ public static class SessionStatusDots {
             Add(facts, "Waiting for input.");
         if (liveSubagents is int live and > 0)
             Add(facts, $"{live} subagent{(live == 1 ? "" : "s")} running");
+        if (liveCommands > 0)
+            Add(facts, $"{liveCommands} command{(liveCommands == 1 ? "" : "s")} running");
         if (kind == AgentStatusKind.Starting && sentence == "Starting") Add(facts, launchStage, "Launch");
         Add(facts, requester, "Requester");
         Add(facts, borrowedFrom, "Borrowed from");
@@ -112,9 +116,11 @@ public static class SessionStatusDots {
     /// Dominant surfaced status for a collapsed worktree. Null when every child is settled or
     /// only carrying the daemon's own word. The accessible name counts the dominant kind.
     public static AgentStatusPresentation? Rollup(
-            IEnumerable<AgentRow> rows, IReadOnlySet<string> pending, IReadOnlySet<string>? answering = null) {
+            IEnumerable<AgentRow> rows, IReadOnlySet<string> pending, IReadOnlySet<string>? answering = null,
+            IReadOnlyDictionary<string, int>? commands = null) {
         var presented = rows
-            .Select(row => (Row: row, Status: ForRow(row, pending.Contains(row.Id), answering?.Contains(row.Id) ?? false)))
+            .Select(row => (Row: row, Status: ForRow(row, pending.Contains(row.Id), answering?.Contains(row.Id) ?? false,
+                commands?.GetValueOrDefault(row.Id) ?? 0)))
             .Where(item => item.Status.HasLabel)
             .OrderBy(item => (int)item.Status.Kind)
             .ThenBy(item => item.Row.Id, StringComparer.Ordinal)

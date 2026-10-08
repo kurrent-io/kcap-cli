@@ -142,7 +142,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time,
-            Func<ITerminalSurface>? surfaceFactory = null) {
+            Func<ITerminalSurface>? surfaceFactory = null, BackgroundCommandActivity? commands = null) {
         _row = row;
         _access = access;
         AgentId = row.Id;
@@ -150,10 +150,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(row, ended: false));
 
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
+        var runs = new SessionRuns(time);
+        commands?.Track(row.Id, runs).DisposeWith(_disposables);
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
-            opener, time, permissions, new SessionRuns(time), missingNote: MissingNote, sessionId: _sessionIds,
+            opener, time, permissions, runs, missingNote: MissingNote, sessionId: _sessionIds,
             serverQueue: Observable.Switch(_sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()

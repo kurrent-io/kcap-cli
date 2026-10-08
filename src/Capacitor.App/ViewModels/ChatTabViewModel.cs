@@ -146,6 +146,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         this.RaisePropertyChanged(nameof(HasRunningRuns));
         this.RaisePropertyChanged(nameof(RunningRow));
         this.RaisePropertyChanged(nameof(RunSummary));
+        RefreshAgentStatus();
     }
 
     public PendingCardsViewModel Cards { get; }
@@ -367,7 +368,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         AgentStatus = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
-            answerExpected: answerExpected, ended: _ended);
+            answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount);
         StatusText = AgentStatus.Label;
     }
 

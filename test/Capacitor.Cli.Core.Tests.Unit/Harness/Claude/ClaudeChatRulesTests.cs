@@ -306,7 +306,7 @@ public class ClaudeChatRulesTests {
         var started = (RunSignal.Started)R(call).Runs.Single();
         await Assert.That(started.Provisional).IsTrue();
         await Assert.That(started.Name).IsEqualTo("make check");
-        await Assert.That(started.Description).IsEqualTo("make check");
+        await Assert.That(started.Description).IsEmpty();
     }
 
     [Test]

@@ -116,7 +116,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
-            IPlanSource? plans = null) {
+            IPlanSource? plans = null, BackgroundCommandActivity? commands = null) {
         AgentId = agentId;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
@@ -129,6 +129,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
 
         var runs = new SessionRuns(time);
+        commands?.Track(agentId, runs).DisposeWith(_disposables);
         var planActivity = new PlanActivity();
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,

@@ -48,7 +48,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             AgentRow row, IObservable<string?> selectedAgentId,
             IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote, TimeProvider time,
-            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
+            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null) {
         Id = row.Id;
         CreatedAt = row.CreatedAt;
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
@@ -72,8 +73,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             .DisposeWith(_disposables);
 
         var answering = agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
-        _status = agentsWithPending.CombineLatest(answering,
-                (pending, asked) => SessionStatusDots.ForRow(row, pending.Contains(row.Id), asked.Contains(row.Id)))
+        var commands = agentsRunningCommands ?? Observable.Return<IReadOnlyDictionary<string, int>>(FrozenDictionary<string, int>.Empty);
+        _status = agentsWithPending.CombineLatest(answering, commands,
+                (pending, asked, running) => SessionStatusDots.ForRow(row, pending.Contains(row.Id), asked.Contains(row.Id), running.GetValueOrDefault(row.Id)))
             .ToProperty(this, x => x.Status, initialValue: SessionStatusDots.ForRow(row, pending: false))
             .DisposeWith(_disposables);
 

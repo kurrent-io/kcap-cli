@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -246,6 +247,27 @@ public class RailSessionViewModelTests {
 
             stale.OnNext(false);
             await Assert.That(remote.IsStale).IsFalse();
+        });
+    }
+
+    /// A background command keeps a finished turn Working, as a live subagent does, and the row
+    /// reads Idle again once the command ends.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_background_command_keeps_a_waiting_row_working() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var commands = new BehaviorSubject<IReadOnlyDictionary<string, int>>(FrozenDictionary<string, int>.Empty);
+            using var row = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, TimeProvider.System, agentsRunningCommands: commands);
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+
+            commands.OnNext(new Dictionary<string, int> { ["a1"] = 2 });
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(row.Status.Pulses).IsTrue();
+            await Assert.That(row.Tooltip).Contains("2 commands running");
+
+            commands.OnNext(FrozenDictionary<string, int>.Empty);
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
         });
     }
 
