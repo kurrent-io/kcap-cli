@@ -34,6 +34,8 @@ public class CodexHooksWriterTests {
         var stop = JsonNode.Parse(File.ReadAllText(hooks))!["hooks"]!["Stop"]!.AsArray();
         await Assert.That(stop.Count).IsEqualTo(2);
         await Assert.That(stop[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("my-tool");
+        await Assert.That(stop[1]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo(CodexHooksWriter.HookCommand);
+        await Assert.That(stop[1]!["hooks"]![0]!["timeout"]!.GetValue<int>()).IsEqualTo(30);
     }
 
     [Test]
@@ -54,10 +56,47 @@ public class CodexHooksWriterTests {
 
     [Test]
     public async Task Remove_drops_only_kcap_entries() {
-        var hooks = Tmp.PathTo("hooks.json");
+        var hooks = Tmp.CreateFile("hooks.json", """
+            { "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "my-tool" } ] } ] } }
+            """);
         CodexHooksWriter.Install(hooks);
 
         await Assert.That(CodexHooksWriter.Remove(hooks)).IsEqualTo(SettingsEdit.Changed);
         await Assert.That(CodexHooksInstaller.ReferencesKcapHook(hooks)).IsFalse();
+        var stop = JsonNode.Parse(File.ReadAllText(hooks))!["hooks"]!["Stop"]!.AsArray();
+        await Assert.That(stop.Count).IsEqualTo(1);
+        await Assert.That(stop[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("my-tool");
+    }
+
+    [Test]
+    [Arguments("""["x"]""")]
+    [Arguments("""[{"hooks":["x"]}]""")]
+    [Arguments("""[[1]]""")]
+    [Arguments(""" "x" """)]
+    public async Task Install_and_Remove_survive_odd_event_shapes(string stopJson) {
+        var hooks = Tmp.CreateFile("hooks.json", """{"hooks":{"Stop":""" + stopJson + "}}");
+
+        await Assert.That(CodexHooksWriter.Install(hooks)).IsEqualTo(SettingsEdit.Changed);
+        var stop = JsonNode.Parse(File.ReadAllText(hooks))!["hooks"]!["Stop"]!.AsArray();
+        var foreign = JsonNode.Parse(stopJson) is JsonArray a ? a.Count : 0;
+        await Assert.That(stop.Count).IsEqualTo(foreign + 1);
+        if (foreign > 0) await Assert.That(stop[0]!.ToJsonString()).IsEqualTo(JsonNode.Parse(stopJson)![0]!.ToJsonString());
+        await Assert.That(CodexHooksInstaller.ReferencesKcapHook(hooks)).IsTrue();
+
+        await Assert.That(CodexHooksWriter.Remove(hooks)).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(CodexHooksInstaller.ReferencesKcapHook(hooks)).IsFalse();
+        var after = JsonNode.Parse(File.ReadAllText(hooks))!["hooks"]!["Stop"]!.AsArray();
+        await Assert.That(after.Count).IsEqualTo(foreign);
+    }
+
+    [Test]
+    [Arguments("""["x"]""")]
+    [Arguments("""[{"hooks":["x"]}]""")]
+    [Arguments("""[[1]]""")]
+    [Arguments(""" "x" """)]
+    public async Task Remove_on_odd_event_shapes_does_not_throw(string stopJson) {
+        var hooks = Tmp.CreateFile("hooks.json", """{"hooks":{"Stop":""" + stopJson + "}}");
+
+        await Assert.That(CodexHooksWriter.Remove(hooks)).IsEqualTo(SettingsEdit.Unchanged);
     }
 }
