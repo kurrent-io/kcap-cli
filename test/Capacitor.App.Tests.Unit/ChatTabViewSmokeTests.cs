@@ -1682,15 +1682,20 @@ public class ChatTabViewSmokeTests {
     }
 
     /// A command's name can run to 80 characters; on a narrow pane the name gives way, never the
-    /// state line with its timer.
+    /// state line with its timer. 550 is the chat pane at the window's minimum width, beside the
+    /// rail and the work-context pane.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_long_command_name_never_pushes_the_state_line_out_of_the_banner() {
+    [Arguments(600, true)]
+    [Arguments(550, true)]
+    [Arguments(550, false)]
+    public async Task A_long_command_name_never_pushes_the_state_line_out_of_the_banner(double width, bool described) {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            host.Window.Width = 600;
-            var description = "Run every integration suite against the staging server and collect the coverage";
-            var call = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make it","description":"{{{description}}}"}}]}}""";
+            host.Window.Width = width;
+            var text = "Run every integration suite against the staging server and collect the coverage";
+            var input = described ? $$$"""{"command":"make it","description":"{{{text}}}"}""" : $$$"""{"command":"{{{text}}}"}""";
+            var call = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{{{input}}}}]}}""";
             var launch = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
             await host.LoadAsync(Tmp.CreateFile("sh.jsonl", [call, launch]));
             host.Settle();

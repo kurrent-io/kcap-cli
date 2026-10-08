@@ -141,7 +141,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
-            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null) {
+            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null) {
         AgentId = agentId;
         _opener = opener;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
@@ -155,6 +155,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
 
         var runs = new SessionRuns(time);
+        commands?.Track($"local:{agentId}", runs).DisposeWith(_disposables);
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;

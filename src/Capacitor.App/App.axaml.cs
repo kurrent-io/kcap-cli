@@ -630,6 +630,7 @@ public partial class App : Application {
             : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
         _menuBar?.SetFeedbackAction(openFeedback);
 
+        var commands = new BackgroundCommandActivity();
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, opener, permissions,
             workContext, ops, uploader,
@@ -637,14 +638,15 @@ public partial class App : Application {
             linkGitHub: () => {
                 if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
             },
-            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts);
+            access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
+            commands: commands);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
         RemoteSessionViewModel? BuildRemote(string agentId) =>
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, _time,
-                    () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts)
+                    () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -654,7 +656,7 @@ public partial class App : Application {
                 lifecycleStatus, _navigation, _workspaceTeardown.Track, BuildWorkspace,
                 // The tenant slug the rail footer shows — profiles are named after it at sign-in.
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
-                agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer,
+                agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer, agentsRunningCommands: commands.Running,
                 requestSignIn: requestSignIn,
                 lifecycleAttention: lifecycleAttention, pullRequestTones: pullRequestTones.Tones,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
@@ -1252,6 +1254,7 @@ public partial class App : Application {
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null, Action? requestSignIn = null,
             IObservable<string?>? lifecycleAttention = null,
+            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
@@ -1303,7 +1306,7 @@ public partial class App : Application {
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
             openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
-            pullRequestTones: pullRequestTones, agentsAwaitingAnswer: agentsAwaitingAnswer);
+            pullRequestTones: pullRequestTones, agentsAwaitingAnswer: agentsAwaitingAnswer, agentsRunningCommands: agentsRunningCommands);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,

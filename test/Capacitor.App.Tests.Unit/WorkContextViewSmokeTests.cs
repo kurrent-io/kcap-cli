@@ -580,6 +580,31 @@ public class WorkContextViewSmokeTests {
             list.GetVisualDescendants().OfType<TextBlock>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
     }
 
+    /// Driven through the Claude projection: a command with no description is named by its own
+    /// text, so the row has nothing else to say under that name.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_command_without_a_description_shows_its_text_once() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var chat = TranscriptChat.For("claude");
+            var context = chat.CreateContext("s1", null);
+            string[] lines = [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""",
+                """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""",
+            ];
+            for (var i = 0; i < lines.Length; i++)
+                host.Runs.Apply(chat.ProjectWithInputs(lines[i], i + 1, host.Time.GetUtcNow(), context));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var list = host.Find<ItemsControl>("RunningSubagentList");
+            await Assert.That(list.IsEffectivelyVisible).IsTrue();
+            await Assert.That(VisibleTexts(list).Count(t => t.Contains("make check", StringComparison.Ordinal))).IsEqualTo(1);
+        });
+    }
+
     /// Folded, the section lists the running rows alone and nothing once none runs; opening it
     /// swaps that list for the full one rather than showing a running row twice.
     [Test]
