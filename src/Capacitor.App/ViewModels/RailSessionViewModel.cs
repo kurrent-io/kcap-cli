@@ -75,7 +75,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var answering = agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
         var commands = agentsRunningCommands ?? Observable.Return<IReadOnlyDictionary<string, int>>(FrozenDictionary<string, int>.Empty);
         _status = agentsWithPending.CombineLatest(answering, commands,
-                (pending, asked, running) => SessionStatusDots.ForRow(row, pending.Contains(row.Id), asked.Contains(row.Id), running.GetValueOrDefault(row.Id)))
+                (pending, asked, running) => SessionStatusDots.ForRow(row, pending.Contains(row.Id), asked.Contains(row.Id), running.GetValueOrDefault(row.Key)))
             .ToProperty(this, x => x.Status, initialValue: SessionStatusDots.ForRow(row, pending: false))
             .DisposeWith(_disposables);
 

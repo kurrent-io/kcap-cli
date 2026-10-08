@@ -251,7 +251,8 @@ public class RailSessionViewModelTests {
     }
 
     /// A background command keeps a finished turn Working, as a live subagent does, and the row
-    /// reads Idle again once the command ends.
+    /// reads Idle again once the command ends. The count is keyed by lane: an unproven twin on the
+    /// other lane is a different session under the same id.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_running_background_command_keeps_a_waiting_row_working() {
@@ -261,7 +262,10 @@ public class RailSessionViewModelTests {
                 _ => { }, _ => { }, TimeProvider.System, agentsRunningCommands: commands);
             await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
 
-            commands.OnNext(new Dictionary<string, int> { ["a1"] = 2 });
+            commands.OnNext(new Dictionary<string, int> { ["remote:a1"] = 2 });
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+
+            commands.OnNext(new Dictionary<string, int> { ["local:a1"] = 2 });
             await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(row.Status.Pulses).IsTrue();
             await Assert.That(row.Tooltip).Contains("2 commands running");

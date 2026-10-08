@@ -628,11 +628,11 @@ public class WorkspaceViewModelTests {
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
 
-            await Assert.That(latest.TryGetValue("a1", out var running) ? running : 0).IsEqualTo(1);
+            await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
             await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
             await vm.TeardownAsync();
-            await Assert.That(latest.ContainsKey("a1")).IsFalse();
+            await Assert.That(latest.ContainsKey("local:a1")).IsFalse();
         });
     }
 }

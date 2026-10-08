@@ -120,7 +120,7 @@ public static class SessionStatusDots {
             IReadOnlyDictionary<string, int>? commands = null) {
         var presented = rows
             .Select(row => (Row: row, Status: ForRow(row, pending.Contains(row.Id), answering?.Contains(row.Id) ?? false,
-                commands?.GetValueOrDefault(row.Id) ?? 0)))
+                commands?.GetValueOrDefault(row.Key) ?? 0)))
             .Where(item => item.Status.HasLabel)
             .OrderBy(item => (int)item.Status.Kind)
             .ThenBy(item => item.Row.Id, StringComparer.Ordinal)

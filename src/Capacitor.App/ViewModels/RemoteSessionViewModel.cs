@@ -200,7 +200,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
         var runs = new SessionRuns(time);
-        commands?.Track(row.Id, runs).DisposeWith(_disposables);
+        commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),

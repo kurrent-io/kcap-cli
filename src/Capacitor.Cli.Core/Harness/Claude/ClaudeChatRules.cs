@@ -135,7 +135,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     const int ShellNameLimit = 80;
 
     /// The row's name is the call's description, with the command's first line under it; a call
-    /// without a description is named by that line and has nothing under it.
+    /// without a description is named by that line, which goes under it only once the name is cut.
     static (string Name, string Detail) ShellFacts(string? inputJson) {
         if (inputJson is null) return ("command", "");
         try {
@@ -144,7 +144,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             var command = FirstLine(input.Str("command") ?? "");
             var described = input.Str("description") is { } d && d.Trim() is { Length: > 0 } trimmed ? trimmed : null;
             var name = described ?? (command.Length > 0 ? command : "command");
-            return (name.Length > ShellNameLimit ? name[..(ShellNameLimit - 1)] + "…" : name, described is null ? "" : command);
+            var cut = name.Length > ShellNameLimit;
+            return (cut ? name[..(ShellNameLimit - 1)] + "…" : name, described is null && !cut ? "" : command);
         } catch (JsonException) {
             return ("command", "");
         }

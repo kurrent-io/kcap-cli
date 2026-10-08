@@ -228,7 +228,7 @@ public class RailWorktreeViewModelTests {
             cache.AddOrUpdate(Row("a1", awaitingInput: true));
             await Assert.That(wt.HeaderStatus!.Kind).IsEqualTo(AgentStatusKind.Idle);
 
-            commands.OnNext(new Dictionary<string, int> { ["a1"] = 1 });
+            commands.OnNext(new Dictionary<string, int> { ["local:a1"] = 1 });
             await Assert.That(wt.HeaderStatus!.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(wt.Sessions.Single().Status.Kind).IsEqualTo(AgentStatusKind.Working);
         });
