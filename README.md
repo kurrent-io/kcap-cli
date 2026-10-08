@@ -68,7 +68,7 @@ Windows (PowerShell):
 irm https://www.kurrent.io/install.ps1 | iex
 ```
 
-The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, when run from a terminal, runs `kcap setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
+The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
 
 ### 2. Start a new agent session
 
