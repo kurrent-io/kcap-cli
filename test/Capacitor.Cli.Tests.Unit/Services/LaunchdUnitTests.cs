@@ -333,4 +333,21 @@ public class LaunchdUnitTests {
         await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = running")).IsEqualTo(ServiceState.Running);
         await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = not running")).IsEqualTo(ServiceState.Installed);
     }
+
+    [Test]
+    [Arguments("\tspawn type = daemon (3)\n", "daemon")]
+    [Arguments("\tspawn type = interactive (4)\n", "interactive")]
+    [Arguments("\tspawn type = background (5)\n", "background")]
+    [Arguments("\tspawn type = adaptive (6)\n", "adaptive")]
+    [Arguments("\tspawn type = app (1)\n", "app")]
+    [Arguments("\tspawn type = Adaptive (6)\r\n", "adaptive")]
+    public async Task LoadedSpawnType_reads_the_word(string print, string expected) {
+        await Assert.That(LaunchdUnit.LoadedSpawnType($"gui/501/x = {{\n{print}}}\n")).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task LoadedSpawnType_is_null_without_the_line() {
+        await Assert.That(LaunchdUnit.LoadedSpawnType("gui/501/x = {\n\tstate = running\n}\n")).IsNull();
+        await Assert.That(LaunchdUnit.LoadedSpawnType("gui/501/x = {\n\tspawn type = \n}\n")).IsNull();
+    }
 }

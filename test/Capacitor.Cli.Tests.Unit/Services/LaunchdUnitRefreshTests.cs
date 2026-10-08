@@ -77,10 +77,9 @@ public class LaunchdUnitRefreshTests {
     }
 
     [Test]
-    public async Task LoadedAsAdaptive_reads_the_spawn_type_line() {
-        await Assert.That(LaunchdUnit.LoadedAsAdaptive(Print("adaptive (6)"))).IsTrue();
-        await Assert.That(LaunchdUnit.LoadedAsAdaptive(Print("daemon (3)"))).IsFalse();
-        await Assert.That(LaunchdUnit.LoadedAsAdaptive("")).IsFalse();
+    public async Task LoadedSpawnType_reads_the_spawn_type_line() {
+        await Assert.That(LaunchdUnit.LoadedSpawnType(Print("adaptive (6)"))).IsEqualTo("adaptive");
+        await Assert.That(LaunchdUnit.LoadedSpawnType(Print("daemon (3)"))).IsEqualTo("daemon");
     }
 
     [Test]

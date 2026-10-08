@@ -153,7 +153,7 @@ sealed partial class LaunchdServiceManager(
         // A loaded job still running a version directory keeps it after the plist moves on.
         var loadedProgram = LaunchdUnit.LoadedProgram(printOut);
         var pinned = loadedProgram is not null && stabilize is not null && stabilize(loadedProgram) != loadedProgram;
-        var stale  = probe == LabelProbe.Loaded && (LaunchdUnit.LoadedAsAdaptive(printOut) || pinned);
+        var stale  = probe == LabelProbe.Loaded && (SpawnTypes.IsBackgroundBand(LaunchdUnit.LoadedSpawnType(printOut)) || pinned);
 
         // Rewriting the file is safe whatever launchd holds; only the reload depends on what it does.
         if (upgraded is not null) _writeUnit(path, upgraded, null);
@@ -208,7 +208,7 @@ sealed partial class LaunchdServiceManager(
             return (exit == 0 ? null : $"launchctl bootstrap failed (exit {exit}): {err.Trim()}", null);
 
         var (label, stdout) = Probe(serviceId);
-        var loaded = label == LabelProbe.Loaded && (acceptAdaptive || !LaunchdUnit.LoadedAsAdaptive(stdout));
+        var loaded = label == LabelProbe.Loaded && (acceptAdaptive || SpawnTypes.IsPositive(LaunchdUnit.LoadedSpawnType(stdout)));
 
         return (loaded ? null : "launchctl bootstrap timed out and was terminated", label);
     }

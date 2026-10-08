@@ -34,11 +34,20 @@ static class LaunchdUnit {
         }
     }
 
-    /// <summary>True when <c>launchctl print</c> shows the loaded job running as Adaptive. launchd reads
-    /// <c>ProcessType</c> only when the job loads, so a rewritten plist leaves this true until a reload.</summary>
-    public static bool LoadedAsAdaptive(string printStdout) =>
-        printStdout.Split('\n').Any(static line =>
-            line.Trim().StartsWith("spawn type = adaptive", StringComparison.OrdinalIgnoreCase));
+    /// <summary>The word on <c>launchctl print</c>'s <c>spawn type = &lt;word&gt; (&lt;n&gt;)</c> line, lower-cased,
+    /// or null when the print has no such line. launchd reads the plist only when the job loads, so this
+    /// lags a rewritten plist until a reload.</summary>
+    public static string? LoadedSpawnType(string printStdout) {
+        foreach (var line in printStdout.Split('\n')) {
+            var t = line.Trim();
+            if (!t.StartsWith("spawn type = ", StringComparison.OrdinalIgnoreCase)) continue;
+            var rest = t["spawn type = ".Length..].Trim();
+            var end  = rest.IndexOf(' ');
+            var word = (end < 0 ? rest : rest[..end]).Trim();
+            return word.Length == 0 ? null : word.ToLowerInvariant();
+        }
+        return null;
+    }
 
     /// <summary>
     /// The plist with its daemon binary (the first <c>ProgramArguments</c> entry) replaced by
