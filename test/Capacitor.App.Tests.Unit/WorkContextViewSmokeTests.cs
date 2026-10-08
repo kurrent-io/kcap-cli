@@ -38,12 +38,14 @@ public class WorkContextViewSmokeTests {
         public SessionRuns Runs { get; }
         public FakePlanSource Plans { get; } = new();
         public PlanActivity PlanActivity { get; } = new();
+        public FakePlanArtifactSource Artefacts { get; } = new();
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
             Runs = new SessionRuns(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, plans: Plans, planActivity: PlanActivity);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, plans: Plans, planActivity: PlanActivity,
+                artefacts: new ArtefactsTabViewModel(Artefacts, PlanActivity, Time));
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -53,6 +55,7 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             Presence.OnNext(WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: SessionA));
             await (Vm.PendingReadForTesting ?? Task.CompletedTask);
+            await (Vm.Artefacts!.PendingReadForTesting ?? Task.CompletedTask);
             await (Vm.Plan.PendingReadForTesting ?? Task.CompletedTask);
             Dispatcher.UIThread.RunJobs();
             Window.UpdateLayout();
@@ -66,6 +69,68 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Vm.TeardownAsync();
         }
+    }
+
+    /// The pane's two ways into the tab: a clickable document row and the summary row.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Document_rows_are_buttons_and_the_summary_row_shows_once_the_tab_has_something() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "design", Path = "docs/x-design.md" }]));
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+                Artifacts = [new PlanArtifactDto {
+                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
+                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+                }],
+            }));
+            var opens = 0;
+            host.Vm.Artefacts!.OpenRequested += () => opens++;
+            await host.ShowAsync(KeyOnlyRead());
+
+            await Assert.That(host.Find<Button>("ArtefactsSummaryRow").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("ArtefactsSummaryText").Text).IsEqualTo("1 document");
+            await host.Vm.OpenArtefactsCommand.Execute();
+            await Assert.That(opens).IsEqualTo(1);
+
+            await host.Vm.Plan.ToggleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            var rowButton = host.Window.GetVisualDescendants().OfType<Button>().Single(b => b.DataContext is PlanDocumentRow);
+            await Assert.That(rowButton.Classes.Contains("copyValue")).IsTrue();
+
+            host.Vm.Plan.MarkOpen("docs/x-design.md");
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
+            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
+            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(purple.Color);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_tick_re_reads_a_failed_first_read_with_the_tab_hidden() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Unreachable, null));
+            await host.ShowAsync(KeyOnlyRead());
+            await Assert.That(host.Vm.Artefacts!.HasAny).IsFalse();
+            await Assert.That(host.Vm.Artefacts.IsShown).IsFalse();
+
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+                Artifacts = [new PlanArtifactDto {
+                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
+                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+                }],
+            }));
+            host.Time.Advance(WorkContextViewModel.PollInterval);
+            await (host.Vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(host.Vm.Artefacts.HasAny).IsTrue();
+        });
     }
 
     /// A key-titled item with no tracker title, its seed issue untitled too, one contributor

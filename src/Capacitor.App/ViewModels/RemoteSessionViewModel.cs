@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -11,7 +12,7 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 public enum RemoteSessionAccess { Connecting, Ready, Denied, Offline, NoSession }
-public enum RemoteTab { Chat, Terminal }
+public enum RemoteTab { Chat, Terminal, Artefacts }
 
 /// The workspace for a row the app has no socket to: the header, the chat pane over the server's
 /// stream — its cards included — Stop and Open in web. Access is the server's explicit signal,
@@ -25,6 +26,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _lease = new();
+    readonly IUrlOpener _opener;
     // Never disposed, so a row revision landing after teardown cannot throw; the chat and its
     // cards unsubscribe from these when the pane is torn down.
     readonly BehaviorSubject<string?> _sessionIds;
@@ -45,7 +47,28 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// vendor's family decides, exactly as it does for a local dto without one.
     public RemoteTerminalViewModel? Terminal { get; }
     public bool ShowsTerminalTab => Terminal is not null;
-    public bool ShowsSurfaceSwitch => ShowsTerminalTab;
+    public ArtefactsTabViewModel Artefacts { get; }
+    public ReactiveCommand<Unit, Unit> ShowArtefactsCommand { get; }
+    bool _showsArtefactsTab;
+    public bool ShowsArtefactsTab {
+        get => _showsArtefactsTab;
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsArtefactsTab, value);
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
+        }
+    }
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsArtefactsTab;
+
+    void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
+
+    /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
+    internal void OpenCard(ToolCard card) {
+        if (card.DocumentPath is { } path) {
+            if (Artefacts.OpenDocument(path)) return;
+            if (Artefacts.HasAny) { Artefacts.RequestOpen(); return; }
+        }
+        if (card.Url is { } url) LinkPolicy.Open(_opener, url);
+    }
 
     string _title = "";
     public string Title { get => _title; private set => this.RaiseAndSetIfChanged(ref _title, value); }
@@ -59,10 +82,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             this.RaiseAndSetIfChanged(ref _activeTab, value);
             RaiseTabProjections();
+            Artefacts.IsShown = IsArtefactsActive;
         }
     }
     public bool IsChatActive => ActiveTab == RemoteTab.Chat;
     public bool IsTerminalActive => ActiveTab == RemoteTab.Terminal;
+    public bool IsArtefactsActive => ActiveTab == RemoteTab.Artefacts;
 
     // Stop's canExecute reads the ended flag here, not through this.WhenAnyValue: that call routes
     // through ReactiveUI's ObservableForProperty/RxAppBuilder global init, which only some other
@@ -116,6 +141,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public bool ShowsChatPane => ShowsPanes && IsChatActive;
     public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
+    public bool ShowsArtefactsPane => ShowsPanes && IsArtefactsActive;
 
     // What the terminal reports its viewport on. Same reason as _sessionEndedChanges above for a
     // subject rather than this.WhenAnyValue; never disposed, so a projection raised after teardown
@@ -125,6 +151,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     void RaiseTabProjections() {
         this.RaisePropertyChanged(nameof(IsChatActive));
         this.RaisePropertyChanged(nameof(IsTerminalActive));
+        this.RaisePropertyChanged(nameof(IsArtefactsActive));
+        this.RaisePropertyChanged(nameof(ShowsArtefactsPane));
         this.RaisePropertyChanged(nameof(ShowsPanes));
         this.RaisePropertyChanged(nameof(ShowsChatPane));
         this.RaisePropertyChanged(nameof(ShowsTerminalPane));
@@ -142,12 +170,33 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time,
-            Func<ITerminalSurface>? surfaceFactory = null, BackgroundCommandActivity? commands = null) {
+            Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
+            BackgroundCommandActivity? commands = null) {
         _row = row;
+        _opener = opener;
         _access = access;
         AgentId = row.Id;
         _sessionIds = new BehaviorSubject<string?>(row.SessionId);
         _session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(row, ended: false));
+
+        var planActivity = new PlanActivity();
+        Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
+        Artefacts.OpenRequested += ShowArtefacts;
+        Artefacts.WhenAnyValue(a => a.HasAny).Subscribe(has => {
+            ShowsArtefactsTab = has;
+            if (!has && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
+        }).DisposeWith(_disposables);
+        _sessionIds.DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(sid => Artefacts.SwitchSession(sid, null)).DisposeWith(_disposables);
+        _accessStates.Select(s => s == SessionAccessState.Established).DistinctUntilChanged().Where(ready => ready)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
+        // No pane polls this lane, so a read the server could not answer is retried on the pane's
+        // cadence, and only while it stays unanswered.
+        _disposables.Add(time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => {
+            if (Artefacts.LastReadFailed) Artefacts.Refresh();
+        }), null, WorkContextViewModel.PollInterval, WorkContextViewModel.PollInterval));
 
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
         var runs = new SessionRuns(time);
@@ -159,7 +208,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             serverQueue: Observable.Switch(_sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
-                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))));
+                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
+            planActivity: planActivity, openCard: OpenCard);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
             : null;
@@ -215,6 +265,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _disposables.Add(StopCommand);
         _disposables.Add(ShowChatCommand);
         _disposables.Add(ShowTerminalCommand);
+        ShowArtefactsCommand = ReactiveCommand.Create(ShowArtefacts);
+        _disposables.Add(ShowArtefactsCommand);
         _disposables.Add(_lease);
     }
 
@@ -277,7 +329,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public async Task TeardownAsync() {
         _disposables.Dispose();
+        Artefacts.OpenRequested -= ShowArtefacts;
         await Chat.TeardownAsync();
         if (Terminal is { } terminal) await terminal.TeardownAsync();
+        await Artefacts.TeardownAsync();
     }
 }

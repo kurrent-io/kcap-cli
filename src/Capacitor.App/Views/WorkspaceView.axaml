@@ -41,10 +41,17 @@
                             <Button x:Name="PullRequestTabButton" Content="Pull request" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsPullRequestActive}" Command="{Binding ShowPullRequestCommand}"
                                     IsVisible="{Binding ShowsPullRequestTab}" />
+                            <Button x:Name="ArtefactsTabButton" Content="Artefacts" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsArtefactsActive}" Command="{Binding ShowArtefactsCommand}"
+                                    IsVisible="{Binding ShowsArtefactsTab}" />
                         </StackPanel>
                     </Border>
-                    <Button x:Name="OpenInWebButton" Content="Open in web" Command="{Binding OpenInWebCommand}" IsVisible="{Binding HasAgent}"
-                            Classes="kcapGhost" Padding="10,5" FontSize="13.5" />
+                    <Button x:Name="OpenInWebButton" Command="{Binding OpenInWebCommand}" IsVisible="{Binding HasAgent}"
+                            Classes="kcapGhost kcapIcon" ToolTip.Tip="Open in web" AutomationProperties.Name="Open in web">
+                        <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6"
+                              StrokeLineCap="Round" StrokeJoin="Round"
+                              Data="M14,3 H21 V10 M21,3 L11,13 M18,13 V20 H4 V6 H11" />
+                    </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
                             IsVisible="{Binding HasAgent}" Padding="10,5" FontSize="13.5" />
                 </StackPanel>
@@ -136,6 +143,7 @@
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsChat}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
+            <ContentControl x:Name="ArtefactsHost" IsVisible="{Binding IsArtefactsActive}" />
 
             <!-- Over the (still empty) chat host while the daemon is starting the runtime: the
                  stage line is the only sign the launch is alive during a handshake that can run

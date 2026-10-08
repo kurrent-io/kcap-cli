@@ -58,4 +58,22 @@ public class ToolDetailTests {
         await Assert.That(ToolDetail.From("""{"command":"cat /Users/me/dev/repo/x"}""", repo)).IsEqualTo("cat /Users/me/dev/repo/x");
         await Assert.That(ToolDetail.From("""{"file_path":"/Users/me/dev/repo/src/Foo.cs"}""", null)).IsEqualTo("/Users/me/dev/repo/src/Foo.cs");
     }
+
+    [Test]
+    public async Task ForKey_reads_the_named_string_first_line_elided_and_nothing_else() {
+        var long120 = new string('a', 120);
+        await Assert.That(ToolDetail.ForKey("""{"issue_key":"WK-3084","title":"x"}""", "issue_key")).IsEqualTo("WK-3084");
+        await Assert.That(ToolDetail.ForKey("""{"prompt":"Fix the flaky test\nthen push"}""", "prompt")).IsEqualTo("Fix the flaky test");
+        await Assert.That(ToolDetail.ForKey("""{"title":"x"}""", "issue_key")).IsEqualTo("");
+        await Assert.That(ToolDetail.ForKey("""{"title":"x"}""", null)).IsEqualTo("");
+        await Assert.That(ToolDetail.ForKey("not json", "title")).IsEqualTo("");
+        await Assert.That(ToolDetail.ForKey($$"""{"query":"{{long120}}"}""", "query").Length).IsLessThanOrEqualTo(80);
+    }
+
+    [Test]
+    public async Task FirstString_takes_the_first_non_empty_string_property() {
+        await Assert.That(ToolDetail.FirstString("""{"n":1,"team":"","title":"Add tests","body":"long"}""")).IsEqualTo("Add tests");
+        await Assert.That(ToolDetail.FirstString("""{"n":1}""")).IsEqualTo("");
+        await Assert.That(ToolDetail.FirstString(null)).IsEqualTo("");
+    }
 }
