@@ -323,7 +323,7 @@ public class DaemonLifecycleControllerTests {
         h.PushConnected(); // races the in-flight query with a MEANINGFULLY different outcome
         first.SetResult(Snap(state: "running", jobPid: 1, daemonPid: 1)); // release the now-stale first query
 
-        await WaitUntilAsync(() => h.Cli.StatusCallCount == 2, what: "the forced re-evaluation against fresh state");
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 3, what: "the passive read of the racing Connected plus the forced re-evaluation against fresh state");
 
         // The re-evaluation must reconcile in ATTACHED mode (we're now actually Connected) — the
         // ownership-mismatch check only fires while attached, so this proves the race does not
@@ -392,7 +392,7 @@ public class DaemonLifecycleControllerTests {
     }
 
     /// A reattach after the first Connected (the daemon relaunching itself onto a new binary, a
-    /// reconnect) is the client's business alone: no query, no dialog, no mutation.
+    /// reconnect) costs one passive status read for the spawn-type indicator: no dialog, no mutation.
     [Test]
     public async Task Later_connected_transitions_neither_query_nor_prompt() {
         await using var h = new Harness();
@@ -405,9 +405,10 @@ public class DaemonLifecycleControllerTests {
 
         h.PushConnecting();
         h.PushConnected();
-        await Task.Delay(50); // a negative: give a would-be second pass every chance to fire
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 2, what: "the passive spawn-type read of the later Connected");
+        await Task.Delay(50); // a negative: give a would-be third read every chance to fire
 
-        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(1);
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(2);
         await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
@@ -883,6 +884,247 @@ public class DaemonLifecycleControllerTests {
         await startTask;
     }
 
+    // ---- background-priority indicator ----
+
+    [Test]
+    [Arguments("adaptive", true)]
+    [Arguments("background", true)]
+    [Arguments("daemon", false)]
+    [Arguments("interactive", false)]
+    public async Task Indicator_follows_the_classified_spawn_type(string word, bool expected) {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = word });
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the connected read");
+        await Assert.That(h.Background()).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Indicator_is_left_alone_by_an_unknown_word_an_empty_word_or_a_failed_read() {
+        await using var h = new Harness();
+        var words = new Queue<string?>(["adaptive", "app", "", null]);
+        h.Cli.StatusBehavior = _ => {
+            var word = words.Dequeue();
+            return Task.FromResult<ServiceSnapshot?>(word is null ? null : Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = word });
+        };
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "first read");
+        await Assert.That(h.Background()).IsTrue();
+
+        h.PushConnecting(); h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 2, what: "unknown-word read");
+        await Assert.That(h.Background()).IsTrue();
+
+        h.PushConnecting(); h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 3, what: "empty-word read");
+        await Assert.That(h.Background()).IsTrue();
+
+        h.PushConnecting(); h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 4, what: "failed read");
+        await Assert.That(h.Background()).IsTrue();
+    }
+
+    [Test]
+    public async Task Every_transition_into_connected_reads_status_without_arming_a_mutation() {
+        await using var h = new Harness();
+        var words = new Queue<string>(["adaptive", "adaptive", "daemon"]);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = words.Dequeue() });
+        h.Start();
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount >= 1, what: "the startup read");
+        var afterStartup = h.Cli.StatusCallCount;
+
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == afterStartup + 1, what: "the connected read");
+        await Assert.That(h.Background()).IsTrue();
+
+        h.PushConnecting(); h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == afterStartup + 2, what: "the reconnect read");
+        await Assert.That(h.Background()).IsFalse();
+        await Assert.That(h.Lane.Requests.Count(r => r.Verb != MutationVerb.StartVerified && r.Verb != MutationVerb.Install)).IsEqualTo(0);
+    }
+
+    // ---- the reload action ----
+
+    [Test]
+    public async Task Reload_prompts_on_every_click_and_a_decline_runs_nothing() {
+        await using var h = new Harness();
+        h.Start();
+        h.PushSnapshot(activeAgents: 3);
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(false);
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(2);
+        await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindReloadService);
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(3));
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Reloading()).IsFalse();
+    }
+
+    [Test]
+    public async Task Reload_runs_the_verb_records_success_and_rereads_status() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" });
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests.Select(r => r.Verb)).IsEquivalentTo([MutationVerb.Reload]);
+        await Assert.That(h.Surface.StatusMessages).Contains(DaemonLifecycleController.StandardPriorityStatus);
+        await Assert.That(h.Reload()).IsNull();
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(1);
+        await Assert.That(h.Background()).IsFalse();
+        await Assert.That(h.Client.RestartCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Reload_records_a_failure_and_a_later_success_clears_it() {
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        var outcomes = new Queue<MutationOutcome>([
+            new MutationOutcome.Failed(1, "unit_missing", RecoverySurface.Attention),
+            new MutationOutcome.Succeeded()]);
+        h.Lane.Behavior = (_, _) => Task.FromResult(outcomes.Dequeue());
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await Assert.That(h.Reload()!.Token).IsEqualTo("unit_missing");
+        await Assert.That(h.Reload()!.ExitCode).IsEqualTo(1);
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await Assert.That(h.Reload()).IsNull();
+    }
+
+    [Test]
+    public async Task A_success_followed_by_a_failure_leaves_the_failure_standing() {
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        var outcomes = new Queue<MutationOutcome>([new MutationOutcome.Succeeded(), new MutationOutcome.AttentionSkew("ownership_mismatch")]);
+        h.Lane.Behavior = (_, _) => Task.FromResult(outcomes.Dequeue());
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Reload()!.Token).IsEqualTo("ownership_mismatch");
+    }
+
+    [Test]
+    public async Task Second_call_while_the_first_prompt_is_open_is_ignored_and_a_decline_releases_the_claim() {
+        await using var h = new Harness();
+        var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Surface.ConfirmBehavior = (_, _) => answer.Task;
+        var gate = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Lane.Behavior = (_, _) => gate.Task;
+
+        var first  = h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the first prompt");
+        var second = h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await second; // returns at once: no prompt, no request
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(1);
+        await Assert.That(h.Reloading()).IsTrue();
+
+        answer.SetResult(true);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the single lane request");
+        var third = h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await third;
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(1);
+
+        gate.SetResult(new MutationOutcome.Succeeded());
+        await first;
+        await Assert.That(h.Reloading()).IsFalse();
+
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(false);
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(2);
+        await Assert.That(h.Reloading()).IsFalse();
+    }
+
+    [Test]
+    public async Task Reload_cancels_when_the_attach_changed_while_the_prompt_was_open() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100));
+        h.Start();
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the connected read");
+        h.Surface.ConfirmBehavior = (_, _) => { h.PushConnecting(); return Task.FromResult(true); };
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.StatusMessages.Last()).IsEqualTo(DaemonLifecycleController.PromptStaleStatus);
+        await Assert.That(h.Reloading()).IsFalse();
+    }
+
+    [Test]
+    public async Task Reload_without_a_canonical_server_records_the_refusal_and_releases_the_claim() {
+        await using var h = new Harness(canonicalServer: null);
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Reload()!.Token).IsEqualTo("no_server_configured");
+        await Assert.That(h.Reload()!.Kind).IsEqualTo(ReloadOutcomeKind.Refused);
+        await Assert.That(h.Reloading()).IsFalse();
+    }
+
+    // ---- resolution by passive reads ----
+
+    [Test]
+    public async Task A_positive_read_after_a_priority_class_failure_clears_it_but_leaves_other_failures() {
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" });
+
+        h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "contended", RecoverySurface.Attention));
+        await h.Controller.ReloadServiceAsync(CancellationToken.None); // the action's own re-read runs after the record
+        await Assert.That(h.Reload()).IsNull();
+
+        h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "unit_missing", RecoverySurface.Attention));
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await Assert.That(h.Reload()!.Token).IsEqualTo("unit_missing");
+
+        h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.AttentionRepair("running_without_daemon_pid"));
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await Assert.That(h.Reload()!.Token).IsEqualTo("running_without_daemon_pid");
+    }
+
+    [Test]
+    public async Task A_read_that_started_before_the_failure_was_recorded_does_not_clear_it() {
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        var slowRead = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reads = 0;
+        h.Cli.StatusBehavior = _ => ++reads switch {
+            1 => slowRead.Task,
+            2 => Task.FromResult<ServiceSnapshot?>(null),
+            _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" }),
+        };
+        h.Start();
+        h.PushConnected(); // starts the slow passive read
+
+        h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(1, "contended", RecoverySurface.Attention));
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+        await Assert.That(h.Reload()!.Token).IsEqualTo("contended");
+
+        slowRead.SetResult(Snap(state: "running", jobPid: 100, daemonPid: 100) with { LoadedSpawnType = "daemon" });
+        await Task.Yield();
+        await Assert.That(h.Reload()!.Token).IsEqualTo("contended");
+
+        h.PushConnecting(); h.PushConnected(); // a read that starts after the record
+        await WaitUntilAsync(() => h.Reload() is null, what: "the later positive read clearing the failure");
+    }
+
+    [Test]
+    public async Task Disclosure_names_the_count_and_what_else_ends() {
+        var text = DaemonLifecycleController.ReloadDisclosure(2);
+        await Assert.That(text).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1)).Contains("1 agent now");
+    }
+
     // ---- harness ----
 
     /// Records every MutationRequest the controller hands to `_runMutation` and lets a test
@@ -934,6 +1176,13 @@ public class DaemonLifecycleControllerTests {
 
         public void PushUnreachable(string reason = "daemon_unreachable", string? daemonVersion = null) =>
             Client.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, reason, null, daemonVersion));
+
+        public void PushSnapshot(int activeAgents) =>
+            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents));
+
+        public bool Background() { bool? v = null; using (Controller.BackgroundPriority.Subscribe(x => v = x)) { } return v ?? false; }
+        public ReloadState? Reload() { ReloadState? v = null; using (Controller.ReloadState.Subscribe(x => v = x)) { } return v; }
+        public bool Reloading() { bool? v = null; using (Controller.IsReloading.Subscribe(x => v = x)) { } return v ?? false; }
 
         public ValueTask DisposeAsync() => Controller.DisposeAsync();
     }

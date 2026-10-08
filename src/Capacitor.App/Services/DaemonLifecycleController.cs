@@ -1,4 +1,7 @@
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services.Mutation;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.App.Services;
@@ -78,6 +81,17 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly TaskCompletionSource<bool> _phaseClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly Lock _lock = new();
 
+    internal const string StandardPriorityStatus = "Daemon runs at standard priority.";
+    internal const string PromptStaleStatus      = "The daemon changed while the prompt was open — canceled, nothing changed.";
+
+    readonly BehaviorSubject<bool>         _backgroundPriority = new(false);
+    readonly BehaviorSubject<ReloadState?> _reloadState        = new(null);
+    readonly BehaviorSubject<bool>         _isReloading        = new(false);
+    IDisposable? _snapshots;
+    int  _latestActiveAgents;
+    int  _reloadClaim;   // 0 free, 1 claimed; Interlocked only
+    long _sequence;      // under _lock: both outcome records and read starts
+
     IDisposable? _subscription;
     bool _armClaimed;
     bool _disposed;
@@ -109,12 +123,24 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// Cached once at Start(); null when the CLI is missing or --version failed.
     public string? CliVersion { get; private set; }
 
+    /// True while launchd holds the service in the background band; unchanged by an unknown word or a failed read.
+    public IObservable<bool> BackgroundPriority => _backgroundPriority.DistinctUntilChanged();
+    /// The last Reload outcome that still stands, or null. Replays to a late subscriber.
+    public IObservable<ReloadState?> ReloadState => _reloadState;
+    /// True from the claim before the prompt until the outcome is recorded and the follow-up read is done.
+    public IObservable<bool> IsReloading => _isReloading.DistinctUntilChanged();
+
+    internal static string ReloadDisclosure(int activeAgents) =>
+        $"Reloading restarts the daemon and ends everything it hosts: {activeAgents} agent{(activeAgents == 1 ? "" : "s")} now, " +
+        "plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.";
+
     /// Subscribes to the attach stream. MUST be called before the host calls
     /// IDaemonClientService.Start() — the host owns pumping the attach loop; a subscription that
     /// starts after the pump has begun could miss the first terminal outcome the startup phase
     /// hinges on.
     public void Start() {
         _subscription = _client.Status.Subscribe(OnAttachStatus);
+        _snapshots    = _client.Snapshots.Subscribe(snap => _latestActiveAgents = snap.Daemon.ActiveAgents);
         _ = CacheVersionAsync(); // never faults
     }
 
@@ -141,7 +167,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (isFirstTerminalOutcome) _armClaimed = true;
         }
 
-        if (!isFirstTerminalOutcome) return;
+        if (!isFirstTerminalOutcome) {
+            // A later Connected is a daemon that came up after the arm, or came back after a reload
+            // outside the app: read its spawn type, arm nothing.
+            if (status.State == AttachState.Connected) _ = PassiveReadAsync();
+            return;
+        }
 
         switch (status.State) {
             case AttachState.Connected:
@@ -185,9 +216,45 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     enum QueryOutcome { Ok, Failed, Stale }
 
+    /// Every service status read: stamped before it starts so a positive result can be ordered against a
+    /// failure recorded while it was in flight, then fed to the indicator and the reload state.
+    async Task<ServiceSnapshot?> ReadStatusAsync(CancellationToken ct) {
+        long readStart;
+        lock (_lock) readStart = ++_sequence;
+        var snap = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false);
+        NoteSnapshot(snap, readStart);
+        return snap;
+    }
+
+    async Task PassiveReadAsync() {
+        try { await ReadStatusAsync(_lifetime.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { /* shutdown */ }
+        catch (Exception ex) { Console.Error.WriteLine($"kcap: daemon lifecycle passive status read failed: {ex.Message}"); }
+    }
+
+    void NoteSnapshot(ServiceSnapshot? snap, long readStart) {
+        if (snap is null) return;
+        bool? background = null;
+        var clear = false;
+        lock (_lock) {
+            switch (SpawnTypes.Classify(snap.LoadedSpawnType)) {
+                case SpawnTypeReading.BackgroundBand:
+                    background = true;
+                    break;
+                case SpawnTypeReading.Positive:
+                    background = false;
+                    if (_reloadState.Value is { } standing && ReloadCopy.ResolvedByPositivePriority(standing.Token) && standing.Sequence < readStart)
+                        clear = true;
+                    break;
+            }
+        }
+        if (background is { } b) _backgroundPriority.OnNext(b);
+        if (clear) _reloadState.OnNext(null);
+    }
+
     async Task<(ServiceSnapshot? Snap, QueryOutcome Outcome)> QueryStatusAsync(CancellationToken ct) {
         var gen0 = CurrentGeneration();
-        var snap = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false);
+        var snap = await ReadStatusAsync(ct).ConfigureAwait(false);
         if (CurrentGeneration() != gen0) return (null, QueryOutcome.Stale);
         return snap is null ? (null, QueryOutcome.Failed) : (snap, QueryOutcome.Ok);
     }
@@ -216,10 +283,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// silently walking away with zero reconciliation for the whole run.
     async Task<ServiceSnapshot?> QueryForStartupBranchAsync((AttachState State, string? Reason) triggering, CancellationToken ct) {
         var gen0 = CurrentGeneration();
-        var snap = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false);
+        var snap = await ReadStatusAsync(ct).ConfigureAwait(false);
 
         if (CurrentGeneration() != gen0 && ObservedStatusChangedSince(triggering))
-            snap = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false); // one re-evaluation against fresh state
+            snap = await ReadStatusAsync(ct).ConfigureAwait(false); // one re-evaluation against fresh state
 
         if (snap is null) {
             _surface.Status("Could not read the daemon service status — skipping automatic action this run.");
@@ -396,6 +463,44 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
 
         await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
+    }
+
+    /// The rail's Reload button. One operation at a time, claimed before the prompt: the confirmation
+    /// surface queues dialogs and releases its gate when one is answered, so a claim taken on acceptance
+    /// would let a second queued prompt be accepted while the first reload is still running.
+    public async Task ReloadServiceAsync(CancellationToken ct) {
+        if (Interlocked.CompareExchange(ref _reloadClaim, 1, 0) != 0) return;
+        _isReloading.OnNext(true);
+        try {
+            if (RequireAppRestart()) return;
+            var gen0   = CurrentGeneration();
+            var prompt = new LifecyclePrompt(LifecyclePrompt.KindReloadService, null, CliVersion, false, ReloadDisclosure(_latestActiveAgents));
+            var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
+            if (!accepted || RequireAppRestart()) return;
+            if (CurrentGeneration() != gen0) {
+                _surface.Status(PromptStaleStatus);
+                return;
+            }
+
+            var profileName = await _resolveProfileName().ConfigureAwait(false);
+            var refusal = MutationRequestFactory.TryBuild(MutationVerb.Reload, profileName, _canonicalServer, _client.DaemonName, out var request);
+            var outcome = refusal ?? await _runMutation(request!, ct).ConfigureAwait(false);
+            Record(outcome);
+            if (refusal is null) _ = _client.RestartLoopAsync(); // the mutation may have restarted the daemon; reattach is idempotent
+            if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) _surface.Status(StandardPriorityStatus);
+
+            try { await ReadStatusAsync(ct).ConfigureAwait(false); } // the indicator follows evidence, not the click
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        } finally {
+            _isReloading.OnNext(false);
+            Volatile.Write(ref _reloadClaim, 0);
+        }
+    }
+
+    void Record(MutationOutcome outcome) {
+        ReloadState? state;
+        lock (_lock) state = Services.ReloadState.From(outcome, _client.DaemonName, ++_sequence);
+        _reloadState.OnNext(state);
     }
 
     /// Preconditions the repair dialog needs — unlike FailingPreconditionAsync (the silent-install
@@ -590,6 +695,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _disposed = true;
 
         _subscription?.Dispose();
+        _snapshots?.Dispose();
         _lifetime.Cancel();
         await QuiescedAsync().ConfigureAwait(false);
         _lifetime.Dispose();
