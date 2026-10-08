@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -127,5 +128,41 @@ public class StatusCommandHooksTests {
         var line = StatusCommand.BuildHooksStatusLine([(HarnessId.Claude, true)]);
 
         await Assert.That(line).IsEqualTo("Claude ✓");
+    }
+
+    static VendorAccount Account(HarnessId vendor, string dir) =>
+        new(dir, vendor, dir, Path.GetFileName(dir), DateTimeOffset.UnixEpoch);
+
+    [Test]
+    public async Task Account_lines_are_omitted_for_a_single_default_per_vendor() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
+            (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Recording),
+        ]);
+
+        await Assert.That(line).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Account_lines_list_each_account_with_its_state() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
+            (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Broken),
+        ]);
+
+        await Assert.That(line).Contains(".claude-work");
+        await Assert.That(line).Contains("broken — run kcap accounts rewire");
+        await Assert.That(line).Contains("recording");
+    }
+
+    [Test]
+    public async Task Account_lines_share_the_accounts_command_wording_for_a_wired_codex_account() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Installed),
+            (Account(HarnessId.Codex, "/h/.codex-work"), RecordingState.NotWired),
+        ]);
+
+        await Assert.That(line).Contains("hooks installed (trust in Codex)");
+        await Assert.That(line).Contains("not wired");
     }
 }

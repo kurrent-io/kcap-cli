@@ -49,7 +49,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     async Task<int> List() {
         var registry = Registry(accounts.Load);
         foreach (var a in registry.Accounts)
-            await Console.Out.WriteLineAsync($"{a.Vendor,-7} {a.Label,-20} {StateLabel(a.Vendor, AccountWiring.State(a, env.Home)),-36} {a.Directory}  [{a.Id[..8]}]");
+            await Console.Out.WriteLineAsync($"{a.Vendor,-7} {a.Label,-20} {AccountStateLabels.For(a.Vendor, AccountWiring.State(a, env.Home)),-36} {a.Directory}  [{a.Id[..8]}]");
 
         var candidates = AccountDiscovery.Find(env.Home, registry, Environment.GetEnvironmentVariable);
         if (candidates.Count > 0) {
@@ -163,14 +163,6 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
         vendor = name.ToLowerInvariant() switch { "claude" => HarnessId.Claude, "codex" => HarnessId.Codex, _ => default };
         return name.ToLowerInvariant() is "claude" or "codex";
     }
-
-    static string StateLabel(HarnessId vendor, RecordingState state) => state switch {
-        RecordingState.Recording                              => "recording",
-        RecordingState.Installed when vendor is HarnessId.Codex => "hooks installed (trust in Codex)",
-        RecordingState.Installed                              => "wired (starts on next launch)",
-        RecordingState.Broken                                 => "broken — run kcap accounts rewire",
-        _                                                     => "not wired",
-    };
 
     static async Task<int> NotFound(string idOrDir) {
         await Console.Error.WriteLineAsync($"No account matches {idOrDir}. Run `kcap accounts` to list them.");
