@@ -196,6 +196,13 @@ sealed partial class LaunchdServiceManager(
         var reload = Bootstrap(serviceId, path, acceptAnySpawnType: false);
         if (reload.Error is null) return UnitRefresh.Reloaded;
 
+        // The label loaded from the plist on disk but launchd still reports the wrong band: a second
+        // bootstrap over a loaded label fails, and the file already declares Standard, so nothing is rolled back.
+        if (reload.After == LabelProbe.Loaded) {
+            error = reload.Error;
+            return UnitRefresh.Failed;
+        }
+
         if (upgraded is not null) _writeUnit(path, original, null);
         var rollback = Bootstrap(serviceId, path, acceptAnySpawnType: true);
         var (bootstrapError, rollbackError) = (reload.Error, rollback.Error);
@@ -234,8 +241,8 @@ sealed partial class LaunchdServiceManager(
         if (acceptAnySpawnType || SpawnTypes.IsPositive(spawn)) return (null, label);
 
         return (spawn is null
-            ? "the job loaded but launchd reports no spawn type for it"
-            : $"the job loaded but launchd still reports spawn type {spawn}", label);
+            ? "the label is loaded but launchd reports no spawn type for it"
+            : $"the label is loaded but launchd still reports spawn type {spawn}", label);
     }
 
     /// <summary>

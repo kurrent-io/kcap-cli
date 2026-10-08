@@ -300,10 +300,9 @@ public class LaunchdUnitRefreshTests {
         var outcome = manager.RefreshUnit("test", () => true, Plenty, out var error);
 
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
-        await Assert.That(error).Contains("restored and loaded");
-        // Six calls after the daemon is asked, the most ReloadBudget reserves for.
+        await Assert.That(error).Contains("still reports spawn type");
         await Assert.That(calls.Select(c => c[0]).ToArray())
-            .IsEquivalentTo(["print", "bootout", "print", "bootstrap", "print", "bootstrap", "print"]);
+            .IsEquivalentTo(["print", "bootout", "print", "bootstrap", "print"]);
     }
 
     [Test]
@@ -420,6 +419,32 @@ public class LaunchdUnitRefreshTests {
             runBounded: (_, _, _) => throw new System.ComponentModel.Win32Exception("launchctl missing"));
         await Assert.That(startThrows.RefreshUnit("test", () => true, Plenty, out var startError)).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(startError).Contains("launchctl missing");
+    }
+
+    [Test]
+    public async Task Loaded_job_still_in_the_band_keeps_the_rewritten_plist_and_is_not_rolled_back() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        var path   = Seed(AdaptivePlist());
+        var calls  = new List<string[]>();
+        var loaded = true;
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, c, _) => File.WriteAllText(p, c),
+            runBounded: (_, args, _) => {
+                calls.Add(args);
+                return args[0] switch {
+                    "print"     => loaded ? (0, Print("adaptive (6)"), "", false) : (113, "", "Could not find service", false),
+                    "bootout"   => ((Func<(int, string, string, bool)>)(() => { loaded = false; return (0, "", "", false); }))(),
+                    "bootstrap" => ((Func<(int, string, string, bool)>)(() => { loaded = true; return (0, "", "", false); }))(),
+                    _           => (0, "", "", false),
+                };
+            });
+
+        var outcome = manager.RefreshUnit("test", () => true, Plenty, out var error);
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("still reports spawn type");
+        await Assert.That(calls.Count(c => c[0] == "bootstrap")).IsEqualTo(1);
+        await Assert.That(LaunchdUnit.DeclaresStandardProcessType(File.ReadAllText(path))).IsTrue();
     }
 
     [Test]
