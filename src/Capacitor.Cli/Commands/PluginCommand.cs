@@ -598,31 +598,39 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     /// <summary>Every registered account of <paramref name="vendor"/> other than the
-    /// environment-derived one, which keeps its own install path. Null when the registry cannot be
-    /// read or written.</summary>
-    async Task<IReadOnlyList<VendorAccount>?> UserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault) {
+    /// environment-derived one, which keeps its own install path. A registry that cannot be read,
+    /// locked or written is a warning, never a failure: the default layout must stay installable
+    /// and removable whatever state the registry is in.</summary>
+    async Task<IReadOnlyList<VendorAccount>> UserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault) {
         if (env.Accounts is null) return [];
 
         try {
             if (adoptDefault) AccountAdoption.EnsureDefault(env.Accounts, vendor, defaultDirectory, TimeProvider.System);
 
             return [.. AccountAdoption.Of(env.Accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, defaultDirectory))];
-        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
-            await env.Stderr.WriteLineAsync($"Could not access the {vendor} account registry ({env.Accounts.Directory}): {ex.Message}");
+        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException
+                                         or TimeoutException or WaitHandleCannotBeOpenedException) {
+            await env.Stderr.WriteLineAsync(
+                $"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
 
-            return null;
+            return [];
         }
     }
 
     async Task<bool> WireUserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault, bool refreshOnly, bool enableNetwork) {
-        var accounts = await UserAccountsAsync(vendor, defaultDirectory, adoptDefault);
-        if (accounts is null) return false;
-
         WiringOptions? options = null;
         var            ok      = true;
 
-        foreach (var account in accounts) {
-            if (refreshOnly && MarkerIsCurrent(account)) continue;
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault)) {
+            if (refreshOnly) {
+                // A refresh never wires an account the user unwired: only an existing install is refreshed.
+                if (!IsInstalledIn(account)) continue;
+
+                if (account.Vendor is HarnessId.Codex)
+                    CodexConfigToml.RegisterKcapMcpServers(AccountLayouts.Codex(env.Home, account.Directory).ConfigToml, env.ResolveMcpBinaryPath);
+
+                if (MarkerIsCurrent(account)) continue;
+            }
 
             options ??= Wiring(enableNetwork);
             ok      &= await ReportAsync(account, AccountWiring.Wire(account, env.Home, options), "Wired", "wire");
@@ -632,16 +640,19 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
-        var accounts = await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false);
-        if (accounts is null) return false;
-
         var ok = true;
 
-        foreach (var account in accounts)
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false))
             ok &= await ReportAsync(account, AccountWiring.Unwire(account, env.Home), "Unwired", "unwire");
 
         return ok;
     }
+
+    bool IsInstalledIn(VendorAccount account) => account.Vendor switch {
+        HarnessId.Claude => ClaudePluginInstaller.IsInstalled(AccountLayouts.Claude(env.Home, account.Directory).UserSettings),
+        HarnessId.Codex  => CodexHooksInstaller.IsInstalled(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson),
+        _                => false,
+    };
 
     bool MarkerIsCurrent(VendorAccount account) => account.Vendor switch {
         HarnessId.Claude => ClaudePluginInstaller.ReadMarker(AccountLayouts.Claude(env.Home, account.Directory).UserSettings) == CapacitorVersion.Current(),
@@ -655,17 +666,23 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, domains.Count == 0 ? null : domains);
     }
 
-    async Task<bool> ReportAsync(VendorAccount account, IReadOnlyList<WiringStep> steps, string done, string attempt) {
-        if (AccountWiring.Succeeded(steps)) {
-            await env.Stdout.WriteLineAsync($"{done} {account.Vendor} account {account.Label} ({account.Directory})");
+    // The sandbox network step is a warning, as it is for the default layout.
+    const string NetworkStep = "network";
 
-            return true;
+    async Task<bool> ReportAsync(VendorAccount account, IReadOnlyList<WiringStep> steps, string done, string attempt) {
+        var failures = steps.Where(s => !s.Succeeded).ToList();
+        var fatal    = failures.Any(s => s.Name != NetworkStep);
+
+        if (!fatal) await env.Stdout.WriteLineAsync($"{done} {account.Vendor} account {account.Label} ({account.Directory})");
+
+        if (failures.Count > 0) {
+            var detail = string.Join(", ", failures.Select(s => $"{s.Name}: {s.Detail}"));
+            await env.Stderr.WriteLineAsync(fatal
+                ? $"Could not {attempt} {account.Vendor} account {account.Label} ({account.Directory}): {detail}"
+                : $"Warning: {account.Vendor} account {account.Label} ({account.Directory}): {detail}");
         }
 
-        var detail = string.Join(", ", steps.Where(s => !s.Succeeded).Select(s => $"{s.Name}: {s.Detail}"));
-        await env.Stderr.WriteLineAsync($"Could not {attempt} {account.Vendor} account {account.Label} ({account.Directory}): {detail}");
-
-        return false;
+        return !fatal;
     }
 
     /// <summary>
