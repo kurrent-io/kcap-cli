@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -122,14 +123,19 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
         await Assert.That(request["refusals"]!["complete"]!.GetValue<bool>()).IsFalse();
     }
 
+    /// <summary>A clock that never moves, so nothing spent before the request can shave the budget it
+    /// declares: the 5 s ceiling less only the client's 250 ms transit allowance.</summary>
     [Test]
     public async Task The_default_budget_is_the_servers_full_ceiling() {
         Judge("ask");
+        var time    = new FakeTimeProvider();
+        var gateway = new PolicyJudgeGateway(
+            () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)), _server.Url, time);
 
-        await ClaudeHostedPolicySeam.EvaluateAsync(Call("git push"), JudgeOn, TimeProvider.System, Gateway, Config.Root);
+        await ClaudeHostedPolicySeam.EvaluateAsync(Call("git push"), JudgeOn, time, gateway, Config.Root);
 
         var budget = JudgeRequests().Single()["budget_ms"]!.GetValue<int>();
-        await Assert.That(budget).IsGreaterThan(4_000).And.IsLessThanOrEqualTo(5_000);
+        await Assert.That(budget).IsEqualTo(4_750);
     }
 
     [Test]
