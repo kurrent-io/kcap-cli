@@ -1160,4 +1160,75 @@ public class MainWindowViewModelTests {
             await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Background_priority_shows_only_while_connected_and_the_failure_text_always() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var background = new BehaviorSubject<bool>(true);
+            var reload = new BehaviorSubject<ReloadState?>(new ReloadState(ReloadOutcomeKind.Failed, "unit_missing", 1, "daemon-a", 1));
+            var reloading = new BehaviorSubject<bool>(false);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                backgroundPriority: background, reloadState: reload, isReloading: reloading, reloadDaemon: _ => Task.CompletedTask);
+            using var activation = vm.Activator.Activate();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            await Assert.That(vm.BackgroundPriority).IsFalse();
+            await Assert.That(vm.BackgroundPriorityText).IsNull();
+            await Assert.That(vm.CanReload).IsFalse();
+            await Assert.That(vm.ReloadFailureText).IsEqualTo(ReloadCopy.For(reload.Value!));
+            await Assert.That(vm.ShowsReloadBlock).IsTrue();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await Assert.That(vm.BackgroundPriority).IsTrue();
+            await Assert.That(vm.BackgroundPriorityText).IsEqualTo(MainWindowViewModel.BackgroundPriorityMessage);
+            await Assert.That(vm.CanReload).IsTrue();
+
+            reloading.OnNext(true);
+            await Assert.That(vm.IsReloading).IsTrue();
+            await Assert.That(vm.CanReload).IsFalse();
+
+            reloading.OnNext(false);
+            reload.OnNext(null);
+            background.OnNext(false);
+            await Assert.That(vm.ReloadFailureText).IsNull();
+            await Assert.That(vm.ShowsReloadBlock).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_view_model_built_while_unreachable_shows_the_replayed_failure() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var reload = new BehaviorSubject<ReloadState?>(new ReloadState(ReloadOutcomeKind.Unconfirmed, "unconfirmed", null, "daemon-a", 1));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, reloadState: reload);
+            using var activation = vm.Activator.Activate();
+            await Assert.That(vm.ReloadFailureText).IsEqualTo(ReloadCopy.For(reload.Value!));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Reload_command_runs_the_controller_action_only_when_it_can() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var calls = 0;
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                backgroundPriority: new BehaviorSubject<bool>(true), isReloading: new BehaviorSubject<bool>(false),
+                reloadDaemon: _ => { calls++; return Task.CompletedTask; });
+            using var activation = vm.Activator.Activate();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await vm.ReloadDaemonCommand.Execute().ToTask();
+            await Assert.That(calls).IsEqualTo(1);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var canExecute = false;
+            using (vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canExecute = x)) { }
+            await Assert.That(canExecute).IsFalse();
+        });
+    }
 }

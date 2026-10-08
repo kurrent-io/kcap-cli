@@ -633,7 +633,9 @@ public partial class App : Application {
                     : null,
                 remoteWorkspaceFactory: BuildRemote,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction)),
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction,
+                backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
+                isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -1175,7 +1177,9 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
-            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null) {
+            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null,
+            IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1223,7 +1227,8 @@ public partial class App : Application {
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction);
+            settingsAction: settingsAction,
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon);
         var window = new MainWindow {
             DataContext = vm,
             Notifier = notifier,
