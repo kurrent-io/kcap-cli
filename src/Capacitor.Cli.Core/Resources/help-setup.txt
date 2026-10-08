@@ -6,8 +6,9 @@ With no <tenant> or --server-url, setup discovers your workspace: it signs you
 in with your organization's single sign-on, then lets you pick from the
 workspaces you belong to, or offers to create one if you have none. --github
 signs in with GitHub instead, which never creates a workspace: without one,
-pass its URL. The install scripts (https://www.kurrent.io/install, install.ps1) run
-setup for you after a first install.
+pass its URL. The install scripts (https://www.kurrent.io/install,
+install.ps1) run setup for you after a first install from a terminal; setup
+options passed to them without a terminal run it with --no-prompt.
 
 Arguments:
   <tenant>                    Workspace to configure, skipping discovery: a
