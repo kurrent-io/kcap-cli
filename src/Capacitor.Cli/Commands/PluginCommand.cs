@@ -2035,7 +2035,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     /// <summary>Derives <c>~/.kiro/settings/cli.json</c> from <c>~/.kiro/agents/kcap.json</c>.</summary>
-    static string KiroSettingsPathFor(string agentJsonPath) =>
+    internal static string KiroSettingsPathFor(string agentJsonPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(agentJsonPath)!)!, "settings", "cli.json");
 
     static int RunKiroCli(string kiroCliPath, params string[] arguments) {

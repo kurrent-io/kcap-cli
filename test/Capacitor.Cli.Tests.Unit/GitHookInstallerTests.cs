@@ -29,8 +29,21 @@ public class GitHookInstallerTests {
     [Arguments("")]
     [Arguments("git: command not found")]
     [Arguments("git version unknown")]
+    [Arguments("git version -1.54")]
+    [Arguments("git version 2.-1")]
     public async Task ParseGitVersion_returns_null_for_output_it_cannot_read(string output) {
         await Assert.That(GitHookInstaller.ParseGitVersion(output)).IsNull();
+    }
+
+    /// <summary>Setup lists the git config as changed only on a write, so an install that finds the entry
+    /// current must say it changed nothing.</summary>
+    [Test]
+    public async Task An_install_reports_a_change_only_when_it_writes() {
+        await Assert.That(Installer.Install(out var first)).IsTrue();
+        await Assert.That(first).IsTrue();
+
+        await Assert.That(Installer.Install(out var second)).IsTrue();
+        await Assert.That(second).IsFalse();
     }
 
     [Test]

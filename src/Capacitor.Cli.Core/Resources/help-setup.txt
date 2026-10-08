@@ -18,7 +18,8 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
-  --daemon-name <name>        Daemon name (skip prompt)
+  --daemon-name <name>        Daemon name, used with --no-prompt and after a
+                              browser answer (the terminal prompt asks otherwise)
   --default-visibility <vis>  Default visibility: private, project, org_public, public
   --org <name>                Organization name for a workspace to create, instead
                               of being prompted for it. Requires --slug.
@@ -131,8 +132,9 @@ hooks first). Until trusted, the hooks are installed but inert and no
 sessions are captured; setup reminds you of this whenever it installs them.
 
 The git hook that files commits under their agent session needs git 2.54 or
-later. Setup checks `git --version` and warns, rather than ticking the hook,
-when git is older; commits are then read from the agent's shell commands.
+later. Setup adds the hook entry, then checks `git --version` and warns when
+an older git will ignore it (or when it cannot read the version); commits are
+then read from the agent's shell commands.
 
 Once you are signed in, on a server that offers browser setup kcap creates a
 setup link, opens your browser on it, and waits while you work through the
@@ -150,9 +152,11 @@ setup applies it instead of asking again, per agent and per choice, and says
 which agents you picked. A --skip-<agent> flag still wins, so a scripted opt-out
 is never overridden. Answering "Not now" installs nothing.
 
-After a browser answer the terminal asks nothing more. The daemon keeps this
-profile's name (your user name on a first run), and takes a name suffixed with
-this machine's if another machine already holds it. The provider API key
+After a browser answer the terminal asks nothing more. The daemon takes
+--daemon-name if given, else this profile's name (your user name on a first
+run). If another machine holds it, setup tries the name suffixed with this
+machine's, then numbered variants of that, and ends with an error naming
+--daemon-name if all of them are taken. The provider API key
 setting is kept as it is; change it with
 `kcap config set use_provider_api_key true|false`. When the browser's Done
 screen ran the daemon as a service, setup says so instead of suggesting

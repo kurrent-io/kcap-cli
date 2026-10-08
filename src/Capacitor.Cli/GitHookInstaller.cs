@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Mcp;
 
@@ -17,7 +18,14 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
 
     const string Section = $"hook.{GitHook.Name}";
 
-    public bool Install() => Entry() == Expected() || Write();
+    public bool Install() => Install(out _);
+
+    /// <param name="changed">Whether this call wrote the config, as opposed to finding it current.</param>
+    public bool Install(out bool changed) {
+        changed = Entry() != Expected();
+
+        return !changed || Write();
+    }
 
     /// <summary>
     /// Repoints an entry already there at this binary, and adds none.
@@ -77,9 +85,12 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
         var parts = output[prefix.Length..].Split('.', ' ');
 
         return parts.Length >= 2
-            && int.TryParse(parts[0], out var major)
-            && int.TryParse(parts[1], out var minor)
-                ? new Version(major, minor, parts.Length > 2 && int.TryParse(parts[2], out var patch) ? patch : 0)
+            && int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var major)
+            && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
+                ? new Version(major, minor,
+                      parts.Length > 2 && int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var patch)
+                          ? patch
+                          : 0)
                 : null;
     }
 

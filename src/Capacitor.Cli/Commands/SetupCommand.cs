@@ -821,12 +821,18 @@ sealed class SetupCommand(
         var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
         var gitHook        = new GitHookInstaller(home);
 
-        if (installResult.AnyHooksInstalled && gitHook.Install()) {
+        if (installResult.AnyHooksInstalled && gitHook.Install(out var gitConfigChanged)) {
             WriteLine(GitHookLine(GitHookInstaller.InstalledGitVersion()));
-            installedPaths.Add(gitHook.ConfigFilePath);
+
+            if (gitConfigChanged) installedPaths.Add(gitHook.ConfigFilePath);
         }
 
         if (CodexTrustReminder(installResult) is { } codexTrust) WriteLine(codexTrust);
+
+        // A run that ends early from here on has still changed these, so it lists them on the way out.
+        void ListChangedBeforeExit() {
+            foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
+        }
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -852,9 +858,13 @@ sealed class SetupCommand(
         var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
         var openaiSet        = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         var promptApiKey      = (anthropicSet && !skipClaude) || (openaiSet && !skipCodexFlag);
+        // Discovery can switch the active profile after `existing` was read, so what this run keeps comes
+        // from the profile it is about to write.
+        var selected = (await AppConfig.LoadProfileConfig(config)).Profiles.GetValueOrDefault(activeProfile);
+
         // Preserve any previous opt-in when no key is in the current env (we just
         // don't have anything to prompt about; the on-disk value is still valid).
-        var useProviderApiKey = existing?.UseProviderApiKey ?? false;
+        var useProviderApiKey = selected?.UseProviderApiKey ?? false;
 
         if (promptApiKey) {
             await Console.Out.WriteLineAsync();
@@ -877,6 +887,8 @@ sealed class SetupCommand(
                     if (parsed is null) {
                         await Console.Error.WriteLineAsync(
                             $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
+                        ListChangedBeforeExit();
+
                         return 1;
                     }
                     useProviderApiKey = parsed.Value;
@@ -905,8 +917,10 @@ sealed class SetupCommand(
             await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
         } else if (browserAgents is not null) {
             // Not asked: the browser has no daemon-name screen, and its service request waits on this
-            // name. The profile's own name comes first so a re-run never renames a daemon in use.
-            daemonName = existing?.Daemon?.Name is { Length: > 0 } kept ? kept : defaultName;
+            // name. The profile's own name comes before the default so a re-run never renames a daemon
+            // in use.
+            daemonName = GetArg(args, "--daemon-name")
+                      ?? (selected?.Daemon?.Name is { Length: > 0 } kept ? kept : defaultName);
             await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
         } else {
             daemonName = AnsiConsole.Prompt(
@@ -920,7 +934,11 @@ sealed class SetupCommand(
         var loggedInto   = new ProfileContext(
             new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
 
-        var suffixedForBrowser = false;
+        // The browser path cannot fall back to a prompt: the user is looking at the browser, and its
+        // service request waits on this name. So it walks a bounded list instead.
+        var browserFallbacks = browserAgents is null
+            ? null
+            : new Queue<string>(BrowserDaemonNameFallbacks(daemonName, MachineSlug()));
 
         while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
             AnsiConsole.MarkupLine(
@@ -930,15 +948,21 @@ sealed class SetupCommand(
 
             if (noPrompt) {
                 await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+                ListChangedBeforeExit();
 
                 return 1;
             }
 
-            // The browser path takes the suffixed name the prompt would have offered, once. If that is
-            // taken too, the prompt is the only way left to get a name.
-            if (browserAgents is not null && !suffixedForBrowser) {
-                suffixedForBrowser = true;
-                daemonName         = $"{daemonName}-{MachineSlug()}";
+            if (browserFallbacks is not null) {
+                if (!browserFallbacks.TryDequeue(out var next)) {
+                    await Console.Error.WriteLineAsync(
+                        "  Every fallback daemon name is taken too. Re-run `kcap setup --daemon-name <name>`.");
+                    ListChangedBeforeExit();
+
+                    return 1;
+                }
+
+                daemonName = next;
                 await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
 
                 continue;
@@ -2387,13 +2411,27 @@ sealed class SetupCommand(
 
     /// <summary>
     /// The git hook's line. An older git ignores the entry silently, so setup says so rather than
-    /// reporting a hook that will never run. An unknown version gets the plain line.
+    /// reporting a hook that will never run, and a version it could not read earns no tick either.
     /// </summary>
-    internal static string GitHookLine(Version? git) =>
-        git is not null && git < GitHookInstaller.MinimumGit
-            ? $"  [yellow]![/] Git hook added, but git {git.ToString(3)} ignores it [dim](needs {GitHookInstaller.MinimumGit}+)[/]. "
-            + "Commits are filed from the agent's shell commands until you upgrade git."
-            : "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]";
+    internal static string GitHookLine(Version? git) => git switch {
+        null => $"  [yellow]![/] Git hook added, but setup could not read your git version; the hook runs only on git {GitHookInstaller.MinimumGit}+.",
+        _ when git < GitHookInstaller.MinimumGit =>
+            $"  [yellow]![/] Git hook added, but git {git.ToString(3)} ignores it [dim](needs {GitHookInstaller.MinimumGit}+)[/]. "
+          + "Commits are filed from the agent's shell commands until you upgrade git.",
+        _ => "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]"
+    };
+
+    /// <summary>
+    /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the
+    /// machine-suffixed name the terminal prompt would offer, then numbered variants of it.
+    /// </summary>
+    internal static IEnumerable<string> BrowserDaemonNameFallbacks(string chosen, string machine) {
+        var suffixed = $"{chosen}-{machine}";
+
+        yield return suffixed;
+
+        for (var n = 2; n <= 4; n++) yield return $"{suffixed}-{n}";
+    }
 
     /// <summary>
     /// Codex runs only hooks the user has trusted, so installed hooks record nothing until then. Null when

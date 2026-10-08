@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Mcp;
@@ -136,9 +137,9 @@ internal static class CodingAgentsStep {
     }
 
     /// <summary>
-    /// Every file or directory this run put kcap into, in install order and without repeats. Read off
-    /// the result rather than collected by the installers, so a path appears only for a write the step
-    /// reports as done.
+    /// Every file or directory this run put kcap into, without repeats. Read off the result rather than
+    /// collected by the installers, so a path appears only for a write the step reports as done; an
+    /// installer that writes a second file needs that file added here too.
     /// </summary>
     internal static IReadOnlyList<string> InstalledPaths(Result r, Paths p) {
         var paths = new List<string>();
@@ -159,6 +160,8 @@ internal static class CodingAgentsStep {
         Add(r.GeminiHooksInstalled || r.GeminiMcpRegistered, p.GeminiSettingsPath);
         Add(r.GeminiInstructionsInstalled, p.GeminiInstructionsPath);
         Add(r.KiroHooksInstalled, p.KiroHooksPath);
+        if (r.KiroHooksInstalled && p.KiroHooksPath.Length > 0)
+            Add(true, PluginCommand.KiroSettingsPathFor(p.KiroHooksPath));
         Add(r.KiroMcpRegistered, p.KiroMcpPath);
         Add(r.KiroSkillsInstalled, p.KiroSkillsDir);
         Add(r.KiroCrewHookInstalled, p.KiroCrewHookScript);
@@ -170,6 +173,8 @@ internal static class CodingAgentsStep {
         Add(r.OpenCodeMcpRegistered, p.OpenCodeMcpPath);
         Add(r.OpenCodeInstructionsInstalled, p.OpenCodeInstructionsPath);
         Add(r.AntigravityHooksInstalled, p.AntigravityHooksPath);
+        if (r.AntigravityHooksInstalled && Path.GetDirectoryName(p.AntigravityHooksPath) is { Length: > 0 } agyDir)
+            Add(true, Path.Combine(agyDir, AntigravityHooksInstaller.PluginManifestFileName));
         Add(r.AntigravityMcpRegistered, p.AntigravityMcpPath);
         Add(r.AntigravityInstructionsInstalled, p.AntigravityInstructionsPath);
         Add(r.AntigravitySkillsInstalled, p.AntigravitySkillsDir);

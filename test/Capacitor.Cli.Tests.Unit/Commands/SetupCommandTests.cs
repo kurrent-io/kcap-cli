@@ -614,13 +614,23 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.ProviderApiKeyKeptLine(true)).Contains("use_provider_api_key false");
     }
 
-    /// <summary>A git too old for config hooks gets a warning instead of a tick for a hook it will never
-    /// run; a current or unreadable version keeps the tick.</summary>
+    /// <summary>The tick is a claim that commits will be filed, so only a git known to run config hooks
+    /// earns it; an unreadable version is a warning, not a pass.</summary>
     [Test]
-    public async Task GitHookLine_warns_only_below_the_config_hook_minimum() {
+    public async Task GitHookLine_ticks_only_a_git_known_to_run_config_hooks() {
         await Assert.That(SetupCommand.GitHookLine(new Version(2, 50, 1))).Contains("ignores it");
         await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
-        await Assert.That(SetupCommand.GitHookLine(null)).Contains("[green]✓[/]");
+        await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
+        await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
+    }
+
+    /// <summary>The browser path cannot fall back to a prompt, so its fallbacks must be finite.</summary>
+    [Test]
+    public async Task BrowserDaemonNameFallbacks_start_with_the_prompt_s_suggestion_and_stop() {
+        var names = SetupCommand.BrowserDaemonNameFallbacks("tony", "mbp").ToList();
+
+        await Assert.That(names[0]).IsEqualTo("tony-mbp");
+        await Assert.That(names).IsEquivalentTo(["tony-mbp", "tony-mbp-2", "tony-mbp-3", "tony-mbp-4"]);
     }
 
     [Test]
@@ -634,8 +644,6 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.CodexTrustReminder(withoutCodex)).IsNull();
     }
 
-    /// <summary>Paths under the home directory read with <c>~</c>, and a run that changed nothing prints no
-    /// heading over an empty list.</summary>
     [Test]
     public async Task InstalledInLines_lists_each_path_with_home_shortened() {
         var home  = Path.Combine("users", "kcap-home");
@@ -648,8 +656,6 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.InstalledInLines([], home)).IsEmpty();
     }
 
-    /// <summary>Only writes the step reports as done are listed, and a file two writes share (Gemini's
-    /// settings.json carries hooks and MCP) appears once.</summary>
     [Test]
     public async Task InstalledPaths_lists_reported_writes_once() {
         var paths = new CodingAgentsStep.Paths(
@@ -666,6 +672,29 @@ public class SetupCommandTests {
         var listed = CodingAgentsStep.InstalledPaths(result, paths);
 
         await Assert.That(listed).IsEquivalentTo(["/h/.claude/settings.json", "/h/.gemini/settings.json"]);
+    }
+
+    /// <summary>Kiro's install also switches the default agent in cli.json, and Antigravity's writes the
+    /// plugin.json it cannot load without; both are second files the hook flag alone does not name.</summary>
+    [Test]
+    public async Task InstalledPaths_names_the_second_file_kiro_and_antigravity_write() {
+        var kiroAgent = Path.Combine("h", ".kiro", "agents", "kcap.json");
+        var agyHooks  = Path.Combine("h", ".gemini", "antigravity", "plugins", "kcap", "hooks.json");
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "", CursorHooksPath: "", CopilotHooksPath: "", GeminiSettingsPath: "",
+            AgentsSkillsDir: "", LegacyCodexSkillsDir: "",
+            KiroHooksPath: kiroAgent, AntigravityHooksPath: agyHooks);
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            KiroHooksInstalled: true, AntigravityHooksInstalled: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).Contains(PluginCommand.KiroSettingsPathFor(kiroAgent));
+        await Assert.That(listed).Contains(Path.Combine(Path.GetDirectoryName(agyHooks)!, "plugin.json"));
+        await Assert.That(listed.Count).IsEqualTo(4);
     }
 
     [Test]
