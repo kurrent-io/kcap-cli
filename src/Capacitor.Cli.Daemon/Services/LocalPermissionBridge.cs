@@ -671,7 +671,7 @@ internal sealed partial class LocalPermissionBridge(
                         policy = await ClaudeHostedPolicySeam.EvaluateAsync(
                             new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
                                 node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node)),
-                            snapshot, time, policyJudge, judgeState, JudgeBudget, ct);
+                            snapshot, time, policyJudge, judgeState, JudgeBudget, logger, ct);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
                     }

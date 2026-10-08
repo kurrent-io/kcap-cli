@@ -87,7 +87,7 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
     }
 
     /// <summary>The hosted lane names its run so the server can resolve the snapshot the
-    /// orchestrator staged under it; nothing travels inline.</summary>
+    /// orchestrator staged under it, and carries it inline for a call that outruns the staging.</summary>
     [Test]
     public async Task The_request_names_the_hosted_run_and_declares_the_transcripts_turns_and_refusals() {
         Judge("ask");
@@ -99,7 +99,8 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
         await Assert.That(request["agent_id"]!.GetValue<string>()).IsEqualTo(AgentId);
         await Assert.That(request["seam"]!.GetValue<string>()).IsEqualTo("hosted_claude_permission");
         await Assert.That(request["snapshot_id"]!.GetValue<string>()).IsEqualTo("snap-1");
-        await Assert.That(request["snapshot"]).IsNull();
+        await Assert.That(request["snapshot"]!["session_id"]!.GetValue<string>()).IsEqualTo(Sid);
+        await Assert.That(request["snapshot"]!["snapshot_id"]!.GetValue<string>()).IsEqualTo("snap-1");
         await Assert.That(request["turns"]!["user_messages"]![0]!["id"]!.GetValue<string>())
             .IsEqualTo("11111111-1111-1111-1111-111111111111");
         await Assert.That(request["turns"]!["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_1");
@@ -109,8 +110,8 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
         await Assert.That(request["refusals"]!["entries"]![0]!["target"]!.GetValue<string>()).IsEqualTo("rm -rf build");
     }
 
-    /// <summary>An older CLI posts no transcript path. The judge still runs, but told the refusal
-    /// history is unknown, so it cannot allow.</summary>
+    /// <summary>A hook from a kcap CLI whose bridge payload predates <c>transcript_path</c> names no
+    /// transcript. The judge still runs, but told the refusal history is unknown, so it cannot allow.</summary>
     [Test]
     public async Task A_request_with_no_transcript_declares_its_refusals_unknown() {
         Judge("ask");

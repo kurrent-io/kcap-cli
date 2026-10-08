@@ -33,7 +33,10 @@ internal sealed class AcpRefusalLedger {
                 return;
             }
 
-            var name   = tool is { Length: > 0 } t ? t : "unknown";
+            // An unnamed refusal is still declared, but the judge cannot match it reliably.
+            var name = tool is { Length: > 0 } t ? t : "unknown";
+            if (tool is not { Length: > 0 }) session.Incomplete = true;
+
             var target = PolicyJudgeTarget.Of(action);
             if (name.Length > MaxTool) { name = name[..MaxTool]; session.Incomplete = true; }
             if (target.Length > MaxTarget) { target = target[..MaxTarget]; session.Incomplete = true; }

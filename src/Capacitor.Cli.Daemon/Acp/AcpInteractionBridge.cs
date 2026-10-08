@@ -820,8 +820,8 @@ internal sealed partial class AcpInteractionBridge(
     /// <summary>
     /// Consults the judge for a call no rule decided. Windowless: an ACP agent has no transcript the
     /// server can verify a turn against, so the request declares only the refusals this bridge
-    /// relayed. No snapshot travels inline: the orchestrator staged it under the agent id before the
-    /// launch, and the server resolves it from there.
+    /// relayed. The snapshot travels inline as well as staged: the launch only enqueues the staged
+    /// copy, and the server reads the inline one only when it holds no other.
     /// </summary>
     async Task<PolicyJudgeResult> ConsultJudgeAsync(
             PolicyJudgeGateway judge, PolicySnapshot snapshot, CanonicalAction action, string sessionId,
@@ -832,7 +832,7 @@ internal sealed partial class AcpInteractionBridge(
 
             return await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
                     sessionId, agentId, policyVendor ?? "unknown", PolicySeams.AcpRequestPermission, snapshot.Id,
-                    PolicyEngine.Version, wire, Turns: null, refusals, Snapshot: null, budgetMs),
+                    PolicyEngine.Version, wire, Turns: null, refusals, PolicyWire.ToUpload(sessionId, snapshot), budgetMs),
                 judgeBudget ?? JudgeBudget, ct).ConfigureAwait(false);
         } catch (Exception ex) {
             logger.LogDebug(ex, "ACP: policy judge consultation threw for agent {AgentId}; passing through", agentId);

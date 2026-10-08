@@ -58,6 +58,17 @@ public class AcpRefusalLedgerTests {
     }
 
     [Test]
+    public async Task A_refusal_with_no_tool_name_is_declared_but_incomplete() {
+        var ledger = new AcpRefusalLedger();
+        ledger.Record(Session, "call-1", tool: null, Shell("git push"));
+
+        var declared = ledger.Declare(Session);
+
+        await Assert.That(declared.Complete).IsFalse();
+        await Assert.That(declared.Entries.Single().Tool).IsEqualTo("unknown");
+    }
+
+    [Test]
     public async Task A_refusal_with_no_action_or_an_unusable_id_is_incomplete() {
         var noAction = new AcpRefusalLedger();
         noAction.Record(Session, "call-1", "execute", action: null);

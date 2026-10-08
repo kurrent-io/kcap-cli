@@ -189,9 +189,9 @@ public class AcpInteractionBridgeJudgeTests : IDisposable {
     }
 
     /// <summary>An ACP agent has no transcript the server can verify a turn against, and the hosted
-    /// run's snapshot is staged under its agent id.</summary>
+    /// run's snapshot rides inline for a call that outruns its staging.</summary>
     [Test]
-    public async Task The_request_is_windowless_names_the_hosted_run_and_carries_no_snapshot() {
+    public async Task The_request_is_windowless_names_the_hosted_run_and_carries_the_snapshot_inline() {
         Judge("ask");
         var h = Build(JudgeOn);
 
@@ -203,7 +203,8 @@ public class AcpInteractionBridgeJudgeTests : IDisposable {
         await Assert.That(request["vendor"]!.GetValue<string>()).IsEqualTo("cursor");
         await Assert.That(request["seam"]!.GetValue<string>()).IsEqualTo("acp_request_permission");
         await Assert.That(request["turns"]).IsNull();
-        await Assert.That(request["snapshot"]).IsNull();
+        await Assert.That(request["snapshot"]!["session_id"]!.GetValue<string>()).IsEqualTo(AcpSessionId);
+        await Assert.That(request["snapshot"]!["snapshot_id"]!.GetValue<string>()).IsEqualTo(request["snapshot_id"]!.GetValue<string>());
         await Assert.That(request["refusals"]!["source"]!.GetValue<string>()).IsEqualTo("bridge");
         await Assert.That(request["refusals"]!["complete"]!.GetValue<bool>()).IsTrue();
         await Assert.That(request["refusals"]!["entries"]!.AsArray().Count).IsEqualTo(0);

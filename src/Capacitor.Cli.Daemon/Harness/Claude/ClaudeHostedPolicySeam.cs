@@ -3,6 +3,7 @@ namespace Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Policy;
+using Microsoft.Extensions.Logging;
 
 /// <summary>
 /// The Claude half of the hosted permission seam: maps the vendor's tool call onto the policy
@@ -20,7 +21,7 @@ internal static class ClaudeHostedPolicySeam {
     internal static async Task<ClaudeHostedPolicyResult?> EvaluateAsync(
             ClaudeHostedPermissionCall call, PolicySnapshot snapshot, TimeProvider time,
             PolicyJudgeGateway? judge = null, ConfigRoot? judgeState = null, TimeSpan? judgeBudget = null,
-            CancellationToken ct = default) {
+            ILogger? logger = null, CancellationToken ct = default) {
         var action     = ClaudeActionNormalizer.Normalize(call.ToolName, call.ToolInput, call.Cwd);
         var evaluation = PolicyEngine.Evaluate(snapshot, action, EvaluationMode.Full);
 
@@ -33,7 +34,7 @@ internal static class ClaudeHostedPolicySeam {
 
         if (judge is null || !snapshot.JudgeEnabled) return null;
 
-        var judged = await ConsultAsync(call, snapshot, action, time, judge, judgeState, judgeBudget ?? JudgeBudget, ct);
+        var judged = await ConsultAsync(call, snapshot, action, time, judge, judgeState, judgeBudget ?? JudgeBudget, logger, ct);
         return judged.Outcome switch {
             PolicyOutcome.Allow => Result(PolicyOutcome.Allow, "allow", "allow", judged),
             PolicyOutcome.Deny  => Result(PolicyOutcome.Deny,  "deny",  "deny",  judged),
@@ -51,22 +52,24 @@ internal static class ClaudeHostedPolicySeam {
                 failureClass: j?.FailureClass, judge: j?.Consultation));
     }
 
-    /// <summary>No snapshot travels inline: the orchestrator staged it under the agent id before the
-    /// launch, and the server resolves it from there.</summary>
+    /// <summary>The snapshot travels inline as well as staged: the launch only enqueues the staged
+    /// copy, and the server reads the inline one only when it holds no other.</summary>
     static async Task<PolicyJudgeResult> ConsultAsync(
             ClaudeHostedPermissionCall call, PolicySnapshot snapshot, CanonicalAction action, TimeProvider time,
-            PolicyJudgeGateway judge, ConfigRoot? judgeState, TimeSpan budget, CancellationToken ct) {
+            PolicyJudgeGateway judge, ConfigRoot? judgeState, TimeSpan budget, ILogger? logger, CancellationToken ct) {
         try {
             var started      = time.GetTimestamp();
             var declarations = ClaudeJudgeDeclarationReader.Read(call.TranscriptPath, call.ToolUseId, call.Cwd,
                 judgeState?.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(call.SessionId)}.json"));
             var wire         = PolicyWire.ToWire(action);
+            var inline       = PolicyWire.ToUpload(call.SessionId, snapshot);
 
             return await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
                     call.SessionId, call.AgentId, "claude", PolicySeams.HostedClaudePermission, snapshot.Id,
-                    PolicyEngine.Version, wire, declarations.Turns, declarations.Refusals, Snapshot: null, budgetMs),
+                    PolicyEngine.Version, wire, declarations.Turns, declarations.Refusals, inline, budgetMs),
                 budget - time.GetElapsedTime(started), ct);
-        } catch {
+        } catch (Exception ex) {
+            logger?.LogDebug(ex, "Hosted Claude policy judge consultation threw for agent {AgentId}; passing through", call.AgentId);
             return PolicyJudgeResult.PassThrough(PolicyJudgeResult.Error);
         }
     }
