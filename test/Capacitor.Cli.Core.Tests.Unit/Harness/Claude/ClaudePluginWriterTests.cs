@@ -65,4 +65,37 @@ public class ClaudePluginWriterTests {
     public async Task Remove_on_a_missing_file_is_unchanged() {
         await Assert.That(ClaudePluginWriter.Remove(Tmp.PathTo("nope.json"))).IsEqualTo(SettingsEdit.Unchanged);
     }
+
+    [Test]
+    public async Task Install_repairs_a_non_bool_plugin_flag() {
+        var settings = Tmp.CreateFile("settings.json", """{"enabledPlugins":{"kcap@kcap":"yes"}}""");
+
+        var result = ClaudePluginWriter.Install(settings, "/p");
+
+        await Assert.That(result).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(JsonNode.Parse(File.ReadAllText(settings))!["enabledPlugins"]!["kcap@kcap"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task Install_repairs_a_malformed_marketplace_entry() {
+        var settings = Tmp.CreateFile("settings.json", """{"extraKnownMarketplaces":{"kcap":{"source":"x"}}}""");
+
+        var result = ClaudePluginWriter.Install(settings, "/p");
+
+        await Assert.That(result).IsEqualTo(SettingsEdit.Changed);
+        var path = JsonNode.Parse(File.ReadAllText(settings))!["extraKnownMarketplaces"]!["kcap"]!["source"]!["path"]!.GetValue<string>();
+        await Assert.That(path).IsEqualTo("/p");
+    }
+
+    [Test]
+    public async Task Repeated_install_is_unchanged_and_still_writes_the_marker() {
+        var settings = Tmp.PathTo("settings.json");
+        ClaudePluginWriter.Install(settings, "/p");
+        ClaudePluginInstaller.DeleteMarker(settings);
+
+        var result = ClaudePluginWriter.Install(settings, "/p");
+
+        await Assert.That(result).IsEqualTo(SettingsEdit.Unchanged);
+        await Assert.That(ClaudePluginInstaller.ReadMarker(settings)).IsNotNull();
+    }
 }

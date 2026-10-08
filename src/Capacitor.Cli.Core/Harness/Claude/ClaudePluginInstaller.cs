@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 /// </summary>
 /// <remarks>
 /// The settings file itself is written by
-/// <c>SetupCommand.InstallPlugin</c>; this type owns only the marker
+/// <see cref="ClaudePluginWriter"/>; this type owns only the marker
 /// side-channel and pre-marker detection. The marketplace source path
 /// is absolute and changes between npm installs, so a refresh on
 /// upgrade is meaningful — not just for command-string drift.

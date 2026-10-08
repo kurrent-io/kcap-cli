@@ -10,16 +10,16 @@ public static class ClaudePluginWriter {
         var result = JsonSettingsFile.Edit(settingsPath, root => {
             var marketplaces = root["extraKnownMarketplaces"] as JsonObject ?? [];
             root["extraKnownMarketplaces"] = marketplaces;
-            var before = marketplaces["kcap"]?["source"]?["path"]?.GetValue<string>();
-            marketplaces["kcap"] = new JsonObject {
+            var entry = new JsonObject {
                 ["source"] = new JsonObject { ["source"] = "directory", ["path"] = marketplacePath }
             };
-            var changed = before != marketplacePath;
+            var changed = marketplaces["kcap"]?.ToJsonString() != entry.ToJsonString();
+            marketplaces["kcap"] = entry;
             foreach (var name in LegacyMarketplaces) changed |= marketplaces.Remove(name);
 
             var enabled = root["enabledPlugins"] as JsonObject ?? [];
             root["enabledPlugins"] = enabled;
-            changed |= enabled["kcap@kcap"]?.GetValue<bool>() != true;
+            changed |= enabled["kcap@kcap"]?.ToJsonString() != "true";
             enabled["kcap@kcap"] = true;
             foreach (var name in LegacyPlugins) changed |= enabled.Remove(name);
 
