@@ -63,6 +63,28 @@ public class SessionEvalsToolTests {
     }
 
     [Test]
+    public async Task Project_reads_a_waiting_run_as_queued() {
+        var queued  = SessionEvalsTool.Project("s", HttpStatusCode.OK, """{"eval_run_id":"r1","is_terminal":false,"queue_position":2,"completed_result":null,"questions":[]}""");
+        var backoff = SessionEvalsTool.Project("s", HttpStatusCode.OK, """{"eval_run_id":"r1","is_terminal":false,"next_attempt_at":"2026-10-07T10:00:00Z","completed_result":null,"questions":[]}""");
+
+        await Assert.That(State(queued)).IsEqualTo("queued");
+        await Assert.That(queued["queue_position"]!.GetValue<long>()).IsEqualTo(2);
+        await Assert.That(State(backoff)).IsEqualTo("queued");
+    }
+
+    /// <summary>The result carries a score, so only the empty categories mark it as a failure.</summary>
+    [Test]
+    public async Task Project_reads_a_failure_only_result_as_failed() {
+        var entry = SessionEvalsTool.Project("s", HttpStatusCode.OK, """
+            {"eval_run_id":"r1","is_terminal":true,"questions":[],
+             "completed_result":{"eval_run_id":"r1","judge_model":"m","evaluated_at":"2026-10-07T10:00:00Z","overall_score":0,"summary":"",
+               "categories":[],"failed_questions":[{"question_id":"q1","code":"judge_error"}]}}
+            """);
+
+        await Assert.That(State(entry)).IsEqualTo("failed");
+    }
+
+    [Test]
     public async Task Project_reads_a_terminal_run_without_a_result_as_failed() {
         var entry = SessionEvalsTool.Project("s", HttpStatusCode.OK,
             """{"eval_run_id":"r1","is_terminal":true,"failure_reason":"judge timed out","completed_result":null}""");

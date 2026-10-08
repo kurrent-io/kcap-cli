@@ -28,7 +28,7 @@ static partial class SessionEvalsTool {
         Name,
         "Get the eval state of up to 25 sessions in one call — the way to follow evals on sessions you already know the ids of, such as the ones a `kcap setup` import created. " +
         "Works on every plan. Each entry carries session_id and state: not_found (not ingested yet, or not visible to you), not_evaluated (ingested, no eval run yet), " +
-        "running (queue_position and questions_done/total_questions while it runs), completed, failed (failure_reason), or error (this lookup failed; http_status or message). " +
+        "queued (waiting for a worker or a retry: queue_position, next_attempt_at), running (questions_done/total_questions), completed, failed (failure_reason), or error (this lookup failed; http_status or message). " +
         "A completed entry carries eval_run_id, evaluated_at, overall_score (out of 5), judge_model, summary, categories [{name, score}] and weakest_questions, the two lowest-scored assessed questions [{question_id, category, score}]. " +
         "A session being re-evaluated reads running even when an earlier eval exists.",
         new(
@@ -120,22 +120,34 @@ static partial class SessionEvalsTool {
             return Error(sessionId, "unreadable eval-progress response");
         }
 
-        if (root.Obj("completed_result") is { } result) return Completed(sessionId, root, result);
+        if (root.Obj("completed_result") is { } result && !IsFailureOnly(result)) return Completed(sessionId, root, result);
 
-        if (root.Bool("is_terminal") == true) {
+        if (root.Bool("is_terminal") == true || root.Obj("completed_result") is not null || root.Obj("failed_result") is not null) {
             var failed = State(sessionId, "failed");
             failed["eval_run_id"]    = root.Str("eval_run_id");
-            failed["failure_reason"] = root.Str("failure_reason");
+            failed["failure_reason"] = root.Str("failure_reason") ?? "every question failed to judge";
             return failed;
+        }
+
+        // A queue position or a retry time means no worker holds the run yet.
+        if (root.Num("queue_position") is not null || root.Str("next_attempt_at") is not null) {
+            var queued = State(sessionId, "queued");
+            queued["eval_run_id"]     = root.Str("eval_run_id");
+            queued["queue_position"]  = root.Num("queue_position");
+            queued["next_attempt_at"] = root.Str("next_attempt_at");
+            return queued;
         }
 
         var running = State(sessionId, "running");
         running["eval_run_id"]     = root.Str("eval_run_id");
-        running["queue_position"]  = root.Num("queue_position");
         running["questions_done"]  = Questions(root).Count(q => q.Str("status") is "completed" or "failed");
         running["total_questions"] = root.Num("total_questions");
         return running;
     }
+
+    // A run that judged nothing and recorded only coded failures is a failed run, whichever field carries it.
+    static bool IsFailureOnly(JsonElement result) =>
+        !Items(result.Arr("categories")).Any() && Items(result.Arr("failed_questions")).Any();
 
     static JsonObject Completed(string sessionId, JsonElement root, JsonElement result) {
         var entry = State(sessionId, "completed");

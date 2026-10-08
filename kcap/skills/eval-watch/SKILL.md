@@ -114,7 +114,8 @@ sentence from section 7.
 entry's `state` is one of:
 - `not_found` — not ingested yet (or not visible to you);
 - `not_evaluated` — arrived, no eval yet;
-- `running` — arrived, eval in progress (`questions_done` of `total_questions`, `queue_position`);
+- `queued` — arrived, eval waiting for a worker or a retry (`queue_position`, `next_attempt_at`);
+- `running` — arrived, eval in progress (`questions_done` of `total_questions`);
 - `completed` — arrived and evaluated: `eval_run_id`, `evaluated_at`, `overall_score` (out of 5),
   `judge_model`, `summary`, `categories`, `weakest_questions`;
 - `failed` — arrived, the eval run failed (`failure_reason`);
