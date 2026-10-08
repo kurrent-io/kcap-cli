@@ -50,6 +50,20 @@ public class HarnessTitleStoresTests {
     }
 
     [Test]
+    public async Task Codex_falls_back_to_the_environment_home_over_a_hand_edited_registry() {
+        Home.CreateFile([".codex", "session_index.jsonl"], $$"""{"id":"{{Id}}","thread_name":"Codex name","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+        var transcript = Home.CreateFile([".codex", "sessions", "2026", "09", "29", $"rollout-2026-09-29T10-00-00-{Id}.jsonl"]);
+        var accounts   = Home.CreateFile(["accounts", "accounts.json"], """
+            { "accounts": [ { "id": "x", "vendor": "Codex", "label": "x", "added_at": "2026-01-01T00:00:00Z" } ] }
+            """);
+
+        var store = HarnessTitleStores.For("codex", null, Id.Replace("-", ""), transcript, Harnesses,
+                                           new AccountStore(Path.GetDirectoryName(accounts)!).TryLoad(), Home);
+
+        await Assert.That(store!.Read()!.Title).IsEqualTo("Codex name");
+    }
+
+    [Test]
     public async Task Copilot_reads_the_sibling_workspace_yaml() {
         var paths = Harnesses.Of<CopilotHarness>().Paths;
         Write(paths.WorkspaceYaml(paths.SessionStateDir, Id), "name: Copilot name\nuser_named: true\n");

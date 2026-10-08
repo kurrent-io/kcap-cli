@@ -157,4 +157,36 @@ public class AccountStoreTests {
 
         await Assert.That(Store().TryLoad()).IsNull();
     }
+
+    const string HandEditedRegistry = """
+        { "version": 1, "revision": 3, "accounts": [
+            null,
+            { "id": "", "vendor": "Claude", "directory": "/h/.claude-empty-id", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
+            { "vendor": "Claude", "directory": "/h/.claude-no-id", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
+            { "id": "nodir", "vendor": "Codex", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
+            { "id": "blank", "vendor": "Codex", "directory": " ", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
+            { "id": "relative", "vendor": "Claude", "directory": "relative/.claude", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
+            { "id": "ok", "vendor": "Claude", "directory": "/h/.claude-work", "label": "work", "added_at": "2026-01-01T00:00:00Z" }
+        ] }
+        """;
+
+    [Test]
+    public async Task Load_drops_hand_edited_entries_without_an_id_or_a_rooted_directory() {
+        Tmp.CreateFile("accounts/accounts.json", HandEditedRegistry);
+
+        var registry = Store().Load();
+
+        await Assert.That(registry.Accounts.Select(a => a.Id)).IsEquivalentTo(["ok"]);
+        await Assert.That(registry.Revision).IsEqualTo(3L);
+    }
+
+    [Test]
+    public async Task Hook_path_lookups_do_not_throw_on_a_hand_edited_registry() {
+        Tmp.CreateFile("accounts/accounts.json", HandEditedRegistry);
+        var registry = Store().TryLoad()!;
+        var home     = new UserHome(Tmp.PathTo("home"));
+
+        await Assert.That(AccountPaths.ClaudeForTranscript(Tmp.PathTo("t.jsonl"), registry, home)).IsNull();
+        await Assert.That(AccountPaths.CodexForRollout(Tmp.PathTo("r.jsonl"), registry, home)).IsNull();
+    }
 }

@@ -25,13 +25,21 @@ public sealed class AccountStore(string directory) {
 
     public AccountRegistry Load() {
         if (!File.Exists(RegistryPath)) return new AccountRegistry();
+        AccountRegistry registry;
         try {
-            return JsonSerializer.Deserialize(File.ReadAllText(RegistryPath), AccountRegistryJsonContext.Default.AccountRegistry)
+            registry = JsonSerializer.Deserialize(File.ReadAllText(RegistryPath), AccountRegistryJsonContext.Default.AccountRegistry)
                 ?? throw new InvalidDataException($"{RegistryPath} is empty.");
         } catch (JsonException ex) {
             throw new InvalidDataException($"{RegistryPath} is not a valid account registry.", ex);
         }
+
+        var accounts = (registry.Accounts ?? []).Where(Usable).ToList();
+        return accounts.Count == registry.Accounts?.Count ? registry : registry with { Accounts = accounts };
     }
+
+    // A hand edit can leave an entry no path lookup can use; dropping it keeps every hook working.
+    static bool Usable(VendorAccount? account) =>
+        account is { Id.Length: > 0, Directory: { } dir } && !string.IsNullOrWhiteSpace(dir) && Path.IsPathRooted(dir);
 
     /// <summary>For hooks and watchers, which must never fail on the registry: null sends the caller to
     /// the environment-derived layout.</summary>

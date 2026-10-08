@@ -12,5 +12,3 @@ public sealed record AccountRegistry {
 [JsonSerializable(typeof(AccountRegistry))]
 [JsonSerializable(typeof(HostIdentity))]
 internal partial class AccountRegistryJsonContext : JsonSerializerContext;
-
-internal sealed record HostIdentity([property: JsonPropertyName("host_id")] string HostId);
