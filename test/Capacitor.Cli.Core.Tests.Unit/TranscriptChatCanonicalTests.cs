@@ -48,13 +48,13 @@ public class TranscriptChatCanonicalTests {
                 new CanonicalEvent(CanonicalEventTypes.SubagentCompleted, new SubagentCompleted { AgentId = "a1" }, Guid.NewGuid(), at), rules);
             await Assert.That(result.Envelopes).IsEmpty();
             await Assert.That(result.SubmittedInputs).IsEmpty();
-            var finished = (SubagentSignal.Finished)result.Subagents.Single();
+            var finished = (RunSignal.Finished)result.Runs.Single();
             await Assert.That(finished.CallId).IsNull();
             await Assert.That(finished.AgentId).IsEqualTo("a1");
             await Assert.That(finished.Outcome).IsNull();
             await Assert.That(finished.At).IsEqualTo(at);
         }
-        await Assert.That(TranscriptChat.Project(Event(CanonicalEventTypes.SubagentCompleted, new SubagentCompleted()), ClaudeChatRules.Instance).Subagents).IsEmpty();
+        await Assert.That(TranscriptChat.Project(Event(CanonicalEventTypes.SubagentCompleted, new SubagentCompleted()), ClaudeChatRules.Instance).Runs).IsEmpty();
     }
 
     [Test]
@@ -67,8 +67,8 @@ public class TranscriptChatCanonicalTests {
         public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) =>
             envelope.Kind == AcpEventKind.ToolCall ? null : envelope;
 
-        public IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) =>
-            raw.Kind == AcpEventKind.ToolCall ? [new SubagentSignal.Started(raw.ToolCallId!, "explore", "look", evt.Timestamp)] : [];
+        public IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) =>
+            raw.Kind == AcpEventKind.ToolCall ? [new RunSignal.Started(raw.ToolCallId!, "explore", "look", evt.Timestamp)] : [];
     }
 
     sealed class SilentRules : IChatDisplayRules {
@@ -86,8 +86,8 @@ public class TranscriptChatCanonicalTests {
         var evt = Event(CanonicalEventTypes.AssistantToolCallsGenerated, Calls("t1"));
         var result = TranscriptChat.Project(evt, new SignallingRules());
         await Assert.That(result.Envelopes).IsEmpty();
-        await Assert.That(result.Subagents).Count().IsEqualTo(1);
-        var started = (SubagentSignal.Started)result.Subagents[0];
+        await Assert.That(result.Runs).Count().IsEqualTo(1);
+        var started = (RunSignal.Started)result.Runs[0];
         await Assert.That(started.CallId).IsEqualTo("t1");
         await Assert.That(started.Name).IsEqualTo("explore");
         await Assert.That(started.At).IsEqualTo(evt.Timestamp);
@@ -96,8 +96,8 @@ public class TranscriptChatCanonicalTests {
     [Test]
     public async Task Rules_without_an_override_and_no_rules_yield_no_signals() {
         var evt = Event(CanonicalEventTypes.AssistantToolCallsGenerated, Calls("t1"));
-        await Assert.That(TranscriptChat.Project(evt, new SilentRules()).Subagents).IsEmpty();
-        await Assert.That(TranscriptChat.Project(evt, rules: null).Subagents).IsEmpty();
+        await Assert.That(TranscriptChat.Project(evt, new SilentRules()).Runs).IsEmpty();
+        await Assert.That(TranscriptChat.Project(evt, rules: null).Runs).IsEmpty();
         await Assert.That(TranscriptChat.Project(evt, rules: null).Envelopes).Count().IsEqualTo(1);
     }
 
@@ -107,7 +107,7 @@ public class TranscriptChatCanonicalTests {
         var line = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Agent","input":{}},{"type":"text","text":"hi"},{"type":"tool_use","id":"t2","name":"Agent","input":{}}]}}""";
         var result = chat.ProjectWithInputs(line, 1, DateTimeOffset.UnixEpoch, chat.CreateContext("s", null));
         await Assert.That(result.Envelopes.Select(e => e.Kind)).IsEquivalentTo(new[] { AcpEventKind.AssistantText });
-        await Assert.That(result.Subagents.Cast<SubagentSignal.Started>().Select(s => s.CallId)).IsEquivalentTo(new[] { "t1", "t2" });
+        await Assert.That(result.Runs.Cast<RunSignal.Started>().Select(s => s.CallId)).IsEquivalentTo(new[] { "t1", "t2" });
     }
 
     [Test]
@@ -117,6 +117,6 @@ public class TranscriptChatCanonicalTests {
         var result = journal.ProjectWithInputs(line, 1, DateTimeOffset.UnixEpoch, journal.CreateContext("s", null));
         await Assert.That(result.Envelopes).Count().IsEqualTo(1);
         await Assert.That(result.SubmittedInputs).IsEmpty();
-        await Assert.That(result.Subagents).IsEmpty();
+        await Assert.That(result.Runs).IsEmpty();
     }
 }

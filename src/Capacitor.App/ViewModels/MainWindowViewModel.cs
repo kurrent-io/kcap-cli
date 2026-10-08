@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Commands;
 using DynamicData;
 using ReactiveUI.Reactive;
@@ -163,6 +164,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// a tenant is exactly the one who needs the docs.
     public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }
 
+    public ReactiveCommand<Unit, Unit> OpenChangelogCommand { get; }
+
+    /// Enabled once the app has a Settings window to open — the same action the app menu and tray
+    /// use.
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    volatile Action? _openSettings;
+
+    /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
+    /// rail's help flyout instead.
+    public bool AppMenuInWindow { get; }
+
+    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
+
     /// Opens the bug/feedback window for one category; inert without an action to route it to.
     public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
 
@@ -171,6 +185,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Opens the re-auth sign-in surface. Inert without an action to route it to.
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+    public ReactiveCommand<Unit, Unit> SetupCommand { get; }
+    public bool CanOpenSetup { get; }
+    public HistoryImportRun? HistoryImport { get; }
+    public bool HistoryImportVisible => HistoryImport is not null;
+    public string HistoryImportStatus => HistoryImport is not { } run ? ""
+        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.State is ImportRunState.Failed or ImportRunState.Cancelled
+            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
+        : $"History imported · {run.Imported:N0} sessions uploaded";
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -266,7 +289,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
-            Action? requestSignIn = null) {
+            Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
+            bool? appMenuInWindow = null, Action? requestSetup = null,
+            HistoryImportRun? historyImport = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -280,15 +305,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
-        var canRefreshWork = this.WhenAnyValue(x => x.CurrentWorkspace)
-            .Select(CanRefreshOpenWork)
-            .Switch()
+        var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
+            .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         RefreshWorkCommand = ReactiveCommand.Create(RefreshOpenWork, canRefreshWork);
         CanOpenFeedback     = openFeedback is not null;
         OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
+        OpenChangelogCommand = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.ChangelogUrl));
+        AppMenuInWindow     = appMenuInWindow ?? !OperatingSystem.IsMacOS();
+        var settings        = settingsAction ?? Observable.Return<Action?>(null);
+        settings.Subscribe(open => _openSettings = open);
+        OpenSettingsCommand = ReactiveCommand.Create(
+            () => _openSettings?.Invoke(),
+            settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
+        CanOpenSetup = requestSetup is not null;
+        SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());
+        HistoryImport = historyImport;
         var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
@@ -326,6 +360,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             StartDaemonCommand, RetryCommand, canStart, canRetry, _startMessageChanges);
 
         this.WhenActivated(disposables => {
+            if (historyImport is not null)
+                historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
 

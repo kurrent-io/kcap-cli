@@ -139,6 +139,15 @@ Options:
                       `install --pi` writes a small kcap-owned, marker-delimited
                       block (non-destructive — preserves your own instructions)
                       that nudges Pi to use the kcap tools for why/history questions.
+  --tools-only        With --cursor, --copilot, --gemini, --kiro, --pi, --opencode or
+                      --antigravity: install only the tools (MCP servers, skills,
+                      steering instructions; the --skip-<vendor>-* flags still
+                      apply) and nothing that records sessions: no hooks, no Pi or
+                      OpenCode live-ingest file, no Antigravity capture plugin, no
+                      Kiro agent clone, default-agent switch or Kiro Crew hook, and
+                      no git hook. Only Pi's MCP bridge needs kcap on PATH. Refused
+                      (exit 1) for Claude Code and --codex, whose tools ship with
+                      capture.
   --if-installed      Refresh-only mode: no-op unless the user has previously
                       installed the target (marker file or pre-marker entry
                       detected). Used by the npm postinstall hook to refresh
@@ -161,7 +170,7 @@ Notes:
   nothing, because that session started with the integration.
 
   Skills install to ~/.agents/skills/kcap-{recap,errors,hide,disable,
-  validate-plan,review-flows,agent-flows,work-items,plans,guided-tour,suggest-review-flow,
+  validate-plan,review-flows,agent-flows,work-items,plans,guided-tour,
   eval-watch,start-agents}/.
   Codex, Cursor, and any other agent that honors the .agents/skills convention
   will pick them up automatically. Every install of a vendor that reads that tree
@@ -255,6 +264,11 @@ Notes:
   install. OpenCode has no project-scope plugins dir, so --project has no effect
   with --opencode.
 
+  --if-installed never adds capture to an install that has only the tools: when
+  a vendor's capture half is absent but its tools are present, the refresh
+  touches only the tools. --tools-only --if-installed refreshes only the tools
+  of any install.
+
   --if-installed is scoped to user-wide installs only — the npm postinstall hook
   does not refresh --project installs.
 
@@ -270,6 +284,8 @@ Examples:
   kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
   kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   kcap plugin install --antigravity         # Install Antigravity capture plugin (~/.gemini/config/plugins/kcap/)
+  kcap plugin install --cursor --tools-only # Cursor MCP servers + agent skills, no hooks
+  kcap plugin install --kiro --tools-only   # Kiro MCP servers + skills, default agent unchanged
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
   kcap plugin install --codex --if-installed    # Refresh Codex hooks if previously installed (used by npm postinstall)
   kcap plugin install --if-installed            # Refresh Claude plugin registration if previously installed

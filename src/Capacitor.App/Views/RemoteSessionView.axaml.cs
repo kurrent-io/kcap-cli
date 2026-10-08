@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Capacitor.App.ViewModels;
-using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Views;
 
@@ -23,14 +22,14 @@ public partial class RemoteSessionView : UserControl {
             _tabFocus?.Dispose();
             ArtefactsPane.Content = null;
             var model = DataContext as RemoteSessionViewModel;
-            _tabFocus = model?
+            _tabFocus = model is null ? null : model
                 .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
                 .Subscribe(pair => Dispatcher.UIThread.Post(() => {
-                    if (!ReferenceEquals(model, DataContext) || !pair.Item2) return;
-                    if (pair.Item1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
+                    if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
+                    if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
                         ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
-                    if (pair.Item1 == RemoteTab.Chat) ChatHost.FocusComposer();
-                    else if (pair.Item1 == RemoteTab.Terminal) TerminalHost.Focus();
+                    if (pair.Property1 == RemoteTab.Chat) ChatHost.FocusComposer();
+                    else if (pair.Property1 == RemoteTab.Terminal) TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));
         };
     }

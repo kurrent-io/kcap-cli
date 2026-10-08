@@ -8,7 +8,7 @@ public static class SessionStatusDots {
     /// The daemon's finished-turn verdict, for an agent the user can answer: a flow participant
     /// between rounds waits on the flow, so nothing here may describe it as waiting on the user.
     public static bool WaitsOnUser(AgentStatusDto dto) =>
-        dto.AwaitingInput == true && !AgentActionService.IsProtectedKind(dto.Kind);
+        dto.AwaitingInput == true && AgentActionService.AcceptsTypedInput(dto.Kind);
 
     /// Failed, waiting on the user, or a usage-limit question. A pending permission is the other source.
     public static bool NeedsAttention(AgentStatusDto dto) =>
@@ -16,7 +16,7 @@ public static class SessionStatusDots {
 
     /// The merged-row twins of the two rules above, for rail rows from either lane.
     public static bool WaitsOnUser(AgentRow row) =>
-        row.AwaitingInput == true && !AgentActionService.IsProtectedKind(row.Kind);
+        row.AwaitingInput == true && AgentActionService.AcceptsTypedInput(row.Kind);
 
     public static bool NeedsAttention(AgentRow row) =>
         row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);
@@ -49,7 +49,7 @@ public static class SessionStatusDots {
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
             string? usageLimitSummary, string? launchStage, string? elapsed,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
-            string? model = null, string? harness = null) {
+            string? model = null, string? harness = null, bool ended = false) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
@@ -91,7 +91,7 @@ public static class SessionStatusDots {
         Add(facts, requester, "Requester");
         Add(facts, borrowedFrom, "Borrowed from");
         return new AgentStatusPresentation(kind, label, FormatTip(facts),
-            kind is AgentStatusKind.Working or AgentStatusKind.Starting, facts);
+            kind is AgentStatusKind.Working or AgentStatusKind.Starting, facts) { Ended = ended };
     }
 
     static void Add(List<AgentStatusFact> facts, string? text, string? caption = null) {

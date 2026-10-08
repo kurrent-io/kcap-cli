@@ -4,12 +4,13 @@ namespace Capacitor.Cli.Core.Tests.Unit.Instructions;
 
 public class AgentInstructionsWriterTests {
     [Test]
-    public async Task Body_carries_the_proactive_review_offer_nudge() {
+    public async Task Body_carries_the_flow_offer_nudge() {
         // The steering block is how the harnesses that do NOT consult a SKILL.md as an invocable
-        // skill (Copilot, Gemini, Pi, OpenCode, Antigravity) get the proactive review-offer
-        // behavior — dropping this paragraph silently removes the feature on those harnesses.
-        await Assert.That(KcapAgentInstructions.Body).Contains("proactively OFFER an independent second-harness review");
-        await Assert.That(KcapAgentInstructions.Body).Contains("list_reviewer_vendors");
+        // skill (Copilot, Gemini, Pi, OpenCode, Antigravity) get the catalogue-flow offer
+        // behavior — dropping this paragraph silently removes it on those harnesses.
+        await Assert.That(KcapAgentInstructions.Body).Contains("Flows you may offer");
+        await Assert.That(KcapAgentInstructions.Body).Contains("get_flow_definition");
+        await Assert.That(KcapAgentInstructions.Body).DoesNotContain("proactively OFFER an independent second-harness review");
     }
 
     [Test]
@@ -24,6 +25,21 @@ public class AgentInstructionsWriterTests {
         await Assert.That(content).Contains(AgentInstructionsWriter.BeginMarker);
         await Assert.That(content).Contains(AgentInstructionsWriter.EndMarker);
         await Assert.That(content).Contains("Prefer kcap tools");
+    }
+
+    [Test]
+    public async Task IsInstalled_sees_only_a_complete_block() {
+        using var tmp = new TempDir();
+        var path = tmp.PathTo("AGENTS.md");
+
+        await Assert.That(AgentInstructionsWriter.IsInstalled(path)).IsFalse();
+
+        tmp.CreateFile("AGENTS.md", "# Mine\n" + AgentInstructionsWriter.BeginMarker + "\nno end\n");
+        await Assert.That(AgentInstructionsWriter.IsInstalled(path)).IsFalse();
+
+        File.WriteAllText(path, "# Mine\n");
+        AgentInstructionsWriter.Write(path, KcapAgentInstructions.Body);
+        await Assert.That(AgentInstructionsWriter.IsInstalled(path)).IsTrue();
     }
 
     [Test]

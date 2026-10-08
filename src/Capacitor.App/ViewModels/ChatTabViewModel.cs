@@ -42,7 +42,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
-    readonly SessionSubagents _subagents;
+    readonly SessionRuns _runs;
     readonly PlanActivity? _planActivity;
     readonly Action<ToolCard>? _openCard;
     readonly CompositeDisposable _disposables = new();
@@ -132,28 +132,35 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// The note is the headline while a turn is live, and a foreground launch is already a Task
     /// row in the transcript; the strip speaks only for runs that outlive the turn.
-    public bool HasRunningSubagents => _subagents.RunningCount > 0 && ActivityNote.Length == 0;
+    public bool HasRunningRuns => _runs.RunningCount > 0 && ActivityNote.Length == 0;
 
     /// The one live row when there is exactly one: the view reads its name and state line, which
     /// the row itself keeps current; a detach or a tick changes neither count, so nothing here
     /// would hear of it.
-    public SubagentRow? RunningSubagent =>
-        _subagents.RunningCount == 1 ? _subagents.Rows.FirstOrDefault(r => r.IsRunning) : null;
+    public RunRow? RunningRow =>
+        _runs.RunningCount == 1 ? _runs.Rows.FirstOrDefault(r => r.IsRunning) : null;
 
-    public string SubagentSummary {
+    public string RunSummary {
         get {
-            var running = _subagents.Rows.Where(r => r.IsRunning).ToList();
+            var running = _runs.Rows.Where(r => r.IsRunning).ToList();
             if (running.Count < 2) return "";
-            return running.All(r => r.IsBackground)
-                ? $"{running.Count} subagents running in background"
-                : $"{running.Count} subagents running";
+            var shells = running.Count(r => r.IsShell);
+            var agents = running.Count - shells;
+            var counts = (agents, shells) switch {
+                (_, 0) => $"{agents} subagents",
+                (0, _) => $"{shells} commands",
+                _      => $"{Plural(agents, "subagent")}, {Plural(shells, "command")}",
+            };
+            return running.All(r => r.IsBackground) ? $"{counts} running in background" : $"{counts} running";
         }
     }
 
-    void RefreshSubagents() {
-        this.RaisePropertyChanged(nameof(HasRunningSubagents));
-        this.RaisePropertyChanged(nameof(RunningSubagent));
-        this.RaisePropertyChanged(nameof(SubagentSummary));
+    static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    void RefreshRuns() {
+        this.RaisePropertyChanged(nameof(HasRunningRuns));
+        this.RaisePropertyChanged(nameof(RunningRow));
+        this.RaisePropertyChanged(nameof(RunSummary));
     }
 
     public PendingCardsViewModel Cards { get; }
@@ -333,11 +340,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set {
             if (_activityNote == value) return;
             this.RaiseAndSetIfChanged(ref _activityNote, value);
-            this.RaisePropertyChanged(nameof(HasRunningSubagents));
+            this.RaisePropertyChanged(nameof(HasRunningRuns));
         }
     }
 
     string _status = "";
+    bool _ended;
     bool? _awaitingInput;
     bool _waitsOnUser;
     int? _liveSubagents;
@@ -374,7 +382,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         AgentStatus = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
-            answerExpected: answerExpected);
+            answerExpected: answerExpected, ended: _ended);
         StatusText = AgentStatus.Label;
     }
 
@@ -392,15 +400,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set => this.RaiseAndSetIfChanged(ref _isReadOnlyParticipant, value);
     }
 
+    bool _takesAttachments = true;
+    internal bool TakesAttachments { get => _takesAttachments; set => this.RaiseAndSetIfChanged(ref _takesAttachments, value); }
+
+    internal const string NoAttachmentsHint = "a review agent takes no attachments";
+
     string _readOnlyNotice = "";
     public string ReadOnlyNotice { get => _readOnlyNotice; private set => this.RaiseAndSetIfChanged(ref _readOnlyNotice, value); }
 
-    /// Why this session cannot be messaged, or "" for an ordinary agent. Mirrors the wording of
-    /// the daemon's attach-time ProtectionReason so the chat banner and the terminal banner name
-    /// the same block identically; an unrecognised kind fails safe as protected, like
-    /// AgentActionService.IsProtectedKind.
+    /// Why this session cannot be messaged, or "" when it can. Mirrors the wording of the daemon's
+    /// attach-time ProtectionReason so the chat banner and the terminal banner name the same block
+    /// identically.
     internal static string ParticipantNotice(AgentStatusDto dto) {
-        if (!AgentActionService.IsProtectedKind(dto.Kind)) return "";
+        if (AgentActionService.AcceptsTypedInput(dto.Kind)) return "";
         var role = string.IsNullOrEmpty(dto.FlowRole) ? "" : $", role {dto.FlowRole}";
         var flow = string.IsNullOrEmpty(dto.FlowRunId) ? "" : $" (flow {dto.FlowRunId}{role})";
         return $"{dto.Kind} agent{flow}";
@@ -447,17 +459,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public ChatTabViewModel(
             string agentId, IDaemonClientService daemon, ChatInput input, IAttachmentUploader uploader,
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
-            SessionSubagents subagents, string? unavailableNote = null, IObservable<string?>? sessionId = null,
+            SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
-               subagents, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard) { }
+               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
             ChatInput input, IAttachmentUploader uploader, Func<string, IChatTranscriptFeed>? openFeed, IUrlOpener opener, TimeProvider time,
-            IPermissionService permissions, SessionSubagents subagents, string? unavailableNote = null, string? missingNote = null,
+            IPermissionService permissions, SessionRuns runs, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null) {
@@ -472,8 +484,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _opener = opener;
         _time = time;
         _permissions = permissions;
-        _subagents = subagents;
-        _subagents.Changed += RefreshSubagents;
+        _runs = runs;
+        _runs.Changed += RefreshRuns;
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
@@ -557,7 +569,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Observable.Merge(
                 _input.WhenAnyValue(i => i.CanAttach).Select(_ => Unit.Default),
                 _input.WhenAnyValue(i => i.AttachHint).Select(_ => Unit.Default),
-                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default))
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant).Select(_ => Unit.Default),
+                this.WhenAnyValue(x => x.TakesAttachments).Select(_ => Unit.Default))
             .Subscribe(_ => {
                 this.RaisePropertyChanged(nameof(IAttachmentSink.CanAttach));
                 this.RaisePropertyChanged(nameof(IAttachmentSink.AttachHint));
@@ -578,7 +591,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var snapshot = ComposerText;
             var edits = _composerEdits;
             var files = Tray.Snapshot();
-            if (files.Count > 0 && !_input.CanAttach) { Notice(_input.AttachHint); return; }
+            if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
             IReadOnlyList<string> ids = [];
             if (files.Count > 0) {
                 // The bytes have to be on the server before the prompt names them: a prompt that
@@ -690,6 +703,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void OnSession(ChatSessionInfo info) {
         ReadOnlyNotice = info.ReadOnlyNotice;
         IsReadOnlyParticipant = info.ReadOnlyNotice.Length > 0;
+        TakesAttachments = info.TakesAttachments;
         _vendor = info.Vendor;
         _root = info.Root;
         _rootSubject.OnNext(info.Root);
@@ -697,12 +711,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         ApplyUsageLimit(info.UsageLimit);
         _status = info.Status;
+        _ended = info.Ended;
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
-        _subagents.SessionOver = info.Ended;
+        _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
@@ -761,7 +776,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _openGroup = null;
         _openShell = null;
         _marked.Clear();
-        _subagents.Clear();
+        _runs.Clear();
         _planActivity?.Clear();
         _feedKey = key;
         var previous = _lease;
@@ -797,8 +812,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The one surface every intake source hands its result to.
     public IAttachmentSink Attachments => this;
 
-    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant;
-    string? IAttachmentSink.AttachHint => _input.AttachHint;
+    bool IAttachmentSink.CanAttach => _input.CanAttach && !IsReadOnlyParticipant && TakesAttachments;
+    string? IAttachmentSink.AttachHint => TakesAttachments ? _input.AttachHint : NoAttachmentsHint;
     int IAttachmentSink.FreeSlots => Tray.FreeSlots;
 
     void IAttachmentSink.Accept(IntakeResult result) {
@@ -813,7 +828,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         if (_lifetimeToken.IsCancellationRequested) return;
         RefreshActivityNote();
-        _subagents.Tick();
+        _runs.Tick();
         if (_lease is not { } lease) return;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return;
         _pendingRead = ReadAndApplyAsync(lease);
@@ -861,7 +876,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _openGroup = null;
                 _openShell = null;
                 _marked.Clear();
-                _subagents.Clear();
+                _runs.Clear();
                 _planActivity?.Clear();
                 break;
         }
@@ -887,7 +902,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _planActivity?.Apply(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
         foreach (var (projected, offset) in read.Lines) {
-            _subagents.Apply(projected);
+            _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
@@ -1136,7 +1151,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         lease?.Feed.Dispose();
         _timer?.Dispose();
         _timer = null;
-        _subagents.Changed -= RefreshSubagents;
+        _runs.Changed -= RefreshRuns;
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
         foreach (var choice in _usageLimitChoices) choice.Choose.Dispose();

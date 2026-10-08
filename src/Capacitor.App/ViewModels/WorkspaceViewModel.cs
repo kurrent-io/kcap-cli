@@ -154,7 +154,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Replay(1)
             .RefCount();
 
-        var subagents = new SessionSubagents(time);
+        var runs = new SessionRuns(time);
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
@@ -163,7 +163,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             ShowsArtefactsTab = has;
             if (!has && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
         }).DisposeWith(_disposables);
-        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, subagents, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
+        WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         WorkContext.Plan.OpenDocument = path => {
             if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();
         };
@@ -250,7 +250,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, subagents, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard);
             })
             .DisposeWith(_disposables);
 

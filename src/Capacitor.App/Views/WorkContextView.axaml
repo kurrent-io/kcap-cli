@@ -254,27 +254,27 @@
              ring is a run the session ended for it. A glyph inside a disc is sized to the disc: its
              geometry is drawn at its own coordinates, so a box any tighter centres the bounds and
              lands the mark off the disc's middle. -->
-        <DataTemplate x:Key="SubagentMark" x:DataType="vm:SubagentState">
+        <DataTemplate x:Key="SubagentMark" x:DataType="vm:RunState">
             <Panel Width="12" Height="12">
-                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Running}}">
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Running}}">
                     <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5" />
                     <!-- 5px in a 12px disc starts at 3.5px; rounding that snaps the dot off centre. -->
                     <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
                             HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
-                            views:PulseClock.IsActive="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Running}}" />
+                            views:PulseClock.IsActive="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Running}}" />
                 </Panel>
-                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Done}}">
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Done}}">
                     <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" />
                     <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
                           Data="M3,6 L5.2,8.2 L9,4" />
                 </Panel>
-                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Failed}}">
+                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Failed}}">
                     <Ellipse Width="12" Height="12" Fill="{StaticResource KcapDangerBrush}" />
                     <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
                           Data="M4,4 L8,8 M8,4 L4,8" />
                 </Panel>
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapBorderBrush}" StrokeThickness="1.5"
-                         IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:SubagentState.Stopped}}" />
+                         IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Stopped}}" />
             </Panel>
         </DataTemplate>
         <!-- One template for the rows and the folded counts alike, so the two cannot drift apart. -->
@@ -315,14 +315,18 @@
                 </StackPanel>
             </Grid>
         </DataTemplate>
-        <DataTemplate x:Key="SubagentItem" x:DataType="vm:SubagentRow">
+        <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                 <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
                 </Panel>
                 <StackPanel Grid.Column="1" Spacing="2">
-                    <TextBlock Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                    <Grid ColumnDefinitions="Auto,*">
+                        <TextBlock x:Name="ShellGlyph" Text="$" Margin="0,0,5,0" FontFamily="Menlo, Consolas, monospace" FontSize="12" LineHeight="16"
+                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" IsVisible="{Binding IsShell}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                    </Grid>
                     <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
                                TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
                                IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -667,7 +671,7 @@
                     </Grid>
                 </Button>
 
-                <!-- Plan: read from the server, so unlike SUBAGENTS it shows nothing while signed out. -->
+                <!-- Plan: read from the server, so unlike AGENTS & COMMANDS it shows nothing while signed out. -->
                 <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.HasPlan}" Margin="0,18,0,0">
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
@@ -764,24 +768,24 @@
                     </Border>
                 </StackPanel>
 
-                <!-- Subagents: read from the transcript, so it renders in every pane phase. -->
-                <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasSubagents}" Margin="0,18,0,0">
-                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleSubagentsCommand}" Classes="sectionHeader expandable">
+                <!-- Agents and commands: read from the transcript, so it renders in every pane phase. -->
+                <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasRuns}" Margin="0,18,0,0">
+                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleRunsCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                            <TextBlock Text="SUBAGENTS" Classes="eyebrow" />
+                            <TextBlock Text="AGENTS &amp; COMMANDS" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <TextBlock x:Name="SubagentsHeaderText" Text="{Binding SubagentsHeader}" Classes="sectionMeta"
-                                           IsVisible="{Binding SubagentsExpanded}" />
+                                <TextBlock x:Name="SubagentsHeaderText" Text="{Binding RunsHeader}" Classes="sectionMeta"
+                                           IsVisible="{Binding RunsExpanded}" />
                                 <!-- ItemsControl clips by default, and the marks' nudge lifts them past its top. -->
-                                <ItemsControl x:Name="SubagentsSummary" ItemsSource="{Binding SubagentCounts}" VerticalAlignment="Center"
-                                              ClipToBounds="False" IsVisible="{Binding !SubagentsExpanded}">
+                                <ItemsControl x:Name="SubagentsSummary" ItemsSource="{Binding RunCounts}" VerticalAlignment="Center"
+                                              ClipToBounds="False" IsVisible="{Binding !RunsExpanded}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
                                             <StackPanel Orientation="Horizontal" Spacing="10" />
                                         </ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:SubagentCount">
+                                        <DataTemplate x:DataType="vm:RunCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
                                                 <!-- Digits have no descender, so a centred line box sets them above the mark's
                                                      middle: each moves a pixel toward the other, and onto the eyebrow's caps. -->
@@ -793,14 +797,14 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                                 <Panel Classes="chevronBox" Width="12" Height="12">
-                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding SubagentsExpanded}" />
-                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !SubagentsExpanded}" />
+                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding RunsExpanded}" />
+                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !RunsExpanded}" />
                                 </Panel>
                             </StackPanel>
                         </Grid>
                     </Button>
-                    <Border Classes="sectionBody" IsVisible="{Binding SubagentsExpanded}">
-                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Subagents}" ItemTemplate="{StaticResource SubagentItem}">
+                    <Border Classes="sectionBody" IsVisible="{Binding RunsExpanded}">
+                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Runs}" ItemTemplate="{StaticResource RunItem}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Spacing="10" />
@@ -811,11 +815,11 @@
                     <Border x:Name="RunningSubagentsBody" Classes="sectionBody">
                         <Border.IsVisible>
                             <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                <Binding Path="!SubagentsExpanded" />
-                                <Binding Path="HasRunningSubagents" />
+                                <Binding Path="!RunsExpanded" />
+                                <Binding Path="HasRunningRuns" />
                             </MultiBinding>
                         </Border.IsVisible>
-                        <ItemsControl x:Name="RunningSubagentList" ItemsSource="{Binding RunningSubagents}" ItemTemplate="{StaticResource SubagentItem}">
+                        <ItemsControl x:Name="RunningSubagentList" ItemsSource="{Binding RunningRuns}" ItemTemplate="{StaticResource RunItem}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Spacing="10" />

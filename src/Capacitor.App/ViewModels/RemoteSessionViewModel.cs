@@ -192,12 +192,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
-            opener, time, permissions, new SessionSubagents(time), missingNote: MissingNote, sessionId: _sessionIds,
-            serverQueue: _sessionIds
+            opener, time, permissions, new SessionRuns(time), missingNote: MissingNote, sessionId: _sessionIds,
+            serverQueue: Observable.Switch(_sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
-                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))
-                .Switch(),
+                    : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)

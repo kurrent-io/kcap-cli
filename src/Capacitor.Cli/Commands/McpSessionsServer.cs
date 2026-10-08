@@ -176,6 +176,10 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return await HandleSessionSummaryAsync(id, arguments, client, baseUrl);
         }
 
+        if (toolName == SessionEvalsTool.Name) {
+            return await HandleSessionEvalsAsync(id, arguments, client, baseUrl);
+        }
+
         var singlePlan = false;
 
         try {
@@ -325,6 +329,19 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        }
+    }
+
+    async Task<string> HandleSessionEvalsAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl) {
+        try {
+            var ids    = SessionEvalsTool.ParseSessionIds(arguments);
+            var result = await SessionEvalsTool.FetchAsync(client, baseUrl, ids, time);
+
+            return result is null
+                ? BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true)
+                : BuildToolResult(id, result.ToJsonString());
+        } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         }
     }
@@ -1108,6 +1125,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 ["session_id"]
             ),
             McpToolAnnotations.Read
-        )
+        ),
+        SessionEvalsTool.Definition
     ];
 }

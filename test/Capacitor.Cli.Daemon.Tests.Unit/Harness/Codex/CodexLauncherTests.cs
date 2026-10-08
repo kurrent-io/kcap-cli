@@ -65,6 +65,18 @@ public class CodexLauncherTests {
     }
 
     [Test]
+    public async Task BuildArgs_with_a_prompt_file_passes_a_pointer_in_place_of_the_prompt() {
+        var file = Path.Combine(Home.Path, "kcap-prompts", "a-1", "prompt.md");
+        var ctx  = NewCtx(prompt: "the whole diff", isReviewFlow: true) with { PromptFile = file };
+
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        await Assert.That(args[^2]).IsEqualTo("--");
+        await Assert.That(args[^1]).IsEqualTo(PromptFile.Pointer(file));
+        await Assert.That(args).DoesNotContain("the whole diff");
+    }
+
+    [Test]
     public async Task BuildArgs_leaves_an_unmigrated_model_alone() {
         WriteCodexConfig("[notice.model_migrations]\n\"gpt-5.2\" = \"gpt-5.6\"\n");
 

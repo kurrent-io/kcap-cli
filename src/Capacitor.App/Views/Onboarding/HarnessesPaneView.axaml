@@ -1,0 +1,163 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             x:Class="Capacitor.App.Views.Onboarding.HarnessesPaneView"
+             x:DataType="vm:HarnessesStepViewModel">
+    <StackPanel Spacing="14">
+        <Border x:Name="PrivacyCard" Classes="frCard">
+            <StackPanel Spacing="8">
+                <TextBlock Classes="frMicro" Text="WHO CAN READ NEW SESSIONS" />
+                <TextBlock Classes="frDetail" Text="Choose a privacy setting before continuing, even if you connect your harnesses later." />
+                <TextBlock Classes="frNote" Text="{Binding CurrentVisibilityNote}"
+                           IsVisible="{Binding CurrentVisibilityNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Classes="frDetail">
+                    <Run Text="Applies to sessions recorded on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}"
+                        Foreground="{StaticResource KcapTextBrush}" /><Run Text=". Sessions can still be shared or hidden individually." />
+                </TextBlock>
+                <ItemsControl x:Name="VisibilityOptions" ItemsSource="{x:Static vm:HarnessesStepViewModel.VisibilityOptions}"
+                              IsEnabled="{Binding Idle}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:VisibilityOption">
+                            <RadioButton Classes="frOption" GroupName="Visibility" Margin="0,0,0,2"
+                                         Tag="{Binding Value}" IsCheckedChanged="OnVisibilityChecked"
+                                         Loaded="OnVisibilityLoaded" AutomationProperties.Name="{Binding Label}"
+                                         AutomationProperties.HelpText="{Binding Detail}">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Classes="frLabel" FontSize="13" Text="{Binding Label}" />
+                                    <TextBlock Classes="frDetail" Text="{Binding Detail}" />
+                                </StackPanel>
+                            </RadioButton>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+        <Border Classes="frCard">
+            <StackPanel Spacing="12">
+                <TextBlock x:Name="HarnessesMessageText" Classes="frError" Text="kcap isn't available on this machine, so there is nothing to turn on from here."
+                           IsVisible="{Binding !CliAvailable}" />
+
+                <TextBlock Classes="frBody" IsVisible="{Binding NoneFound}">
+                    <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}"
+                        Foreground="{StaticResource KcapTextBrush}" /><Run Text=". Install a harness, then reopen setup from Help and support." />
+                </TextBlock>
+
+                <!-- The table: one row per detected harness, record and tools in fixed cells. -->
+                <StackPanel IsVisible="{Binding !NoneFound}">
+                    <Border Classes="frRowRule" Padding="0,0,0,8">
+                        <Grid ColumnDefinitions="*,68,68">
+                            <TextBlock Classes="frMicro">
+                                <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource KcapTextBrush}" />
+                            </TextBlock>
+                            <TextBlock Grid.Column="1" Classes="frMicro" Text="RECORD" HorizontalAlignment="Center" />
+                            <TextBlock Grid.Column="2" Classes="frMicro" Text="TOOLS" HorizontalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <ItemsControl x:Name="HarnessRows" ItemsSource="{Binding Rows}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:HarnessRowViewModel">
+                                <Border Classes="frRowRule" Padding="2,11">
+                                    <StackPanel Spacing="6">
+                                        <!-- The box shares the name's row. The line under the name must not pull it down. -->
+                                        <Grid ColumnDefinitions="*,Auto,68,68" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+                                            <TextBlock Grid.Row="0" x:Name="HarnessLabelText" Classes="frLabel" VerticalAlignment="Center"
+                                                       Text="{Binding Label}" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Classes="frSignal" Margin="0,2,0,0"
+                                                       Text="{Binding SignalLine}" />
+                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                <TextBlock Classes="frSignal" Text="installing…" IsVisible="{Binding Installing}" />
+                                                <TextBlock Classes="frSignal" Text="✓ turned on" Foreground="{StaticResource KcapSuccessBrush}"
+                                                           IsVisible="{Binding Succeeded}" />
+                                                <Button x:Name="HarnessRetryButton" Classes="frSecondary frCompact" Content="Retry"
+                                                        Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
+                                            </StackPanel>
+                                            <CheckBox Grid.Row="0" Grid.Column="2" x:Name="RecordCheckBox" Classes="frCheck"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
+                                                      IsChecked="{Binding Record, Mode=TwoWay}"
+                                                      ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}" />
+                                            <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="frCheck"
+                                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                      IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
+                                                      IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
+                                                      ToolTip.Tip="{Binding Label, StringFormat='Give {0} Capacitor tools'}" />
+                                            <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       FontFamily="{StaticResource FrMonoFont}" FontSize="9" LetterSpacing="0.6"
+                                                       Foreground="{StaticResource FrDimBrush}" IsVisible="{Binding ToolsBundled}" />
+                                        </Grid>
+                                        <TextBlock Classes="frDetail" Text="{Binding ConsentNote}" Margin="0,0,152,0"
+                                                   IsVisible="{Binding ConsentNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock x:Name="HarnessRowMessageText" Classes="frError" Text="{Binding Message}"
+                                                   IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="frNote" Text="{Binding NotFoundLine}" Margin="0,11,0,0"
+                               IsVisible="{Binding NotFoundLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <!-- A provider key in the terminal: kcap scrubs it from headless spawns unless told not to. -->
+                <Border Classes="frCallout" IsVisible="{Binding ProviderKeyNotice, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                        <CheckBox x:Name="ProviderKeyCheckBox" Classes="frCheck" VerticalAlignment="Top" Margin="0,1,0,0"
+                                  IsChecked="{Binding UseProviderApiKey, Mode=TwoWay}" IsEnabled="{Binding Idle}"
+                                  AutomationProperties.Name="Use my provider API keys for titles and summaries" />
+                        <StackPanel Grid.Column="1" Spacing="3">
+                            <TextBlock Classes="frLabel" FontSize="13" Text="Use these API keys for kcap's own calls" />
+                            <TextBlock Classes="frDetail">
+                                <Run Text="{Binding ProviderKeyNotice}" /><Run Text=" By default kcap leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use." />
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- The bundled CLI is not on the login shell. Turning harnesses on waits for the fix. -->
+                <Border Classes="frWarning" IsVisible="{Binding PathHazard}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                        <Path Data="M12 3 2 21h20L12 3Zm0 6v6m0 3v.5" Stroke="{StaticResource KcapDangerBrush}" StrokeThickness="2"
+                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="5">
+                            <TextBlock Classes="frLabel" FontSize="12.5">
+                                <Run Text="This app includes " /><Run Text="kcap" FontFamily="{StaticResource FrMonoFont}" /><Run Text=", and your terminal cannot run it yet." />
+                            </TextBlock>
+                            <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
+                                       Text="Harness hooks run that command by name. Turning them on waits until this machine can find it." />
+                            <TextBlock Classes="frDetail" Text="{Binding PathFix.Disclosure}" />
+                            <WrapPanel Orientation="Horizontal" ItemSpacing="10" LineSpacing="6" Margin="0,3,0,0">
+                                <Button x:Name="PathFixButton" Classes="frPrimary frCompact"
+                                        Content="{Binding PathFix.ActionLabel}"
+                                        Command="{Binding PathFix.InstallCommand}" />
+                                <TextBlock x:Name="PathFixMessageText" Classes="frDetail" Text="{Binding PathFix.Message}" VerticalAlignment="Center"
+                                           IsVisible="{Binding PathFix.Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+                <Border Classes="frResolved" IsVisible="{Binding PathResolved}">
+                    <StackPanel Orientation="Horizontal" Spacing="9">
+                        <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
+                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                        <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}">
+                            <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource FrMonoFont}" /><Run Text=". Capture will record." />
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Classes="frError" Text="{Binding Message}"
+                           IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock Classes="frNote" IsVisible="{Binding DeclineVisible}"
+                   Text="No new connections selected. Reopen setup from Help and support whenever you're ready." />
+        <TextBlock Classes="frNote" IsVisible="{Binding ConnectionsSaved}"
+                   Text="These connection choices are saved. Use kcap plugin remove in your terminal to disconnect a harness." />
+        <TextBlock Classes="frNote" Text="Setup adds connections; it doesn't remove existing ones. Unchecking a box leaves that part of an existing connection unchanged." />
+        <TextBlock Classes="frNote" IsVisible="{Binding !DeclineVisible}">
+            <Run Text="Then you can ask " /><Run Text="“have I hit this before?”" Foreground="{StaticResource FrMutedBrush}" /><Run Text=" or " /><Run Text="“what did I change in the importer last week?”" Foreground="{StaticResource FrMutedBrush}" />
+        </TextBlock>
+    </StackPanel>
+</UserControl>

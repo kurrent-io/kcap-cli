@@ -1,0 +1,47 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             x:Class="Capacitor.App.Views.Onboarding.DaemonPaneView"
+             x:DataType="vm:DaemonStepViewModel">
+    <Border Classes="frCard">
+        <StackPanel Spacing="16">
+            <!-- The name is part of the service, so it is asked where the service is turned on. -->
+            <StackPanel Spacing="8" IsVisible="{Binding Machine, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TextBlock Classes="frMicro" Text="NAME" />
+                <TextBlock Classes="frDetail" Text="How this machine appears when you start an agent on it from somewhere else." />
+                <TextBox x:Name="DaemonNameBox" Classes="frField" Text="{Binding Machine.DaemonName, Mode=TwoWay}"
+                         IsEnabled="{Binding NameEditable}" AutomationProperties.Name="Machine name" />
+            </StackPanel>
+
+            <Border Classes="frDivider" IsVisible="{Binding Machine, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+            <StackPanel Spacing="10">
+                <TextBlock Classes="frMicro" Text="BACKGROUND SERVICE" />
+                <StackPanel Orientation="Horizontal" Spacing="10">
+                    <Panel Classes="frSpinner" IsVisible="{Binding Busy}">
+                        <Ellipse />
+                        <Path Classes.kcapSpinning="{Binding Busy}" />
+                    </Panel>
+                    <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
+                          Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" IsVisible="{Binding Satisfied}" />
+                    <TextBlock x:Name="DaemonMessageText" Classes="frLabel" FontWeight="Medium" Text="{Binding Message}"
+                               TextWrapping="Wrap" VerticalAlignment="Center" MaxWidth="520"
+                               IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="DaemonActionButton" Classes="frPrimary frCompact"
+                            Content="{Binding ActionLabel}"
+                            Command="{Binding ActionCommand}"
+                            IsVisible="{Binding ShowsOwnPrimary}" />
+                    <Button x:Name="DaemonRefreshButton" Classes="frSecondary frCompact" Content="Check again"
+                            Command="{Binding RefreshCommand}" IsVisible="{Binding RefreshVisible}" />
+                </StackPanel>
+
+                <TextBlock x:Name="DaemonStatusText" Classes="frBody" Text="{Binding Status}"
+                           IsVisible="{Binding Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

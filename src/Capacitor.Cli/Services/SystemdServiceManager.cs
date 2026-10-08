@@ -2,8 +2,13 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Services;
 
-sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = null) : IServiceManager {
+sealed class SystemdServiceManager(
+    UserHome home,
+    UnitFileWriter? writeUnit = null,
+    Func<string, string[], (int ExitCode, string StdOut, string StdErr)>? runProcess = null
+) : IServiceManager {
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _runProcess = runProcess ?? ServiceProcess.Run;
 
     public string Describe() => "systemd --user unit";
 
@@ -44,6 +49,41 @@ sealed class SystemdServiceManager(UserHome home, UnitFileWriter? writeUnit = nu
     /// invoking systemctl.</summary>
     internal void WriteUnitFiles(ServiceSpec spec) =>
         _writeUnit(SystemdUnit.UnitPath(home, spec.ServiceId), SystemdUnit.Unit(spec), null);
+
+    /// <summary>
+    /// Points an installed unit's binary at what <paramref name="stabilize"/> maps it to, and reloads
+    /// systemd's copy of the unit. The running daemon is left alone: it picks the new binary up on its
+    /// next start. True when the unit was rewritten or a reload it still needed was done.
+    ///
+    /// <para>A unit already on the stable path is reloaded when systemd reports it stale, so a reload that
+    /// failed after the rewrite is retried by the next refresh. Throws when <c>daemon-reload</c> fails.</para>
+    /// </summary>
+    public bool Repoint(string serviceId, Func<string, string> stabilize) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        if (!File.Exists(path)) return false;
+
+        var text   = File.ReadAllText(path);
+        var binary = SystemdUnit.BinaryFromUnit(text);
+        if (binary is null) return false;
+
+        if (SystemdUnit.WithBinary(text, stabilize(binary)) is { } rewritten) {
+            _writeUnit(path, rewritten, null);
+            Reload();
+            return true;
+        }
+
+        var (_, stale, _) = _runProcess("systemctl", SystemdUnit.NeedDaemonReloadArgs(serviceId));
+        if (!SystemdUnit.NeedsDaemonReload(stale)) return false;
+
+        Reload();
+        return true;
+    }
+
+    void Reload() {
+        var (exit, _, err) = _runProcess("systemctl", SystemdUnit.DaemonReloadArgs());
+        if (exit != 0)
+            throw new InvalidOperationException($"systemctl --user daemon-reload exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}")}");
+    }
 
     public void Install(ServiceSpec spec, bool startNow) {
         WriteUnitFiles(spec);
