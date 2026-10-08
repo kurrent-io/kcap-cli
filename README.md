@@ -72,7 +72,7 @@ The installer checks the download against its published checksum, installs the n
 
 ### 2. Start a new agent session
 
-Use an agent you let setup install kcap into; one you declined is not recorded until you run `kcap plugin install` for it. Hooks load when a session starts, so a session that was already running is not recorded live. Start a new one (or `claude --continue`) and give it a prompt.
+Use an agent kcap is installed into: setup installs it unless you decline, and `kcap plugin install` adds one later. Hooks load when a session starts, so a session that was already running is not recorded live. Start a new one (or `claude --continue`) and give it a prompt.
 
 ### 3. Check it in the dashboard
 

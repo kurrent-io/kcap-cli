@@ -195,7 +195,7 @@ does not cancel an import chosen in the browser.
 this machine's session history unless you add --skip-import.
 
 Recording starts with the next session of an agent kcap is installed into
-(declined ones need `kcap plugin install` first): hooks load when a session
+(`kcap plugin install` adds one setup did not): hooks load when a session
 starts, so restart any agent that was already running. A session you then
 start should appear in your workspace's dashboard; `kcap status` shows that
 kcap is configured and can reach the server, not that sessions are recorded.
