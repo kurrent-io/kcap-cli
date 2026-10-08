@@ -126,7 +126,11 @@ desktop app never shows that prompt: if you only use the desktop app, trust
 the kcap hooks in Settings → Hooks there (and since setup detects Codex by
 `codex` on PATH, you may need `kcap plugin install --codex` to install the
 hooks first). Until trusted, the hooks are installed but inert and no
-sessions are captured.
+sessions are captured; setup reminds you of this whenever it installs them.
+
+The git hook that files commits under their agent session needs git 2.54 or
+later. Setup checks `git --version` and warns, rather than ticking the hook,
+when git is older; commits are then read from the agent's shell commands.
 
 Once you are signed in, on a server that offers browser setup kcap creates a
 setup link, opens your browser on it, and waits while you work through the

@@ -614,6 +614,26 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.ProviderApiKeyKeptLine(true)).Contains("use_provider_api_key false");
     }
 
+    /// <summary>A git too old for config hooks gets a warning instead of a tick for a hook it will never
+    /// run; a current or unreadable version keeps the tick.</summary>
+    [Test]
+    public async Task GitHookLine_warns_only_below_the_config_hook_minimum() {
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 50, 1))).Contains("ignores it");
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
+        await Assert.That(SetupCommand.GitHookLine(null)).Contains("[green]✓[/]");
+    }
+
+    [Test]
+    public async Task CodexTrustReminder_appears_only_when_codex_hooks_were_installed() {
+        var withCodex = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: true, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false);
+        var withoutCodex = withCodex with { CodexHooksInstalled = false, ClaudeInstalled = true };
+
+        await Assert.That(SetupCommand.CodexTrustReminder(withCodex)).Contains("trust");
+        await Assert.That(SetupCommand.CodexTrustReminder(withoutCodex)).IsNull();
+    }
+
     [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(

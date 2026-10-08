@@ -14,6 +14,25 @@ public class GitHookInstallerTests {
         return git.ExitCode == 0 ? git.Text : null;
     }
 
+    /// <summary>The vendor suffixes Apple and Git for Windows append must not hide the version setup
+    /// compares against the config-hook minimum.</summary>
+    [Test]
+    [Arguments("git version 2.50.1 (Apple Git-155)", "2.50.1")]
+    [Arguments("git version 2.54.0.windows.1", "2.54.0")]
+    [Arguments("git version 2.54.0", "2.54.0")]
+    [Arguments("git version 3.0", "3.0.0")]
+    public async Task ParseGitVersion_reads_vendor_builds(string output, string expected) {
+        await Assert.That(GitHookInstaller.ParseGitVersion(output)).IsEqualTo(Version.Parse(expected));
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("git: command not found")]
+    [Arguments("git version unknown")]
+    public async Task ParseGitVersion_returns_null_for_output_it_cannot_read(string output) {
+        await Assert.That(GitHookInstaller.ParseGitVersion(output)).IsNull();
+    }
+
     [Test]
     public async Task A_refresh_adds_no_entry_and_an_install_adds_one_for_every_event() {
         await Assert.That(Installer.Refresh()).IsFalse();
