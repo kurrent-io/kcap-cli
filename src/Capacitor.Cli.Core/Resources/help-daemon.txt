@@ -107,6 +107,10 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           binary paths, transaction-marker state) and exits
                           non-zero if the underlying service state can't be
                           determined.
+  refresh [--force]       Bring installed units up to this version. Reloads a
+                          daemon only when it is idle; --force reloads the
+                          named daemon now (ends its hosted agents) and prints
+                          refresh_outcome=<token> on stderr.
 
 Subcommands for shim (the command-line tool — kcap on your terminal PATH):
   ensure [--json]         Probe the login shell. If kcap already resolves
