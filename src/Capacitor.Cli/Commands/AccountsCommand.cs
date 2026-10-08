@@ -5,9 +5,16 @@ using Capacitor.Cli.Core.Harness;
 namespace Capacitor.Cli.Commands;
 
 public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env, TimeProvider time) {
-    const int MinIdPrefix = 4;
+    const int    MinIdPrefix     = 4;
+    const int    IdDisplayChars  = 8;
+    const string SkipNetworkFlag = "--skip-codex-network-access";
+
+    bool _skipNetwork;
 
     public async Task<int> HandleAsync(string[] args) {
+        _skipNetwork = args.Contains(SkipNetworkFlag);
+        args         = [.. args.Where(a => a != SkipNetworkFlag)];
+
         try {
             return args.Length < 2 ? await List() : args[1] switch {
                 "list"                         => await List(),
@@ -42,14 +49,15 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
         }
     }
 
-    WiringOptions Options => new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, NetworkAllowDomains: Domains(env.CodexNetworkAllowDomains()));
+    WiringOptions Options => new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath,
+                                 NetworkAllowDomains: _skipNetwork ? null : Domains(env.CodexNetworkAllowDomains()));
 
     static IReadOnlyCollection<string>? Domains(IReadOnlyList<string> domains) => domains.Count == 0 ? null : domains;
 
     async Task<int> List() {
         var registry = Registry(accounts.Load);
         foreach (var a in registry.Accounts)
-            await Console.Out.WriteLineAsync($"{a.Vendor,-7} {a.Label,-20} {AccountStateLabels.For(a.Vendor, AccountWiring.State(a, env.Home)),-36} {a.Directory}  [{a.Id[..8]}]");
+            await Console.Out.WriteLineAsync($"{a.Vendor,-7} {a.Label,-20} {AccountStateLabels.For(a.Vendor, AccountWiring.State(a, env.Home)),-36} {a.Directory}  [{a.Id[..Math.Min(IdDisplayChars, a.Id.Length)]}]");
 
         var candidates = AccountDiscovery.Find(env.Home, registry, Environment.GetEnvironmentVariable);
         if (candidates.Count > 0) {

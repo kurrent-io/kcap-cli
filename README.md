@@ -2132,7 +2132,7 @@ kcap accounts rewire [<id|dir>]                # reinstall recording into one or
 kcap accounts remove <id|dir>                  # remove kcap's recording and forget the account
 ```
 
-`<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`.
+`<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`. For a Codex account, `add` and `rewire` also enable Codex sandbox network access for your server(s), as `kcap plugin install --codex` does; pass `--skip-codex-network-access` to leave that home's `config.toml` network keys untouched.
 
 ### Profiles
 
@@ -2369,7 +2369,7 @@ kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
 
-`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), removes the `kcap` git hook from `~/.gitconfig`, and deletes `~/.config/kcap/`. Every registered vendor account (see `kcap accounts`) is unwired too, and the account registry (`~/.config/kcap/accounts/`) is deleted last, only when no step failed — even with `--keep-config`, but not with `--project`.
+`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), removes the `kcap` git hook from `~/.gitconfig`, and deletes `~/.config/kcap/`. Every registered vendor account (see `kcap accounts`) is unwired too, and the account registry (`~/.config/kcap/accounts/`) is deleted last, only when no step failed — neither `--keep-config` nor `--project` spares it.
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 

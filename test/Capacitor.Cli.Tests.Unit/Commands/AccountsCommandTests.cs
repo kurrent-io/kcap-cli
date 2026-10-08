@@ -216,4 +216,40 @@ public class AccountsCommandTests {
         await Assert.That(Store.Load().Accounts.Count).IsEqualTo(0);
         await Assert.That(Directory.Exists(dir)).IsTrue();
     }
+
+    [Test]
+    public async Task List_shows_an_id_shorter_than_the_display_prefix() {
+        var dir = ClaudeDir();
+        Tmp.CreateFile("accounts/accounts.json", $$"""
+            { "accounts": [ { "id": "abc", "vendor": "Claude", "directory": {{System.Text.Json.JsonSerializer.Serialize(dir)}}, "label": "work", "added_at": "2026-01-01T00:00:00Z" } ] }
+            """);
+        using var capture = ConsoleOutput.StartCapture();
+
+        var exit = await Sut().HandleAsync(["accounts", "list"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput()).Contains("[abc]");
+    }
+
+    [Test]
+    [Arguments("add")]
+    [Arguments("rewire")]
+    public async Task Skip_codex_network_access_leaves_the_sandbox_network_alone(string verb) {
+        var dir = ClaudeDir(".codex-b");
+        var env = TestPluginEnvironment.For(Home, PluginDir()) with {
+            Profiles = new ProfileConfig { Profiles = new() { ["work"] = new() { ServerUrl = "https://cap.example.test" } } },
+        };
+        using var capture = ConsoleOutput.StartFullCapture();
+        if (verb == "rewire")
+            await new AccountsCommand(Store, env, TimeProvider.System).HandleAsync(["accounts", "add", "codex", dir, "--skip-codex-network-access"]);
+
+        string[] args = verb == "add"
+            ? ["accounts", "add", "codex", dir, "--skip-codex-network-access"]
+            : ["accounts", "rewire", "--skip-codex-network-access"];
+        var exit = await new AccountsCommand(Store, env, TimeProvider.System).HandleAsync(args);
+
+        await Assert.That(exit).IsEqualTo(0).Because(capture.GetCapturedError());
+        await Assert.That(File.Exists(Path.Combine(dir, "hooks.json"))).IsTrue();
+        await Assert.That(File.ReadAllText(Path.Combine(dir, "config.toml"))).DoesNotContain("cap.example.test");
+    }
 }
