@@ -56,4 +56,21 @@ public class AccountPathsTests {
 
         await Assert.That(AccountPaths.CodexForRollout(transcript, Registry((HarnessId.Claude, work)), Home)).IsNull();
     }
+
+    [Test]
+    public async Task A_blank_or_malformed_path_resolves_to_null() {
+        var registry = Registry((HarnessId.Claude, Home.CreateDir(".claude-work")), (HarnessId.Codex, Home.CreateDir(".codex-b")));
+
+        foreach (var bad in new[] { "", "  ", "a\0b" }) {
+            await Assert.That(AccountPaths.ClaudeForTranscript(bad, registry, Home)).IsNull();
+            await Assert.That(AccountPaths.CodexForRollout(bad, registry, Home)).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task A_relative_path_does_not_throw() {
+        var registry = Registry((HarnessId.Claude, Home.CreateDir(".claude-work")));
+
+        await Assert.That(AccountPaths.ClaudeForTranscript("projects/x.jsonl", registry, Home)).IsNull();
+    }
 }
