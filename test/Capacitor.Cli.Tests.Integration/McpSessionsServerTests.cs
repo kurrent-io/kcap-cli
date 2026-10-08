@@ -196,14 +196,14 @@ public class McpSessionsServerTests : IDisposable {
     }
 
     [Test]
-    public async Task Tools_list_returns_eight_tools_with_correct_names() {
+    public async Task Tools_list_returns_nine_tools_with_correct_names() {
         using var proc = SpawnMcpServer();
         try {
             var response = await SendRequest(proc, ToolsListRequest(2));
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(8);
+            await Assert.That(tools!.Count).IsEqualTo(9);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("search_sessions")).IsTrue();
@@ -214,6 +214,7 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("list_repo_sessions")).IsTrue();
             await Assert.That(names.Contains("list_repo_plans")).IsTrue();
             await Assert.That(names.Contains("get_declared_plans")).IsTrue();
+            await Assert.That(names.Contains("get_session_evals")).IsTrue();
 
             // Hard gates: the routing cue, the query shape that can actually hit, and the
             // facts about list_repo_sessions that otherwise read as a broken filter.

@@ -1405,11 +1405,10 @@ sealed class SetupCommand(
 
         PrintBackground(launch);
 
-        var analyticsAllowed = PlanEntitlementStore.Get(inputs.ServerUrl, config, time.GetUtcNow()).Allows(PlanFeature.Analytics);
-        var eligible          = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
-        var detectedVendors   = HandoffVendorEligibility.Detected(harnesses);
+        var eligible        = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
+        var detectedVendors = HandoffVendorEligibility.Detected(harnesses);
 
-        var handoff = HandoffDecision.Decide(outcome, launch.Status, analyticsAllowed, eligible.Count, detectedVendors);
+        var handoff = HandoffDecision.Decide(outcome, launch.Status, eligible.Count, detectedVendors);
 
         // Best-effort: Write's own contract already leaves no temp behind on failure, so the only
         // thing this step adds is the warning and the promise to carry on regardless.
@@ -1462,13 +1461,11 @@ sealed class SetupCommand(
     }
 
     /// <summary>A suppression tied to the import's own outcome (nothing new, nothing landed, or it
-    /// failed) prints nothing beyond what the step already said; one tied to eligibility (plan, skill,
+    /// failed) prints nothing beyond what the step already said; one tied to eligibility (skill,
     /// detection) names the reason. With no agent able to follow along, the two detection-tied
     /// reasons also point at the web UI, so the run is still watchable.</summary>
     static void PrintSuppressed(HandoffSuppressedReason reason, string serverUrl) {
         var line = reason switch {
-            HandoffSuppressedReason.AnalyticsNotInPlan =>
-                "  Insights isn't in this workspace's plan, so the eval-watch handoff is skipped.",
             HandoffSuppressedReason.SkillNotInstalled =>
                 $"  No detected agent has the kcap {EvalWatchSkillName} skill.",
             HandoffSuppressedReason.NoAgentDetected =>
