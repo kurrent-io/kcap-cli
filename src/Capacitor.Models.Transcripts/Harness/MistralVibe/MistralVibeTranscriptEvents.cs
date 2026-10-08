@@ -122,11 +122,30 @@ public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
         var outputText = state.Str("outputText") is { Length: > 0 } text ? text : null;
 
         return state.Str("status") switch {
-            "completed"             => outputText ?? (state.TryGetProperty("output", out var output) && output.ValueKind != JsonValueKind.Null ? output.GetRawText() : ""),
+            "completed"             => outputText ?? (state.TryGetProperty("output", out var output) ? OutputText(output) : ""),
             "failed"                => string.Join('\n', new[] { state.Obj("error")?.Str("message"), outputText }.OfType<string>()),
             "cancelled" or "skipped" => state.Str("reason") ?? outputText ?? "",
             _                       => null,
         };
+    }
+
+    /// A tool's <c>output</c> when Vibe left <c>outputText</c> empty: MCP-style text blocks, else the
+    /// <c>structured_content</c> its built-in tools return (<c>stdout</c>/<c>stderr</c> from a shell,
+    /// <c>content</c> from a read), else the raw JSON.
+    static string OutputText(JsonElement output) {
+        if (output.ValueKind == JsonValueKind.String) return output.GetString() ?? "";
+        if (output.ValueKind != JsonValueKind.Object) return output.ValueKind == JsonValueKind.Null ? "" : output.GetRawText();
+
+        if (output.Arr("content") is { } blocks && JoinTextBlocks(blocks, "text") is { Length: > 0 } text) return text;
+
+        if (output.Obj("structured_content") is { } structured) {
+            if (structured.Str("stdout") is { } stdout)
+                return structured.Str("stderr") is { Length: > 0 } stderr ? $"{stdout}\n{stderr}" : stdout;
+            if (structured.Str("content") is { } content) return content;
+            return structured.GetRawText();
+        }
+
+        return output.GetRawText();
     }
 
     static AssistantThinkingGenerated Reasoning(JsonElement entry, Timestamp ts) {

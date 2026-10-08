@@ -925,15 +925,17 @@ static partial class ProcessHelpers {
         // Match the vendor's process name OR `{name}-cli`. The bounded `-cli` tolerance fixes the Kiro
         // watchdog, whose durable process image is `kiro-cli` while its vendor token is `kiro`
         // The clean-stem gate above keeps it from over-matching unrelated processes.
-        var name = ProcessNameOf(vendor);
-        return stem.Equals(name, StringComparison.OrdinalIgnoreCase)
-            || stem.Equals($"{name}-cli", StringComparison.OrdinalIgnoreCase);
+        return ProcessNamesOf(vendor).Any(name =>
+            stem.Equals(name, StringComparison.OrdinalIgnoreCase)
+         || stem.Equals($"{name}-cli", StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>The executable a vendor runs as, where it is not the vendor token itself.</summary>
-    static string ProcessNameOf(string vendor) => vendor switch {
-        "mistral-vibe" => "vibe",
-        _              => vendor,
+    /// <summary>The names a vendor's process shows, where they are not the vendor token itself.
+    /// Vibe retitles its interpreter to "Vibe CLI" on Linux and macOS; on Windows the title is
+    /// unchanged and its <c>vibe.exe</c> launcher is what the walk meets.</summary>
+    static string[] ProcessNamesOf(string vendor) => vendor switch {
+        "mistral-vibe" => ["vibe", "Vibe CLI"],
+        _              => [vendor],
     };
 
     /// <summary>

@@ -185,4 +185,22 @@ public class MistralVibeUnifiedStoreTests {
         await Assert.That(File.Exists(copy)).IsFalse();
         await Assert.That(File.Exists(vibeOwned)).IsTrue();
     }
+
+    [Test]
+    public async Task Refresh_follows_the_store_after_the_last_hook() {
+        // The turn's closing message often completes after post_agent, when no hook is left to sync it.
+        var live = Tmp.PathTo("live/s.jsonl");
+        PublishInline("s", Message("m1", "user", "go"));
+        Tmp.CreateFile("s/journal/0000000000000002.jsonl", new[] { Delta(2, Append(Message("m2", "assistant", "partial", "in_progress"))) });
+
+        MistralVibeLiveTranscript.Follow(Tmp.PathTo("s"), live);
+        await Assert.That(File.ReadAllLines(live).Length).IsEqualTo(1);
+
+        File.AppendAllLines(Tmp.PathTo("s/journal/0000000000000002.jsonl"), [Delta(3, Replace("m2", Message("m2", "assistant", "done")))]);
+        MistralVibeLiveTranscript.Refresh(live);
+
+        var lines = File.ReadAllLines(live);
+        await Assert.That(lines.Length).IsEqualTo(2);
+        await Assert.That(lines[1]).Contains("done");
+    }
 }

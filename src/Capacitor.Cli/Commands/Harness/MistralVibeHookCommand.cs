@@ -93,7 +93,7 @@ sealed class MistralVibeHookCommand(
         if (!Directory.Exists(transcriptPath)) return transcriptPath;
 
         var live = MistralVibeLiveTranscript.PathFor(config, sessionId);
-        MistralVibeLiveTranscript.Sync(transcriptPath, live);
+        MistralVibeLiveTranscript.Follow(transcriptPath, live);
         return live;
     }
 

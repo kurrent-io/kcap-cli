@@ -579,10 +579,13 @@ partial class WatchCommand(
         // exists, so it can never observe a half-applied reconnect rewind (see cursorRewindGate's
         // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
         // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
-        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) =>
-            GatedDrainNewLinesAsync(
+        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
+            if (vendor == "mistral-vibe" && agentId is null) MistralVibeLiveTranscript.Refresh(transcriptPath);
+
+            return GatedDrainNewLinesAsync(
                 cursorRewindGate, hubConnection, sessionId, transcriptPath, agentId, state, vendor, drainCt,
                 isFinalDrain: isFinalDrainLocal, cursorGuard: cursorGuard, onCursorRewriteDetected: OnCursorRewriteDetected);
+        }
 
         // Register StopWatcher handler — server sends this to tell us to shut down
         hubConnection.On<string>(

@@ -93,6 +93,14 @@ public class MistralVibeTranscriptEventsTests {
     }
 
     [Test]
+    public async Task A_built_in_tool_with_no_output_text_reports_its_structured_stdout() {
+        // vibe 2.26.0 leaves outputText empty for its built-in tools and returns the result here.
+        const string line = """{"type":"effect","id":"effect-b","createdAt":1,"generationStatus":"completed","detail":{"kind":"tool","toolName":"file_system.bash","input":{"command":"python3 hello.py"}},"state":{"status":"completed","outputText":"","output":{"_meta":{},"content":[],"structured_content":{"command":"python3 hello.py","returncode":0,"stderr":"","stdout":"hi\n"},"type":"success"}}}""";
+
+        await Assert.That(((ToolResultReceived)E(line)[1].Payload).Result).IsEqualTo("hi\n");
+    }
+
+    [Test]
     public async Task A_failed_effect_reports_its_error_message() {
         const string line = """{"type":"effect","id":"effect-f","createdAt":1,"generationStatus":"completed","detail":{"kind":"file_read","toolName":"file_system.read_file","input":{"file_path":"x"}},"state":{"status":"failed","error":{"message":"no such file"},"outputText":""}}""";
         var events = E(line);
