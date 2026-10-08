@@ -259,4 +259,68 @@ public class PluginCommandAccountsTests {
 
         await Assert.That(ClaudePluginInstaller.IsPluginEnabled(Home.PathTo(".claude-work", "settings.json"))).IsFalse();
     }
+
+    /// <summary>An installed work account with a stale marker, beside a default layout kcap is not installed in, so a
+    /// refresh wires only the account and never adopts the default (which would take the lock on its own).</summary>
+    async Task<PluginEnvironment> StaleWorkAccountOnly() {
+        var env = Env();
+        Directory.CreateDirectory(Home.PathTo(".claude-work"));
+        AccountAdoption.EnsureDefault(env.Accounts!, HarnessId.Claude, Home.PathTo(".claude-work"), TimeProvider.System);
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
+        File.Delete(Home.PathTo(".claude", "settings.json"));
+        File.Delete(Home.PathTo(".claude", ClaudePluginInstaller.MarkerFileName));
+        File.WriteAllText(Home.PathTo(".claude-work", ClaudePluginInstaller.MarkerFileName), "0.0.1");
+        return env;
+    }
+
+    [Test]
+    public async Task Refresh_wires_an_account_only_while_holding_the_registry_lock() {
+        var env  = await StaleWorkAccountOnly();
+        var work = Home.PathTo(".claude-work", "settings.json");
+
+        Task<int> run;
+        using (env.Accounts!.Lock()) {
+            run = Task.Run(() => new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--if-installed"]));
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            await Assert.That(ClaudePluginInstaller.ReadMarker(work)).IsEqualTo("0.0.1");
+        }
+
+        await Assert.That(await run).IsEqualTo(0);
+        await Assert.That(ClaudePluginInstaller.ReadMarker(work)).IsEqualTo(CapacitorVersion.Current());
+    }
+
+    [Test]
+    public async Task User_remove_unwires_an_account_only_while_holding_the_registry_lock() {
+        var env  = Env();
+        var work = Home.PathTo(".claude-work", "settings.json");
+        Directory.CreateDirectory(Home.PathTo(".claude-work"));
+        AccountAdoption.EnsureDefault(env.Accounts!, HarnessId.Claude, Home.PathTo(".claude-work"), TimeProvider.System);
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
+
+        Task<int> run;
+        using (env.Accounts!.Lock()) {
+            run = Task.Run(() => new PluginCommand(env, Workdir).HandleAsync(["plugin", "remove"]));
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            await Assert.That(ClaudePluginInstaller.IsPluginEnabled(work)).IsTrue();
+        }
+
+        await Assert.That(await run).IsEqualTo(0);
+        await Assert.That(ClaudePluginInstaller.IsPluginEnabled(work)).IsFalse();
+    }
+
+    [Test]
+    public async Task Refresh_warns_and_succeeds_when_the_registry_lock_stays_held() {
+        var env  = await StaleWorkAccountOnly();
+        var work = Home.PathTo(".claude-work", "settings.json");
+
+        int exit;
+        using (env.Accounts!.Lock())
+            exit = await Task.Run(() => new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--if-installed"]));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(env.Stderr.ToString()).Contains("kcap account registry");
+        await Assert.That(ClaudePluginInstaller.ReadMarker(work)).IsEqualTo("0.0.1");
+    }
 }

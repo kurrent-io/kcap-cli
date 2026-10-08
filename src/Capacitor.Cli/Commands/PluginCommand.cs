@@ -608,13 +608,34 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             if (adoptDefault) AccountAdoption.EnsureDefault(env.Accounts, vendor, defaultDirectory, TimeProvider.System);
 
             return [.. AccountAdoption.Of(env.Accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, defaultDirectory))];
-        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException
-                                         or TimeoutException or WaitHandleCannotBeOpenedException) {
-            await env.Stderr.WriteLineAsync(
-                $"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryWarningAsync(ex);
 
             return [];
         }
+    }
+
+    static bool IsRegistryFailure(Exception ex) =>
+        ex is InvalidDataException or IOException or UnauthorizedAccessException or TimeoutException or WaitHandleCannotBeOpenedException;
+
+    Task RegistryWarningAsync(Exception ex) =>
+        env.Stderr.WriteLineAsync($"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
+
+    /// <summary>Runs one account's wiring under the registry lock; null, after the registry warning, when the
+    /// lock cannot be taken. Never call <see cref="AccountAdoption.EnsureDefault"/> inside: the lock is not
+    /// re-entrant.</summary>
+    async Task<T?> LockedAsync<T>(Func<T> wiring) where T : class {
+        IDisposable lease;
+
+        try {
+            lease = env.Accounts!.Lock();
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryWarningAsync(ex);
+
+            return null;
+        }
+
+        using (lease) return wiring();
     }
 
     async Task<bool> WireUserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault, bool refreshOnly, bool enableNetwork) {
@@ -622,28 +643,41 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var            ok      = true;
 
         foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault)) {
-            if (refreshOnly) {
-                // A refresh never wires an account the user unwired: only an existing install is refreshed.
-                if (!IsInstalledIn(account)) continue;
-
-                if (account.Vendor is HarnessId.Codex)
-                    CodexConfigToml.RegisterKcapMcpServers(AccountLayouts.Codex(env.Home, account.Directory).ConfigToml, env.ResolveMcpBinaryPath);
-
-                if (MarkerIsCurrent(account)) continue;
-            }
-
             options ??= Wiring(enableNetwork);
-            ok      &= await ReportAsync(account, AccountWiring.Wire(account, env.Home, options), "Wired", "wire");
+
+            var steps = await LockedAsync(() => WireOne(account, refreshOnly, options));
+            if (steps is null) break;
+
+            if (steps.Count > 0) ok &= await ReportAsync(account, steps, "Wired", "wire");
         }
 
         return ok;
     }
 
+    /// <summary>No steps when a refresh leaves the account alone.</summary>
+    IReadOnlyList<WiringStep> WireOne(VendorAccount account, bool refreshOnly, WiringOptions options) {
+        if (refreshOnly) {
+            // A refresh never wires an account the user unwired: only an existing install is refreshed.
+            if (!IsInstalledIn(account)) return [];
+
+            if (account.Vendor is HarnessId.Codex)
+                CodexConfigToml.RegisterKcapMcpServers(AccountLayouts.Codex(env.Home, account.Directory).ConfigToml, env.ResolveMcpBinaryPath);
+
+            if (MarkerIsCurrent(account)) return [];
+        }
+
+        return AccountWiring.Wire(account, env.Home, options);
+    }
+
     async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
         var ok = true;
 
-        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false))
-            ok &= await ReportAsync(account, AccountWiring.Unwire(account, env.Home), "Unwired", "unwire");
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false)) {
+            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home));
+            if (steps is null) break;
+
+            ok &= await ReportAsync(account, steps, "Unwired", "unwire");
+        }
 
         return ok;
     }
@@ -682,17 +716,16 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     /// <summary>
-    /// Writes (or merges into) <paramref name="hooksPath"/> a hooks.json that
-    /// invokes <c>kcap codex-hook</c> for every Codex event. Existing
-    /// non-kcap entries are preserved; existing kcap entries are
-    /// replaced (so the timeout/command stay current after a CLI upgrade).
+    /// Merges into <paramref name="hooksPath"/> a hooks.json entry that invokes <c>kcap hook --codex</c> for
+    /// every Codex event. Non-kcap entries are preserved; kcap entries are replaced, so the timeout and
+    /// command stay current after an upgrade.
     /// </summary>
     public static bool InstallCodexHooks(string hooksPath) =>
         CodexHooksWriter.Install(hooksPath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
 
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
-    /// invokes <c>kcap codex-hook</c>. Other entries are preserved.
+    /// invokes kcap's Codex hook. Other entries are preserved.
     /// Returns true if any entries were removed. Throws on I/O failure
     /// (caller decides how to surface partial writes); returns false only
     /// when there was genuinely nothing to remove.
