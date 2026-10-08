@@ -21,6 +21,29 @@ public class OnboardingGateTests {
     string ConfigPath => AppConfig.GetConfigPath(Config.Root);
     string TokensDir  => Config.PathTo("tokens");
 
+    [Test]
+    public async Task Cli_configured_profile_opens_main_unless_setup_is_explicitly_requested() {
+        WriteConfig(SingleProfileConfig(new Profile { ServerUrl = ServerUrl }));
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(ProfileName,
+            MakeToken(AuthProvider.GitHubApp, expired: false, serverUrl: ServerUrl));
+
+        var (gate, _) = await App.ResolveAndEvaluateGateAsync(Config.Root,
+            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(App.ShouldShowWizard(gate, null)).IsFalse();
+        await Assert.That(App.ShouldShowWizard(gate, [])).IsFalse();
+        await Assert.That(App.AutoActionsPermanentlyClosed(gate, laneQuiesced: true)).IsFalse();
+        await Assert.That(App.ShouldShowWizard(gate, ["--setup"])).IsTrue();
+    }
+
+    [Test]
+    public async Task Unconfigured_profile_still_opens_setup_without_desktop_state() {
+        var (gate, _) = await App.ResolveAndEvaluateGateAsync(Config.Root,
+            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(App.ShouldShowWizard(gate, [])).IsTrue();
+    }
+
     // ── ValidServerUrl (the shared validator) ───────────────────────────────
 
     [Test]

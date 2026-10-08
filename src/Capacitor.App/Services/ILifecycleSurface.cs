@@ -29,4 +29,5 @@ public sealed record LifecyclePrompt(
     public const string KindReloadService = "reload-service";
     public const string KindRename        = "rename";
     public const string KindRemoveProfile = "remove-profile";
+    public const string KindSetup         = "setup";
 }

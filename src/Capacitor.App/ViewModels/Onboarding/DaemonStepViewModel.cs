@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Reactive;
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
@@ -22,11 +24,11 @@ public enum DaemonAffordance { None, Install, Start, Takeover, Repair }
 public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     internal const string CliMissingMessage    = "kcap isn't available on this machine. Install it, then check again.";
-    internal const string RequiresSignInMessage = "Go Back to sign in, or continue and enable the daemon later in Settings.";
+    internal const string RequiresSignInMessage = "Go Back and sign in before the daemon can be enabled.";
     internal const string NoServerMessage       = "No workspace is configured. Go Back to Sign in.";
     internal const string BinaryUnresolvedMessage = "kcap can't find its daemon binary. Reinstall kcap, then check again.";
-    internal const string StatusUnknownMessage = "Couldn't read the daemon service. Check again, or continue and try later in Settings.";
-    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state. Check again, or continue and try later in Settings.";
+    internal const string StatusUnknownMessage = "Couldn't read the daemon service. Check again.";
+    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state. Check again.";
     internal const string TxnWaitingMessage    = "Waiting for a daemon operation to finish…";
     internal const string TxnActiveMessage     = "A daemon operation is still running. Check again in a moment.";
     internal const string AlreadyEnabledMessage = "The daemon is running and will start again after a reboot.";
@@ -83,7 +85,9 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             Func<(string Profile, string Server, string DaemonName)> resolveIdentityUnderConfigLock,
             ILifecycleSurface surface,
             Func<CancellationToken, Task<string?>> terminalPathAsync,
-            TimeProvider time) {
+            TimeProvider time,
+            MachineNameViewModel? machine = null) {
+        Machine                         = machine;
         _cli                            = cli;
         _runMutation                    = runMutation;
         _resolveIdentity                = resolveIdentity;
@@ -95,22 +99,48 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         _terminalPathAsync              = terminalPathAsync;
         _time                           = time;
 
-        var idle = this.WhenAnyValue(x => x.Busy, busy => !busy);
+        var idle = this.WhenAnyValue(x => x.Busy, busy => !busy)
+            .ObserveOn(RxSchedulers.MainThreadScheduler);
         ActionCommand  = ReactiveCommand.CreateFromTask(RunActionAsync,
-            this.WhenAnyValue(x => x.Busy, x => x.Affordance, (busy, affordance) => !busy && affordance != DaemonAffordance.None));
+            this.WhenAnyValue(x => x.Busy, x => x.Affordance, (busy, affordance) => !busy && affordance != DaemonAffordance.None)
+                .ObserveOn(RxSchedulers.MainThreadScheduler));
         RefreshCommand = ReactiveCommand.CreateFromTask(() => RefreshAsync(CancellationToken.None), idle);
     }
 
+    internal const string RequiredMessage = "The daemon has to be running to finish setup.";
+
     public WizardStepId Id         => WizardStepId.Daemon;
-    public string       Title      => "Enable the daemon";
+    public string       Title      => "Run your agents on this machine from anywhere";
+    public string       Eyebrow    => "Your daemon";
     public bool         Applicable => true;
+    public bool         Skippable  => false;
+    public string?      NextLabel  => "Continue";
+
+    public string Lede =>
+        "Start a run from another machine and have it land on this one, where your code is. The daemon runs as a " +
+        "background service and starts again after a restart.";
+
+    /// The machine's name, saved before the first enable so the service is installed under it.
+    public MachineNameViewModel? Machine { get; }
+
+    string? _savedName;
 
     /// Set ONLY by the lane's own success outcome or the already-enabled row, and never cleared —
     /// a later re-classification must not re-derive (or revoke) a mutation's success from a snapshot.
     public bool Satisfied {
         get => _satisfied;
-        private set => this.RaiseAndSetIfChanged(ref _satisfied, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _satisfied, value);
+            this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
+            this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(NameEditable));
+        }
     }
+
+    /// Enable / Start is the filled action until the service is running. Continue stays secondary.
+    public bool ShowsOwnPrimary => !Satisfied && ActionLabel is not null;
+    public bool CanContinue => Satisfied && !Busy;
+    public bool NameEditable => !Busy && !Satisfied;
 
     public DaemonRow Row {
         get => _row;
@@ -126,6 +156,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             this.RaiseAndSetIfChanged(ref _affordance, value);
             this.RaisePropertyChanged(nameof(ActionLabel));
             this.RaisePropertyChanged(nameof(RefreshVisible));
+            this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
         }
     }
 
@@ -142,6 +173,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         private set {
             this.RaiseAndSetIfChanged(ref _busy, value);
             this.RaisePropertyChanged(nameof(RefreshVisible));
+            this.RaisePropertyChanged(nameof(CanContinue));
+            this.RaisePropertyChanged(nameof(NameEditable));
         }
     }
 
@@ -169,21 +202,27 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     public Task OnEnterAsync(CancellationToken ct) => RefreshAsync(ct);
 
-    /// Never vetoes: a running mutation belongs to the LANE, so cancelling detaches this
-    /// waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
+    /// Vetoes only moving forward without a running daemon. Back cancels, and a running mutation
+    /// belongs to the LANE, so cancelling detaches this waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        // Required: the app has nothing to run without it. A run in flight is left to finish.
+        if (direction != WizardNavigation.Back && !Satisfied) {
+            if (!Busy) Status = RequiredMessage;
+            return false;
+        }
+
         _classifyCts?.Cancel();
         _actionCts?.Cancel();
 
-        await AwaitQuietlyAsync(_classifyRun).ConfigureAwait(false);
-        await AwaitQuietlyAsync(_actionRun).ConfigureAwait(false);
+        await AwaitQuietlyAsync(_classifyRun).ConfigureAwait(true);
+        await AwaitQuietlyAsync(_actionRun).ConfigureAwait(true);
 
         return true;
     }
 
     static async Task AwaitQuietlyAsync(Task? task) {
         if (task is null) return;
-        try { await task.ConfigureAwait(false); }
+        try { await task.ConfigureAwait(true); }
         catch (OperationCanceledException) { /* leaving mid-work is not a failure */ }
         catch (Exception ex) { Console.Error.WriteLine($"kcap: wizard daemon step failed unexpectedly: {ex.Message}"); }
     }
@@ -223,11 +262,14 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             }
 
             _request = request!;
-            var snapshot = await ReadStatusAsync(ct).ConfigureAwait(false);
-            await ClassifySnapshotAsync(snapshot, ct).ConfigureAwait(false);
+            var snapshot = await ReadStatusAsync(ct).ConfigureAwait(true);
+            await ClassifySnapshotAsync(snapshot, ct).ConfigureAwait(true);
             WithdrawUnitWritingOfferWithoutBinary(snapshot);
         } catch (OperationCanceledException) {
             // left the step (or shutting down) mid-classification — nothing to surface
+        } catch (Win32Exception ex) when (ex.NativeErrorCode == 2) {
+            // A bare "kcap" that is not on PATH throws here. That is a missing CLI, not an unreadable service.
+            Set(DaemonRow.CliMissing, CliMissingMessage, DaemonAffordance.None);
         } catch (Exception ex) {
             Set(DaemonRow.StatusUnknown, StatusUnknownMessage, DaemonAffordance.None); // unknown, never a positive row
             Console.Error.WriteLine($"kcap: wizard daemon step classification failed unexpectedly: {ex.Message}");
@@ -240,11 +282,11 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     /// grandchild that outlives a force-quit must not wedge the step forever.
     async Task<ServiceSnapshot?> ReadStatusAsync(CancellationToken ct) {
         for (var poll = 0; ; poll++) {
-            var snapshot = await _cli.ServiceStatusAsync(ct).ConfigureAwait(false);
+            var snapshot = await _cli.ServiceStatusAsync(ct).ConfigureAwait(true);
             if (snapshot is null || !snapshot.TxnActive || poll >= MaxTxnPolls) return snapshot;
 
             Message = TxnWaitingMessage;
-            await Task.Delay(TxnPollInterval, _time, ct).ConfigureAwait(false);
+            await Task.Delay(TxnPollInterval, _time, ct).ConfigureAwait(true);
         }
     }
 
@@ -268,7 +310,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         }
 
         if (snapshot.DaemonPid is { } daemonPid) {
-            await ClassifyLiveDaemonAsync(snapshot, daemonPid, ct).ConfigureAwait(false);
+            await ClassifyLiveDaemonAsync(snapshot, daemonPid, ct).ConfigureAwait(true);
             return;
         }
 
@@ -296,7 +338,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task ClassifyLiveDaemonAsync(ServiceSnapshot snapshot, int daemonPid, CancellationToken ct) {
-        _evidence = await _observation.ObserveAsync(_request!, ct).ConfigureAwait(false);
+        _evidence = await _observation.ObserveAsync(_request!, ct).ConfigureAwait(true);
         var matched = IdentityMatches(_evidence, _request!);
         var owned   = snapshot.JobPid is not null && snapshot.JobPid == snapshot.DaemonPid;
 
@@ -305,7 +347,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
                 snapshot.TxnMarker ? $"{AlreadyEnabledMessage} {StaleMarkerNote}" : AlreadyEnabledMessage,
                 DaemonAffordance.None);
             Satisfied = true;
-            await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(false);
+            await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(true);
             return;
         }
 
@@ -368,18 +410,30 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     async Task RunActionCoreAsync(CancellationToken ct) {
         Busy = true;
         try {
+            if (Machine is { } machine && machine.DaemonName != _savedName) {
+                var name = machine.DaemonName;
+                if (!await machine.SaveAsync(ct).ConfigureAwait(true)) {
+                    Status = machine.Message;
+                    return;
+                }
+
+                _savedName = name;
+                await ClassifyAsync(ct).ConfigureAwait(true);
+                if (Satisfied || Affordance == DaemonAffordance.None) return;
+                Busy = true;
+            }
             switch (Affordance) {
                 case DaemonAffordance.Install:
-                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(false);
+                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(true);
                     break;
                 case DaemonAffordance.Start:
-                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(false);
+                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(true);
                     break;
                 case DaemonAffordance.Takeover:
-                    await RunConsentedReplaceAsync(LifecyclePrompt.KindTakeover, ct).ConfigureAwait(false);
+                    await RunConsentedReplaceAsync(LifecyclePrompt.KindTakeover, ct).ConfigureAwait(true);
                     break;
                 case DaemonAffordance.Repair:
-                    await RunConsentedReplaceAsync(LifecyclePrompt.KindRepair, ct).ConfigureAwait(false);
+                    await RunConsentedReplaceAsync(LifecyclePrompt.KindRepair, ct).ConfigureAwait(true);
                     break;
             }
         } catch (OperationCanceledException) {
@@ -394,38 +448,38 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     // The ONLY dialog this step opens: consent BEFORE a unit rewrite, with the takeover
     // disclosure. Outcome presentation belongs to the channel consumer, never to this waiter.
     async Task RunConsentedReplaceAsync(string kind, CancellationToken ct) {
-        var pathDegraded = await _terminalPathAsync(ct).ConfigureAwait(false) is null;
+        var pathDegraded = await _terminalPathAsync(ct).ConfigureAwait(true) is null;
         var prompt = new LifecyclePrompt(
             kind, null, null, pathDegraded, DaemonLifecycleController.TakeoverDisclosure);
 
-        if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
+        if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(true)) {
             Status = TakeoverDeclinedMessage;
             // Decline leaves the step visibly incomplete — but the flip protects the owner
             // regardless of which process hosts an identity-MATCHED daemon.
-            if (Row == DaemonRow.ManualIdentityMatch) await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(false);
+            if (Row == DaemonRow.ManualIdentityMatch) await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(true);
             return;
         }
 
-        await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
+        await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
     }
 
     async Task RunMutationAsync(MutationVerb verb, CancellationToken ct) {
         var request = _request! with { Verb = verb };
-        var outcome = await _runMutation(request, ct).ConfigureAwait(false);
+        var outcome = await _runMutation(request, ct).ConfigureAwait(true);
 
         // The lane's own outcome IS the predicate — never a status snapshot read afterwards.
         Status = OutcomeStatus(verb, outcome);
         if (outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) return;
 
         Satisfied = true;
-        _evidence = await _observation.ObserveAsync(request, ct).ConfigureAwait(false);
-        if (IdentityMatches(_evidence, request)) await ApplyPendingClaimAsync(request, _evidence).ConfigureAwait(false);
+        _evidence = await _observation.ObserveAsync(request, ct).ConfigureAwait(true);
+        if (IdentityMatches(_evidence, request)) await ApplyPendingClaimAsync(request, _evidence).ConfigureAwait(true);
     }
 
     /// Reads the live policy first because the put replaces it wholesale, and stays untokened so leaving the step awaits rather than cancels mid-claim.
     async Task ApplyPendingClaimAsync(MutationRequest request, ObservedEvidence? evidence) {
         try {
-            await ApplyPendingClaimCoreAsync(request, evidence).ConfigureAwait(false);
+            await ApplyPendingClaimCoreAsync(request, evidence).ConfigureAwait(true);
         } catch (Exception ex) {
             Status = Append(Status, ClaimFailedMessage); // claim retained for the post-wizard coordinator
             Console.Error.WriteLine($"kcap: wizard daemon step consent flip failed unexpectedly: {ex.Message}");
@@ -433,7 +487,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     }
 
     async Task ApplyPendingClaimCoreAsync(MutationRequest request, ObservedEvidence? evidence) {
-        var pending = await Task.Run(_claims.Pending).ConfigureAwait(false);
+        var pending = await Task.Run(_claims.Pending).ConfigureAwait(true);
         var claim = pending.FirstOrDefault(
             c => c.Profile == request.Profile && c.CanonicalServer == request.CanonicalServer);
         if (claim is null) return;
@@ -445,7 +499,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
         ConsentAckDto ack;
         try {
-            var policy = await _ops.GetConsentPolicyAsync(CancellationToken.None).ConfigureAwait(false);
+            var policy = await _ops.GetConsentPolicyAsync(CancellationToken.None).ConfigureAwait(true);
             // Seeding respects an operator's deny: it is stricter than prompt, so the flip is inert here.
             if (policy.Default == "deny") {
                 Status = Append(Status, ClaimAlreadyStricterMessage);
@@ -453,7 +507,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             }
 
             var put = new ConsentPolicyPutV2Dto(request.DaemonName, claim.CanonicalServer, policy with { Default = "prompt" });
-            ack = await _ops.PutConsentPolicyV2Async(put, CancellationToken.None).ConfigureAwait(false);
+            ack = await _ops.PutConsentPolicyV2Async(put, CancellationToken.None).ConfigureAwait(true);
         } catch (LocalControlOpsException) {
             Status = Append(Status, ClaimFailedMessage); // claim retained for the post-wizard coordinator
             return;
@@ -464,7 +518,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
 
-        await Task.Run(() => _claims.TryConsume(claim, ResolveCanonical, request.DaemonName)).ConfigureAwait(false);
+        await Task.Run(() => _claims.TryConsume(claim, ResolveCanonical, request.DaemonName)).ConfigureAwait(true);
     }
 
     (string Profile, string Server, string DaemonName) ResolveCanonical() =>

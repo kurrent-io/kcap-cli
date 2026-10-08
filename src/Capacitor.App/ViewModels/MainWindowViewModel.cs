@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Commands;
 using DynamicData;
 using ReactiveUI.Reactive;
@@ -206,6 +207,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Opens the re-auth sign-in surface. Inert without an action to route it to.
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+    public ReactiveCommand<Unit, Unit> SetupCommand { get; }
+    public bool CanOpenSetup { get; }
+    public HistoryImportRun? HistoryImport { get; }
+    public bool HistoryImportVisible => HistoryImport is not null;
+    public string HistoryImportStatus => HistoryImport is not { } run ? ""
+        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.State is ImportRunState.Failed or ImportRunState.Cancelled
+            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
+        : $"History imported · {run.Imported:N0} sessions uploaded";
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -302,7 +312,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
-            bool? appMenuInWindow = null,
+            bool? appMenuInWindow = null, Action? requestSetup = null,
+            HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         _service = service;
@@ -333,6 +344,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
+        CanOpenSetup = requestSetup is not null;
+        SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());
+        HistoryImport = historyImport;
         var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
@@ -378,6 +392,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ObserveOn(RxSchedulers.MainThreadScheduler));
 
         this.WhenActivated(disposables => {
+            if (historyImport is not null)
+                historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
 

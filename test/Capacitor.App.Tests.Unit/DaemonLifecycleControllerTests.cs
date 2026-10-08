@@ -1272,12 +1272,22 @@ sealed class FakeKcapCli : IKcapCli {
 
     public int PluginInstallCallCount;
     public readonly List<string?> PluginInstallCalls = []; // call-order proof for sequential-install tests
+    public readonly List<IReadOnlyList<string>> PluginInstallOptions = [];
     public Func<string?, CancellationToken, Task<ProcessResult>> PluginInstallBehavior =
         (_, _) => Task.FromResult(new ProcessResult(0, "", "", false));
-    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) {
+    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) {
         PluginInstallCallCount++;
         PluginInstallCalls.Add(vendorFlag);
+        PluginInstallOptions.Add(options ?? []);
         return PluginInstallBehavior(vendorFlag, ct);
+    }
+
+    public readonly List<IReadOnlyList<string>> DiscoverCalls = [];
+    public Func<IReadOnlyList<string>, Task<ImportDiscoveryReport?>> DiscoverBehavior =
+        _ => Task.FromResult<ImportDiscoveryReport?>(new ImportDiscoveryReport([], 0, []));
+    public Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {
+        DiscoverCalls.Add(vendorFlags);
+        return DiscoverBehavior(vendorFlags);
     }
 
     public int ImportCallCount;

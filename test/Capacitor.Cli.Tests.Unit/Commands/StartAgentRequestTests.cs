@@ -15,7 +15,7 @@ public class StartAgentRequestTests {
     }
 
     static JsonObject Args(string cwd, string prompt = "Fix the retry.", string workItem = "none") => new() {
-        ["cwd"] = cwd, ["prompt"] = prompt, ["work_item"] = workItem
+        ["cwd"] = cwd, ["prompt"] = prompt, ["title"] = "Fix the retry", ["work_item"] = workItem
     };
 
     static StartAgentDto Build(
@@ -32,6 +32,7 @@ public class StartAgentRequestTests {
         await Assert.That(request.Cwd).IsEqualTo(cwd);
         await Assert.That(request.RepoPath).IsEqualTo(Tmp.PathTo("repo"));
         await Assert.That(request.Prompt).IsEqualTo("Fix the retry.");
+        await Assert.That(request.Title).IsEqualTo("Fix the retry");
         await Assert.That(request.WorkItem).IsEqualTo("wi:9d35573ceee554d58c1bbc909fe7d099");
         await Assert.That(request.Vendor).IsEqualTo("claude");
         await Assert.That(request.CallerAgentId).IsEqualTo("a1b2c3d4");
@@ -131,11 +132,35 @@ public class StartAgentRequestTests {
 
     [Test]
     public async Task A_missing_work_item_is_refused() {
-        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry." };
+        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry" };
 
         var ex = await Assert.That(() => Build(arguments)).Throws<ArgumentException>();
 
         await Assert.That(ex!.Message).IsEqualTo("'work_item' is required.");
+    }
+
+    /// <summary>A start with no title would name the session after the prompt's first line, which any
+    /// generated title then replaces.</summary>
+    [Test]
+    public async Task A_missing_title_is_refused() {
+        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["work_item"] = "none" };
+
+        var ex = await Assert.That(() => Build(arguments)).Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).IsEqualTo("'title' is required.");
+    }
+
+    [Test]
+    public async Task A_title_is_trimmed_and_bounded_by_the_server_column() {
+        var arguments = Args(Cwd());
+
+        arguments["title"] = "  Cap gh output  ";
+        await Assert.That(Build(arguments).Title).IsEqualTo("Cap gh output");
+
+        arguments["title"] = new string('t', StartAgentTool.MaxTitleLength + 1);
+        var ex = await Assert.That(() => Build(arguments)).Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).IsEqualTo("'title' is 201 characters; the limit is 200.");
     }
 
     /// <summary>What a work item value means is the server's to decide, so a key of another kind is
@@ -181,7 +206,7 @@ public class StartAgentRequestTests {
 
     [Test]
     public async Task A_wrongly_typed_argument_is_a_clean_refusal() {
-        var arguments = new JsonObject { ["cwd"] = 42, ["prompt"] = "Fix the retry.", ["work_item"] = "none" };
+        var arguments = new JsonObject { ["cwd"] = 42, ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry", ["work_item"] = "none" };
 
         var ex = await Assert.That(() => Build(arguments)).Throws<ArgumentException>();
 

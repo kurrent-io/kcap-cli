@@ -32,7 +32,14 @@ public static class ServiceStateClassifier {
 
 public enum ImportScopeChoice { Everything, Org, Repo }
 
-public sealed record ImportRequest(ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags);
+/// <param name="Repos">With <see cref="ImportScopeChoice.Repo"/>, every repository to import; overrides
+/// <paramref name="OrgOrRepo"/>.</param>
+/// <param name="Since">Only sessions started on or after this day.</param>
+/// <param name="Private">Mark every imported session as visible to its owner only.</param>
+/// <param name="SkipTitle">Leave titling to the server rather than this machine's own agent.</param>
+public sealed record ImportRequest(
+    ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags,
+    IReadOnlyList<string>? Repos = null, DateOnly? Since = null, bool Private = false, bool SkipTitle = false);
 
 /// Typed facade over every CLI call the app shells out to — every daemon mutation goes through
 /// the CLI. Consumed by the lifecycle controller and faked in tests behind
@@ -62,17 +69,23 @@ public interface IKcapCli {
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
     Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct);
 
-    /// `plugin install` (+ vendorFlag, when non-null); null = the flagless Claude default.
-    Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct);
+    /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
+    /// flagless Claude default.
+    Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
 
     /// `import` with scope/vendor flags, streamed live via onLine — unbounded internal timeout
     /// (imports are long; ct cancellation is the only bound).
     Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct);
+
+    /// `import --discover --json` for these vendors; null when the run failed or printed no report.
+    Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
 }
 
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+    // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
+    static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
     // acquire, then a 3s commit or abort) and the retire's own 20s forward budget — about 118s in all.
@@ -201,11 +214,12 @@ public sealed class KcapCli : IKcapCli {
 
     // Neither this nor ImportAsync overlays MutationEnv — non-daemon shelling keeps lenient
     // classification; the vendor flag itself is the caller's exclusive-flag choice.
-    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) {
+    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) {
         if (CliPath is not { } cliPath) return NoCliResult();
 
         List<string> args = ["plugin", "install"];
         if (vendorFlag is not null) args.Add(vendorFlag);
+        if (options is not null) args.AddRange(options);
 
         return Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env(), Timeout: MutationTimeout), ct);
     }
@@ -221,11 +235,34 @@ public sealed class KcapCli : IKcapCli {
             ImportScopeChoice.Repo       => "--repo",
             _                            => throw new ArgumentOutOfRangeException(nameof(request)),
         });
-        if (request.Scope != ImportScopeChoice.Everything) args.Add(request.OrgOrRepo!);
+        if (request is { Scope: ImportScopeChoice.Repo, Repos: { Count: > 0 } repos }) {
+            args.Add(repos[0]);
+            foreach (var repo in repos.Skip(1)) {
+                args.Add("--repo");
+                args.Add(repo);
+            }
+        } else if (request.Scope != ImportScopeChoice.Everything) {
+            args.Add(request.OrgOrRepo!);
+        }
+        if (request.Since is { } since) {
+            args.Add("--since");
+            args.Add(since.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        if (request.Private) args.Add("--private");
+        if (request.SkipTitle) args.Add("--skip-title");
         args.Add("--yes");
         args.AddRange(request.VendorFlags);
 
         return _runner.RunStreamingAsync(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env()), onLine, ct);
+    }
+
+    public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return null;
+
+        string[] args = ["import", "--discover", "--json", .. vendorFlags];
+        var result = await Run(cliPath, args, new RunOptions(EnvOverlay: Env(), Timeout: DiscoverTimeout), ct).ConfigureAwait(false);
+
+        return result is { ExitCode: 0, TimedOut: false } ? ImportDiscoveryReport.Parse(result.Stdout) : null;
     }
 
     // Deterministic exit 127 ("command not found") rather than throwing on a null CliPath — a
