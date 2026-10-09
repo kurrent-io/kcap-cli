@@ -230,7 +230,7 @@ if (command is "--help" or "-h" or "help") {
 
 // Per-command help: kcap <command> --help / -h
 if (args.Skip(1).Any(a => a is "--help" or "-h")) {
-    return await PrintCommandHelp(command);
+    return await PrintCommandHelp(command == "artefact" ? "page" : command);
 }
 
 // Commands that don't need a server URL
@@ -486,7 +486,7 @@ switch (command) {
     }
     case "mcp": {
         if (args.Length < 2) {
-            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|artefacts|knowledge …");
+            Console.Error.WriteLine("Usage: kcap mcp review|judge|sessions|flows|flow-result|memory|workitems|plans|analytics|pages|knowledge …");
             Console.Error.WriteLine("  kcap mcp review [--owner <owner> --repo <repo> --pr <number>]");
             Console.Error.WriteLine("  kcap mcp judge --session <sessionId>");
             Console.Error.WriteLine("  kcap mcp sessions");
@@ -496,7 +496,7 @@ switch (command) {
             Console.Error.WriteLine("  kcap mcp workitems");
             Console.Error.WriteLine("  kcap mcp plans");
             Console.Error.WriteLine("  kcap mcp analytics");
-            Console.Error.WriteLine("  kcap mcp artefacts");
+            Console.Error.WriteLine("  kcap mcp pages");
             Console.Error.WriteLine("  kcap mcp knowledge");
 
             return 1;
@@ -544,6 +544,8 @@ switch (command) {
                 return await Run<McpHandoffServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
+            // Existing harness configs may still launch `kcap mcp artefacts`.
+            case "pages":
             case "artefacts":
                 return await Run<McpArtefactsServer>().RunAsync();
             case "knowledge":
@@ -579,6 +581,7 @@ switch (command) {
                 return 1;
         }
     }
+    case "page":
     case "artefact":
         return await Run<ArtefactCommand>().HandleAsync(args);
     case "cleanup":

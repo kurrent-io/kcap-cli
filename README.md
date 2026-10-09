@@ -178,7 +178,7 @@ At a glance — each links to its section below:
 | [`kcap review`](#pr-review-with-full-context) | Launch a PR review with full transcript context |
 | [`kcap mcp <server>`](#sessions-mcp-server-for-agents) | Run an MCP server (sessions / flows / memory / …) for agents |
 | [`kcap curate apply`](#curate-guidelines) | Sync promoted guidelines into `CLAUDE.md` / `AGENTS.md` |
-| [`kcap artefact`](#artefacts) | Publish a self-contained HTML page and get a link to share |
+| [`kcap page`](#pages) | Publish a self-contained HTML page and get a link to share |
 | [`kcap skills sync`](#skills-sync) | Materialize the repo's approved skill docs into every present harness's skills tree |
 | [`kcap daemon …`](#daemon) | Run and manage the agent daemon |
 | [`kcap agent`](#local-agents-kcap-agent) | Start, list, attach to, and stop daemon-hosted agents |
@@ -506,7 +506,7 @@ The `kcap mcp memory` stdio server lets agents search, save, and update durable 
 
 Beyond registering the servers, `kcap setup` / `kcap plugin install` also installs a small kcap-owned **agent-instructions block** for harnesses that read a user-level instructions file (GitHub Copilot CLI's `~/.copilot/copilot-instructions.md`, and Gemini CLI's + Google Antigravity's shared `~/.gemini/GEMINI.md` today; more rolling out per harness). It's a marker-delimited, non-destructive note (preserves any instructions you've written) that steers the agent to prefer the kcap tools for "why / history / prior-work" questions over native `git`/GitHub/grep — registration alone doesn't make agents route to the tools. Opt out with `--skip-<harness>-instructions`.
 
-Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own Capacitor record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems`, `kcap-plans` and `kcap-handoff` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same servers via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory), `kcap-artefacts` (can widen who may open a page) and `kcap-knowledge` (can change facts and skills) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
+Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own Capacitor record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems`, `kcap-plans` and `kcap-handoff` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same servers via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory), `kcap-pages` (can widen who may open a page) and `kcap-knowledge` (can change facts and skills) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
 
 The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — list what a session is already attached to, or record the loose ends a session leaves unfinished. `kcap setup` / `kcap plugin install` **register it for every supported harness** (Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, OpenCode, Antigravity, and Pi). See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
 
@@ -746,24 +746,24 @@ Reads default to the current repository and refuse to widen when none resolves. 
 
 This server can change knowledge, so it is not pre-approved for unattended reviewers. It requires `kcap login` and a server with `/api/knowledge` endpoints.
 
-### Artefacts MCP server (for agents)
+### Pages MCP server (for agents)
 
 ```bash
-kcap mcp artefacts
+kcap mcp pages
 ```
 
-Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the Capacitor server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. An artefact is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
+Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the Capacitor server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. A page is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
 
 It provides six tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and reading, version history and takedown all live in the web UI:
 
-- **`publish_artefact`** — publish a page. `title` plus either `html` or a local `path`; optional `description`, `visibility` (`none` / `org` / `scoped`), `grants`, `session_ids`, `response_schema`, and `update_id` to revise an existing artefact.
-- **`await_artefact_responses`** — block until people have answered. Returns on a respondent count, on a close, or on a timeout — a timeout is a result, not an error.
-- **`get_artefact_results`** — tallies and each person's current answer, without waiting.
-- **`close_artefact_responses`** — freeze a version's answers. `closed: false` reopens, which also clears any deadline.
-- **`list_my_artefacts`** — the artefacts you can see: id, title, audience, latest version, URL.
-- **`set_artefact_visibility`** — replace an artefact's audience. A grant left out is one being taken away.
+- **`publish_page`** — publish a page. `title` plus either `html` or a local `path`; optional `description`, `visibility` (`none` / `org` / `scoped`), `grants`, `session_ids`, `response_schema`, and `update_id` to revise an existing page.
+- **`await_page_responses`** — block until people have answered. Returns on a respondent count, on a close, or on a timeout — a timeout is a result, not an error.
+- **`get_page_results`** — tallies and each person's current answer, without waiting.
+- **`close_page_responses`** — freeze a version's answers. `closed: false` reopens, which also clears any deadline.
+- **`list_my_pages`** — the pages you can see: id, title, audience, latest version, URL.
+- **`set_page_visibility`** — replace a page's audience. A grant left out is one being taken away.
 
-**The human checkpoint.** Declaring a `response_schema` at publish makes the page answerable: fields of type `choice`, `multi`, `score` or `text`, which the server validates every answer against and tallies. The agent publishes a plan or a decision, shares it, then blocks in `await_artefact_responses` until the people who must sign off have answered — reviewable on a phone, by several named people, with the approval recorded next to the artefact. Who answered is the authenticated viewer, resolved server-side; the page cannot claim it. `results_mode` decides what other viewers see: `owner` (default, only their own), `aggregate` (tallies, never names or free text) or `named`.
+**The human checkpoint.** Declaring a `response_schema` at publish makes the page answerable: fields of type `choice`, `multi`, `score` or `text`, which the server validates every answer against and tallies. The agent publishes a plan or a decision, shares it, then blocks in `await_page_responses` until the people who must sign off have answered — reviewable on a phone, by several named people, with the approval recorded next to the page. Who answered is the authenticated viewer, resolved server-side; the page cannot claim it. `results_mode` decides what other viewers see: `owner` (default, only their own), `aggregate` (tallies, never names or free text) or `named`.
 
 The current session is cited automatically from `KCAP_SESSION_ID` when set, so an agent's publish is attributed to the work that produced it without ceremony. Requires `kcap login` and a kcap-server new enough to expose the `/api/artefacts` endpoints.
 
@@ -782,20 +782,20 @@ It provides two tools:
 
 Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics` endpoints (older servers return a clear "upgrade kcap-server" message).
 
-### Artefacts
+### Pages
 
 Publish a self-contained HTML page to the Capacitor server and get back a link — the same shape as a session share link, but for a page you wrote. The page is served under a sandbox that cannot reach the network, so inline every style, script and image as a data URI; an external URL renders as nothing.
 
 ```bash
-kcap artefact publish plan.html --title "Migration plan" --visibility org
-kcap artefact publish report.html --visibility scoped --to team:platform --to user:github:7
-kcap artefact publish plan.html --update art_01J9...   # new version, same URL
-kcap artefact list --mine
-kcap artefact share art_01J9... --visibility none      # take it back to private
-kcap artefact delete art_01J9...
+kcap page publish plan.html --title "Migration plan" --visibility org
+kcap page publish report.html --visibility scoped --to team:platform --to user:github:7
+kcap page publish plan.html --update art_01J9...   # new version, same URL
+kcap page list --mine
+kcap page share art_01J9... --visibility none      # take it back to private
+kcap page delete art_01J9...
 ```
 
-An artefact is private to its owner until `--visibility` says otherwise. `--to` names one audience member (`user:<id>`, `team:<slug>`, `project:<id>`) and is only read under `scoped`; on `share` it replaces the whole audience, so a grant you leave out is one you are taking away. `--session` cites a session the artefact came out of and defaults to `KCAP_SESSION_ID`, so an agent's publish is attributed without ceremony. The URL is whatever the server says it is — printed on stdout; refusals go to stderr and name the limit they hit along with its value.
+A page is private to its owner until `--visibility` says otherwise. `--to` names one audience member (`user:<id>`, `team:<slug>`, `project:<id>`) and is only read under `scoped`; on `share` it replaces the whole audience, so a grant you leave out is one you are taking away. `--session` cites a session the page came out of and defaults to `KCAP_SESSION_ID`, so an agent's publish is attributed without ceremony. The URL is whatever the server says it is — printed on stdout; refusals go to stderr and name the limit they hit along with its value.
 
 ### Curate guidelines
 

@@ -19,6 +19,14 @@ public class ToolCardsTests {
         await Assert.That(card.DocumentPath).IsNull();
     }
 
+    /// The pages tool hands the server's `artefact` object back as `page`.
+    [Test]
+    public async Task A_publish_page_result_builds_the_same_card() {
+        var card = ToolCards.Build(ToolCardKind.Page, "{}", PublishResult.Replace("\"artefact\":", "\"page\":").Replace("\"artefact_id\":", "\"page_id\":"))!;
+        await Assert.That(card.Name).IsEqualTo("Retention brief");
+        await Assert.That(card.Url).IsEqualTo("https://kurrent.kcap.ai/artefacts/01eccca1dfac4da596db71feead98dc8");
+    }
+
     [Test]
     public async Task A_second_version_reads_updated_and_a_private_or_scoped_audience_is_named() {
         var v3 = PublishResult.Replace("\"latest_version\":1", "\"latest_version\":3").Replace("\"visibility\":\"org\"", "\"visibility\":\"none\"");

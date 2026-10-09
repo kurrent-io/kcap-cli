@@ -11,7 +11,14 @@ public static class KcapToolCatalogue {
     const string PiPrefix = "kcap_";
 
     internal static readonly KcapToolEntry[] Entries = [
-        // artefacts
+        // pages
+        new("publish_page",              ToolCategory.Artefact, "Published page",           "title",  ToolCardKind.Page),
+        new("set_page_visibility",       ToolCategory.Artefact, "Shared page",              "visibility"),
+        new("await_page_responses",      ToolCategory.Artefact, "Waiting for answers",      null),
+        new("get_page_results",          ToolCategory.Artefact, "Read answers",             null),
+        new("close_page_responses",      ToolCategory.Artefact, "Closed answers",           null),
+        new("list_my_pages",             ToolCategory.Artefact, "Listed pages",             null),
+        // the same tools under their artefact names, which recorded transcripts still carry
         new("publish_artefact",          ToolCategory.Artefact, "Published page",           "title",  ToolCardKind.Page),
         new("set_artefact_visibility",   ToolCategory.Artefact, "Shared page",              "visibility"),
         new("await_artefact_responses",  ToolCategory.Artefact, "Waiting for answers",      null),
@@ -82,6 +89,7 @@ public static class KcapToolCatalogue {
 
     /// Category per kcap server, for a kcap tool the table does not list.
     static readonly FrozenDictionary<string, ToolCategory> ServerCategories = new Dictionary<string, ToolCategory>(StringComparer.Ordinal) {
+        ["kcap-pages"]     = ToolCategory.Artefact,
         ["kcap-artefacts"] = ToolCategory.Artefact,
         ["kcap-plans"]     = ToolCategory.Plan,
         ["kcap-workitems"] = ToolCategory.Work,
