@@ -419,7 +419,16 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             var freshnessLine = NextWorkEmitter.FreshnessLine(
                 root.Str("as_of"), root.Str("tracker_state_as_of"), (int)(root.Num("tracker_state_unknown_rows") ?? 0), arms);
 
+            var attached = new List<string>();
+            if (root.Arr("attached_open") is { } open) AppendAttachedRows(attached, open);
+
             var sb = new StringBuilder();
+            if (attached.Count > 0) {
+                Line(sb, AttachedOpenNotice);
+                Line(sb, NextWorkEmitter.DataOpen);
+                foreach (var a in attached) Line(sb, a);
+                Line(sb, NextWorkEmitter.DataClose);
+            }
             if (rows.Count == 0) {
                 Line(sb, "No next work to suggest right now.");
             } else {
@@ -436,6 +445,41 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         } catch (InvalidOperationException) {
             // A string with an invalid escape parses but throws when read.
             return null;
+        }
+    }
+
+    internal const string AttachedOpenNotice =
+        "This session's attached work is still open, so its piece of work has not wrapped: unless the user asked, do not present next work.";
+
+    /// <summary>One line per open attached work item: its label, href and each seed issue or PR with its
+    /// tracker state, all untrusted tracker text. An item with no label is dropped.</summary>
+    static void AppendAttachedRows(List<string> rows, JsonElement items) {
+        foreach (var item in items.EnumerateArray()) {
+            if (!item.IsObject) continue;
+
+            var label = NextWorkUntrustedText.Render(item.Str("label"), NextWorkEmitter.FieldCap);
+            if (label.Length == 0) continue;
+
+            var line = new StringBuilder($"- {label}");
+            var href = NextWorkUntrustedText.Render(item.Str("href"), NextWorkEmitter.FieldCap);
+            if (href.Length > 0) line.Append($" ({href})");
+
+            var subjects = item.Arr("subjects") is { } subs
+                ? subs.EnumerateArray().Where(e => e.IsObject).Select(Subject).Where(t => t.Length > 0).ToList()
+                : [];
+            if (subjects.Count > 0) line.Append($" — {string.Join("; ", subjects)}");
+
+            rows.Add(line.ToString());
+        }
+
+        static string Subject(JsonElement subject) {
+            var key = NextWorkUntrustedText.Render(subject.Str("key"), NextWorkEmitter.FieldCap);
+            if (key.Length == 0) return "";
+
+            var kind  = NextWorkUntrustedText.Render(subject.Str("kind"), 16);
+            var state = NextWorkUntrustedText.Render(subject.Str("state"), 64);
+            var text  = kind.Length > 0 ? $"{kind} {key}" : key;
+            return state.Length > 0 ? $"{text}: {state}" : text;
         }
     }
 

@@ -65,7 +65,9 @@ public class ClaudeCompletionNudgeTests {
 
         await Assert.That(ClaudeCompletionNudge.BlockDecision).DoesNotContain("\n");
         await Assert.That(decision["decision"]!.GetValue<string>()).IsEqualTo("block");
-        await Assert.That(decision["reason"]!.GetValue<string>()).StartsWith("kcap: If the user's task is now complete — (1) declare any remaining loose ends with declare_loose_end");
+        await Assert.That(decision["reason"]!.GetValue<string>()).StartsWith("kcap: If the piece of work the user framed has reached a terminal state");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(1) declare any remaining loose ends with declare_loose_end");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("unless it says this session's attached work is still open");
         await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(2) call get_next_work");
     }
 

@@ -64,10 +64,18 @@ static partial class NextWorkEmitter {
         "session, declare it at that moment with declare_loose_end (one call per item, never \"none\"). " +
         CompletionInstruction;
 
+    // Without the explicit "question answered with nothing pending" case, agents present after every reply.
     internal const string CompletionInstruction =
-        "When the user's task is complete and you are about to report it: declare any remaining loose " +
-        "ends with declare_loose_end (one call per item, never \"none\"), then call get_next_work and " +
-        "tell the user, in a few lines, what to consider working on next and why.";
+        "Present next work once per piece of work the user framed, when that piece reaches a terminal " +
+        "state: a PR merged, an issue closed, a question answered with nothing pending, or the user saying " +
+        "they are done with it or parking it. Then declare any remaining loose ends with declare_loose_end " +
+        "(one call per item, never \"none\"), call get_next_work and tell the user, in a few lines, what to " +
+        "consider working on next and why. Never present after a step inside work that is still open, and " +
+        "never right after declaring loose ends you expect to continue yourself in this session. If " +
+        "get_next_work says this session's attached work is still open and the user did not ask, do not " +
+        "present. For example: a lookup answered, a PR merged as asked, a question answered: present. " +
+        "\"Take over these two PRs and fix my comment\" while they are still draft: do not present until " +
+        "they merge or the user parks them, however many requests that takes.";
 
     public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
