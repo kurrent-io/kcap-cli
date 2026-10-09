@@ -10,15 +10,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/persist-session-id.sh",
-            "timeout": 3
-          }
-        ]
       }
     ],
     "SessionEnd": [
@@ -142,7 +133,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/set-title-prompt.sh",
+            "command": "kcap hook --claude --title-prompt --no-update-check",
             "timeout": 2
           }
         ]

@@ -119,6 +119,11 @@ string? claudeHookBody = null;
 if (isHook && args.Contains("--claude")) {
     try { claudeHookBody = await Console.In.ReadToEndAsync(); } catch { claudeHookBody = ""; }
 
+    if (args.Contains(ClaudeTitlePrompt.Flag))
+        return ClaudeTitlePrompt.Handle(claudeHookBody, config, WatcherPaths.FromEnvironment(config), Console.Out, Console.Error);
+
+    ClaudeSessionEnv.Persist(claudeHookBody, Environment.GetEnvironmentVariable(ClaudeSessionEnv.EnvFileVar), Console.Error);
+
     if (ClaudeSessionEndHandoff.IsDetached(args)) {
         ClaudeSessionEndHandoff.EnterDetached(claudeHookBody, config);
     } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance)) {
