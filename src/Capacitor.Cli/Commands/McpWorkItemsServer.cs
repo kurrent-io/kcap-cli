@@ -419,12 +419,15 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             var freshnessLine = NextWorkEmitter.FreshnessLine(
                 root.Str("as_of"), root.Str("tracker_state_as_of"), (int)(root.Num("tracker_state_unknown_rows") ?? 0), arms);
 
+            // The hold rests on the open records, not on which of them render: an unlabelled one still holds.
             var attached = new List<string>();
-            if (root.Arr("attached_open") is { } open) AppendAttachedRows(attached, open);
+            var open     = root.Arr("attached_open");
+            var held     = open is { } records && records.EnumerateArray().Any(e => e.IsObject);
+            if (held) AppendAttachedRows(attached, open!.Value);
 
             var sb = new StringBuilder();
+            if (held) Line(sb, AttachedOpenNotice);
             if (attached.Count > 0) {
-                Line(sb, AttachedOpenNotice);
                 Line(sb, UntrustedRowsWarning);
                 Line(sb, NextWorkEmitter.DataOpen);
                 foreach (var a in attached) Line(sb, a);
