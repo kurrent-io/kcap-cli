@@ -164,10 +164,11 @@ public static class ClaudePluginInstaller {
         }
     }
 
-    // v2 records an array of per-scope installs. Callers gate on the USER-scope settings.json
+    // An array entry is one install per scope. Callers gate on the USER-scope settings.json
     // enabled flag, so only a "user"-scoped install proves that flag's payload; a local/project
-    // install belonging to an unrelated repo must not count. The bare-object shape (pre-v2)
-    // predates scopes and is accepted as-is. Throws on unreadable or malformed records.
+    // install belonging to an unrelated repo must not count. A persisted installed_plugins.json can
+    // still hold a bare object with no scope, which must keep counting as an install. Throws on
+    // unreadable or malformed records.
     static List<JsonObject> UserScopedInstalls(string pluginsDir, string enabledKey) {
         if (JsonNode.Parse(File.ReadAllText(Path.Combine(pluginsDir, "installed_plugins.json")))
                 is not JsonObject installedRoot ||
