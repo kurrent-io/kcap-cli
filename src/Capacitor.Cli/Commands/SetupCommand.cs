@@ -690,7 +690,9 @@ sealed class SetupCommand(
                 ? "default"
                 : afterDiscovery.ActiveProfile;
 
-            if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
+            // GitHub discovery has already exchanged a token at the workspace itself, which only a live one
+            // answers; a WorkOS workspace can be listed after its tenant is gone, or before it is up.
+            if (provider == AuthProvider.WorkOS && !await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         }
 
         await Console.Out.WriteLineAsync();
@@ -1875,6 +1877,8 @@ sealed class SetupCommand(
 
     static readonly TimeSpan WorkspacePollGap = TimeSpan.FromSeconds(5);
 
+    const int WorkspaceProgressEvery = 6;
+
     /// <summary>
     /// Holds setup until the workspace discovery chose answers, so nothing after this configures a host
     /// that is not there. False after saying why; the profile discovery wrote stays, so a re-run naming
@@ -1887,9 +1891,12 @@ sealed class SetupCommand(
 
         await Console.Out.WriteLineAsync($"  Waiting for {serverUrl} to answer — a new workspace can take a few minutes…");
 
-        var deadline = time.GetUtcNow() + budget;
+        var started  = time.GetUtcNow();
+        var deadline = started + budget;
 
-        while (time.GetUtcNow() < deadline) {
+        // A line rather than a spinner: an agent driving setup reads redirected output, where a live
+        // display shows nothing until it ends.
+        for (var poll = 1; time.GetUtcNow() < deadline; poll++) {
             await Task.Delay(WorkspacePollGap, time, ct);
 
             if (await WorkspaceProbe.AskAsync(client, serverUrl, time, ct) == WorkspaceAnswer.Live) {
@@ -1897,6 +1904,9 @@ sealed class SetupCommand(
 
                 return true;
             }
+
+            if (poll % WorkspaceProgressEvery == 0)
+                await Console.Out.WriteLineAsync($"  Still waiting ({(time.GetUtcNow() - started):m\\:ss} of {budget:m\\:ss})…");
         }
 
         // Console rather than AnsiConsole so the command survives being copied: Spectre hard-wraps.

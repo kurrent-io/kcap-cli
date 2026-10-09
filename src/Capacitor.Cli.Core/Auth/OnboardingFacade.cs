@@ -212,8 +212,9 @@ public sealed class OnboardingFacade(
     internal IKeyWatcher KeyWatcher { get; init; } = NoKeyWatcher.Instance;
 
     /// <summary>
-    /// Whether each discovered WorkOS workspace still answers, given the org-less sign-in's bearer; one
-    /// that does not is left out. Unset, every listed workspace is offered.
+    /// Asks each discovered WorkOS workspace whether it is still there, given the org-less sign-in's bearer.
+    /// Only a <see cref="WorkspaceAnswer.Gone"/> leaves one out; an outage keeps it. Unset, every listed
+    /// workspace is offered.
     /// </summary>
     internal Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
 
