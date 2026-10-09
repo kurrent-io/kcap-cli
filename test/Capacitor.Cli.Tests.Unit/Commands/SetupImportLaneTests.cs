@@ -1,4 +1,7 @@
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using TUnit.Assertions.Enums;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
@@ -15,6 +18,8 @@ public class SetupImportLaneTests {
     [TempHome] public required TempHome Home { get; init; }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
+    [TempDir] public required TempDir Bin { get; init; }
 
     static ImportCommand.ImportDiscoveryResult Found(
             IEnumerable<ImportDiscoverySummary.RepoTotals> repos,
@@ -104,9 +109,38 @@ public class SetupImportLaneTests {
             DateTimeOffset.UnixEpoch,
             0);
 
-    SetupImportLane Lane(Func<SetupImportLane.Pass, Task<SetupImportRun>> runner) =>
-        new(Config.Root, Resolutions.None(Config.Root), Home, new FixedCapacitorHttpClient(),
-            TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System, runner);
+    const string ChosenServer = "https://chosen.example";
+
+    SetupImportLane Lane(
+            Func<SetupImportLane.Pass, Task<SetupImportRun>> runner,
+            IBackgroundImportSpawner?                        spawner      = null,
+            bool                                             evalWatch    = false,
+            Action<ImportHandoffFile>?                       writeHandoff = null,
+            ConfigRoot?                                      config       = null) =>
+        new(config ?? Config.Root, Resolutions.None(Config.Root), Home, new FixedCapacitorHttpClient(),
+            evalWatch ? TestHarnesses.Under(Home, TestBinaries.Searching(Bin, "codex")) : TestHarnesses.Under(Home),
+            new GitProviderRouter(), TimeProvider.System,
+            spawner ?? FakeBackgroundImportSpawner.Running(), ChosenServer, "work", "org_public", Config.Directory,
+            evalWatch ? PathsWithEvalWatch() : Paths(), runner, writeHandoff);
+
+    CodingAgentsStep.Paths Paths() => new(
+        ClaudeSettingsPath:   Home.PathTo("claude-settings.json"),
+        ClaudeScopeLabel:     "user",
+        PluginDir:            null,
+        CodexHooksPath:       Home.PathTo("codex-hooks.json"),
+        CursorHooksPath:      Home.PathTo("cursor-hooks.json"),
+        CopilotHooksPath:     Home.PathTo("copilot-hooks.json"),
+        GeminiSettingsPath:   Home.PathTo("gemini-settings.json"),
+        AgentsSkillsDir:      Home.PathTo("agents-skills"),
+        LegacyCodexSkillsDir: Home.PathTo("legacy-codex-skills"),
+        KiroSkillsDir:        Home.PathTo("kiro-skills"),
+        AntigravitySkillsDir: Home.PathTo("antigravity-skills"));
+
+    CodingAgentsStep.Paths PathsWithEvalWatch() {
+        Home.CreateFile(["agents-skills", $"kcap-{HandoffVendorEligibility.SkillName}", "SKILL.md"], "skill");
+
+        return Paths();
+    }
 
     /// <summary>A run that reported its Done grid with nothing failed.</summary>
     static Task<SetupImportRun> Clean() => Reported(new(Counts(), 0));
@@ -114,6 +148,13 @@ public class SetupImportLaneTests {
     /// <summary>A run that finished without a fault, reporting <paramref name="outcome"/>.</summary>
     static Task<SetupImportRun> Reported(ImportCommand.ImportRunOutcome? outcome) =>
         Task.FromResult(new SetupImportRun(0, Selection("s1"), outcome, null));
+
+    /// <summary>A clean run whose selection is <paramref name="succeeded"/> out of
+    /// <paramref name="candidates"/>, all of it landed.</summary>
+    static Task<SetupImportRun> Landed(string[] candidates, params string[] succeeded) =>
+        Task.FromResult(new SetupImportRun(
+            0, new ImportRunSelection(candidates, succeeded, RemainderExists: candidates.Length > succeeded.Length),
+            new(Counts(), 0, new ImportRunPartition(succeeded, [], [])), null));
 
     static ImportRunSelection Selection(params string[] ids) => new(ids, ids, RemainderExists: false);
 
@@ -299,8 +340,6 @@ public class SetupImportLaneTests {
             new DateOnly(2026, 6, 15), CancellationToken.None);
 
         await Assert.That(result.Totals).IsEqualTo(new FirstRunImportTotals(5, 1, 3));
-        await Assert.That(result.Background).IsNull();
-        await Assert.That(result.HandoffPrompt).IsNull();
     }
 
     // The window counts are only comparable with the import that follows them if both resolve from
@@ -506,5 +545,125 @@ public class SetupImportLaneTests {
         await Assert.That(forImport.Resolution.ProfileName).IsEqualTo("work");
         await Assert.That(forImport.Resolution.Profile).IsSameReferenceAs(profile);
         await Assert.That(forImport.Snapshot).IsSameReferenceAs(beforeSetup.Snapshot);
+    }
+
+    // ---- The remainder's child and the handoff.
+
+    static readonly (string, FirstRunImportLevel)[] BothLevels =
+        [("mine", FirstRunImportLevel.OnlyMe), ("ours", FirstRunImportLevel.Shared)];
+
+    [Test]
+    public async Task Spawns_exactly_one_child_with_a_plan_when_a_level_was_chosen() {
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Lane(_ => Clean(), spawner).ImportAsync(
+            Answer(repos: BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(spawner.Spawns).IsEqualTo(1);
+        await Assert.That(spawner.Seen!.PlanPath).IsNotNull();
+        await Assert.That(spawner.Seen.ProfileName).IsEqualTo("work");
+        await Assert.That(result.Background).IsEqualTo("running");
+    }
+
+    [Test]
+    public async Task A_decline_spawns_nothing() {
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Lane(_ => Clean(), spawner).ImportAsync(
+            Answer(), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(spawner.Spawns).IsEqualTo(0);
+        await Assert.That(result.Background).IsNull();
+        await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
+    }
+
+    /// <summary>The profile has no server yet on a first run, so the plan must carry the one this run
+    /// imported to.</summary>
+    [Test]
+    public async Task The_plan_carries_the_server_and_levels_in_order() {
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        await Lane(_ => Clean(), spawner).ImportAsync(
+            Answer([HarnessId.Claude], BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        var plan = ImportPlan.Read(spawner.Seen!.PlanPath!)!;
+
+        await Assert.That(plan.ServerUrl).IsEqualTo(ChosenServer);
+        await Assert.That(plan.Levels.Select(l => l.Level))
+                    .IsEquivalentTo([FirstRunImportLevel.OnlyMe, FirstRunImportLevel.Shared], CollectionOrdering.Matching);
+        await Assert.That(plan.Levels[0].Repos.Single().Name).IsEqualTo("mine");
+        await Assert.That(plan.Levels[1].Repos.Single().Name).IsEqualTo("ours");
+        await Assert.That(plan.Levels[0].Since).IsEqualTo(new DateOnly(2026, 5, 16));
+        await Assert.That(plan.Levels[0].SkipTitle).IsTrue();
+        await Assert.That(plan.Levels[0].Vendors!).IsEquivalentTo([HarnessId.Claude]);
+    }
+
+    [Test]
+    public async Task An_unwritable_plan_fails_the_launch_without_spawning() {
+        var spawner = FakeBackgroundImportSpawner.Running();
+
+        var result = await Lane(_ => Clean(), spawner, config: new ConfigRoot(Config.PathTo("missing"))).ImportAsync(
+            Answer(repos: BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(spawner.Spawns).IsEqualTo(0);
+        await Assert.That(result.Background).IsEqualTo("failed");
+    }
+
+    [Test]
+    public async Task The_result_offers_the_prompt_when_the_decision_does() {
+        ImportHandoffFile? written = null;
+
+        var result = await Lane(
+                p => p.Level is FirstRunImportLevel.OnlyMe ? Landed(["m0", "m1"], "m0") : Landed(["s0"], "s0"),
+                evalWatch: true, writeHandoff: f => written = f)
+            .ImportAsync(Answer(repos: BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(result.HandoffPrompt).IsNotNull();
+        await Assert.That(result.HandoffPrompt!).StartsWith(SetupCommand.EvalWatchPrompt + "\n(run: ");
+        await Assert.That(result.HandoffPrompt).Contains(written!.RunId);
+        await Assert.That(result.HandoffSuppressed).IsNull();
+        await Assert.That(result.BackgroundRemaining).IsEqualTo(1);
+        await Assert.That(written.HandoffOffered).IsTrue();
+        await Assert.That(written.SessionIds).IsEquivalentTo(["m0", "m1", "s0"], CollectionOrdering.Matching);
+        await Assert.That(written.Cohort).IsEqualTo(HandoffCohort.Exact);
+        await Assert.That(JsonNode.Parse(written.ToJson())!["scope"]!.GetValue<string>()).IsEqualTo("repos");
+    }
+
+    [Test]
+    public async Task A_suppressed_handoff_reports_its_reason_and_no_prompt() {
+        var result = await Lane(_ => Landed(["s0"], "s0")).ImportAsync(
+            Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(result.HandoffPrompt).IsNull();
+        await Assert.That(result.HandoffSuppressed).IsEqualTo("no_agent_detected");
+    }
+
+    [Test]
+    public async Task A_handoff_write_failure_reports_handoff_file_unwritten() {
+        var result = await Lane(_ => Landed(["s0"], "s0"), evalWatch: true,
+                writeHandoff: _ => throw new IOException("disk full"))
+            .ImportAsync(Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(result.HandoffPrompt).IsNull();
+        await Assert.That(result.HandoffSuppressed).IsEqualTo("handoff_file_unwritten");
+    }
+
+    [Test]
+    public async Task A_lost_pass_still_spawns_and_still_offers_for_the_other_level() {
+        var spawner = FakeBackgroundImportSpawner.Running();
+        ImportHandoffFile? written = null;
+
+        var result = await Lane(
+                p => p.Level is FirstRunImportLevel.OnlyMe
+                    ? throw new HttpRequestException("private pass died")
+                    : Landed(["s0", "s1"], "s0"),
+                spawner, evalWatch: true, writeHandoff: f => written = f)
+            .ImportAsync(Answer(repos: BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(spawner.Spawns).IsEqualTo(1);
+        await Assert.That(result.Totals).IsNull();
+        await Assert.That(result.HandoffPrompt).IsNotNull();
+        await Assert.That(result.BackgroundRemaining).IsNull();
+        await Assert.That(written!.Cohort).IsEqualTo(HandoffCohort.PartialExact);
     }
 }

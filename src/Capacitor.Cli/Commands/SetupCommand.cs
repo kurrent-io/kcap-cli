@@ -242,7 +242,18 @@ sealed class SetupImportLane(
         HarnessRegistry harnesses,
         GitProviderRouter router,
         TimeProvider time,
-        Func<SetupImportLane.Pass, Task<SetupImportRun>>? runner = null) : IFirstRunImportLane {
+        IBackgroundImportSpawner spawner,
+        string serverUrl,
+        string profileName,
+        string defaultVisibility,
+        string workingDirectory,
+        CodingAgentsStep.Paths paths,
+        Func<SetupImportLane.Pass, Task<SetupImportRun>>? runner = null,
+        Action<ImportHandoffFile>? writeHandoff = null) : IFirstRunImportLane {
+    /// <summary>The handoff suppression for a file that could not be written, so the page never offers
+    /// a prompt whose file does not exist.</summary>
+    internal const string HandoffFileUnwritten = "handoff_file_unwritten";
+
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
     internal sealed record Pass(
@@ -414,7 +425,61 @@ sealed class SetupImportLane(
                 outcome.Counts.Failed + outcome.VisibilityFailures);
         }
 
-        return new FirstRunImportResult(counted ? totals : null);
+        if (_runs.Count == 0) return new FirstRunImportResult(counted ? totals : null);
+
+        return HandOff(answer, since, counted ? totals : null);
+    }
+
+    /// <summary>One child for every chosen level, whatever the foreground selected: the capped passes
+    /// defer visibility work on sessions they did not select, and only the uncapped child performs it.</summary>
+    FirstRunImportResult HandOff(FirstRunImportAnswer answer, DateOnly? since, FirstRunImportTotals? totals) {
+        var runId = Guid.NewGuid().ToString("N");
+
+        var (merged, cohort, remaining) = ForegroundImportMerge.Merge(
+            [.. _runs.Select(r => ForegroundImportOutcome.From(r.Run))]);
+
+        var launch = Spawn(runId, answer, since);
+
+        SetupCommand.PrintBackground(launch);
+
+        var decision = HandoffDecision.Decide(
+            merged, launch.Status,
+            HandoffVendorEligibility.Eligible(harnesses, paths).Count,
+            HandoffVendorEligibility.Detected(harnesses));
+
+        var file = ImportHandoffFile.Compose(
+            runId, time.GetUtcNow(), decision.Offered, decision.Reason, merged, launch,
+            serverUrl, profileName, unattributedOnDisk: 0, cohortOverride: cohort, scope: "repos");
+
+        try {
+            (writeHandoff ?? (f => f.Write(config, time)))(file);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            AnsiConsole.MarkupLine($"  [yellow]![/] Could not write the import handoff file: {Markup.Escape(ex.Message)}");
+
+            return new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: HandoffFileUnwritten);
+        }
+
+        return decision.Offered
+            ? new FirstRunImportResult(totals, launch.Status.Wire(), remaining, SetupCommand.HandoffPromptText(runId))
+            : new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: decision.Reason!.Value.Wire());
+    }
+
+    BackgroundImportLaunch Spawn(string runId, FirstRunImportAnswer answer, DateOnly? since) {
+        var plan = new ImportPlan(serverUrl, [
+            .. _runs.Select(r => new ImportPlanLevel(r.Level, answer.At(r.Level), since, answer.Vendors, answer.SkipTitle))
+        ]);
+        var planPath = ImportPlan.PathFor(config, runId);
+
+        try {
+            plan.Write(planPath);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return new BackgroundImportLaunch(
+                BackgroundImportStatus.Failed, null, null, $"could not write the import plan: {ex.Message}");
+        } finally {
+            ImportPlan.Prune(config, time.GetUtcNow());
+        }
+
+        return spawner.Spawn(new BackgroundImportRequest(runId, profileName, defaultVisibility, workingDirectory, planPath));
     }
 }
 
@@ -604,10 +669,63 @@ sealed class SetupCommand(
         var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile);
         if (loginStepResult != 0) return loginStepResult;
 
+        // Ahead of the browser leg, whose import decides the eval-watch handoff from them.
+        var pluginPath = ResolvePluginPath();
+
+        // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
+        // guard at the top of HandleAsync returns 1 otherwise).
+        var claudeSettingsPath = legacyProjectScope
+            ? Path.Combine(gitRoot!, ".claude", "settings.local.json")
+            : harnesses.Of<ClaudeHarness>().Paths.UserSettings;
+
+        var copilot  = harnesses.Of<CopilotHarness>().Paths;
+        var pi       = harnesses.Of<PiHarness>().Paths;
+        var kiro     = harnesses.Of<KiroHarness>().Paths;
+        var kiroCrew = harnesses.Of<KiroHarness>().Crew;
+        var codex    = harnesses.Of<CodexHarness>().Paths;
+        var opencode = harnesses.Of<OpenCodeHarness>().Paths;
+        var cursor   = harnesses.Of<CursorHarness>().Paths;
+        var gemini   = harnesses.Of<GeminiHarness>().Paths;
+        var agy      = harnesses.Of<AntigravityHarness>().Paths;
+
+        var stepPaths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath:   claudeSettingsPath,
+            ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
+            PluginDir:            pluginPath,
+            CodexHooksPath:       codex.UserHooksJson,
+            CursorHooksPath:      cursor.UserHooksJson,
+            CopilotHooksPath:     copilot.KcapHooksJson,
+            GeminiSettingsPath:   gemini.SettingsJson,
+            AgentsSkillsDir:      agents.UserSkillsDir,
+            LegacyCodexSkillsDir: codex.SkillsDir,
+            KiroHooksPath:        kiro.KcapAgentJson,
+            PiExtensionPath:      pi.KcapExtension,
+            OpenCodeExtensionPath: opencode.KcapPlugin,
+            AntigravityHooksPath: agy.GlobalHooksJson,
+            CodexConfigTomlPath:  codex.ConfigToml,
+            CursorMcpPath:        cursor.UserMcpJson,
+            CopilotMcpPath:       copilot.McpConfigJson,
+            CopilotInstructionsPath: copilot.InstructionsMd,
+            GeminiInstructionsPath: gemini.GeminiMd,
+            AntigravityMcpPath:       agy.McpConfigJson,
+            AntigravityInstructionsPath: agy.InstructionsMd,
+            AntigravitySkillsDir:     agy.SkillsDir,
+            OpenCodeMcpPath:      opencode.McpConfigJson,
+            OpenCodeInstructionsPath: opencode.AgentsMd,
+            KiroMcpPath:          kiro.SettingsMcpJson,
+            KiroSkillsDir:        kiro.SkillsDir,
+            KiroCrewHookScript:   kiroCrew.SpawnHookScript,
+            KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
+            PiMcpExtensionPath:   pi.KcapMcpExtension,
+            PiAgentsMdPath:       pi.AgentsMd);
+
         // The browser leg, where the tenant serves one. Unnumbered because it is not a step: the
         // steps below run either way, and on every tenant that has not turned the flow on this
         // returns without a word. It has to sit after login — both routes are authenticated.
-        var browserAnswers = await RunBrowserFlowStepAsync(serverUrl, provider, noPrompt);
+        var browserAnswers = await RunBrowserFlowStepAsync(
+            serverUrl, provider, noPrompt, activeProfile,
+            (await AppConfig.LoadProfileConfig(config)).Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility ?? "org_public",
+            stepPaths);
         var browserAgents  = browserAnswers.Agents;
 
         await Console.Out.WriteLineAsync();
@@ -665,7 +783,6 @@ sealed class SetupCommand(
         await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your harnesses.");
         await Console.Out.WriteLineAsync();
 
-        var pluginPath = ResolvePluginPath();
         var detected   = new CodingAgentsStep.DetectedAgents(
             Claude:      harnesses.Detected(HarnessId.Claude),
             Codex:       harnesses.Detected(HarnessId.Codex),
@@ -704,12 +821,6 @@ sealed class SetupCommand(
             // be set explicitly here or `--no-prompt` would silently stop installing agents.
             installAgents = SetupDecisions.DecideInstallAgents(detected, noPrompt, PromptYesNo);
         }
-
-        // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
-        // guard at the top of HandleAsync returns 1 otherwise).
-        var claudeSettingsPath = legacyProjectScope
-            ? Path.Combine(gitRoot!, ".claude", "settings.local.json")
-            : harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         var stepOptions = new CodingAgentsStep.Options(
             SkipClaude:  skipClaude,
@@ -755,47 +866,6 @@ sealed class SetupCommand(
             browserAgents is null
                 ? new[] { serverUrl }.Concat(profilesForDomains.Profiles.Values.Select(p => p.ServerUrl))
                 : [serverUrl]);
-
-        var copilot  = harnesses.Of<CopilotHarness>().Paths;
-        var pi       = harnesses.Of<PiHarness>().Paths;
-        var kiro     = harnesses.Of<KiroHarness>().Paths;
-        var kiroCrew = harnesses.Of<KiroHarness>().Crew;
-        var codex    = harnesses.Of<CodexHarness>().Paths;
-        var opencode = harnesses.Of<OpenCodeHarness>().Paths;
-        var cursor   = harnesses.Of<CursorHarness>().Paths;
-        var gemini   = harnesses.Of<GeminiHarness>().Paths;
-        var agy      = harnesses.Of<AntigravityHarness>().Paths;
-
-        var stepPaths = new CodingAgentsStep.Paths(
-            ClaudeSettingsPath:   claudeSettingsPath,
-            ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
-            PluginDir:            pluginPath,
-            CodexHooksPath:       codex.UserHooksJson,
-            CursorHooksPath:      cursor.UserHooksJson,
-            CopilotHooksPath:     copilot.KcapHooksJson,
-            GeminiSettingsPath:   gemini.SettingsJson,
-            AgentsSkillsDir:      agents.UserSkillsDir,
-            LegacyCodexSkillsDir: codex.SkillsDir,
-            KiroHooksPath:        kiro.KcapAgentJson,
-            PiExtensionPath:      pi.KcapExtension,
-            OpenCodeExtensionPath: opencode.KcapPlugin,
-            AntigravityHooksPath: agy.GlobalHooksJson,
-            CodexConfigTomlPath:  codex.ConfigToml,
-            CursorMcpPath:        cursor.UserMcpJson,
-            CopilotMcpPath:       copilot.McpConfigJson,
-            CopilotInstructionsPath: copilot.InstructionsMd,
-            GeminiInstructionsPath: gemini.GeminiMd,
-            AntigravityMcpPath:       agy.McpConfigJson,
-            AntigravityInstructionsPath: agy.InstructionsMd,
-            AntigravitySkillsDir:     agy.SkillsDir,
-            OpenCodeMcpPath:      opencode.McpConfigJson,
-            OpenCodeInstructionsPath: opencode.AgentsMd,
-            KiroMcpPath:          kiro.SettingsMcpJson,
-            KiroSkillsDir:        kiro.SkillsDir,
-            KiroCrewHookScript:   kiroCrew.SpawnHookScript,
-            KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
-            PiMcpExtensionPath:   pi.KcapMcpExtension,
-            PiAgentsMdPath:       pi.AgentsMd);
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -1535,7 +1605,7 @@ sealed class SetupCommand(
           + $"{attributed} session{(attributed == 1 ? "" : "s")} attributed, "
           + $"{unmatched} session{(unmatched == 1 ? "" : "s")} on disk with no repository match.");
 
-    static void PrintBackground(BackgroundImportLaunch launch) {
+    internal static void PrintBackground(BackgroundImportLaunch launch) {
         var log = Markup.Escape(launch.LogPath ?? "");
 
         switch (launch.Status) {
@@ -1847,7 +1917,9 @@ sealed class SetupCommand(
     /// vendor keys and booleans, and the install runs through the same one place the terminal prompt
     /// does. Every outcome leaves setup running: sign-in has already happened, so nothing in this leg
     /// can strand a machine.</summary>
-    async Task<BrowserFlowAnswers> RunBrowserFlowStepAsync(string serverUrl, string provider, bool noPrompt) {
+    async Task<BrowserFlowAnswers> RunBrowserFlowStepAsync(
+            string serverUrl, string provider, bool noPrompt,
+            string profileName, string defaultVisibility, CodingAgentsStep.Paths paths) {
         // --no-prompt is a scripted run and this waits on a human. None has no identity for a flow to
         // be owned by, and its routes are authenticated. Headless is deliberately NOT a skip: a
         // machine with no browser of its own is exactly the one whose user is sitting at another, and
@@ -1894,7 +1966,8 @@ sealed class SetupCommand(
                     Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
                 importing = new SetupImportLane(
-                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time);
+                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time,
+                    spawner, serverUrl, profileName, defaultVisibility, workdir.Path, paths);
 
                 using var progress = new SpectreFirstRunFlowProgress(time);
 
