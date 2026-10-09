@@ -21,6 +21,7 @@ Search and recall past Kurrent Capacitor sessions from inside the agent.
 | `list_repo_plans` | List a repository's declared plans you can see, most recently touched first |
 | `get_declared_plans` | A plan's documents and full task list, by `plan_id` or `session_id` |
 | `get_session_evals` | Eval state and scores for up to 25 sessions by id; works on every plan |
+| `get_connection` | The server URL and profile this MCP server resolved at start; no network call |
 
 Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` defaults to *this* repo.
 

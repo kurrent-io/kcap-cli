@@ -78,7 +78,7 @@ public class ServiceRepointTests {
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
         await Assert.That(error).IsNull();
         await Assert.That(LaunchdUnit.BinaryFromPlist(File.ReadAllText(path))).IsEqualTo(Stable);
-        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap"]);
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "print"]);
     }
 
     /// <summary>A reload kills whatever the daemon hosts, so a busy one keeps its old binary until later.</summary>
@@ -114,7 +114,7 @@ public class ServiceRepointTests {
 
         var outcome = Launchd([], Stable).RefreshUnit("test", () => asked = true, Plenty, out _, Stabilize);
 
-        await Assert.That(outcome).IsEqualTo(UnitRefresh.Unchanged);
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Current);
         await Assert.That(asked).IsFalse();
     }
 

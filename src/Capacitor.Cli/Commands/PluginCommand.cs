@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -22,16 +23,11 @@ namespace Capacitor.Cli.Commands;
 public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdir) {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    const string CodexHookCommand   = "kcap hook --codex";
     const string CursorHookCommand  = "kcap hook --cursor";
     const string CopilotHookCommand = "kcap hook --copilot";
     const string KiroHookCommand    = "kcap hook --kiro";
 
-    // PermissionRequest must wait for the dashboard's decision; the daemon-side
-    // bridge call is intentionally infinite. 86400s = 24h keeps Codex from
-    // killing the hook before the user approves or denies.
-    const int PermissionRequestTimeout = 86400;
-    const int DefaultHookTimeout       = 30;
+    const int DefaultHookTimeout = 30;
 
     /// <summary>Whether the bare <c>kcap</c> those commands invoke resolves on the same search path
     /// the vendors were found on — a hook writing a command this cannot find never fires.</summary>
@@ -150,18 +146,26 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
-        // --if-installed: refresh-only mode used by the npm postinstall hook.
-        // Skip when the user never opted in; short-circuit when the marker
-        // already matches the current CLI version.
-        var refreshOnly = args.Contains("--if-installed");
+        // --if-installed: refresh-only mode used by the npm postinstall hook. It never adopts or
+        // rewrites a default layout the user never opted into, and skips one whose marker is current.
+        var refreshOnly      = args.Contains("--if-installed");
+        var defaultInstalled = ClaudePluginInstaller.IsInstalled(settingsPath);
 
-        switch (refreshOnly) {
-            case true when !ClaudePluginInstaller.IsInstalled(settingsPath):
-            case true when
-                ClaudePluginInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current():
-                return 0;
-        }
+        var skipDefault = refreshOnly
+            && (!defaultInstalled || ClaudePluginInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current());
 
+        var exit = skipDefault ? 0 : await InstallClaudeLayout(settingsPath, scope, refreshOnly);
+
+        if (exit != 0 || scope != "user") return exit;
+
+        var accountsWired = await WireUserAccountsAsync(
+            HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home,
+            adoptDefault: !refreshOnly || defaultInstalled, refreshOnly, enableNetwork: false);
+
+        return accountsWired || refreshOnly ? 0 : 1;
+    }
+
+    async Task<int> InstallClaudeLayout(string settingsPath, string scope, bool refreshOnly) {
         var pluginPath = env.ResolvePluginPath();
 
         if (pluginPath is null) {
@@ -210,6 +214,15 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             ? Path.Combine(workdir.Path, ".claude", "settings.local.json")
             : env.Harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
+        var exit = await RemoveClaudeLayout(settingsPath, scope);
+
+        if (scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Claude, env.Harnesses.Of<ClaudeHarness>().Paths.Home))
+            exit = 1;
+
+        return exit;
+    }
+
+    async Task<int> RemoveClaudeLayout(string settingsPath, string scope) {
         if (!File.Exists(settingsPath)) {
             await env.Stdout.WriteLineAsync("Nothing to remove — settings file not found.");
 
@@ -251,35 +264,13 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <see cref="ClaudeRemovalOutcome.NotInstalled"/> when the file exists
     /// but contains no kcap entries.
     /// </summary>
-    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) {
-        if (!File.Exists(settingsPath)) return ClaudeRemovalOutcome.NotInstalled;
-
-        var text = File.ReadAllText(settingsPath);
-
-        if (JsonNode.Parse(text) is not JsonObject root) return ClaudeRemovalOutcome.Malformed;
-
-        var changed = false;
-
-        if (root["enabledPlugins"] is JsonObject enabled) {
-            changed |= enabled.Remove("kcap@kcap");
-            changed |= enabled.Remove("kcap@kurrent");
-            changed |= enabled.Remove("kapacitor@kapacitor");
-            changed |= enabled.Remove("kapacitor@kurrent");
-        }
-
-        if (root["extraKnownMarketplaces"] is JsonObject marketplaces) {
-            changed |= marketplaces.Remove("kcap");
-            changed |= marketplaces.Remove("kurrent");
-            changed |= marketplaces.Remove("kapacitor");
-        }
-
-        if (!changed) return ClaudeRemovalOutcome.NotInstalled;
-
-        File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
-        ClaudePluginInstaller.DeleteMarker(settingsPath);
-
-        return ClaudeRemovalOutcome.Removed;
-    }
+    public static ClaudeRemovalOutcome RemoveClaudePlugin(string settingsPath) =>
+        ClaudePluginWriter.Remove(settingsPath) switch {
+            SettingsEdit.Changed   => ClaudeRemovalOutcome.Removed,
+            SettingsEdit.Malformed => ClaudeRemovalOutcome.Malformed,
+            SettingsEdit.Failed    => throw new IOException($"Could not write {settingsPath}."),
+            _                      => ClaudeRemovalOutcome.NotInstalled,
+        };
 
     public enum ClaudeRemovalOutcome {
         Removed,
@@ -387,21 +378,26 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var refreshOnly = args.Contains("--if-installed");
 
         if (refreshOnly) {
-            if (!CodexHooksInstaller.IsInstalled(hooksPath)) return 0;
+            var defaultInstalled = CodexHooksInstaller.IsInstalled(hooksPath);
 
             // The marker gates only the hooks write. The MCP registration is healed on every
             // refresh: the marker says nothing about config.toml, and a server that joined the
             // Codex set after the last full install is otherwise never registered.
             // Never fail the npm install path.
-            if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()) {
-                if (InstallCodexHooks(hooksPath))
-                    await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
-                else
-                    await env.Stderr.WriteLineAsync(
-                        $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+            if (defaultInstalled) {
+                if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()) {
+                    if (InstallCodexHooks(hooksPath))
+                        await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
+                    else
+                        await env.Stderr.WriteLineAsync(
+                            $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+                }
+
+                await RegisterCodexMcpServersAsync();
             }
 
-            await RegisterCodexMcpServersAsync();
+            if (scope == "user")
+                await WireUserAccountsAsync(HarnessId.Codex, codex.Home, adoptDefault: defaultInstalled, refreshOnly: true, enableNetwork: false);
 
             return 0;
         }
@@ -492,9 +488,15 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 "Note: Codex requires the project's .codex directory to be trusted. " +
                 "Run `codex` once in this directory and accept the trust prompt."
             );
+
+            return 0;
         }
 
-        return 0;
+        var accountsWired = await WireUserAccountsAsync(
+            HarnessId.Codex, codex.Home, adoptDefault: true, refreshOnly: false,
+            enableNetwork: !args.Contains("--skip-codex-network-access"));
+
+        return accountsWired ? 0 : 1;
     }
 
     /// <summary>
@@ -505,7 +507,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task EnableCodexNetworkAccessAsync() {
         var codex = env.Harnesses.Of<CodexHarness>().Paths;
 
-        var domains = CodexConfigToml.BuildAllowDomains(env.Profiles.Profiles.Values.Select(p => p.ServerUrl));
+        var domains = env.CodexNetworkAllowDomains();
 
         if (domains.Count == 0) {
             await env.Stdout.WriteLineAsync(
@@ -611,7 +613,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         var legacy = AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
-        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors) {
+        var accountsFailed = scope == "user" && !await UnwireUserAccountsAsync(HarnessId.Codex, codex.Home);
+
+        if (hooksFailed || mcpFailed || agents.HadErrors || legacy.HadErrors || accountsFailed) {
             await env.Stdout.WriteLineAsync("Removal incomplete — see errors above.");
 
             return 1;
@@ -624,113 +628,156 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return 0;
     }
 
-    /// <summary>
-    /// Writes (or merges into) <paramref name="hooksPath"/> a hooks.json that
-    /// invokes <c>kcap codex-hook</c> for every Codex event. Existing
-    /// non-kcap entries are preserved; existing kcap entries are
-    /// replaced (so the timeout/command stay current after a CLI upgrade).
-    /// </summary>
-    public static bool InstallCodexHooks(string hooksPath) {
+    /// <summary>Every registered account of <paramref name="vendor"/> other than the
+    /// environment-derived one, which keeps its own install path. A registry that cannot be read,
+    /// locked or written is a warning, never a failure: the default layout must stay installable
+    /// and removable whatever state the registry is in.</summary>
+    async Task<IReadOnlyList<VendorAccount>> UserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault) {
+        if (env.Accounts is null) return [];
+
         try {
-            JsonObject root = [];
+            if (adoptDefault) AccountAdoption.EnsureDefault(env.Accounts, vendor, defaultDirectory, TimeProvider.System);
 
-            if (File.Exists(hooksPath)) {
-                try {
-                    if (JsonNode.Parse(File.ReadAllText(hooksPath)) is JsonObject obj) root = obj;
-                } catch {
-                    // Malformed — start fresh
-                }
-            }
+            return [.. AccountAdoption.Of(env.Accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, defaultDirectory))];
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
 
-            if (root["hooks"] is not JsonObject hooks) {
-                hooks         = [];
-                root["hooks"] = hooks;
-            }
-
-            foreach (var evt in CodexHooksParser.CodexHookEvents) {
-                var timeout = evt == "PermissionRequest" ? PermissionRequestTimeout : DefaultHookTimeout;
-
-                var kcapEntry = new JsonObject {
-                    ["hooks"] = new JsonArray(
-                        new JsonObject {
-                            ["type"]    = "command",
-                            ["command"] = CodexHookCommand,
-                            ["timeout"] = timeout
-                        }
-                    )
-                };
-
-                if (hooks[evt] is not JsonArray entries) {
-                    hooks[evt] = new JsonArray(kcapEntry);
-
-                    continue;
-                }
-
-                var preserved = new JsonArray();
-
-                foreach (var entry in entries) {
-                    if (entry is null) continue;
-
-                    if (!CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
-                        preserved.Add(entry.DeepClone());
-                    }
-                }
-
-                preserved.Add((JsonNode)kcapEntry);
-                hooks[evt] = preserved;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(hooksPath)!);
-            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-
-            CodexHooksInstaller.WriteMarker(hooksPath);
-
-            return true;
-        } catch {
-            return false;
+            return [];
         }
     }
 
+    static bool IsRegistryFailure(Exception ex) =>
+        ex is InvalidDataException or IOException or UnauthorizedAccessException or TimeoutException or WaitHandleCannotBeOpenedException;
+
+    /// <summary>
+    /// Whether a registry failure other than an unparseable file stopped this command reaching every
+    /// account. An unparseable registry names no account anyone could unwire, so deleting it loses
+    /// nothing; a locked or unreadable one may still list wired accounts, and only it can unwire them.
+    /// The exit code stays a warning's so <c>kcap plugin remove</c> keeps removing the default layout.
+    /// </summary>
+    public bool AccountsMayStillBeWired { get; private set; }
+
+    Task RegistryUnavailableAsync(Exception ex) {
+        if (ex is not InvalidDataException) AccountsMayStillBeWired = true;
+
+        return env.Stderr.WriteLineAsync($"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
+    }
+
+    /// <summary>Runs one account's wiring under the registry lock; null, after the registry warning, when the
+    /// lock cannot be taken. Never call <see cref="AccountAdoption.EnsureDefault"/> inside: the lock is not
+    /// re-entrant.</summary>
+    async Task<T?> LockedAsync<T>(Func<T> wiring) where T : class {
+        IDisposable lease;
+
+        try {
+            lease = env.Accounts!.Lock();
+        } catch (Exception ex) when (IsRegistryFailure(ex)) {
+            await RegistryUnavailableAsync(ex);
+
+            return null;
+        }
+
+        using (lease) return wiring();
+    }
+
+    async Task<bool> WireUserAccountsAsync(HarnessId vendor, string defaultDirectory, bool adoptDefault, bool refreshOnly, bool enableNetwork) {
+        WiringOptions? options = null;
+        var            ok      = true;
+
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault)) {
+            options ??= Wiring(enableNetwork);
+
+            var steps = await LockedAsync(() => WireOne(account, refreshOnly, options));
+            if (steps is null) break;
+
+            if (steps.Count > 0) ok &= await ReportAsync(account, steps, "Wired", "wire");
+        }
+
+        return ok;
+    }
+
+    /// <summary>No steps when a refresh leaves the account alone.</summary>
+    IReadOnlyList<WiringStep> WireOne(VendorAccount account, bool refreshOnly, WiringOptions options) {
+        if (refreshOnly) {
+            // A refresh never wires an account the user unwired: only an existing install is refreshed.
+            if (!IsInstalledIn(account)) return [];
+
+            if (account.Vendor is HarnessId.Codex)
+                CodexConfigToml.RegisterKcapMcpServers(AccountLayouts.Codex(env.Home, account.Directory).ConfigToml, env.ResolveMcpBinaryPath);
+
+            if (MarkerIsCurrent(account)) return [];
+        }
+
+        return AccountWiring.Wire(account, env.Home, options);
+    }
+
+    async Task<bool> UnwireUserAccountsAsync(HarnessId vendor, string defaultDirectory) {
+        var ok = true;
+
+        foreach (var account in await UserAccountsAsync(vendor, defaultDirectory, adoptDefault: false)) {
+            var steps = await LockedAsync(() => AccountWiring.Unwire(account, env.Home));
+            if (steps is null) break;
+
+            ok &= await ReportAsync(account, steps, "Unwired", "unwire");
+        }
+
+        return ok;
+    }
+
+    bool IsInstalledIn(VendorAccount account) => account.Vendor switch {
+        HarnessId.Claude => ClaudePluginInstaller.IsInstalled(AccountLayouts.Claude(env.Home, account.Directory).UserSettings),
+        HarnessId.Codex  => CodexHooksInstaller.IsInstalled(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson),
+        _                => false,
+    };
+
+    bool MarkerIsCurrent(VendorAccount account) => account.Vendor switch {
+        HarnessId.Claude => ClaudePluginInstaller.ReadMarker(AccountLayouts.Claude(env.Home, account.Directory).UserSettings) == CapacitorVersion.Current(),
+        HarnessId.Codex  => CodexHooksInstaller.ReadMarker(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson) == CapacitorVersion.Current(),
+        _                => false,
+    };
+
+    WiringOptions Wiring(bool enableNetwork) {
+        var domains = enableNetwork ? env.CodexNetworkAllowDomains() : [];
+
+        return new(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, domains.Count == 0 ? null : domains);
+    }
+
+    async Task<bool> ReportAsync(VendorAccount account, IReadOnlyList<WiringStep> steps, string done, string attempt) {
+        var fatal = AccountWiring.HasFatalFailure(steps);
+
+        if (!fatal) await env.Stdout.WriteLineAsync($"{done} {account.Vendor} account {account.Label} ({account.Directory})");
+
+        if (!AccountWiring.Succeeded(steps)) {
+            var detail = AccountWiring.FailureSummary(steps);
+            await env.Stderr.WriteLineAsync(fatal
+                ? $"Could not {attempt} {account.Vendor} account {account.Label} ({account.Directory}): {detail}"
+                : $"Warning: {account.Vendor} account {account.Label} ({account.Directory}): {detail}");
+        }
+
+        return !fatal;
+    }
+
+    /// <summary>
+    /// Merges into <paramref name="hooksPath"/> a hooks.json entry that invokes <c>kcap hook --codex</c> for
+    /// every Codex event. Non-kcap entries are preserved; kcap entries are replaced, so the timeout and
+    /// command stay current after an upgrade.
+    /// </summary>
+    public static bool InstallCodexHooks(string hooksPath) =>
+        CodexHooksWriter.Install(hooksPath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
+
     /// <summary>
     /// Removes every entry in <paramref name="hooksPath"/> whose command
-    /// invokes <c>kcap codex-hook</c>. Other entries are preserved.
+    /// invokes kcap's Codex hook. Other entries are preserved.
     /// Returns true if any entries were removed. Throws on I/O failure
     /// (caller decides how to surface partial writes); returns false only
     /// when there was genuinely nothing to remove.
     /// </summary>
-    public static bool RemoveCodexHooks(string hooksPath) {
-        if (!File.Exists(hooksPath)) return false;
-
-        if (JsonNode.Parse(File.ReadAllText(hooksPath)) is not JsonObject root) return false;
-        if (root["hooks"] is not JsonObject hooks) return false;
-
-        var changed = false;
-
-        foreach (var evt in CodexHooksParser.CodexHookEvents) {
-            if (hooks[evt] is not JsonArray entries) continue;
-
-            var preserved = new JsonArray();
-
-            foreach (var entry in entries) {
-                if (entry is null) continue;
-
-                if (CodexHooksParser.EntryReferencesCapacitorCodexHook(entry)) {
-                    changed = true;
-                } else {
-                    preserved.Add(entry.DeepClone());
-                }
-            }
-
-            hooks[evt] = preserved;
-        }
-
-        if (changed) {
-            File.WriteAllText(hooksPath, root.ToJsonString(WriteOpts));
-            CodexHooksInstaller.DeleteMarker(hooksPath);
-        }
-
-        return changed;
-    }
+    public static bool RemoveCodexHooks(string hooksPath) =>
+        CodexHooksWriter.Remove(hooksPath) switch {
+            SettingsEdit.Changed => true,
+            SettingsEdit.Failed  => throw new IOException($"Could not write {hooksPath}."),
+            _                    => false,
+        };
 
     async Task<int> InstallCursor(string[] args) {
         var cursor    = env.Harnesses.Of<CursorHarness>().Paths;
@@ -2039,7 +2086,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     }
 
     /// <summary>Derives <c>~/.kiro/settings/cli.json</c> from <c>~/.kiro/agents/kcap.json</c>.</summary>
-    static string KiroSettingsPathFor(string agentJsonPath) =>
+    internal static string KiroSettingsPathFor(string agentJsonPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(agentJsonPath)!)!, "settings", "cli.json");
 
     static int RunKiroCli(string kiroCliPath, params string[] arguments) {

@@ -51,10 +51,18 @@ public sealed class ShellCommandItem : ChatItemViewModel {
 
 public enum ToolOutcome { Running, Done, Error }
 
-public sealed class ToolCallItem(string name, string detail, ToolCategory category) : ChatItemViewModel {
+public sealed class ToolCallItem(string name, string detail, ToolCategory category, string? label = null,
+        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null) : ChatItemViewModel {
     public string Name { get; } = name;
     public string Detail { get; } = detail;
     public ToolCategory Category { get; } = category;
+    /// The verb phrase a kcap or foreign MCP row opens with ("Attached work item"); null for a
+    /// built-in tool, whose row is the detail alone.
+    public string? Label { get; } = label;
+    public bool HasLabel => !string.IsNullOrEmpty(Label);
+    public ToolCardKind CardKind { get; } = cardKind;
+    /// Kept so the card can be built when the result arrives.
+    internal string? InputJson { get; } = inputJson;
 
     /// What the row shows: detail when present, otherwise the tool name.
     public string LineText => string.IsNullOrEmpty(Detail) ? Name : Detail;
@@ -65,6 +73,28 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// A question's detail is the question itself — prose, read whole and wrapped. Every other
     /// detail is a command or a path, which the row keeps to one line and elides.
     public bool DetailIsProse => Category == ToolCategory.Question;
+
+    ToolCard? _card;
+    public ToolCard? Card {
+        get => _card;
+        private set {
+            if (ReferenceEquals(_card, value)) return;
+            _card = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HasCard));
+            this.RaisePropertyChanged(nameof(CanOpenCard));
+        }
+    }
+    public bool HasCard => _card is not null;
+    public bool CanOpenCard => OpenCardCommand is not null;
+    public ReactiveCommand<Unit, Unit>? OpenCardCommand { get; private set; }
+
+    /// Set before Outcome so a group sees the card the moment the call settles.
+    public void SetCard(ToolCard card, Action? open) {
+        OpenCardCommand = open is null ? null : ReactiveCommand.Create(open);
+        this.RaisePropertyChanged(nameof(OpenCardCommand));
+        Card = card;
+    }
 
     ToolOutcome _outcome;
     /// Flipped in place when the matching tool_result arrives; a result is terminal.
@@ -107,11 +137,13 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
 public sealed class ToolGroupItem : ChatItemViewModel {
     readonly AvaloniaList<ToolCallItem> _calls = new();
     readonly AvaloniaList<ToolCallItem> _live = new();
+    /// What a folded group shows: the live calls and every card, in call order.
+    readonly AvaloniaList<ToolCallItem> _folded = new();
 
     public IAvaloniaReadOnlyList<ToolCallItem> Calls => _calls;
     public IAvaloniaReadOnlyList<ToolCallItem> LiveCalls => _live;
     public IAvaloniaReadOnlyList<ToolCallItem> VisibleCalls =>
-        _calls.Count <= 1 || _isExpanded ? _calls : _live;
+        _calls.Count <= 1 || _isExpanded ? _calls : _folded;
 
     /// False when a multi-call group is folded and every call has settled — the list would
     /// otherwise still occupy a StackPanel slot under the summary.
@@ -191,10 +223,15 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         _calls.Add(call);
         RefreshLoneChrome();
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
-        if (call.IsSettled) { Recompute(); return; }
-        _live.Add(call);
         call.PropertyChanged += OnCallChanged;
-        // After the add: a folded group's VisibleCalls is _live, and HasVisibleCalls read before
+        if (call.IsSettled) {
+            if (call.HasCard) _folded.Add(call);
+            Recompute();
+            return;
+        }
+        _live.Add(call);
+        _folded.Add(call);
+        // After the add: a folded group's VisibleCalls is _folded, and HasVisibleCalls read before
         // the add would publish false for the call's whole run.
         NotifyVisible();
     }
@@ -206,10 +243,23 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     }
 
     void OnCallChanged(object? sender, PropertyChangedEventArgs e) {
-        if (e.PropertyName != nameof(ToolCallItem.Outcome) || sender is not ToolCallItem call || !call.IsSettled) return;
-        call.PropertyChanged -= OnCallChanged;
+        if (sender is not ToolCallItem call) return;
+        if (e.PropertyName == nameof(ToolCallItem.Card)) {
+            if (call.HasCard && !_folded.Contains(call)) InsertInCallOrder(_folded, call);
+            NotifyVisible();
+            return;
+        }
+        if (e.PropertyName != nameof(ToolCallItem.Outcome) || !call.IsSettled) return;
         _live.Remove(call);
+        if (!call.HasCard) _folded.Remove(call);
         Recompute();
+    }
+
+    void InsertInCallOrder(AvaloniaList<ToolCallItem> list, ToolCallItem call) {
+        var index = _calls.IndexOf(call);
+        var at = 0;
+        while (at < list.Count && _calls.IndexOf(list[at]) < index) at++;
+        list.Insert(at, call);
     }
 
     void Recompute() {

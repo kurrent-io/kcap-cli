@@ -129,6 +129,23 @@
                  org's hover — at rail width it wraps to two lines and outweighs its neighbours. -->
             <Border DockPanel.Dock="Bottom" BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}">
                 <StackPanel x:Name="RailFooterPanel" Margin="16,10,16,10" Spacing="2">
+                    <!-- A daemon launchd holds in the background band throttles every hosted agent; the
+                         block offers the reload and keeps its last outcome readable until a success clears it. -->
+                    <Border x:Name="RailPriorityBlock" Classes="backgroundPriority" Margin="0,0,0,8" Padding="10,8"
+                            CornerRadius="6" Background="{StaticResource KcapWarningDimBrush}"
+                            IsVisible="{Binding ShowsReloadBlock}">
+                        <StackPanel Spacing="6">
+                            <TextBlock x:Name="RailPriorityText" Text="{Binding BackgroundPriorityText}" TextWrapping="Wrap"
+                                       FontSize="12" LineHeight="17" Foreground="{StaticResource KcapWarningBrush}"
+                                       IsVisible="{Binding BackgroundPriority}" />
+                            <Button x:Name="RailReloadButton" Classes="kcapGhost" Content="Reload" Padding="10,4" FontSize="12.5"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding ReloadDaemonCommand}" />
+                            <TextBlock x:Name="RailReloadFailureText" Text="{Binding ReloadFailureText}" TextWrapping="Wrap"
+                                       FontSize="12" LineHeight="17" Foreground="{StaticResource KcapWarningBrush}"
+                                       IsVisible="{Binding ReloadFailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                    </Border>
                     <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
                         <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
                              diagnostic takes the extra slot; without one the caption stands

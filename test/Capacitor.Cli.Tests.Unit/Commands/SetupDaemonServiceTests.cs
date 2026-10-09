@@ -56,7 +56,7 @@ public class SetupDaemonServiceTests {
             })]
         };
 
-    static Task RunAsync(Channel channel, Func<Task<ServiceEnsureJson?>>? ladder = null) =>
+    static Task<FirstRunMachineActionResult?> RunAsync(Channel channel, Func<Task<ServiceEnsureJson?>>? ladder = null) =>
         SetupDaemonService.RunAsync(
             channel, ServerUrl, FlowId,
             new ConfigRoot("/nonexistent-config-root"),
@@ -172,5 +172,25 @@ public class SetupDaemonServiceTests {
         await RunAsync(channel);
 
         await Assert.That(channel.Reports.Count).IsEqualTo(3);
+    }
+
+    /// <summary>Setup's closing line reads this: a service the ensure put in place must not be followed by
+    /// advice to start a second daemon by hand.</summary>
+    [Test]
+    public async Task The_performed_outcome_is_returned_to_setup() {
+        var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService));
+
+        var result = await RunAsync(channel, () => Task.FromResult<ServiceEnsureJson?>(
+            new("kcap", "running", "none", "already_enabled")));
+
+        await Assert.That(result?.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyEnabled);
+    }
+
+    /// <summary>Nothing asked returns nothing, so setup keeps its ordinary closing advice.</summary>
+    [Test]
+    public async Task Nothing_outstanding_returns_no_outcome() {
+        var result = await RunAsync(new Channel(View()));
+
+        await Assert.That(result).IsNull();
     }
 }

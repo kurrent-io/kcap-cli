@@ -73,8 +73,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 return [new RunSignal.Started(callId, name, description, evt.Timestamp)];
             }
             case AcpEventKind.ToolCall when raw.ToolName is "Bash" && raw.ToolCallId is { Length: > 0 } callId: {
-                var (name, command) = ShellFacts(raw.ToolInputJson);
-                return [new RunSignal.Started(callId, name, command, evt.Timestamp, RunKind.Shell, Provisional: true)];
+                var (name, detail) = ShellFacts(raw.ToolInputJson);
+                return [new RunSignal.Started(callId, name, detail, evt.Timestamp, RunKind.Shell, Provisional: true)];
             }
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
                 if (SchemaExtensions.Text(result, "backgroundTaskId") is { Length: > 0 } backgroundId)
@@ -134,17 +134,18 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     const int ShellNameLimit = 80;
 
-    /// The row's name is the call's description, else the command's first line; the description
-    /// line under it is that first line.
-    static (string Name, string Command) ShellFacts(string? inputJson) {
+    /// The row's name is the call's description, with the command's first line under it; a call
+    /// without a description is named by that line, which goes under it only once the name is cut.
+    static (string Name, string Detail) ShellFacts(string? inputJson) {
         if (inputJson is null) return ("command", "");
         try {
             using var doc = JsonDocument.Parse(inputJson);
             var input = doc.RootElement;
             var command = FirstLine(input.Str("command") ?? "");
-            var name = input.Str("description") is { } d && d.Trim() is { Length: > 0 } described ? described : command;
-            if (name.Length == 0) name = "command";
-            return (name.Length > ShellNameLimit ? name[..(ShellNameLimit - 1)] + "…" : name, command);
+            var described = input.Str("description") is { } d && d.Trim() is { Length: > 0 } trimmed ? trimmed : null;
+            var name = described ?? (command.Length > 0 ? command : "command");
+            var cut = name.Length > ShellNameLimit;
+            return (cut ? name[..(ShellNameLimit - 1)] + "…" : name, described is null && !cut ? "" : command);
         } catch (JsonException) {
             return ("command", "");
         }

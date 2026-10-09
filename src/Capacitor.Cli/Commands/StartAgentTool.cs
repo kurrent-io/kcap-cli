@@ -14,6 +14,9 @@ static class StartAgentTool {
 
     internal const int MaxPromptBytes = 16_384;
 
+    /// <summary>The server's session-title column bound.</summary>
+    internal const int MaxTitleLength = 200;
+
     /// <summary>The POST is never re-sent, because a second one would start a second agent. The bound
     /// keeps a server that stops answering from holding the serial tool loop.</summary>
     internal static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
@@ -41,6 +44,7 @@ static class StartAgentTool {
         "Call list_start_agent_options first: it says whether a daemon runs on this machine and which harnesses it can start. When none runs here, do not call this. When the user did not name a harness, ask which one before calling. " +
         "This call does not block and nothing polls: it answers `requested` when the launch command has been sent, before the agent registers, with the agent id and the url of its page. The user supervises the agent from the dashboard. Do not wait for it, and do not call this again to check on it. " +
         "The prompt is all the agent gets. It shares none of this conversation, so write a task that stands alone and name this session's id as its source. " +
+        "title is required: it names the new session from its first moment, and titles the harness or Capacitor generate later do not replace it. " +
         "work_item is required and has no default: name the work item or loose end the task belongs to, `requester` for this session's own work item, or `none`. The server attempts ONE attach of the new session to that item after the session starts; nothing is attached when this call returns. " +
         "A refusal states its reason: no daemon on this machine, the daemon at capacity, the limit of live agents, a start on the same key already in progress. Relay it to the user instead of retrying in a loop.",
         new(
@@ -48,13 +52,14 @@ static class StartAgentTool {
             new() {
                 ["cwd"]        = new("string", "Absolute path of a directory on this machine, inside the git repository the agent should work in. The agent gets its own worktree of that repository; a path inside a linked worktree resolves to the repository the worktree belongs to."),
                 ["prompt"]     = new("string", "The task, self-contained. At most 16384 bytes of UTF-8."),
+                ["title"]      = new("string", $"Required. The new session's title: a short phrase naming this agent's task, specific enough to tell it apart from the other sessions in the repository, e.g. 'Cap gh output while the PR reader reads it'. At most {MaxTitleLength} characters."),
                 ["work_item"]  = new("string", "Required. One of: a `wi:` or `le:` target key exactly as get_next_work printed it; a work item id; `requester` (this session's primary work item); `none`."),
                 ["vendor"]     = new("string", "The harness to start, as a lowercase token listed by list_start_agent_options (e.g. 'claude', 'codex'). Pass the one the user chose; ask them when they did not name one. Defaults to the harness running this session, and is required when that harness cannot be identified."),
                 ["model"]      = new("string", "Optional. The vendor's own model id or alias: letters, digits and . _ : - / only, at most 64 characters. Omit to let the daemon use the vendor's default."),
                 ["daemon"]     = new("string", "Optional. A daemon's name. Needed only after the server answers ambiguous_daemon because several of your daemons run on this machine."),
                 ["session_id"] = new("string", "Optional. The calling session. Defaults to the session this server runs in; a value given here wins.")
             },
-            ["cwd", "prompt", "work_item"]
+            ["cwd", "prompt", "title", "work_item"]
         ),
         McpToolAnnotations.Launch
     );
@@ -64,6 +69,7 @@ static class StartAgentTool {
         var sessionId = McpSessionId.ResolveWithin(arguments, ambientSessionId);
         var cwd       = McpToolArguments.RequireString(arguments, "cwd").Trim();
         var prompt    = McpToolArguments.RequireString(arguments, "prompt");
+        var title     = McpToolArguments.RequireBoundedString(arguments, "title", MaxTitleLength);
         var workItem  = McpToolArguments.RequireString(arguments, "work_item").Trim();
         var vendor    = (McpToolArguments.OptionalString(arguments, "vendor") ?? driverVendor)?.ToLowerInvariant()
                      ?? throw new ArgumentException(NoVendorMessage);
@@ -75,7 +81,7 @@ static class StartAgentTool {
                 $"'prompt' is {promptBytes} bytes of UTF-8; the limit is {MaxPromptBytes}. Shorten it, or have the agent read the detail from a file.");
 
         return new(
-            sessionId, cwd, RepoPathOf(cwd), prompt, workItem, vendor, machineId, callerAgentId,
+            sessionId, cwd, RepoPathOf(cwd), prompt, title, workItem, vendor, machineId, callerAgentId,
             McpToolArguments.OptionalString(arguments, "model"),
             McpToolArguments.OptionalString(arguments, "daemon"));
     }

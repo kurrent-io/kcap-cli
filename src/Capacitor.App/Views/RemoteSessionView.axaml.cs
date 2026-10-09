@@ -20,13 +20,16 @@ public partial class RemoteSessionView : UserControl {
         };
         DataContextChanged += (_, _) => {
             _tabFocus?.Dispose();
+            ArtefactsPane.Content = null;
             var model = DataContext as RemoteSessionViewModel;
             _tabFocus = model is null ? null : model
                 .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
                 .Subscribe(pair => Dispatcher.UIThread.Post(() => {
                     if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
+                    if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
+                        ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
                     if (pair.Property1 == RemoteTab.Chat) ChatHost.FocusComposer();
-                    else TerminalHost.Focus();
+                    else if (pair.Property1 == RemoteTab.Terminal) TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));
         };
     }

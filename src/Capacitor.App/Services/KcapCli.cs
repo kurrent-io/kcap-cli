@@ -6,9 +6,11 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
+/// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
+/// CLI predates the field; read it through SpawnTypes.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -57,6 +59,10 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
 
+    /// <c>daemon service refresh --name &lt;name&gt; --force</c>: reloads this daemon's launchd job to Standard, ending
+    /// whatever it hosts. One <c>refresh_outcome=&lt;token&gt;</c> line on stderr; exit 0 only for reloaded/current.
+    Task<ProcessResult> ServiceReloadAsync(CancellationToken ct);
+
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
     /// <c>daemon start -d --name &lt;name&gt;</c>, bounded + ProcessOnly-kill, stamped with a boot-attempt id
@@ -78,6 +84,8 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+    /// The forced refresh may wait 10 s for the service transaction lock before its own 55 s deadline starts.
+    static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(75);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
     static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
@@ -164,6 +172,14 @@ public sealed class KcapCli : IKcapCli {
             ? NoCliResult()
             : Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
                 new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
+    }
+
+    public Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
+        var env = MutationEnv(); // throws before any spawn if the instance carries no server
+        return CliPath is not { } cliPath
+            ? NoCliResult()
+            : Run(cliPath, ["daemon", "service", "refresh", "--name", _daemonName, "--force"],
+                new RunOptions(EnvOverlay: env, Timeout: ReloadTimeout), ct);
     }
 
     // The profile flag and environment overlay must agree with the identity the lane verifies.

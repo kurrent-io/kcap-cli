@@ -608,4 +608,41 @@ public class KcapCliTests {
             [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
         await Assert.That(runner.SeenFileName).IsNull();
     }
+
+    [Test]
+    [Arguments("\"loaded_spawn_type\":\"adaptive\",", "adaptive")]
+    [Arguments("\"loaded_spawn_type\":null,", null)]
+    [Arguments("", null)]
+    public async Task ServiceStatusAsync_reads_the_loaded_spawn_type(string field, string? expected) {
+        var json = "{\"service_id\":\"daemon-a\",\"unit_present\":true,\"state\":\"running\",\"binary_path\":\"/b\"," +
+                   "\"install_binary_path\":\"/b\",\"job_pid\":7,\"daemon_pid\":7,\"txn_marker\":false,\"txn_active\":false," +
+                   field + "\"unit_profile\":null}";
+        var runner = new FakeProcessRunner { Behavior = _ => Task.FromResult(new ProcessResult(0, json, "", false)) };
+
+        var snapshot = await MakeCli(runner).ServiceStatusAsync(CancellationToken.None);
+
+        await Assert.That(snapshot!.LoadedSpawnType).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ServiceReloadAsync_runs_the_forced_refresh_for_this_daemon() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.ServiceReloadAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["daemon", "service", "refresh", "--name", "daemon-a", "--force"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(75));
+        await Assert.That(runner.SeenOptions.EnvOverlay![KcapCli.ExpectServerUrlVar]).IsEqualTo(CanonicalServer);
+    }
+
+    [Test]
+    public async Task ServiceReloadAsync_without_a_cli_is_exit_127() {
+        var runner = new FakeProcessRunner();
+        var cli = new KcapCli(runner, null, "daemon-a", "work", _ => Task.FromResult<string?>(null), CanonicalServer);
+        var result = await cli.ServiceReloadAsync(CancellationToken.None);
+        await Assert.That(result.ExitCode).IsEqualTo(127);
+        await Assert.That(runner.SeenArgs).IsNull();
+    }
 }

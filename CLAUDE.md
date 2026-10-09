@@ -71,6 +71,11 @@ running notes file that every PR edits.
   over the whole line matches past the value it found into the surrounding structure, and the server
   drops an unparseable line silently. A line the writer refuses is replaced by a placeholder —
   never by the raw line, which would re-expose what the redactor just matched.
+- **A redaction timeout holds its source; it never drops or marks the line.** The record budget and
+  regex deadline are wall-clock, so the watcher stops capturing at that line and retries it off the
+  loop under a longer budget each time, for as long as it takes. Sending the lines after it first
+  would lose it: the server drops a line numbered at or below one it already took. A source that
+  stops advancing behind such a line is waiting, not hung.
 - **Transcript event ids are a persistence contract.** `TranscriptIds` in `Capacitor.Models.Transcripts`
   fixes the bytes each id hashes; the server dedups by them, and a session it has already ingested
   is never re-projected. A different derivation would append duplicates on the next re-import, so

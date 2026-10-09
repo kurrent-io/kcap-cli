@@ -86,6 +86,28 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string?>? _restartPendingText;
     public string? RestartPendingText => _restartPendingText?.Value;
 
+    internal const string BackgroundPriorityMessage = "Daemon runs at background priority — agent terminals lag under load.";
+
+    ObservableAsPropertyHelper<bool>? _backgroundPriority;
+    /// The attached daemon runs in launchd's background band. Connected only: it describes the daemon on screen.
+    public bool BackgroundPriority => _backgroundPriority?.Value ?? false;
+
+    ObservableAsPropertyHelper<string?>? _backgroundPriorityText;
+    public string? BackgroundPriorityText => _backgroundPriorityText?.Value;
+
+    ObservableAsPropertyHelper<string?>? _reloadFailureText;
+    /// The standing reload outcome's line. Not gated on the attach: a reload that left the daemon
+    /// unreachable is exactly the outcome this line exists to show.
+    public string? ReloadFailureText => _reloadFailureText?.Value;
+
+    ObservableAsPropertyHelper<bool>? _isReloading;
+    public bool IsReloading => _isReloading?.Value ?? false;
+
+    ObservableAsPropertyHelper<bool>? _showsReloadBlock;
+    public bool ShowsReloadBlock => _showsReloadBlock?.Value ?? false;
+
+    public ReactiveCommand<Unit, Unit> ReloadDaemonCommand { get; }
+
     ObservableAsPropertyHelper<AttachState>? _state;
     public AttachState State => _state?.Value ?? AttachState.Connecting;
 
@@ -291,7 +313,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
             bool? appMenuInWindow = null, Action? requestSetup = null,
-            HistoryImportRun? historyImport = null) {
+            HistoryImportRun? historyImport = null,
+            IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -358,6 +382,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // hot/multicast, so this second subscriber replays the current value like the first.
         home?.AttachDaemonRecovery(
             StartDaemonCommand, RetryCommand, canStart, canRetry, _startMessageChanges);
+
+        var reloadAction = reloadDaemon ?? (_ => Task.CompletedTask);
+        ReloadDaemonCommand = ReactiveCommand.CreateFromTask(
+            (CancellationToken ct) => reloadAction(ct),
+            service.Status
+                .CombineLatest(isReloading ?? Observable.Return(false), (st, reloading) => st.State == AttachState.Connected && !reloading)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler));
 
         this.WhenActivated(disposables => {
             if (historyImport is not null)
@@ -433,6 +465,34 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             _restartPendingText = pendingWhileConnected.Select(p => p ? RestartPendingMessage : null)
                 .ToProperty(this, x => x.RestartPendingText, (string?)null)
+                .DisposeWith(disposables);
+
+            var backgroundSource = (backgroundPriority ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
+            var reloadingSource  = (isReloading ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
+            var reloadSource     = (reloadState ?? Observable.Return<ReloadState?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            var backgroundWhileConnected = status
+                .CombineLatest(backgroundSource, (st, bg) => bg && st.State == AttachState.Connected)
+                .DistinctUntilChanged();
+            _backgroundPriority = backgroundWhileConnected
+                .ToProperty(this, x => x.BackgroundPriority, false)
+                .DisposeWith(disposables);
+            _backgroundPriorityText = backgroundWhileConnected.Select(b => b ? BackgroundPriorityMessage : null)
+                .ToProperty(this, x => x.BackgroundPriorityText, (string?)null)
+                .DisposeWith(disposables);
+
+            _isReloading = reloadingSource
+                .ToProperty(this, x => x.IsReloading, false)
+                .DisposeWith(disposables);
+
+            var failureText = reloadSource.Select(state => state is null ? null : ReloadCopy.For(state));
+            _reloadFailureText = failureText
+                .ToProperty(this, x => x.ReloadFailureText, (string?)null)
+                .DisposeWith(disposables);
+            _showsReloadBlock = backgroundWhileConnected
+                .CombineLatest(failureText, (bg, text) => bg || text is not null)
+                .DistinctUntilChanged()
+                .ToProperty(this, x => x.ShowsReloadBlock, false)
                 .DisposeWith(disposables);
 
             _state = status.Select(s => s.State)
