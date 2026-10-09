@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using TUnit.Assertions.Enums;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
@@ -30,6 +31,15 @@ public class DetachedImportPlanRunnerTests {
         new(level, [new FirstRunImportChoice(owner, name, level)], null, null, true);
 
     string WritePlan(params ImportPlanLevel[] levels) => WritePlanAs("run1", levels);
+
+    /// <summary>Owner-only, as setup writes every plan, so only the content is wrong.</summary>
+    string WriteGarbage(string name) {
+        var path = Config.PathTo(name);
+        using (var stream = OwnerOnlyFile.CreateNew(path))
+        using (var writer = new StreamWriter(stream)) writer.Write("not a plan");
+
+        return path;
+    }
 
     string WritePlanAs(string runId, params ImportPlanLevel[] levels) {
         var path = ImportPlan.PathFor(Config.Root, runId);
@@ -71,7 +81,7 @@ public class DetachedImportPlanRunnerTests {
 
     [Test]
     public async Task An_unreadable_plan_fails_without_importing() {
-        var garbage  = Config.CreateFile("import-plan-run1.json", "not a plan");
+        var garbage  = WriteGarbage("import-plan-run1.json");
         var insecure = Config.PathTo("import-plan-run2.json");
         new ImportPlan("http://new.example", [Level(FirstRunImportLevel.Shared, "a", "b")]).Write(insecure);
 
@@ -87,7 +97,7 @@ public class DetachedImportPlanRunnerTests {
 
     [Test]
     public async Task A_rejected_plan_file_in_the_config_directory_is_removed() {
-        var garbage = Config.CreateFile("import-plan-run1.json", "not a plan");
+        var garbage = WriteGarbage("import-plan-run1.json");
 
         await Runner(Resolutions.None(Config.Root)).RunAsync(garbage);
 
@@ -108,6 +118,47 @@ public class DetachedImportPlanRunnerTests {
         await Assert.That(File.Exists(outside)).IsTrue();
         await Assert.That(File.Exists(misnamed)).IsTrue();
         await Assert.That(File.Exists(nested)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_valid_plan_outside_the_config_directory_is_never_run() {
+        using var elsewhere = new TempDir();
+        var outside = elsewhere.PathTo("import-plan-run1.json");
+        new ImportPlan("https://new.example", [Level(FirstRunImportLevel.Shared, "a", "b")]).Write(outside);
+
+        var exit = await Runner(Resolutions.None(Config.Root)).RunAsync(outside);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(_seen).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_plan_others_can_read_or_write_is_never_run() {
+        if (OperatingSystem.IsWindows()) return;
+
+        var path = WritePlan(Level(FirstRunImportLevel.Shared, "a", "b"));
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.OtherWrite);
+
+        var exit = await Runner(Resolutions.None(Config.Root)).RunAsync(path);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(_seen).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_symlinked_plan_is_never_run() {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var elsewhere = new TempDir();
+        var target = elsewhere.PathTo("plan.json");
+        new ImportPlan("https://new.example", [Level(FirstRunImportLevel.Shared, "a", "b")]).Write(target);
+        var link = Config.PathTo("import-plan-run1.json");
+        File.CreateSymbolicLink(link, target);
+
+        var exit = await Runner(Resolutions.None(Config.Root)).RunAsync(link);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(_seen).IsEmpty();
     }
 
     [Test]

@@ -28,6 +28,12 @@ sealed class DetachedImportPlanRunner(
         Func<ImportPlanLevel, ProfileContext, Task<SetupImportRun>>? passRunner = null) {
     /// <returns>0 when every level finished with nothing failed; 1 otherwise.</returns>
     public async Task<int> RunAsync(string planPath) {
+        if (!ImportPlan.IsSetupPlanPath(config, planPath)) {
+            Console.Error.WriteLine($"Refusing the import plan at {planPath}: not a plan setup wrote in {config.Directory}.");
+
+            return 1;
+        }
+
         if (ImportPlan.Read(planPath) is not { } plan || !ImportPlan.IsUsableServer(plan.ServerUrl)) {
             Console.Error.WriteLine($"Could not read the import plan at {planPath}.");
             DeletePlan(planPath);
@@ -60,19 +66,9 @@ sealed class DetachedImportPlanRunner(
         return exit;
     }
 
-    /// <summary>Only a plan file setup wrote: the path arrives through the environment, so anything
-    /// else it names is not this runner's to delete.</summary>
     void DeletePlan(string planPath) {
         try {
-            var full = Path.GetFullPath(planPath);
-            var name = Path.GetFileName(full);
-            if (!string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(config.Directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal)
-             || !name.StartsWith("import-plan-", StringComparison.Ordinal)
-             || !name.EndsWith(".json", StringComparison.Ordinal)
-             || !File.Exists(full))
-                return;
-
-            File.Delete(full);
+            if (ImportPlan.IsSetupPlanPath(config, planPath)) File.Delete(Path.GetFullPath(planPath));
         } catch { /* best effort; pruned with the handoff files */ }
     }
 

@@ -146,6 +146,32 @@ internal sealed record ImportPlan(string ServerUrl, IReadOnlyList<ImportPlanLeve
 
     /// <summary>Absolute <c>https</c>, or <c>http</c> to a loopback host — nothing a tampered plan
     /// could use to send this machine's credentials in the clear.</summary>
+    /// <summary>
+    /// Whether <paramref name="path"/> is a plan setup could have written: an owner-only regular file
+    /// named <c>import-plan-*.json</c> directly in the config directory. The path arrives through the
+    /// environment, and a plan widens visibility and skips confirmation, so nothing else is read.
+    /// </summary>
+    public static bool IsSetupPlanPath(ConfigRoot config, string path) {
+        try {
+            var full = Path.GetFullPath(path);
+            var name = Path.GetFileName(full);
+            var info = new FileInfo(full);
+
+            if (!string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(config.Directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal)
+             || !name.StartsWith("import-plan-", StringComparison.Ordinal)
+             || !name.EndsWith(".json", StringComparison.Ordinal)
+             || !info.Exists
+             || info.LinkTarget is not null)
+                return false;
+
+            return OperatingSystem.IsWindows()
+                || (File.GetUnixFileMode(full) & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                                              | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) == 0;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+            return false;
+        }
+    }
+
     public static bool IsUsableServer(string url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri)
      && (uri.Scheme == Uri.UriSchemeHttps || (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback));
