@@ -670,6 +670,9 @@ sealed class SetupCommand(
             if (resolved is null) return 1;
 
             (serverUrl, provider) = resolved.Value;
+
+            // A named server can be one still being created, which the provisioner says to re-run setup against.
+            if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         } else if (noPrompt && requestedWorkspace is null) {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace)");
@@ -686,6 +689,10 @@ sealed class SetupCommand(
             activeProfile = string.IsNullOrWhiteSpace(afterDiscovery.ActiveProfile)
                 ? "default"
                 : afterDiscovery.ActiveProfile;
+
+            // GitHub discovery has already exchanged a token at the workspace itself, which only a live one
+            // answers; a WorkOS workspace can be listed after its tenant is gone, or before it is up.
+            if (provider == AuthProvider.WorkOS && !await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         }
 
         await Console.Out.WriteLineAsync();
@@ -1048,7 +1055,8 @@ sealed class SetupCommand(
         // Step 5: Daemon name + save
         AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
-        var    defaultName = Environment.UserName.ToLowerInvariant();
+        // The daemon resolves its name the same way, so the name written here is the one it runs under.
+        var    defaultName = DaemonNameResolver.Resolve([]);
         string daemonName;
 
         if (noPrompt) {
@@ -1058,8 +1066,7 @@ sealed class SetupCommand(
             // Not asked: the browser has no daemon-name screen, and its service request waits on this
             // name. The profile's own name comes before the default so a re-run never renames a daemon
             // in use.
-            daemonName = GetArg(args, "--daemon-name")
-                      ?? (selected?.Daemon?.Name is { Length: > 0 } kept ? kept : defaultName);
+            daemonName = GetArg(args, "--daemon-name") ?? DaemonNameResolver.Resolve([], selected?.Daemon?.Name);
             await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
         } else {
             daemonName = AnsiConsole.Prompt(
@@ -1862,6 +1869,52 @@ sealed class SetupCommand(
             AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(ex.Message)}");
             return null;
         }
+    }
+
+    /// <summary>Matches the provisioner's own poll budget: a workspace it reports active can still be
+    /// minutes from serving.</summary>
+    internal static readonly TimeSpan NewWorkspaceWait = TimeSpan.FromMinutes(10);
+
+    static readonly TimeSpan WorkspacePollGap = TimeSpan.FromSeconds(5);
+
+    const int WorkspaceProgressEvery = 6;
+
+    /// <summary>
+    /// Holds setup until the workspace discovery chose answers, so nothing after this configures a host
+    /// that is not there. False after saying why; the profile discovery wrote stays, so a re-run naming
+    /// the workspace picks up where this left off.
+    /// </summary>
+    internal async Task<bool> WaitForWorkspaceAsync(string serverUrl, TimeSpan budget, CancellationToken ct = default) {
+        using var client = http.Anonymous();
+
+        if (await WorkspaceProbe.AskAsync(client, serverUrl, time, ct) == WorkspaceAnswer.Live) return true;
+
+        await Console.Out.WriteLineAsync($"  Waiting for {serverUrl} to answer — a new workspace can take a few minutes…");
+
+        var started  = time.GetUtcNow();
+        var deadline = started + budget;
+
+        // A line rather than a spinner: an agent driving setup reads redirected output, where a live
+        // display shows nothing until it ends.
+        for (var poll = 1; time.GetUtcNow() < deadline; poll++) {
+            await Task.Delay(WorkspacePollGap, time, ct);
+
+            if (await WorkspaceProbe.AskAsync(client, serverUrl, time, ct) == WorkspaceAnswer.Live) {
+                AnsiConsole.MarkupLine($"  [green]✓[/] {Markup.Escape(serverUrl)} is answering");
+
+                return true;
+            }
+
+            if (poll % WorkspaceProgressEvery == 0)
+                await Console.Out.WriteLineAsync($"  Still waiting ({(time.GetUtcNow() - started):m\\:ss} of {budget:m\\:ss})…");
+        }
+
+        // Console rather than AnsiConsole so the command survives being copied: Spectre hard-wraps.
+        await Console.Error.WriteLineAsync($"  {serverUrl} is not answering, so setup stopped before configuring anything else.");
+        await Console.Error.WriteLineAsync(
+            $"  If it was just created, run `kcap setup --server-url {serverUrl}` once it is up. If not, it may have been removed.");
+
+        return false;
     }
 
     internal static readonly SetupAuthProgress StepProgress = new(new ConsoleAuthProgress(SetupAuthProgress.StepIndent));

@@ -57,6 +57,69 @@ public class WorkOSDiscoveryTests {
         await Assert.That(cfg.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
     }
 
+    /// <summary>A removed tenant whose organization survives is still listed by the proxy; picking it
+    /// would configure a host that only 404s, so the account is treated as having no workspace.</summary>
+    [Test]
+    public async Task DiscoverAsync_leaves_out_a_workspace_that_no_longer_answers_and_offers_to_create() {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", OrganizationId = "org_gone", Slug = "gone", DisplayName = "Gone", Origin = "https://gone.kcap.ai" }
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+        provisioner.OfferCreateAsync(Arg.Any<WorkOSTokenSource>(), Arg.Any<CancellationToken>())
+                   .Returns(Task.FromResult(ProvisionOffer.Created(
+                       new ProvisionedTenant("org_new", "acme", "Acme", "https://acme.kcap.ai"))));
+
+        string? switchedTo = null;
+        var     progress   = new RecordingAuthProgress();
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => {
+                switchedTo = org;
+                return Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" });
+            },
+            provisioner: provisioner, time: TimeProvider.System, progress: progress,
+            probe: (_, _, _) => Task.FromResult(WorkspaceAnswer.Gone));
+
+        await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
+        await Assert.That(switchedTo).IsEqualTo("org_new");
+        await Assert.That(string.Join("\n", progress.Notices)).Contains("https://gone.kcap.ai");
+    }
+
+    /// <summary>Only a definite "not a workspace" drops a tenant: an outage must not send the user to
+    /// create a second one.</summary>
+    [Test]
+    [Arguments(WorkspaceAnswer.Live)]
+    [Arguments(WorkspaceAnswer.NoAnswer)]
+    public async Task DiscoverAsync_keeps_a_workspace_that_did_not_answer_gone(WorkspaceAnswer answer) {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", DisplayName = "Acme", Origin = "https://acme.kcap.ai" }
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var provisioner = Substitute.For<ITenantProvisioner>();
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, Substitute.For<ITenantPicker>(), NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
+            provisioner: provisioner, time: TimeProvider.System,
+            probe: (_, _, _) => Task.FromResult(answer));
+
+        await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
+        await Assert.That(((WorkOSDiscoveryFlow.Ready)flow).Picked.Slug).IsEqualTo("acme");
+        await provisioner.DidNotReceiveWithAnyArgs().OfferCreateAsync(default!, default);
+    }
+
     [Test]
     public async Task DiscoverAsync_errors_when_workos_not_configured() {
         var flow = await WorkOSDiscovery.DiscoverAsync(

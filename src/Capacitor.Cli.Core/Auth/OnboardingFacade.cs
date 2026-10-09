@@ -211,6 +211,13 @@ public sealed class OnboardingFacade(
     /// </summary>
     internal IKeyWatcher KeyWatcher { get; init; } = NoKeyWatcher.Instance;
 
+    /// <summary>
+    /// Asks each discovered WorkOS workspace whether it is still there, given the org-less sign-in's bearer.
+    /// Only a <see cref="WorkspaceAnswer.Gone"/> leaves one out; an outage keeps it. Unset, every listed
+    /// workspace is offered.
+    /// </summary>
+    internal Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
+
     /// <param name="adoptServer">
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the
     /// provider stamp, false leaves config untouched (a <c>None</c> server then has nothing to sign in with).
@@ -383,8 +390,12 @@ public sealed class OnboardingFacade(
         if (result.Error != DiscoveryError.None)
             return Halted(AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
 
+        var tenants = ProbeWorkspace is null
+            ? result.Tenants
+            : await WorkOSDiscovery.DropGoneAsync(result.Tenants, ProbeWorkspace, auth.AccessToken, progress, ct);
+
         // The hosted lane is the only one that can provision, and only for an account with none.
-        return new DiscoveryReport(result.Tenants, AuthProvider.WorkOS, CanCreate: result.Tenants.Length == 0);
+        return new DiscoveryReport(tenants, AuthProvider.WorkOS, CanCreate: tenants.Length == 0);
     }
 
     async Task<DiscoveryReport> ListGitHubAsync(
@@ -454,7 +465,8 @@ public sealed class OnboardingFacade(
             pickContext: new TenantPickContext(
                 Proxy: proxy,
                 ProxyUrl: endpoints.ProxyUrl,
-                PickerVersion: proxyConfig.CliPickerVersion));
+                PickerVersion: proxyConfig.CliPickerVersion),
+            probe: ProbeWorkspace);
 
         return flow switch {
             WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(

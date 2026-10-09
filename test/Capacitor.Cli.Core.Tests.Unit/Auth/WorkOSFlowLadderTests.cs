@@ -88,15 +88,15 @@ public class WorkOSFlowLadderTests {
         var       workos = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
         var       browser = new FakeBrowser(_ => throw new InvalidOperationException("the browser must not be invoked"));
 
-        var opener = new RecordingBrowser(opens: false);
+        var opener = new RecordingBrowser(opens: true);
 
         var result = await OAuthLoginFlow.AcquireWorkOSAsync(
             workos, "client_d", organizationId: null, forceDevice: true, opener, NoTelemetry.Join, TimeProvider.System, browser,
             progress: new RecordingAuthProgress(), keys: ScriptedKeyWatcher.Blind());
 
         await Assert.That(result!.AccessToken).IsEqualTo("acc");
-        // The device page, never the authorize URL: "opens no browser" means no LOOPBACK browser.
-        await Assert.That(opener.Urls).IsEquivalentTo(["https://signin.example/device"]);
+        // Not the device page either: the person entering the code is at another device.
+        await Assert.That(opener.Urls).IsEmpty();
     }
 
     [Test]

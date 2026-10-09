@@ -174,4 +174,25 @@ public class WorkOSDeviceFlowTests {
 
         await Assert.That(browser.Urls).IsEquivalentTo(["https://signin.example/device?user_code=WXYZ-1234"]);
     }
+
+    /// <summary>An explicit device request opens nothing here, and the narration must not claim a
+    /// browser opened: an agent relays it verbatim to someone on another device.</summary>
+    [Test]
+    public async Task An_explicit_device_request_opens_no_browser() {
+        using var server = WithAuthorize(
+            """{"device_code":"dc","user_code":"WXYZ-1234","verification_uri":"https://signin.example/device","verification_uri_complete":"https://signin.example/device?user_code=WXYZ-1234","interval":0,"expires_in":900}""");
+        Authenticated(server, """{"access_token":"acc"}""");
+        using var stub     = new StubHost(server.Urls[0]);
+        var       workos   = new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System);
+        var       browser  = new RecordingBrowser(opens: true);
+        var       progress = new RecordingAuthProgress();
+
+        await OAuthLoginFlow.RunWorkOSDeviceFlowAsync(
+            workos, "client_d", browser, TimeProvider.System, progress: progress, openBrowser: false);
+
+        await Assert.That(browser.Urls).IsEmpty();
+        await Assert.That(progress.DeviceCodes[0].Uri).IsEqualTo("https://signin.example/device");
+        await Assert.That(progress.DeviceCodes[0].Prefilled).IsFalse();
+        await Assert.That(string.Join("\n", progress.Notices)).DoesNotContain("should have opened");
+    }
 }
