@@ -150,7 +150,8 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
             ? $"{n} session{(n == 1 ? "" : "s")} from {repos} repositor{(repos == 1 ? "y" : "ies")}"
             : $"{repos} repositor{(repos == 1 ? "y" : "ies")}";
 
-        AnsiConsole.MarkupLine(SetupAuthProgress.Indent($"Importing {what}, as chosen in the browser."));
+        AnsiConsole.MarkupLine(SetupAuthProgress.Indent(
+            $"Importing your newest sessions first, of {what} chosen in the browser. The rest will continue in the background."));
     }
 
     public void ImportEnded() => Refresh();
@@ -321,6 +322,9 @@ sealed class SetupImportLane(
 
     readonly List<(FirstRunImportLevel Level, SetupImportRun Run)> _runs = [];
 
+    /// <summary>The eval-watch prompt the last import offered, or null.</summary>
+    internal string? HandoffPrompt { get; private set; }
+
     /// <summary>Every pass this lane ran, in run order — a pass that threw included, carrying its
     /// fault.</summary>
     internal IReadOnlyList<(FirstRunImportLevel Level, SetupImportRun Run)> Runs => _runs;
@@ -394,7 +398,7 @@ sealed class SetupImportLane(
 
                 AnsiConsole.MarkupLine(
                     $"  [yellow]![/] That history did not import: {Markup.Escape(fault.Message)}. "
-                  + "Run [cyan]kcap import[/] to retry it.");
+                  + "Run [cyan]kcap setup[/] again and choose the same repositories to retry it.");
 
                 continue;
             }
@@ -408,7 +412,8 @@ sealed class SetupImportLane(
                 Failed = true;
 
                 AnsiConsole.MarkupLine(
-                    "  [yellow]![/] Some of that history did not import. Run [cyan]kcap import[/] to retry it.");
+                    "  [yellow]![/] Some of that history did not import. "
+                  + "Run [cyan]kcap setup[/] again and choose the same repositories to retry it.");
             }
 
             if (outcome is null) {
@@ -440,7 +445,7 @@ sealed class SetupImportLane(
 
         var launch = Spawn(runId, answer, since);
 
-        SetupCommand.PrintBackground(launch);
+        SetupCommand.PrintBackground(launch, browser: true);
 
         var decision = HandoffDecision.Decide(
             merged, launch.Status,
@@ -459,8 +464,10 @@ sealed class SetupImportLane(
             return new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: HandoffFileUnwritten);
         }
 
+        if (decision.Offered) HandoffPrompt = SetupCommand.HandoffPromptText(runId);
+
         return decision.Offered
-            ? new FirstRunImportResult(totals, launch.Status.Wire(), remaining, SetupCommand.HandoffPromptText(runId))
+            ? new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffPrompt)
             : new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: decision.Reason!.Value.Wire());
     }
 
@@ -1204,7 +1211,8 @@ sealed class SetupCommand(
             Paths:               stepPaths,
             BrowserImport:       browserAnswers.Import,
             BrowserImportFailed: browserAnswers.ImportFailed,
-            BrowserFinished:     browserAnswers.FlowStillLive));
+            BrowserFinished:     browserAnswers.FlowStillLive,
+            BrowserHandoffPrompt: browserAnswers.HandoffPrompt));
 
         await Console.Out.WriteLineAsync();
 
@@ -1448,7 +1456,8 @@ sealed class SetupCommand(
         CodingAgentsStep.Paths        Paths,
         FirstRunImportAnswer?         BrowserImport,
         bool                          BrowserImportFailed,
-        bool                          BrowserFinished = false);
+        bool                          BrowserFinished = false,
+        string?                       BrowserHandoffPrompt = null);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1472,7 +1481,7 @@ sealed class SetupCommand(
         if (inputs.BrowserImport is { } browser) {
             foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed)) AnsiConsole.MarkupLine(line);
 
-            return new ImportStepResult(false, null, null, null);
+            return new ImportStepResult(false, null, null, inputs.BrowserHandoffPrompt);
         }
 
         // A browser flow that finished without an import answer left nothing to run, and the user is
@@ -1605,7 +1614,9 @@ sealed class SetupCommand(
           + $"{attributed} session{(attributed == 1 ? "" : "s")} attributed, "
           + $"{unmatched} session{(unmatched == 1 ? "" : "s")} on disk with no repository match.");
 
-    internal static void PrintBackground(BackgroundImportLaunch launch) {
+    /// <param name="browser">The browser flow's import is per repository and per level, which plain
+    /// <c>kcap import</c> cannot reproduce, so its retry names setup instead.</param>
+    internal static void PrintBackground(BackgroundImportLaunch launch, bool browser = false) {
         var log = Markup.Escape(launch.LogPath ?? "");
 
         switch (launch.Status) {
@@ -1619,7 +1630,9 @@ sealed class SetupCommand(
                 var code = launch.ExitCode is { } c ? $" (exit {c})" : "";
                 AnsiConsole.MarkupLine(
                     $"  [yellow]![/] Background import did not start{code}: {Markup.Escape(launch.Error ?? "unknown error")}. "
-                  + "Run [cyan]kcap import --all --yes[/] to import the rest.");
+                  + (browser
+                        ? "Run [cyan]kcap setup[/] again and choose the same repositories to import the rest."
+                        : "Run [cyan]kcap import --all --yes[/] to import the rest."));
                 break;
             case BackgroundImportStatus.NotNeeded:
             default:
@@ -1999,7 +2012,8 @@ sealed class SetupCommand(
             FirstRunFlowOutcomes.Import(result),
             importing?.Failed == true,
             FlowId(result),
-            result is FirstRunFlowResult.Finished);
+            result is FirstRunFlowResult.Finished,
+            importing?.HandoffPrompt);
     }
 
     /// <summary>
@@ -2015,12 +2029,15 @@ sealed class SetupCommand(
     /// leg that finished: every other ending relinquished, and a relinquish is the machine stating it has
     /// gone. Read before beating again — saying this machine is here, after saying it had gone, is worse
     /// than the silence it would be covering.</param>
+    /// <param name="HandoffPrompt">The eval-watch prompt the import offered, printed again at the end of
+    /// setup for a user who closed the tab.</param>
     internal sealed record BrowserFlowAnswers(
             FirstRunAgentsAnswer? Agents,
             FirstRunImportAnswer? Import,
             bool                  ImportFailed  = false,
             string?               FlowId        = null,
-            bool                  FlowStillLive = false) {
+            bool                  FlowStillLive = false,
+            string?               HandoffPrompt = null) {
         /// <summary>No browser leg ran, or it ended with nothing to spend.</summary>
         public static BrowserFlowAnswers None { get; } = new(null, null);
     }
@@ -2058,7 +2075,7 @@ sealed class SetupCommand(
         if (answer.NoReadableVendors)
             return [
                 "  [yellow]![/] Nothing was imported: those sessions come from agents this version of kcap "
-              + "does not know. Run 'kcap update', then 'kcap import' to bring them in."
+              + "does not know. Run 'kcap update', then 'kcap setup' to bring them in."
             ];
 
         var lines = new List<string>();
@@ -2069,14 +2086,15 @@ sealed class SetupCommand(
                         + $"[dim]({Markup.Escape(FirstRunImportWindows.Label(answer.Window))})[/]";
 
             lines.Add(failed
-                ? $"  [yellow]![/] Partly imported {subject}. Run [cyan]kcap import[/] to finish it."
+                ? $"  [yellow]![/] Partly imported {subject}. "
+                + "Run [cyan]kcap setup[/] again and choose the same repositories to finish it."
                 : $"  [green]✓[/] Imported {subject}");
         }
 
         if (answer.Unreadable > 0)
             lines.Add(
                 $"  [yellow]![/] {answer.Unreadable} of those repositories asked for something this version of "
-              + "kcap does not know, and were left alone. Run 'kcap update' and import them with 'kcap import'.");
+              + "kcap does not know, and were left alone. Run 'kcap update', then 'kcap setup' to import them.");
 
         return lines;
     }
