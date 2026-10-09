@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "kcap-review": {
+      "command": "kcap",
+      "args": ["mcp", "review"]
+    },
+    "kcap-sessions": {
+      "command": "kcap",
+      "args": ["mcp", "sessions"]
+    },
+    "kcap-flows": {
+      "command": "kcap",
+      "args": ["mcp", "flows"]
+    },
+    "kcap-memory": {
+      "command": "kcap",
+      "args": ["mcp", "memory"]
+    },
+    "kcap-analytics": {
+      "command": "kcap",
+      "args": ["mcp", "analytics"]
+    },
+    "kcap-workitems": {
+      "command": "kcap",
+      "args": ["mcp", "workitems"]
+    },
+    "kcap-plans": {
+      "command": "kcap",
+      "args": ["mcp", "plans"]
+    },
+    "kcap-artefacts": {
+      "command": "kcap",
+      "args": ["mcp", "artefacts"]
+    }
+  }
+}
