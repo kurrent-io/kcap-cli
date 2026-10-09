@@ -17,8 +17,10 @@ record GeneratedFile(string Path, string Content);
 /// <summary>Status plus the binary path baked into the installed unit (for doctor).</summary>
 record ServiceStatus(ServiceState State, string? BinaryPath);
 
-/// <summary>Rich query result: tri-state probe, plist presence, current state, binary path, running job pid.</summary>
-record ServiceQuery(LabelProbe Probe, bool UnitPresent, ServiceState State, string? BinaryPath, int? JobPid);
+/// <summary>Rich query result: tri-state probe, plist presence, current state, binary path, running job pid,
+/// and the loaded job's spawn-type word (launchd only; null when the label is not loaded or the print
+/// has no such line).</summary>
+record ServiceQuery(LabelProbe Probe, bool UnitPresent, ServiceState State, string? BinaryPath, int? JobPid, string? LoadedSpawnType = null);
 
 /// <summary>
 /// Everything needed to render and register one per-user service.

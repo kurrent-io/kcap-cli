@@ -77,4 +77,28 @@ public class ToolSummaryTests {
     public async Task Categorize_refines_reads_and_shell_commands_from_the_input(string name, string? input, ToolCategory expected) {
         await Assert.That(ToolSummary.Categorize(name, input)).IsEqualTo(expected);
     }
+
+    [Test]
+    [Arguments("mcp__plugin_kcap_kcap-workitems__declare_work_item", ToolCategory.Work)]
+    [Arguments("declare_work_item", ToolCategory.Work)]
+    [Arguments("mcp__kcap-artefacts__publish_artefact", ToolCategory.Artefact)]
+    [Arguments("save_memory", ToolCategory.Memory)]
+    [Arguments("search_sessions", ToolCategory.Session)]
+    [Arguments("start_agent", ToolCategory.Flow)]
+    [Arguments("mcp__plugin_kcap_kcap-plans__update_plan_task", ToolCategory.Plan)]
+    public async Task Kcap_tools_categorize_through_the_catalogue(string name, ToolCategory expected) {
+        await Assert.That(ToolSummary.Categorize(name, """{"x":1}""")).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Kcap_categories_describe_and_chip_in_product_words() {
+        await Assert.That(ToolSummary.Describe([ToolCategory.Artefact])).IsEqualTo("Worked on a page");
+        await Assert.That(ToolSummary.Describe([ToolCategory.Work, ToolCategory.Memory, ToolCategory.Session, ToolCategory.Flow, ToolCategory.Flow]))
+            .IsEqualTo("Tracked work, used team memory, recalled sessions, ran flows");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Artefact)).IsEqualTo("Page");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Work)).IsEqualTo("Work");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Memory)).IsEqualTo("Memory");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Session)).IsEqualTo("Recall");
+        await Assert.That(ToolSummary.ChipLabel(ToolCategory.Flow)).IsEqualTo("Flow");
+    }
 }

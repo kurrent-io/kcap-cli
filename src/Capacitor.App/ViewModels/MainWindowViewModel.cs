@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Commands;
 using DynamicData;
 using ReactiveUI.Reactive;
@@ -84,6 +85,28 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     ObservableAsPropertyHelper<string?>? _restartPendingText;
     public string? RestartPendingText => _restartPendingText?.Value;
+
+    internal const string BackgroundPriorityMessage = "Daemon runs at background priority — agent terminals lag under load.";
+
+    ObservableAsPropertyHelper<bool>? _backgroundPriority;
+    /// The attached daemon runs in launchd's background band. Connected only: it describes the daemon on screen.
+    public bool BackgroundPriority => _backgroundPriority?.Value ?? false;
+
+    ObservableAsPropertyHelper<string?>? _backgroundPriorityText;
+    public string? BackgroundPriorityText => _backgroundPriorityText?.Value;
+
+    ObservableAsPropertyHelper<string?>? _reloadFailureText;
+    /// The standing reload outcome's line. Not gated on the attach: a reload that left the daemon
+    /// unreachable is exactly the outcome this line exists to show.
+    public string? ReloadFailureText => _reloadFailureText?.Value;
+
+    ObservableAsPropertyHelper<bool>? _isReloading;
+    public bool IsReloading => _isReloading?.Value ?? false;
+
+    ObservableAsPropertyHelper<bool>? _showsReloadBlock;
+    public bool ShowsReloadBlock => _showsReloadBlock?.Value ?? false;
+
+    public ReactiveCommand<Unit, Unit> ReloadDaemonCommand { get; }
 
     ObservableAsPropertyHelper<AttachState>? _state;
     public AttachState State => _state?.Value ?? AttachState.Connecting;
@@ -184,6 +207,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Opens the re-auth sign-in surface. Inert without an action to route it to.
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+    public ReactiveCommand<Unit, Unit> SetupCommand { get; }
+    public bool CanOpenSetup { get; }
+    public HistoryImportRun? HistoryImport { get; }
+    public bool HistoryImportVisible => HistoryImport is not null;
+    public string HistoryImportStatus => HistoryImport is not { } run ? ""
+        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.State is ImportRunState.Failed or ImportRunState.Cancelled
+            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
+        : $"History imported · {run.Imported:N0} sessions uploaded";
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -280,7 +312,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
-            bool? appMenuInWindow = null) {
+            bool? appMenuInWindow = null, Action? requestSetup = null,
+            HistoryImportRun? historyImport = null,
+            IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -309,6 +344,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
+        CanOpenSetup = requestSetup is not null;
+        SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());
+        HistoryImport = historyImport;
         var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
@@ -345,7 +383,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         home?.AttachDaemonRecovery(
             StartDaemonCommand, RetryCommand, canStart, canRetry, _startMessageChanges);
 
+        var reloadAction = reloadDaemon ?? (_ => Task.CompletedTask);
+        ReloadDaemonCommand = ReactiveCommand.CreateFromTask(
+            (CancellationToken ct) => reloadAction(ct),
+            service.Status
+                .CombineLatest(isReloading ?? Observable.Return(false), (st, reloading) => st.State == AttachState.Connected && !reloading)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler));
+
         this.WhenActivated(disposables => {
+            if (historyImport is not null)
+                historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
 
@@ -414,6 +465,34 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             _restartPendingText = pendingWhileConnected.Select(p => p ? RestartPendingMessage : null)
                 .ToProperty(this, x => x.RestartPendingText, (string?)null)
+                .DisposeWith(disposables);
+
+            var backgroundSource = (backgroundPriority ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
+            var reloadingSource  = (isReloading ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
+            var reloadSource     = (reloadState ?? Observable.Return<ReloadState?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            var backgroundWhileConnected = status
+                .CombineLatest(backgroundSource, (st, bg) => bg && st.State == AttachState.Connected)
+                .DistinctUntilChanged();
+            _backgroundPriority = backgroundWhileConnected
+                .ToProperty(this, x => x.BackgroundPriority, false)
+                .DisposeWith(disposables);
+            _backgroundPriorityText = backgroundWhileConnected.Select(b => b ? BackgroundPriorityMessage : null)
+                .ToProperty(this, x => x.BackgroundPriorityText, (string?)null)
+                .DisposeWith(disposables);
+
+            _isReloading = reloadingSource
+                .ToProperty(this, x => x.IsReloading, false)
+                .DisposeWith(disposables);
+
+            var failureText = reloadSource.Select(state => state is null ? null : ReloadCopy.For(state));
+            _reloadFailureText = failureText
+                .ToProperty(this, x => x.ReloadFailureText, (string?)null)
+                .DisposeWith(disposables);
+            _showsReloadBlock = backgroundWhileConnected
+                .CombineLatest(failureText, (bg, text) => bg || text is not null)
+                .DistinctUntilChanged()
+                .ToProperty(this, x => x.ShowsReloadBlock, false)
                 .DisposeWith(disposables);
 
             _state = status.Select(s => s.State)

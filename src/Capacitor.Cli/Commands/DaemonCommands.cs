@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
@@ -648,6 +649,13 @@ public sealed class DaemonCommands(
             ? $"running (PID {pid})"
             : $"running (PID {pid}, starting — not yet serving)";
 
+    /// <summary>The status line for a service job launchd holds in the background band; null for any
+    /// other spawn type, including none.</summary>
+    internal static string? DescribePriority(string daemonName, string? loadedSpawnType) =>
+        SpawnTypes.IsBackgroundBand(loadedSpawnType)
+            ? $"  priority: loaded as {loadedSpawnType} — background priority; run `kcap daemon service refresh --name {daemonName} --force` to reload (ends this daemon's hosted agents)"
+            : null;
+
     async Task<int> Status(string[] args) {
         string? explicitName;
 
@@ -714,9 +722,11 @@ public sealed class DaemonCommands(
             }
 
             if (manager is not null) {
-                var st = manager.Status(DaemonStore.Sanitize(name)).State;
-                if (st != ServiceState.NotInstalled)
-                    await Console.Out.WriteLineAsync($"  service: {st} ({manager.Describe()})");
+                var query = manager.Query(DaemonStore.Sanitize(name));
+                if (query.Probe == LabelProbe.Loaded && query.State != ServiceState.NotInstalled)
+                    await Console.Out.WriteLineAsync($"  service: {query.State} ({manager.Describe()})");
+                if (DescribePriority(name, query.LoadedSpawnType) is { } priority)
+                    await Console.Out.WriteLineAsync(priority);
             }
         }
 
@@ -746,7 +756,7 @@ public sealed class DaemonCommands(
             claude.UserConfigJson, claude.UserSettings,
             McpDoctorSection.DefaultJsonRegistrations(harnesses),
             harnesses.Of<CodexHarness>().Paths.ConfigToml,
-            Environment.ProcessPath);
+            Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null);
         await Console.Out.WriteLineAsync();
 
         store.EnsureDirectory();

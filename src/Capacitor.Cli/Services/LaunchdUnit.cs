@@ -11,17 +11,59 @@ static class LaunchdUnit {
     public static string Label(string id) => LabelPrefix + id;
 
     // Adaptive lets macOS hold the job at background priority 4, and under load that starves the hub
-    // heartbeat into a reconnect storm. Plists written before Standard still carry the Adaptive line
-    // byte for byte, and UpgradeProcessType matches it exactly.
-    const string AdaptiveProcessTypeLine = "  <key>ProcessType</key><string>Adaptive</string>\n";
+    // heartbeat into a reconnect storm. Background does the same.
     const string StandardProcessTypeLine = "  <key>ProcessType</key><string>Standard</string>\n";
+    const string AdaptiveValue   = "Adaptive";
+    const string BackgroundValue = "Background";
 
-    /// <summary>The plist with this writer's Adaptive line switched to Standard, or null when it has no
-    /// such line — already current, or not shaped the way this writer writes it.</summary>
-    public static string? UpgradeProcessType(string plistXml) =>
-        plistXml.Contains(AdaptiveProcessTypeLine, StringComparison.Ordinal)
-            ? plistXml.Replace(AdaptiveProcessTypeLine, StandardProcessTypeLine, StringComparison.Ordinal)
-            : null;
+    /// <summary>The plist with its top-level <c>ProcessType</c> value switched from Adaptive or Background to
+    /// Standard, every other byte intact; null when there is nothing to splice — no such key, a value that
+    /// is not one of those two, a value with markup inside it, or a document that does not parse. Null is
+    /// not a verdict on the plist: the caller validates <c>upgraded ?? original</c> itself.</summary>
+    public static string? UpgradeProcessType(string plistXml) {
+        XDocument doc;
+        try { doc = XDocument.Parse(plistXml, LoadOptions.SetLineInfo); }
+        catch (System.Xml.XmlException) { return null; }
+
+        var topDict = doc.Root?.Element("dict");
+        if (topDict is null) return null;
+
+        XElement? value;
+        try { value = TopLevelValue(topDict, "ProcessType"); }
+        catch (InvalidDataException) { return null; }
+        if (value is null || value.Name != "string") return null;
+
+        // Exactly one plain text node: a comment or CDATA inside the element is not a value this
+        // writer produced, and the byte check below would not describe it.
+        if (value.FirstNode is not XText text || text is XCData || text.NextNode is not null) return null;
+        if (text.Value is not (AdaptiveValue or BackgroundValue)) return null;
+
+        // LinePosition is the column of the element name's first character; the '<' is one before.
+        var info = (System.Xml.IXmlLineInfo)value;
+        if (!info.HasLineInfo()) return null;
+        var start = OffsetOf(plistXml, info.LineNumber, info.LinePosition - 1);
+        if (start < 0) return null;
+
+        var element = $"<string>{text.Value}</string>";
+        if (start + element.Length > plistXml.Length || string.CompareOrdinal(plistXml, start, element, 0, element.Length) != 0) return null;
+
+        var valueStart = start + "<string>".Length;
+        var rewritten  = string.Concat(plistXml.AsSpan(0, valueStart), "Standard", plistXml.AsSpan(valueStart + text.Value.Length));
+        return DeclaresStandardProcessType(rewritten) ? rewritten : null;
+    }
+
+    /// <summary>Character offset of a 1-based line and column, walking the source's own line endings so
+    /// LF and CRLF documents both map correctly; -1 when the position is outside the text.</summary>
+    static int OffsetOf(string source, int line, int column) {
+        var offset = 0;
+        for (var current = 1; current < line; current++) {
+            var newline = source.IndexOf('\n', offset);
+            if (newline < 0) return -1;
+            offset = newline + 1;
+        }
+        var position = offset + column - 1;
+        return position >= 0 && position <= source.Length ? position : -1;
+    }
 
     /// <summary>True when the plist's top-level <c>ProcessType</c> is Standard, however it is formatted.
     /// An unparseable plist is not.</summary>
@@ -34,11 +76,56 @@ static class LaunchdUnit {
         }
     }
 
-    /// <summary>True when <c>launchctl print</c> shows the loaded job running as Adaptive. launchd reads
-    /// <c>ProcessType</c> only when the job loads, so a rewritten plist leaves this true until a reload.</summary>
-    public static bool LoadedAsAdaptive(string printStdout) =>
-        printStdout.Split('\n').Any(static line =>
-            line.Trim().StartsWith("spawn type = adaptive", StringComparison.OrdinalIgnoreCase));
+    /// <summary>The word on <c>launchctl print</c>'s <c>spawn type = &lt;word&gt; (&lt;n&gt;)</c> line, lower-cased,
+    /// or null when the print has no such line. launchd reads the plist only when the job loads, so this
+    /// lags a rewritten plist until a reload.</summary>
+    public static string? LoadedSpawnType(string printStdout) {
+        foreach (var line in printStdout.Split('\n')) {
+            var t = line.Trim();
+            if (!t.StartsWith("spawn type = ", StringComparison.OrdinalIgnoreCase)) continue;
+            var rest = t["spawn type = ".Length..].Trim();
+            var end  = rest.IndexOf(' ');
+            var word = (end < 0 ? rest : rest[..end]).Trim();
+            return word.Length == 0 ? null : word.ToLowerInvariant();
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The plist with its daemon binary (the first <c>ProgramArguments</c> entry) replaced by
+    /// <paramref name="binary"/>, or null when the binary is already that or the plist is not shaped the
+    /// way this writer writes it. Text-level, so every other byte of the unit survives.
+    /// </summary>
+    public static string? WithBinary(string plistXml, string binary) {
+        string? current;
+        try { current = BinaryFromPlist(plistXml); }
+        catch (Exception ex) when (ex is System.Xml.XmlException or InvalidDataException) { return null; }
+
+        if (current is null || current == binary) return null;
+
+        const string key = "<key>ProgramArguments</key><array>";
+        var at = plistXml.IndexOf(key, StringComparison.Ordinal);
+        if (at < 0) return null;
+
+        var oldElement = $"<string>{ServiceText.Xml(current)}</string>";
+        var start      = plistXml.IndexOf("<string>", at + key.Length, StringComparison.Ordinal);
+        if (start < 0 || string.CompareOrdinal(plistXml, start, oldElement, 0, oldElement.Length) != 0) return null;
+
+        var rewritten = string.Concat(plistXml.AsSpan(0, start), $"<string>{Guarded("binary path", binary)}</string>",
+            plistXml.AsSpan(start + oldElement.Length));
+
+        return BinaryFromPlist(rewritten) == binary ? rewritten : null;
+    }
+
+    /// <summary>The program <c>launchctl print</c> shows the loaded job running, or null when it shows none.
+    /// launchd reads the plist only when the job loads, so this lags a rewritten plist until a reload.</summary>
+    public static string? LoadedProgram(string printStdout) {
+        foreach (var line in printStdout.Split('\n')) {
+            var t = line.Trim();
+            if (t.StartsWith("program = ", StringComparison.Ordinal)) return t["program = ".Length..];
+        }
+        return null;
+    }
 
     /// <summary>The Library/LaunchAgents directory under the given home.</summary>
     public static string AgentsDir(UserHome home) =>

@@ -31,7 +31,7 @@ public class McpFlowsServerStartAgentTests {
     JsonObject ToolCall(JsonObject? arguments = null) => new() {
         ["params"] = new JsonObject {
             ["name"]      = "start_agent",
-            ["arguments"] = arguments ?? new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["work_item"] = "none" }
+            ["arguments"] = arguments ?? new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry", ["work_item"] = "none" }
         }
     };
 
@@ -150,7 +150,7 @@ public class McpFlowsServerStartAgentTests {
     [Test]
     public async Task A_call_that_is_refused_locally_sends_nothing() {
         using var server = Answering(200, Requested);
-        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry." };
+        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry" };
 
         var (text, isError) = await CallAsync(server, arguments);
 

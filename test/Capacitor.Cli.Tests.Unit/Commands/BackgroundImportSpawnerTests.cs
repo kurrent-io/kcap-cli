@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Commands;
+using TUnit.Assertions.Enums;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
@@ -39,6 +40,29 @@ public class BackgroundImportSpawnerTests {
         await Assert.That(psi.RedirectStandardInput && psi.RedirectStandardOutput && psi.RedirectStandardError).IsTrue();
         await Assert.That(launch.Status).IsEqualTo(BackgroundImportStatus.Running);
         await Assert.That(File.Exists(launch.LogPath!)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_plan_request_runs_import_yes_with_the_plan_variable() {
+        var request = Request() with { PlanPath = "/cfg/import-plan-x.json" };
+
+        var psi = BackgroundImportSpawner.BuildStartInfo(Config.Root, request, "/cfg/import-x.log");
+
+        await Assert.That(psi.ArgumentList.ToList()).IsEquivalentTo(["import", "--yes"], CollectionOrdering.Matching);
+        await Assert.That(psi.Environment[ImportPlan.EnvVar]).IsEqualTo("/cfg/import-plan-x.json");
+        await Assert.That(psi.Environment[DetachedImportLog.EnvVar]).IsEqualTo("/cfg/import-x.log");
+        await Assert.That(psi.Environment[ProfileOverrides.ProfileVar]).IsEqualTo("work");
+    }
+
+    /// A parent carrying a plan variable is what makes its removal observable.
+    [Test]
+    public async Task A_plain_request_keeps_the_all_arguments() {
+        using var _ = EnvScope.Exclusive(ImportPlan.EnvVar, "/elsewhere/import-plan-y.json");
+
+        var psi = BackgroundImportSpawner.BuildStartInfo(Config.Root, Request(), "/cfg/import-x.log");
+
+        await Assert.That(psi.ArgumentList.ToList()).IsEquivalentTo(["import", "--all", "--yes", "--skip-title"], CollectionOrdering.Matching);
+        await Assert.That(psi.Environment.ContainsKey(ImportPlan.EnvVar)).IsFalse();
     }
 
     [Test]

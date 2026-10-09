@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -6,7 +8,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
-using Capacitor.App.Views.Onboarding;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Time.Testing;
@@ -86,13 +88,18 @@ public class DaemonStepViewModelTests {
         public (string Profile, string Server, string DaemonName) UnderConfigLock = (Profile, RawServer, DaemonName);
         public string? TerminalPath = "/usr/bin:/bin";
 
-        public Harness() {
+        public Harness(bool withName = false) {
             Time   = new TimerCountingTimeProvider(Clock);
             Claims = new ConsentFlipClaims(_config.Root);
+            Name   = withName ? new MachineNameViewModel(_config.Root, "first-name") : null;
             Vm = new DaemonStepViewModel(
                 Cli, Lane.RunAsync, () => Identity, Observation, Ops, Claims, () => UnderConfigLock, Surface,
-                _ => Task.FromResult<string?>(TerminalPath), Time);
+                _ => Task.FromResult<string?>(TerminalPath), Time, Name);
         }
+
+        public readonly MachineNameViewModel? Name;
+
+        public ConfigRoot Root => _config.Root;
 
         public void ArmClaim() => Claims.Arm(new ConsentFlipClaim(Profile, CanonicalServer));
 
@@ -114,6 +121,28 @@ public class DaemonStepViewModelTests {
     }
 
     // ── gate / precondition rows ────────────────────────────────────────────
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Real_async_status_and_mutation_results_update_the_view_model_on_the_UI_thread() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var status = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Cli.StatusBehavior = _ => status.Task;
+            var wrongThread = false;
+            h.Vm.PropertyChanged += (_, _) => wrongThread |= !Dispatcher.UIThread.CheckAccess();
+            var enter = h.Enter();
+            await Task.Run(() => status.SetResult(Snap()));
+            await enter;
+            var mutation = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Lane.Behavior = (_, _) => mutation.Task;
+            var action = h.Act();
+            await Task.Run(() => mutation.SetResult(new MutationOutcome.Succeeded()));
+            await action;
+            await Assert.That(wrongThread).IsFalse();
+            await Assert.That(h.Vm.Satisfied).IsTrue();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -185,6 +214,23 @@ public class DaemonStepViewModelTests {
         await Assert.That(affordance).IsEqualTo(DaemonAffordance.None);
         await Assert.That(message).IsEqualTo(DaemonStepViewModel.CliMissingMessage);
         await Assert.That(statusCalls).IsEqualTo(0);
+    }
+
+    /// A PATH lookup that finds nothing throws from the spawn. That is not an unreadable service.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_CLI_the_process_cannot_start_is_missing() {
+        var (row, message) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Cli.StatusBehavior = _ => throw new Win32Exception(2);
+
+            await h.Enter();
+
+            return (h.Vm.Row, h.Vm.Message);
+        });
+
+        await Assert.That(row).IsEqualTo(DaemonRow.CliMissing);
+        await Assert.That(message).IsEqualTo(DaemonStepViewModel.CliMissingMessage);
     }
 
     [Test]
@@ -833,7 +879,7 @@ public class DaemonStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Leaving_mid_mutation_detaches_the_waiter_and_never_vetoes() {
+    public async Task Going_back_mid_mutation_detaches_the_waiter() {
         var (observedCancel, canLeave, status) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             h.Status(Snap());
@@ -851,7 +897,7 @@ public class DaemonStepViewModelTests {
             var action = h.Act();
             await entered.Task;
 
-            var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var left = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
             await action;
 
             return (cancelled.Task.IsCompleted, left, h.Vm.Status);
@@ -860,6 +906,47 @@ public class DaemonStepViewModelTests {
         await Assert.That(observedCancel).IsTrue();
         await Assert.That(canLeave).IsTrue();
         await Assert.That(status).IsEqualTo(DaemonStepViewModel.DetachedMessage);
+    }
+
+    /// The service is installed under the name on the page, so the name is saved, and the row read
+    /// again, before the install runs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Enabling_saves_the_machine_name_first() {
+        var (saved, statusReadsBefore, statusReadsAfter, installs) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness(withName: true);
+            h.Status(Snap());
+            await h.Enter();
+            var before = h.Cli.StatusCallCount;
+            h.Name!.DaemonName = "renamed";
+
+            await h.Act();
+
+            var name = ConfigMutator.LoadPure(AppConfig.GetConfigPath(h.Root)).Profiles.Values.Single().Daemon?.Name;
+            return (name, before, h.Cli.StatusCallCount, h.Lane.Requests.Count);
+        });
+
+        await Assert.That(saved).IsEqualTo("renamed");
+        await Assert.That(statusReadsAfter).IsGreaterThan(statusReadsBefore);
+        await Assert.That(installs).IsEqualTo(1);
+    }
+
+    /// The daemon is required: moving on without one is refused, and says why.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(WizardNavigation.Next)]
+    [Arguments(WizardNavigation.Skip)]
+    public async Task Moving_on_without_a_running_daemon_is_refused(WizardNavigation direction) {
+        var (left, status) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Status(Snap());
+            await h.Enter();
+
+            return (await h.Vm.CanLeaveAsync(direction, CancellationToken.None), h.Vm.Status);
+        });
+
+        await Assert.That(left).IsFalse();
+        await Assert.That(status).IsEqualTo(DaemonStepViewModel.RequiredMessage);
     }
 
     [Test]
@@ -895,7 +982,7 @@ public class DaemonStepTemplateTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_window_selects_a_template_for_the_daemon_step() {
-        var (actionButton, refreshButton, messageText) = await AvaloniaSession.DispatchAsync(async () => {
+        var (actionButton, refreshButton, messageText, ranks) = await AvaloniaSession.DispatchAsync(async () => {
             using var temp = new TempClaims();
             var step = new DaemonStepViewModel(
                 new FakeKcapCli { StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
@@ -906,29 +993,44 @@ public class DaemonStepTemplateTests {
                 () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
                 _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
 
-            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
+            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
             var action  = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonActionButton");
             var refresh = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "DaemonRefreshButton");
+            var next    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "NextButton");
+            var skip    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "SkipButton");
+            var back    = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "BackButton");
             var message = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(t => t.Name == "DaemonMessageText");
+            var ranks   = (
+                NextPrimary: next?.Classes.Contains("frPrimary") == true,
+                NextSecondary: next?.Classes.Contains("frSecondary") == true,
+                BackSecondary: back?.Classes.Contains("frSecondary") == true,
+                BackColumn: back is null ? -1 : Grid.GetColumn(back),
+                SkipColumn: skip is null ? -1 : Grid.GetColumn(skip),
+                NextColumn: next is null ? -1 : Grid.GetColumn(next));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (action, refresh, message?.Text);
+            return (action, refresh, message?.Text, ranks);
         });
 
         await Assert.That(actionButton).IsNotNull();
-        await Assert.That(actionButton!.Content).IsEqualTo("Enable daemon");
-        await Assert.That(actionButton.IsVisible).IsTrue();
+        await Assert.That(actionButton!.IsVisible).IsTrue();
+        await Assert.That(actionButton.Classes.Contains("frPrimary")).IsTrue();
         await Assert.That(refreshButton).IsNotNull();
         await Assert.That(refreshButton!.IsVisible).IsFalse();
         await Assert.That(messageText).IsEqualTo(DaemonStepViewModel.NotInstalledMessage);
+        await Assert.That(ranks.NextPrimary).IsFalse();
+        await Assert.That(ranks.NextSecondary).IsTrue();
+        await Assert.That(ranks.BackSecondary).IsTrue();
+        await Assert.That(ranks.BackColumn).IsLessThan(ranks.SkipColumn);
+        await Assert.That(ranks.SkipColumn).IsLessThan(ranks.NextColumn);
     }
 
     [Test]
@@ -944,10 +1046,10 @@ public class DaemonStepTemplateTests {
                 () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
                 _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
 
-            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => [])]);
+            var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
 
-            var window = new OnboardingWindow { DataContext = vm };
+            var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
@@ -964,6 +1066,54 @@ public class DaemonStepTemplateTests {
         await Assert.That(actionVisible).IsFalse();
         await Assert.That(refreshVisible).IsFalse();
         await Assert.That(messageText).IsEqualTo(DaemonStepViewModel.RequiresSignInMessage);
+    }
+
+    /// The status read resumes off the UI thread, after the button is already bound and disabled.
+    /// The re-enable has to cross the dispatcher; otherwise Check again and Enable stay dead.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_background_status_result_reenables_the_bound_buttons() {
+        var (refreshEnabled, actionEnabled) = await AvaloniaSession.DispatchAsync(async () => {
+            var refresh = await ShowUntilStatusAsync(null, "DaemonRefreshButton");
+            var action  = await ShowUntilStatusAsync(
+                new ServiceSnapshot("kcap-daemon", false, "not_installed", null, "/opt/kcap/kcap-daemon", null, null, false, false),
+                "DaemonActionButton");
+            return (refresh, action);
+        });
+
+        await Assert.That(refreshEnabled).IsTrue();
+        await Assert.That(actionEnabled).IsTrue();
+    }
+
+    /// Shows the pane while status is still in flight, then completes that read off the UI thread.
+    static async Task<bool> ShowUntilStatusAsync(ServiceSnapshot? snapshot, string buttonName) {
+        using var temp = new TempClaims();
+        var gate = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var step = new DaemonStepViewModel(
+            new FakeKcapCli { StatusBehavior = _ => gate.Task },
+            (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
+            () => ("default", "https://example.test", "kcap-daemon"),
+            new NeverObserved(), new ScriptedLocalControlOps(), temp.Claims,
+            () => ("default", "https://example.test", "kcap-daemon"), new FakeLifecycleSurface(),
+            _ => Task.FromResult<string?>("/usr/bin"), TimeProvider.System);
+
+        var vm = new OnboardingViewModel([step, new DoneStepViewModel(() => DoneFacts.Empty)]);
+        var window = new MainWindow { Onboarding = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var button = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == buttonName);
+        if (button.IsEffectivelyEnabled)
+            throw new InvalidOperationException($"{buttonName} was enabled before status returned");
+
+        gate.SetResult(snapshot);
+        await vm.PendingEnterForTesting;
+        Dispatcher.UIThread.RunJobs();
+
+        var enabled = button.IsEffectivelyEnabled && button.IsVisible;
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+        return enabled;
     }
 
     sealed class NeverObserved : IDaemonObservation {

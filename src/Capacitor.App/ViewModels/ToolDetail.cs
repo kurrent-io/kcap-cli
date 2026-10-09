@@ -41,6 +41,31 @@ public static class ToolDetail {
         return "";
     }
 
+    /// The one argument a catalogued kcap row shows, first line only, elided like any detail.
+    public static string ForKey(string? inputJson, string? key) {
+        if (string.IsNullOrEmpty(inputJson) || string.IsNullOrEmpty(key)) return "";
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            if (!doc.RootElement.IsObject) return "";
+            return doc.RootElement.Str(key) is { } s && s.Trim().Length > 0 ? TextElision.End(FirstLine(s), MaxLength) : "";
+        } catch (JsonException) {
+            return "";
+        }
+    }
+
+    /// For a tool nothing describes: the first string argument, in declaration order.
+    public static string FirstString(string? inputJson) {
+        if (string.IsNullOrEmpty(inputJson)) return "";
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            if (!doc.RootElement.IsObject) return "";
+            foreach (var property in doc.RootElement.EnumerateObject())
+                if (property.Value.IsString && property.Value.GetString() is { } s && s.Trim().Length > 0)
+                    return TextElision.End(FirstLine(s), MaxLength);
+        } catch (JsonException) { }
+        return "";
+    }
+
     static string Relative(string path, string? root) {
         if (string.IsNullOrEmpty(root)) return path;
         var prefix = root.TrimEnd('/') + "/";

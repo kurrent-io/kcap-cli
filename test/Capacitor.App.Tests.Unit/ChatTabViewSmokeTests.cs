@@ -39,6 +39,8 @@ public class ChatTabViewSmokeTests {
     const string ToolCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
     const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
     const string ToolResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
+    const string PublishCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_pub","name":"mcp__plugin_kcap_kcap-artefacts__publish_artefact","input":{"title":"Retention brief","html":"<p>x</p>"}}]}}""";
+    const string PublishResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_pub","content":"{\"artefact\":{\"artefact_id\":\"01ec\",\"title\":\"Retention brief\",\"owner_user_id\":\"u1\",\"visibility\":\"org\",\"latest_version\":1,\"updated_at\":\"2026-10-07T10:00:00Z\",\"is_owner\":true,\"url\":\"https://kurrent.kcap.ai/artefacts/01ec\"}}"}]}}""";
     const string ToolErrorLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}""";
     static readonly TimeSpan CrDelay = TimeSpan.FromMilliseconds(150);
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
@@ -402,6 +404,34 @@ public class ChatTabViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { "https://example.com/docs" });
+            await host.CloseAsync();
+        });
+    }
+
+    /// A labelled row shows its verb phrase beside the detail; once the result lands the same item
+    /// renders as a card with the page's name and its actions, and the plain row is gone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_publish_row_turns_into_a_card_when_its_result_lands() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("pub.jsonl", [PublishCallLine]);
+            await host.LoadAsync(path);
+
+            var label = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
+            await Assert.That(label.Text).IsEqualTo("Published page");
+            await Assert.That(host.View.GetVisualDescendants().OfType<Control>().Any(c => c.Name == "ToolCard" && c.IsEffectivelyVisible)).IsFalse();
+
+            await host.AppendLinesAndTickAsync(path, PublishResultLine);
+
+            await Assert.That(host.View.GetVisualDescendants().OfType<Border>().Count(b => b.Name == "ToolCard" && b.IsEffectivelyVisible)).IsEqualTo(1);
+            var title = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardTitle");
+            var name = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardName");
+            await Assert.That(title.Text).IsEqualTo("Published page");
+            await Assert.That(name.Text).IsEqualTo("Retention brief");
+            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink").IsEffectivelyVisible).IsTrue();
+            await Assert.That(ToolRows(host.View).Any(r => r.IsEffectivelyVisible)).IsFalse();
             await host.CloseAsync();
         });
     }
@@ -1435,6 +1465,41 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Pins that a trailing group hidden behind a question card whose card has not arrived does not
+    /// loop layout. A zero-height last row is re-estimated at the average row size on every pass,
+    /// so the extent grows each pass, follow-tail chases it, and the render loop gives up with
+    /// "Infinite layout loop detected". The rows above genuinely have to be uneven — with uniform
+    /// rows the estimate is exact and this test proves nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_waiting_for_its_card_does_not_loop_layout() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var prose = string.Join("\\n\\n", Enumerable.Range(1, 60).Select(i => $"Paragraph {i} of a long reply that wraps across the column."));
+                var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
+                const string question = """{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}""";
+                var ask = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q-tool","name":"AskUserQuestion","input":{{{question}}}}]}}""";
+                var path = Tmp.CreateFile("pending-question.jsonl",
+                    [tall, tall, tall, UserLine, ThinkingLine, CallLine(1), ResultLine(1), UserLine, ThinkingLine, CallLine(2), ResultLine(2),
+                     ThinkingLine, CallLine(3), ResultLine(3), CallLine(4), ResultLine(4), ask]);
+                await host.LoadAsync(path);
+                await Assert.That(host.Chat.Items[^1] is ToolGroupItem { SuppressedForPendingQuestion: true }).IsTrue();
+
+                var extent = host.Scroll.Extent.Height;
+                for (var i = 0; i < 5; i++) {
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    Dispatcher.UIThread.RunJobs();
+                }
+
+                await Assert.That(host.Scroll.Extent.Height).IsEqualTo(extent);
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally {
+                await host.CloseAsync();
+            }
+        });
+    }
+
     /// Pins the reader at the bottom across a series answer, by click and by Enter. Either is an
     /// input inside the list, and the card swaps to the next question in the same layout pass; that
     /// growth is the card's, not the reader scrolling, so following has to carry on and land the
@@ -1652,15 +1717,20 @@ public class ChatTabViewSmokeTests {
     }
 
     /// A command's name can run to 80 characters; on a narrow pane the name gives way, never the
-    /// state line with its timer.
+    /// state line with its timer. 550 is the chat pane at the window's minimum width, beside the
+    /// rail and the work-context pane.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_long_command_name_never_pushes_the_state_line_out_of_the_banner() {
+    [Arguments(600, true)]
+    [Arguments(550, true)]
+    [Arguments(550, false)]
+    public async Task A_long_command_name_never_pushes_the_state_line_out_of_the_banner(double width, bool described) {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            host.Window.Width = 600;
-            var description = "Run every integration suite against the staging server and collect the coverage";
-            var call = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make it","description":"{{{description}}}"}}]}}""";
+            host.Window.Width = width;
+            var text = "Run every integration suite against the staging server and collect the coverage";
+            var input = described ? $$$"""{"command":"make it","description":"{{{text}}}"}""" : $$$"""{"command":"{{{text}}}"}""";
+            var call = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{{{input}}}}]}}""";
             var launch = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
             await host.LoadAsync(Tmp.CreateFile("sh.jsonl", [call, launch]));
             host.Settle();

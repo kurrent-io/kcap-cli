@@ -249,6 +249,28 @@ public class AppMutationLaneWiringTests {
     }
 
     [Test]
+    public async Task Reload_outcomes_are_acknowledged_without_posting_to_the_attention_lane() {
+        var surface = new FakeLifecycleSurface();
+        var request = new MutationRequest(MutationVerb.Reload, "default", "https://cap.example.test", "daemon-a");
+        var presented = 0;
+
+        foreach (MutationOutcome outcome in new MutationOutcome[] {
+                new MutationOutcome.Failed(1, "unit_missing", RecoverySurface.Attention),
+                new MutationOutcome.AttentionSkew("background_band"),
+                new MutationOutcome.Refused("reload_unsupported", RecoverySurface.Attention),
+                new MutationOutcome.UnconfirmedNoAttach() }) {
+            await AppUnderTest.PresentOutcomeAsync(
+                surface, new OutcomeEnvelope(request, outcome), (_, _) => throw new InvalidOperationException("no re-mutation"),
+                _ => Task.FromResult<string?>("/usr/bin"), () => "1.0.0", CancellationToken.None, markPresented: () => presented++);
+        }
+
+        await Assert.That(surface.AttentionMessages).IsEmpty();
+        await Assert.That(surface.StatusMessages).IsEmpty();
+        await Assert.That(surface.Prompts).IsEmpty();
+        await Assert.That(presented).IsEqualTo(4);
+    }
+
+    [Test]
     public async Task Failed_with_no_reason_token_falls_back_to_the_exit_code_token() {
         var surface = new FakeLifecycleSurface();
         var envelope = Envelope(new MutationOutcome.Failed(24, null, RecoverySurface.Attention));

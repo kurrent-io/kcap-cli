@@ -15,7 +15,7 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 /// </summary>
 /// <remarks>
 /// The settings file itself is written by
-/// <c>SetupCommand.InstallPlugin</c>; this type owns only the marker
+/// <see cref="ClaudePluginWriter"/>; this type owns only the marker
 /// side-channel and pre-marker detection. The marketplace source path
 /// is absolute and changes between npm installs, so a refresh on
 /// upgrade is meaningful — not just for command-string drift.
@@ -116,29 +116,7 @@ public static class ClaudePluginInstaller {
         var pluginsDir = Path.Combine(claudeHome, "plugins");
 
         try {
-            // No install record for the enabled key → Claude has nothing to load.
-            if (JsonNode.Parse(File.ReadAllText(Path.Combine(pluginsDir, "installed_plugins.json")))
-                    is not JsonObject installedRoot ||
-                installedRoot["plugins"] is not JsonObject plugins ||
-                plugins[enabledKey] is not { } entryNode)
-                return null;
-
-            // v2 records an array of per-scope installs. Both callers gate on the USER-scope
-            // settings.json enabled flag, so only a "user"-scoped install proves that flag's
-            // payload — a local/project-scoped install belonging to some unrelated repo must
-            // not make the plugin globally "effective". The bare-object shape (pre-v2
-            // compatibility) predates scopes and is accepted as-is.
-            List<JsonObject> entries = entryNode switch {
-                JsonArray arr => [.. arr.OfType<JsonObject>().Where(e =>
-                    e["scope"] is JsonValue sv && sv.TryGetValue<string>(out var scope) &&
-                    string.Equals(scope, "user", StringComparison.Ordinal))],
-                JsonObject single => [single],
-                _                 => []
-            };
-            // No eligible user-scoped record (v2 with only local/project installs, or an
-            // unrecognized shape) → not effective, and the directory-marketplace fallback
-            // below must not run either: it only excuses a PHANTOM cache path on an
-            // otherwise-eligible record, never the absence of an eligible record.
+            var entries = UserScopedInstalls(pluginsDir, enabledKey);
             if (entries.Count == 0) return null;
             foreach (var entry in entries) {
                 if (entry["installPath"] is JsonValue v && v.TryGetValue<string>(out var installPath) &&
@@ -169,6 +147,42 @@ public static class ClaudePluginInstaller {
         } catch {
             return null; // missing/malformed plugin records → fail closed
         }
+    }
+
+    /// <summary>True when <paramref name="settingsPath"/> enables the kcap plugin and
+    /// <c>installed_plugins.json</c> holds a user-scope install record for it, whether or not the
+    /// payload exists. False before Claude has first installed the plugin.</summary>
+    public static bool HasInstallRecord(string settingsPath) {
+        var enabledKey = EnabledKcapPluginKey(settingsPath);
+        var claudeHome = Path.GetDirectoryName(settingsPath);
+        if (enabledKey is null || string.IsNullOrEmpty(claudeHome)) return false;
+
+        try {
+            return UserScopedInstalls(Path.Combine(claudeHome, "plugins"), enabledKey).Count > 0;
+        } catch {
+            return false;
+        }
+    }
+
+    // An array entry is one install per scope. Callers gate on the USER-scope settings.json
+    // enabled flag, so only a "user"-scoped install proves that flag's payload; a local/project
+    // install belonging to an unrelated repo must not count. A persisted installed_plugins.json can
+    // still hold a bare object with no scope, which must keep counting as an install. Throws on
+    // unreadable or malformed records.
+    static List<JsonObject> UserScopedInstalls(string pluginsDir, string enabledKey) {
+        if (JsonNode.Parse(File.ReadAllText(Path.Combine(pluginsDir, "installed_plugins.json")))
+                is not JsonObject installedRoot ||
+            installedRoot["plugins"] is not JsonObject plugins ||
+            plugins[enabledKey] is not { } entryNode)
+            return [];
+
+        return entryNode switch {
+            JsonArray arr => [.. arr.OfType<JsonObject>().Where(e =>
+                e["scope"] is JsonValue sv && sv.TryGetValue<string>(out var scope) &&
+                string.Equals(scope, "user", StringComparison.Ordinal))],
+            JsonObject single => [single],
+            _                 => []
+        };
     }
 
     /// <summary>The first recognized kcap plugin key enabled in settings, else null.</summary>

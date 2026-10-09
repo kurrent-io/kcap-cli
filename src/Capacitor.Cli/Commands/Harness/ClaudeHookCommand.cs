@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -11,7 +12,6 @@ using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.Claude;
-using Capacitor.Cli.Policy;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -27,7 +27,7 @@ namespace Capacitor.Cli.Commands.Harness;
 public sealed class ClaudeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
-        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir) {
+        IProcessStarter starter, GitProviderRouter router, WorkingDirectory workdir, AccountStore accounts) {
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -727,7 +727,7 @@ public sealed class ClaudeHookCommand(
                 var slug = node?["slug"]?.GetValue<string>();
 
                 if (slug is not null) {
-                    var planContent = ReadPlanFile(slug, harnesses.Of<ClaudeHarness>().Paths);
+                    var planContent = ReadPlanFile(slug, ClaudeLayoutFor(transcriptPath));
 
                     if (planContent is not null) {
                         node!["plan_content"] = planContent;
@@ -849,7 +849,7 @@ public sealed class ClaudeHookCommand(
                     var resolvedSlug = responseNode["slug"]?.GetValue<string>();
 
                     if (resolvedSlug is not null) {
-                        var planContent = ReadPlanFile(resolvedSlug, harnesses.Of<ClaudeHarness>().Paths);
+                        var planContent = ReadPlanFile(resolvedSlug, ClaudeLayoutFor(transcriptPath));
 
                         if (planContent is not null) {
                             await PostPlanContentAsync(client, clock.Time, Url, sessionId, planContent);
@@ -1283,6 +1283,12 @@ public sealed class ClaudeHookCommand(
             return await task.WaitAsync(remaining, budget.Time);
         } catch { return null; }
     }
+
+    ClaudePaths ClaudeLayoutFor(string? transcriptPath) =>
+        transcriptPath is not null && accounts.TryLoad() is { } registry
+     && AccountPaths.ClaudeForTranscript(transcriptPath, registry, home) is { } paths
+            ? paths
+            : harnesses.Of<ClaudeHarness>().Paths;
 
     static string? ReadPlanFile(string slug, ClaudePaths paths) {
         var planPath = Path.Combine(paths.Plans, $"{slug}.md");

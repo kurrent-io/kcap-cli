@@ -4,7 +4,7 @@ using Capacitor.Models.Transcripts.Harness.Codex;
 
 namespace Capacitor.App.ViewModels;
 
-public enum ToolCategory { Read, Edit, Command, Search, WebSearch, Fetch, Skill, Agent, Plan, Question, Other }
+public enum ToolCategory { Read, Edit, Command, Search, WebSearch, Fetch, Skill, Agent, Plan, Question, Artefact, Work, Memory, Session, Flow, Other }
 
 /// What a group of settled tool calls says about itself. The name map keys on the name the
 /// transcript carries (Codex's rollout says `shell`, its hook says `Bash`); a name in no row is
@@ -40,10 +40,16 @@ public static class ToolSummary {
         ("Ran an agent", "Ran agents"),
         ("Updated the plan", "Updated the plan"),
         ("Asked a question", "Asked questions"),
+        ("Worked on a page", "Worked on pages"),
+        ("Tracked work", "Tracked work"),
+        ("Used team memory", "Used team memory"),
+        ("Recalled sessions", "Recalled sessions"),
+        ("Ran a flow", "Ran flows"),
         ("Called a tool", "Called tools"),
     ];
 
     public static ToolCategory Categorize(string name, string? inputJson) {
+        if (KcapToolCatalogue.Match(name) is { } kcap) return kcap.Category;
         var category = Names.TryGetValue(name, out var known) ? known : ToolCategory.Other;
         if (category is not (ToolCategory.Read or ToolCategory.Command) || string.IsNullOrEmpty(inputJson)) return category;
         try {
@@ -93,6 +99,11 @@ public static class ToolSummary {
         ToolCategory.Agent     => "Task",
         ToolCategory.Plan      => "Plan",
         ToolCategory.Question  => "Question",
+        ToolCategory.Artefact  => "Page",
+        ToolCategory.Work      => "Work",
+        ToolCategory.Memory    => "Memory",
+        ToolCategory.Session   => "Recall",
+        ToolCategory.Flow      => "Flow",
         _                      => "Tool",
     };
 

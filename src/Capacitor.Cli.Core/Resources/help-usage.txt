@@ -9,6 +9,9 @@ Getting Started:
   logout                           Remove stored credentials
   whoami                           Show current user; verify the server accepts your token
 
+Vendor accounts:
+  accounts                         Manage the Claude and Codex config directories kcap records
+
 Profiles:
   profile add <name> --server-url <url>  Add a server profile
   profile list                     Show all profiles
@@ -97,6 +100,7 @@ Plugin:
 
 Maintenance:
   update                           Check for and install updates
+  refresh                          Refresh the agent integrations kcap installed (runs after an update)
   feedback (--bug|--feedback) [-m <text>]  Report a bug or send feedback to Kurrent support
   cleanup                          Kill all orphaned watcher processes
   uninstall [--project] [--yes]    Remove kcap config + all agent integrations

@@ -28,6 +28,21 @@ public class AgentInstructionsWriterTests {
     }
 
     [Test]
+    public async Task IsInstalled_sees_only_a_complete_block() {
+        using var tmp = new TempDir();
+        var path = tmp.PathTo("AGENTS.md");
+
+        await Assert.That(AgentInstructionsWriter.IsInstalled(path)).IsFalse();
+
+        tmp.CreateFile("AGENTS.md", "# Mine\n" + AgentInstructionsWriter.BeginMarker + "\nno end\n");
+        await Assert.That(AgentInstructionsWriter.IsInstalled(path)).IsFalse();
+
+        File.WriteAllText(path, "# Mine\n");
+        AgentInstructionsWriter.Write(path, KcapAgentInstructions.Body);
+        await Assert.That(AgentInstructionsWriter.IsInstalled(path)).IsTrue();
+    }
+
+    [Test]
     public async Task Write_is_idempotent() {
         using var tmp = new TempDir();
         var path = tmp.PathTo("copilot-instructions.md");

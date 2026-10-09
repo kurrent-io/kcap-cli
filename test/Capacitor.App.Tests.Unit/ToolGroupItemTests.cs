@@ -179,4 +179,51 @@ public class ToolGroupItemTests {
         await Assert.That(bare.HasDetail).IsFalse();
         await Assert.That(bare.LineText).IsEqualTo("Bash");
     }
+
+    /// A card is the point of the group; folding hides settled rows, never a card.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_folded_group_keeps_its_cards_beside_the_live_calls() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var read = Call("Read", ToolCategory.Read);
+            var publish = new ToolCallItem("publish_artefact", "Retention brief", ToolCategory.Artefact, "Published page", ToolCardKind.Page, "{}");
+            var live = Call("Bash", ToolCategory.Command);
+            group.Add(read);
+            group.Add(publish);
+            group.Add(live);
+
+            publish.SetCard(new ToolCard(ToolCardKind.Page, "Published page", "Retention brief", "v1 · Org", "https://x/artefacts/1", null), open: null);
+            publish.Outcome = ToolOutcome.Done;
+            read.Outcome = ToolOutcome.Done;
+
+            await Assert.That(group.IsExpanded).IsFalse();
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { publish, live }, CollectionOrdering.Matching);
+            await Assert.That(group.LiveCalls).IsEquivalentTo(new[] { live });
+
+            group.Toggle();
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { read, publish, live }, CollectionOrdering.Matching);
+        });
+    }
+
+    /// A card attached after the call settled still surfaces in the folded list.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_set_after_settling_joins_the_folded_list() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Read", ToolCategory.Read);
+            var b = new ToolCallItem("declare_plan_document", "x.md", ToolCategory.Plan, "Declared document", ToolCardKind.Document, "{}");
+            group.Add(a);
+            group.Add(b);
+            a.Outcome = ToolOutcome.Done;
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HasVisibleCalls).IsFalse();
+
+            b.SetCard(new ToolCard(ToolCardKind.Document, "Declared plan", "x.md", "x.md", null, "x.md"), open: null);
+
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { b });
+            await Assert.That(group.HasVisibleCalls).IsTrue();
+        });
+    }
 }
