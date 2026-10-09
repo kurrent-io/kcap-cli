@@ -636,7 +636,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
             return [.. AccountAdoption.Of(env.Accounts, vendor).Where(a => !AccountDirectory.Same(a.Directory, defaultDirectory))];
         } catch (Exception ex) when (IsRegistryFailure(ex)) {
-            await RegistryWarningAsync(ex);
+            await RegistryUnavailableAsync(ex);
 
             return [];
         }
@@ -645,8 +645,19 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     static bool IsRegistryFailure(Exception ex) =>
         ex is InvalidDataException or IOException or UnauthorizedAccessException or TimeoutException or WaitHandleCannotBeOpenedException;
 
-    Task RegistryWarningAsync(Exception ex) =>
-        env.Stderr.WriteLineAsync($"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
+    /// <summary>
+    /// Whether a registry failure other than an unparseable file stopped this command reaching every
+    /// account. An unparseable registry names no account anyone could unwire, so deleting it loses
+    /// nothing; a locked or unreadable one may still list wired accounts, and only it can unwire them.
+    /// The exit code stays a warning's so <c>kcap plugin remove</c> keeps removing the default layout.
+    /// </summary>
+    public bool AccountsMayStillBeWired { get; private set; }
+
+    Task RegistryUnavailableAsync(Exception ex) {
+        if (ex is not InvalidDataException) AccountsMayStillBeWired = true;
+
+        return env.Stderr.WriteLineAsync($"Could not read the kcap account registry ({ex.Message}); only the default directory was updated.");
+    }
 
     /// <summary>Runs one account's wiring under the registry lock; null, after the registry warning, when the
     /// lock cannot be taken. Never call <see cref="AccountAdoption.EnsureDefault"/> inside: the lock is not
@@ -657,7 +668,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         try {
             lease = env.Accounts!.Lock();
         } catch (Exception ex) when (IsRegistryFailure(ex)) {
-            await RegistryWarningAsync(ex);
+            await RegistryUnavailableAsync(ex);
 
             return null;
         }

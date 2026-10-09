@@ -677,6 +677,38 @@ public class UninstallCommandTests {
         await Assert.That(File.Exists(Path.Combine(accounts.Directory, "accounts.json"))).IsTrue();
     }
 
+    [Test, ExcludeOn(OS.Windows)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Uninstall_keeps_an_unreadable_registry_and_reports_the_uninstall_incomplete() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+        var registry = Path.Combine(accounts.Directory, "accounts.json");
+        File.SetUnixFileMode(registry, UnixFileMode.None);
+
+        try {
+            var exit = await RunUninstall(fixture);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(File.Exists(registry)).IsTrue();
+        } finally {
+            File.SetUnixFileMode(registry, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Test]
+    public async Task Uninstall_deletes_an_unparseable_registry() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+        await File.WriteAllTextAsync(Path.Combine(accounts.Directory, "accounts.json"), "{ not json");
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+    }
+
     [Test]
     public async Task Project_scope_uninstall_also_deletes_the_account_registry() {
         await using var fixture = await Fixture.CreateAsync();

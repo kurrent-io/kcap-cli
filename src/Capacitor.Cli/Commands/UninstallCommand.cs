@@ -153,6 +153,12 @@ public sealed class UninstallCommand(
         // hooks file).
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--skills"]) != 0) hadFailures = true;
 
+        if (pluginCommand.AccountsMayStillBeWired) {
+            await Console.Error.WriteLineAsync(
+                "Some vendor accounts may still record to kcap: check them with `kcap accounts`, then re-run `kcap uninstall`.");
+            hadFailures = true;
+        }
+
         new GitHookInstaller(home).Remove();
 
         // Belt-and-braces marker cleanup. These hooks installers delete their

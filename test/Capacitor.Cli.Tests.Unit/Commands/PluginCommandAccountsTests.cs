@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
@@ -6,6 +7,7 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Mcp;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -142,10 +144,49 @@ public class PluginCommandAccountsTests {
         await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
         File.WriteAllText(Tmp.PathTo("accounts", "accounts.json"), "{ not json");
 
-        var exit = await new PluginCommand(env, Workdir).HandleAsync(["plugin", "remove"]);
+        var command = new PluginCommand(env, Workdir);
+        var exit    = await command.HandleAsync(["plugin", "remove"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(ClaudePluginInstaller.IsPluginEnabled(Home.PathTo(".claude", "settings.json"))).IsFalse();
+        await Assert.That(command.AccountsMayStillBeWired).IsFalse();
+    }
+
+    [Test, ExcludeOn(OS.Windows)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task User_remove_with_an_unreadable_registry_warns_and_flags_accounts_left_wired() {
+        var env = Env();
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
+        var registry = Tmp.PathTo("accounts", "accounts.json");
+        File.SetUnixFileMode(registry, UnixFileMode.None);
+
+        try {
+            var command = new PluginCommand(env, Workdir);
+            var exit    = await command.HandleAsync(["plugin", "remove"]);
+
+            await Assert.That(exit).IsEqualTo(0);
+            await Assert.That(env.Stderr.ToString()).Contains("kcap account registry");
+            await Assert.That(command.AccountsMayStillBeWired).IsTrue();
+        } finally {
+            File.SetUnixFileMode(registry, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Test]
+    public async Task User_remove_with_the_registry_lock_held_flags_accounts_left_wired() {
+        var env = Env();
+        Directory.CreateDirectory(Home.PathTo(".claude-work"));
+        AccountAdoption.EnsureDefault(env.Accounts!, HarnessId.Claude, Home.PathTo(".claude-work"), TimeProvider.System);
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install"]);
+
+        var command = new PluginCommand(env, Workdir);
+        int exit;
+        using (env.Accounts!.Lock())
+            exit = await Task.Run(() => command.HandleAsync(["plugin", "remove"]));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(command.AccountsMayStillBeWired).IsTrue();
+        await Assert.That(ClaudePluginInstaller.IsPluginEnabled(Home.PathTo(".claude-work", "settings.json"))).IsTrue();
     }
 
     [Test]
