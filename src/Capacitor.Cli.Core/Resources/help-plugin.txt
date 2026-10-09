@@ -139,10 +139,24 @@ Options:
                       `install --pi` writes a small kcap-owned, marker-delimited
                       block (non-destructive — preserves your own instructions)
                       that nudges Pi to use the kcap tools for why/history questions.
-  --tools-only        With --cursor, --copilot, --gemini, --kiro, --pi, --opencode or
-                      --antigravity: install only the tools (MCP servers, skills,
-                      steering instructions; the --skip-<vendor>-* flags still
-                      apply) and nothing that records sessions: no hooks, no Pi or
+  --mistral-vibe      Target Mistral Vibe: merge kcap's hooks into the shared
+                      ~/.vibe/hooks.toml (honours $VIBE_HOME) for pre_tool/
+                      post_tool/post_agent, register the kcap MCP servers in
+                      ~/.vibe/config.toml, and install the agent skills. Writes the
+                      bare `kcap hook --mistral-vibe` command, so kcap must be on
+                      PATH. Vibe loads hooks at startup — restart any running
+                      `vibe` session.
+  --skip-mistral-vibe-mcp
+                      With --mistral-vibe: skip registering the kcap MCP servers in
+                      ~/.vibe/config.toml (the [[mcp_servers]] tables).
+  --skip-mistral-vibe-skills
+                      With --mistral-vibe: skip installing the kcap skills into
+                      ~/.agents/skills.
+  --tools-only        With --cursor, --copilot, --gemini, --kiro, --pi, --opencode,
+                      --antigravity or --mistral-vibe: install only the tools (MCP
+                      servers, skills, steering instructions; the
+                      --skip-<vendor>-* flags still apply) and nothing that
+                      records sessions: no hooks, no Pi or
                       OpenCode live-ingest file, no Antigravity capture plugin, no
                       Kiro agent clone, default-agent switch or Kiro Crew hook, and
                       no git hook. Only Pi's MCP bridge needs kcap on PATH. Refused
@@ -284,6 +298,7 @@ Examples:
   kcap plugin install --pi                  # Install Pi extension (~/.pi/agent/extensions/kcap.ts)
   kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   kcap plugin install --antigravity         # Install Antigravity capture plugin (~/.gemini/config/plugins/kcap/)
+  kcap plugin install --mistral-vibe        # Install Mistral Vibe hooks (merge into ~/.vibe/hooks.toml) + MCP
   kcap plugin install --cursor --tools-only # Cursor MCP servers + agent skills, no hooks
   kcap plugin install --kiro --tools-only   # Kiro MCP servers + skills, default agent unchanged
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
@@ -296,4 +311,5 @@ Examples:
   kcap plugin remove --kiro                 # Restore previous default agent, delete kcap.json
   kcap plugin remove --opencode             # Delete ~/.config/opencode/plugins/kcap.ts
   kcap plugin remove --antigravity          # Remove the kcap plugin from ~/.gemini/config/plugins/kcap/
+  kcap plugin remove --mistral-vibe         # Remove kcap hooks + MCP from ~/.vibe/hooks.toml and config.toml
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

@@ -21,6 +21,13 @@ public class HostedHarnessCatalogTests {
     }
 
     [Test]
+    public async Task A_recording_only_harness_is_listed_only_when_advertised() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
+        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
+        await Assert.That(HostedHarnessCatalog.Build(["mistral-vibe"]).Single(o => o.Vendor == "mistral-vibe").Available).IsTrue();
+    }
+
+    [Test]
     public async Task Transport_family_matches_how_the_daemon_hosts_each_vendor() {
         var options = HostedHarnessCatalog.Build(null).ToDictionary(o => o.Vendor);
 

@@ -11,8 +11,10 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.Toml;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 
@@ -45,10 +47,10 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--skills"];
 
     const string MutuallyExclusiveMsg =
-        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, and --skills are mutually exclusive.";
+        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, and --skills are mutually exclusive.";
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -94,6 +96,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--pi")) return InstallPi(args);
         if (args.Contains("--opencode")) return InstallOpenCode(args);
         if (args.Contains("--antigravity")) return InstallAntigravity(args);
+        if (args.Contains("--mistral-vibe")) return InstallVibe(args);
 
         return InstallClaude(args);
     }
@@ -101,7 +104,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task<int> RefuseToolsOnlyAsync(string vendor, string reason) {
         await env.Stderr.WriteLineAsync(
             $"--tools-only is not supported for {vendor}: {reason}. "
-          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode and --antigravity."
+          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity and --mistral-vibe."
         );
 
         return 1;
@@ -131,6 +134,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--pi")) return await RemovePi(args);
         if (args.Contains("--opencode")) return await RemoveOpenCode(args);
         if (args.Contains("--antigravity")) return await RemoveAntigravity(args);
+        if (args.Contains("--mistral-vibe")) return await RemoveVibe(args);
 
         return await RemoveClaude(args);
     }
@@ -2359,6 +2363,96 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
+    }
+
+    async Task<int> InstallVibe(string[] args) {
+        var vibe        = env.Harnesses.Of<MistralVibeHarness>().Paths;
+        var hooksPath   = GetArg(args, "--mistral-vibe-hooks-path")  ?? vibe.HooksToml;
+        var configPath  = GetArg(args, "--mistral-vibe-config-path") ?? vibe.ConfigToml;
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = MistralVibeHooksInstaller.IsInstalled(hooksPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
+
+        if (refreshOnly && !hooksInstalled && !MistralVibeConfigToml.OwnsAnything(configPath)) return 0;
+
+        // hooks.toml writes the bare `kcap hook --mistral-vibe` command, so Vibe must find kcap on PATH.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Vibe hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
+            return 1;
+        }
+
+        var hooksCurrent = refreshOnly && File.Exists(hooksPath)
+                        && MistralVibeHooksInstaller.ReadMarker(hooksPath) == CapacitorVersion.Current();
+        var freshHookFailure = false;
+        if (!toolsOnly && !hooksCurrent) {
+            if (MistralVibeHooksInstaller.Install(hooksPath) != TomlConfigFile.Outcome.Failed) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly ? $"Vibe hooks refreshed ({hooksPath})" : $"Vibe hooks installed ({hooksPath})");
+            } else if (!refreshOnly) {
+                await env.Stderr.WriteLineAsync(
+                    $"Could not install Vibe hooks. If {hooksPath} exists, make sure it is valid TOML — "
+                  + "kcap leaves an unparseable hooks.toml untouched rather than overwrite your config. "
+                  + "Fix or remove it, then re-run.");
+                freshHookFailure = true;
+            } else {
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Vibe hooks ({hooksPath}); continuing with MCP registration.");
+            }
+        }
+
+        // Register the kcap MCP servers in ~/.vibe/config.toml ([[mcp_servers]]) so Vibe picks them up
+        // with no manual TOML edit. Non-destructive + idempotent; never fails the install.
+        if (!args.Contains("--skip-mistral-vibe-mcp"))
+            await RegisterVibeMcpServersAsync(configPath);
+
+        if (!args.Contains("--skip-mistral-vibe-skills"))
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Vibe");
+
+        return freshHookFailure ? 1 : 0;
+    }
+
+    async Task RegisterVibeMcpServersAsync(string configPath) {
+        switch (MistralVibeConfigToml.RegisterKcapMcpServers(configPath, env.ResolveMcpBinaryPath)) {
+            case TomlConfigFile.Outcome.Updated:
+                await env.Stdout.WriteLineAsync($"Vibe MCP servers registered ({configPath}).");
+                break;
+            case TomlConfigFile.Outcome.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {configPath} to register Vibe MCP servers.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
+    async Task<int> RemoveVibe(string[] args) {
+        var vibe       = env.Harnesses.Of<MistralVibeHarness>().Paths;
+        var hooksPath  = GetArg(args, "--mistral-vibe-hooks-path")  ?? vibe.HooksToml;
+        var configPath = GetArg(args, "--mistral-vibe-config-path") ?? vibe.ConfigToml;
+
+        var hooksFailed = false;
+        try {
+            var outcome = MistralVibeHooksInstaller.Remove(hooksPath);
+            await env.Stdout.WriteLineAsync(
+                outcome == TomlConfigFile.Outcome.Updated ? $"Vibe hooks removed ({hooksPath})"
+                                                          : "Vibe hooks were not installed.");
+            if (outcome == TomlConfigFile.Outcome.Failed) hooksFailed = true;
+        } catch (Exception ex) {
+            await env.Stderr.WriteLineAsync($"Could not update Vibe hooks at {hooksPath}: {ex.Message}");
+            hooksFailed = true;
+        }
+
+        var mcpChange = MistralVibeConfigToml.UnregisterKcapMcpServers(configPath);
+        var mcpFailed = mcpChange == TomlConfigFile.Outcome.Failed;
+        if (mcpChange == TomlConfigFile.Outcome.Updated)
+            await env.Stdout.WriteLineAsync($"Vibe MCP servers removed ({configPath}).");
+        else if (mcpFailed)
+            await env.Stderr.WriteLineAsync($"Could not update {configPath} to remove Vibe MCP servers.");
+
+        return hooksFailed || mcpFailed ? 1 : 0;
     }
 
     /// <summary>

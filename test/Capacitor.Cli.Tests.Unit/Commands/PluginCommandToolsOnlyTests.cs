@@ -5,9 +5,12 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
+using Tomlyn;
+using Tomlyn.Model;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -199,6 +202,35 @@ public class PluginCommandToolsOnlyTests {
 
         await Assert.That(HarnessMcpProjections.Kiro.OwnsAnything(kiro.SettingsMcpJson, env.Home)).IsTrue();
         await Assert.That(File.Exists(kiro.KcapAgentJson)).IsFalse();
+    }
+
+    [Test]
+    public async Task Vibe_tools_only_writes_mcp_and_skills_but_no_hooks() {
+        var env  = Env();
+        var vibe = env.Harnesses.Of<MistralVibeHarness>().Paths;
+
+        await Assert.That(await Run(env, "plugin", "install", "--mistral-vibe", "--tools-only")).IsEqualTo(0);
+
+        await Assert.That(MistralVibeConfigToml.OwnsAnything(vibe.ConfigToml)).IsTrue();
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(env.Agents.UserSkillsDir)).IsTrue();
+        await Assert.That(File.Exists(vibe.HooksToml)).IsFalse();
+        await Assert.That(File.Exists(GitConfig)).IsFalse();
+    }
+
+    [Test]
+    public async Task Plain_refresh_of_a_tools_only_vibe_install_heals_mcp_without_adding_hooks() {
+        var env  = Env();
+        var vibe = env.Harnesses.Of<MistralVibeHarness>().Paths;
+        await Run(env, "plugin", "install", "--mistral-vibe", "--tools-only");
+        var config  = TomlSerializer.Deserialize<TomlTable>(await File.ReadAllTextAsync(vibe.ConfigToml))!;
+        var servers = (TomlTableArray)config["mcp_servers"];
+        servers.Remove(servers.Single(t => (string)t["name"] == "kcap-sessions"));
+        await File.WriteAllTextAsync(vibe.ConfigToml, TomlSerializer.Serialize(config));
+
+        await Assert.That(await Run(env, "plugin", "install", "--mistral-vibe", "--if-installed")).IsEqualTo(0);
+
+        await Assert.That(await File.ReadAllTextAsync(vibe.ConfigToml)).Contains("kcap-sessions");
+        await Assert.That(File.Exists(vibe.HooksToml)).IsFalse();
     }
 
     [Test]

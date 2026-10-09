@@ -48,6 +48,21 @@ public class TranscriptIdsTests {
         await Assert.That(TranscriptIds.CodexRecord(line)).IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes(line))));
     }
 
+    [Test]
+    public async Task Vibe_record_hashes_the_utf8_line() {
+        const string line = "{\"role\":\"user\",\"content\":\"hi\"}";
+        await Assert.That(TranscriptIds.VibeRecord(line)).IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes(line))));
+        // Two genuinely distinct lines take distinct ids; the unified reader keeps entries distinct.
+        await Assert.That(TranscriptIds.VibeRecord(line)).IsNotEqualTo(TranscriptIds.VibeRecord(line + " "));
+    }
+
+    [Test]
+    public async Task Vibe_entry_hashes_the_prefixed_entry_id() {
+        await Assert.That(TranscriptIds.VibeEntry("user-turn-abc-1"))
+            .IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes("vibe-entry:user-turn-abc-1"))));
+        await Assert.That(TranscriptIds.VibeEntry("a")).IsNotEqualTo(TranscriptIds.VibeEntry("b"));
+    }
+
     /// Fixed vectors: a later change to any derivation fails here even if the framing tests are edited too.
     [Test]
     [Arguments("sibling", "580a4b24-18bc-bc19-9676-ed805dff4bdd")]
@@ -56,6 +71,8 @@ public class TranscriptIdsTests {
     [Arguments("claude-attachment", "c0331d1c-5d1f-a123-49d3-820902c4d48b")]
     [Arguments("codex-record", "b17e302c-b826-0247-6fda-5634e74c45ce")]
     [Arguments("codex-usage-backfill", "5bccf7a4-6eee-83b2-b58c-f10627871a82")]
+    [Arguments("vibe-record", "ca3c057b-649d-864f-339b-160c1c7fd711")]
+    [Arguments("vibe-entry", "d219bcea-d51a-d28e-6f8a-c4d4635844d0")]
     public async Task Vectors_are_fixed(string name, string expected) {
         await Assert.That(Vector(name).ToString("D")).IsEqualTo(expected);
     }
@@ -67,6 +84,8 @@ public class TranscriptIdsTests {
         "claude-attachment" => TranscriptIds.ClaudeAttachment("sess:agent", Primary, 3),
         "codex-record"      => TranscriptIds.CodexRecord("{\"type\":\"response_item\",\"payload\":{}}"),
         "codex-usage-backfill" => TranscriptIds.Sibling(Primary, "usage-backfill"),
+        "vibe-record"       => TranscriptIds.VibeRecord("{\"role\":\"user\",\"content\":\"hi\"}"),
+        "vibe-entry"        => TranscriptIds.VibeEntry("user-turn-abc-1"),
         _                   => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 }

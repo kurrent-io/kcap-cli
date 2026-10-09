@@ -48,7 +48,7 @@ public class HarnessRegistryConformanceTests {
     [Test]
     public async Task Every_harness_has_a_hooks_arm_in_the_browser_answer_fold() {
         foreach (var harness in HarnessRegistry.Identities) {
-            var vendorId = harness.VendorId;
+            var vendorId = harness.VendorId.Replace("-", "");
             var property = "Skip" + vendorId;
 
             // Declined, then chosen. The property must exist AND must move — an arm that is missing
@@ -67,7 +67,7 @@ public class HarnessRegistryConformanceTests {
     [Test]
     public async Task Every_vendor_that_separates_tools_has_a_tools_arm_in_the_browser_answer_fold() {
         foreach (var harness in HarnessRegistry.Identities) {
-            var vendorId = harness.VendorId;
+            var vendorId = harness.VendorId.Replace("-", "");
             var property = "Skip" + vendorId + "Mcp";
 
             if (Skip(Bare, property) is null) continue;

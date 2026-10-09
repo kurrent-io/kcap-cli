@@ -23,6 +23,7 @@ using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
@@ -594,10 +595,20 @@ partial class WatchCommand(
         // exists, so it can never observe a half-applied reconnect rewind (see cursorRewindGate's
         // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
         // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
-        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) =>
-            GatedDrainNewLinesAsync(
+        var vibeSubagents = new List<MistralVibeSubagent>();
+
+        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
+            // Vibe replaces journal segments as it publishes, so a refresh can race a file away;
+            // the next drain retries it.
+            if (vendor == "mistral-vibe") {
+                try { vibeSubagents.AddRange(MistralVibeLiveTranscript.Refresh(transcriptPath)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+
+            return GatedDrainNewLinesAsync(
                 cursorRewindGate, hubConnection, sessionId, transcriptPath, agentId, state, vendor, drainCt,
                 isFinalDrain: isFinalDrainLocal, cursorGuard: cursorGuard, onCursorRewriteDetected: OnCursorRewriteDetected);
+        }
 
         // Register StopWatcher handler — server sends this to tell us to shut down
         hubConnection.On<string>(
@@ -880,6 +891,8 @@ partial class WatchCommand(
                         codexRolloutMtimes, spawnedChildWatcherKeys, cts.Token);
                 } else if (agentId is null && vendor == "antigravity") {
                     await ScanAntigravitySubagentLinks(sessionId, drained, state.PostedSubagentLinks, cts.Token);
+                } else if (agentId is null && vendor == "mistral-vibe") {
+                    await ScanMistralVibeSubagents(sessionId, transcriptPath, vibeSubagents, seenSubagents, spawnedChildWatcherKeys, cts.Token);
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -1160,6 +1173,53 @@ partial class WatchCommand(
         }
     }
 
+    /// <summary>
+    /// Vibe fires no hooks for a subagent; the child runs in its own <c>child-&lt;hex&gt;</c> store
+    /// beside the parent's, named only by the parent's <c>subagent.spawn</c> effect. The parent
+    /// watcher registers each one (<c>subagent-start</c>, fail-closed), keeps a copy of its store, and
+    /// spawns a child watcher to stream that copy. A child whose store is not there yet, or whose
+    /// registration failed, is retried on the next tick.
+    /// </summary>
+    async Task ScanMistralVibeSubagents(
+            string                    sessionId,
+            string                    transcriptPath,
+            List<MistralVibeSubagent> found,
+            HashSet<string>           seen,
+            ICollection<string>       spawnedChildKeys,
+            CancellationToken         ct
+        ) {
+        if (found.Count == 0 || MistralVibeLiveTranscript.SourceOf(transcriptPath) is not { } source) return;
+        if (Path.GetDirectoryName(source.SessionDir) is not { } storeRoot) return;
+
+        // Every refresh re-reports each spawn the store holds, so one child arrives many times.
+        var pending = found.DistinctBy(s => s.ChildSessionId, StringComparer.Ordinal).ToList();
+        found.Clear();
+
+        foreach (var subagent in pending) {
+            if (ct.IsCancellationRequested) return;
+            if (subagent.AgentId is not { } agentId || seen.Contains(agentId)) continue;
+
+            var childDir = Path.Combine(storeRoot, subagent.ChildSessionId);
+            if (!Directory.Exists(childDir)) { found.Add(subagent); continue; }
+
+            var key       = $"{sessionId}-{agentId}";
+            var childCopy = MistralVibeLiveTranscript.PathFor(config, key);
+            MistralVibeLiveTranscript.Follow(childDir, childCopy, source.Model);
+
+            if (!await PostSubagentStartAsync(sessionId, agentId, subagent.AgentType ?? "subagent", childCopy, ct)) {
+                found.Add(subagent);
+                continue;
+            }
+
+            seen.Add(agentId);
+            await watchers.EnsureWatcherRunning(key: key, transcriptPath: childCopy,
+                agentId: agentId, sessionIdOverride: sessionId, vendor: "mistral-vibe");
+            spawnedChildKeys.Add(key);
+
+            Log(time, $"Mistral Vibe subagent {agentId} registered + child watcher spawned");
+        }
+    }
+
     async Task<bool> PostSubagentStartAsync(
         string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
     ) {
@@ -1428,7 +1488,7 @@ partial class WatchCommand(
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -1624,7 +1684,7 @@ partial class WatchCommand(
     /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
     /// <see cref="RunWatch"/>'s call site.
     /// </summary>
-    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor";
+    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe";
 
     /// <summary>
     /// the idle clock <see cref="ShouldEndOnIdle"/> measures against for

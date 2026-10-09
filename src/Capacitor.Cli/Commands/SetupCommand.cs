@@ -12,12 +12,14 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Core.Toml;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Codex;
@@ -25,6 +27,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Spectre.Console;
@@ -585,6 +588,8 @@ sealed class SetupCommand(
         var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
         var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
+        var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
+        var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
         var skipImport       = args.Contains("--skip-import");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -709,6 +714,7 @@ sealed class SetupCommand(
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var gemini   = harnesses.Of<GeminiHarness>().Paths;
         var agy      = harnesses.Of<AntigravityHarness>().Paths;
+        var vibe     = harnesses.Of<MistralVibeHarness>().Paths;
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath:   claudeSettingsPath,
@@ -739,7 +745,9 @@ sealed class SetupCommand(
             KiroCrewHookScript:   kiroCrew.SpawnHookScript,
             KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
             PiMcpExtensionPath:   pi.KcapMcpExtension,
-            PiAgentsMdPath:       pi.AgentsMd);
+            PiAgentsMdPath:       pi.AgentsMd,
+            VibeHooksPath:        vibe.HooksToml,
+            VibeConfigPath:       vibe.ConfigToml);
 
         // The browser leg, where the tenant serves one. Unnumbered because it is not a step: the
         // steps below run either way, and on every tenant that has not turned the flow on this
@@ -814,7 +822,8 @@ sealed class SetupCommand(
             Kiro:        harnesses.Detected(HarnessId.Kiro),
             Pi:          harnesses.Detected(HarnessId.Pi),
             OpenCode:    harnesses.Detected(HarnessId.OpenCode),
-            Antigravity: harnesses.Detected(HarnessId.Antigravity));
+            Antigravity: harnesses.Detected(HarnessId.Antigravity),
+            Vibe:        harnesses.Detected(HarnessId.MistralVibe));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -870,7 +879,9 @@ sealed class SetupCommand(
             SkipKiroSkills: skipKiroSkillsFlag,
             SkipPiMcp: skipPiMcpFlag,
             SkipPiInstructions: skipPiInstructionsFlag,
-            InstallAgents: installAgents);
+            InstallAgents: installAgents,
+            SkipMistralVibe: skipVibeFlag,
+            SkipMistralVibeMcp: skipVibeMcpFlag);
 
         stepOptions = SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 
@@ -932,7 +943,10 @@ sealed class SetupCommand(
             // Pi has no JSON MCP config — the "MCP" is a second extension file (kcap-mcp.ts).
             InstallPiMcp:             PiMcpExtensionInstaller.Install,
             InstallPiInstructions:    () => AgentInstructionsWriter.Write(
-                pi.AgentsMd, KcapAgentInstructions.Body));
+                pi.AgentsMd, KcapAgentInstructions.Body),
+            // Vibe's hooks.toml and MCP config.toml are TOML (not the JSON writer / Codex map).
+            InstallVibeHooks:         p => MistralVibeHooksInstaller.Install(p) != TomlConfigFile.Outcome.Failed,
+            RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
@@ -973,6 +987,7 @@ sealed class SetupCommand(
         OfferedIf(detected.Pi,          skipPiFlag,          HarnessId.Pi);
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
+        OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
         new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
@@ -1297,6 +1312,7 @@ sealed class SetupCommand(
             installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
             installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
+            installResult.VibeHooksInstalled,
         }.Count(installed => installed);
 
         telemetry.Funnel.Succeeded(agentsConfigured);
@@ -1787,7 +1803,8 @@ sealed class SetupCommand(
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),
                     opencode.ImportLedgerJson, time),
-            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time)
+            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
+            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time)
         ];
 
         if (vendors is null) return all;
