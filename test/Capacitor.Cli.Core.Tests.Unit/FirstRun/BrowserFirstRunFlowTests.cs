@@ -1613,6 +1613,69 @@ public class BrowserFirstRunFlowTests {
     }
 
     [Test]
+    public async Task The_outcome_carries_background_and_prompt() {
+        const string prompt = "Follow my kcap import\n(run: 0123)";
+
+        var h = Build(importing: true);
+        h.Importing!.Moved = new FirstRunImportResult(new(1, 0, 0), "running", 4, prompt);
+        h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
+        h.Channel.Polls.Enqueue(new(200, Done()));
+
+        await Run(h);
+
+        var sent = h.Channel.OutcomeReports.Single();
+
+        await Assert.That((sent.Imported, sent.Skipped, sent.Failed)).IsEqualTo((1, 0, 0));
+        await Assert.That(sent.Background).IsEqualTo("running");
+        await Assert.That(sent.BackgroundRemaining).IsEqualTo(4);
+        await Assert.That(sent.HandoffPrompt).IsEqualTo(prompt);
+        await Assert.That(sent.HandoffSuppressed).IsNull();
+    }
+
+    [Test]
+    public async Task A_run_failed_outcome_still_carries_background() {
+        var h = Build(importing: true);
+        h.Importing!.Moved = new FirstRunImportResult(null, "running", 9, HandoffSuppressed: "import_failed");
+        h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
+        h.Channel.Polls.Enqueue(new(200, Done()));
+
+        await Run(h);
+
+        var sent = h.Channel.OutcomeReports.Single();
+
+        await Assert.That(sent.Reason).IsEqualTo("run_failed");
+        await Assert.That((sent.Imported, sent.Skipped, sent.Failed)).IsEqualTo((0, 0, 0));
+        await Assert.That(sent.Background).IsEqualTo("running");
+        await Assert.That(sent.BackgroundRemaining).IsEqualTo(9);
+        await Assert.That(sent.HandoffSuppressed).IsEqualTo("import_failed");
+    }
+
+    /// <summary>Pins the wire as additive: an older server must see exactly the fields it already knows
+    /// when none of the new ones is set.</summary>
+    [Test]
+    public async Task Outcome_json_carries_new_fields_only_when_set() {
+        var bare = new ReportFirstRunImportOutcomeRequest {
+            DecidedAt = Decided, Imported = 1, Skipped = 0, Failed = 0
+        };
+
+        var bareJson = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+            bare, CapacitorJsonContext.Default.ReportFirstRunImportOutcomeRequest))!.AsObject();
+
+        await Assert.That(bareJson.Select(p => p.Key).Order(StringComparer.Ordinal).ToArray())
+                    .IsEquivalentTo(new[] { "decided_at", "failed", "imported", "reason", "skipped" });
+
+        var full = bare with { Background = "running", BackgroundRemaining = 4, HandoffSuppressed = "no_new_sessions" };
+
+        var fullJson = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+            full, CapacitorJsonContext.Default.ReportFirstRunImportOutcomeRequest))!.AsObject();
+
+        await Assert.That(fullJson["background"]!.GetValue<string>()).IsEqualTo("running");
+        await Assert.That(fullJson["background_remaining"]!.GetValue<int>()).IsEqualTo(4);
+        await Assert.That(fullJson["handoff_suppressed"]!.GetValue<string>()).IsEqualTo("no_new_sessions");
+        await Assert.That(fullJson.ContainsKey("handoff_prompt")).IsFalse();
+    }
+
+    [Test]
     public async Task Retries_the_outcome_until_it_lands_without_importing_again() {
         var h = Build(importing: true);
         h.Channel.OutcomeStatuses.Enqueue(500);

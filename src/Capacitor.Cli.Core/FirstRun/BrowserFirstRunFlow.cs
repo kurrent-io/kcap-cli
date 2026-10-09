@@ -523,11 +523,15 @@ public sealed class BrowserFirstRunFlow(
     static ReportFirstRunImportOutcomeRequest Outcome(
             DateTimeOffset decidedAt, FirstRunImportTotals totals, string? reason, FirstRunImportResult? moved = null) =>
         new() {
-            DecidedAt = decidedAt,
-            Imported  = totals.Imported,
-            Skipped   = totals.Skipped,
-            Failed    = totals.Failed,
-            Reason    = reason
+            DecidedAt           = decidedAt,
+            Imported            = totals.Imported,
+            Skipped             = totals.Skipped,
+            Failed              = totals.Failed,
+            Reason              = reason,
+            Background          = moved?.Background,
+            BackgroundRemaining = moved?.BackgroundRemaining,
+            HandoffPrompt       = moved?.HandoffPrompt,
+            HandoffSuppressed   = moved?.HandoffSuppressed
         };
 
     /// <summary>A token and no figures. The server rejects the report outright if a reason arrives on
