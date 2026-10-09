@@ -18,12 +18,44 @@ public class RecapContinuationTests {
     [Test]
     public async Task Prints_the_continued_block_and_exits_zero() {
         using var output = ConsoleOutput.StartCapture();
-        using var client = Serving(path => path.EndsWith("/summary", StringComparison.Ordinal) ? (200, """{"status":"ended"}""") : (200, "[]"));
+        using var client = Serving(path => path switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (200, """{"results":[]}"""),
+            _ => (200, "[]")
+        });
 
         var code = await Command().RunWithAsync(client, "http://x", Previous, Current, force: false);
 
         await Assert.That(code).IsEqualTo(0);
         await Assert.That(output.GetCapturedOutput()).Contains($"## Continued from session {Previous}");
+    }
+
+    [Test]
+    public async Task Failed_claim_adoption_prints_the_attempt_and_exits_one() {
+        using var output = ConsoleOutput.StartCapture();
+        using var client = Serving(path => path switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (200, """{"results":[{"outcome":"ownership_lost","attempted_claim_id":"lost"}]}"""),
+            _ => (200, "[]")
+        });
+        var code = await Command().RunWithAsync(client, "http://x", Previous, Current, force: false);
+        await Assert.That(code).IsEqualTo(1);
+        await Assert.That(output.GetCapturedOutput()).Contains("lost: ownership_lost");
+    }
+
+    [Test]
+    [Arguments(404)]
+    [Arguments(405)]
+    public async Task Unsupported_claim_adoption_exits_one_without_claiming_transfer(int status) {
+        using var output = ConsoleOutput.StartCapture();
+        using var client = Serving(path => path switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (status, ""),
+            _ => (200, "[]")
+        });
+        var code = await Command().RunWithAsync(client, "http://x", Previous, Current, force: false);
+        await Assert.That(code).IsEqualTo(1);
+        await Assert.That(output.GetCapturedOutput()).Contains("unsupported");
     }
 
     [Test]

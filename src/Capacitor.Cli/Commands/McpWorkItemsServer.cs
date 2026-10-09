@@ -154,7 +154,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         "citing its because-clauses; tracker queries and memory are context for that answer, not a " +
         "substitute for it. When the user turns a presented next-work suggestion down, record it with " +
         "dismiss_next_work; restore_next_work undoes it. When you finish a listed or declared loose end, close it " +
-        "with close_loose_end; reopen_loose_end undoes a mistaken close. " + NextWorkEmitter.CompletionInstruction;
+        "with close_loose_end; reopen_loose_end undoes a mistaken close. Before working on a loose end in this session, " +
+        "call claim_loose_end and keep its claim_id. Claimed work stays open but is withheld from suggestions. " +
+        "Pass claim_id when closing completed work; release_loose_end gives unfinished work back without closing it. " +
+        "A claim refusal is not permission to dismiss, close, or launch a duplicate. " + NextWorkEmitter.CompletionInstruction;
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -195,6 +198,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             using var evalDeadline = IsWorkItemEvalTool(toolName) ? new CancellationTokenSource(NextWorkRequestDeadline, time) : null;
             var       evalToken    = evalDeadline?.Token ?? CancellationToken.None;
 
+            var claimedClose = toolName == "close_loose_end" && arguments?["claim_id"] is not null
+                ? BuildCloseLooseEndBody(arguments, HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId)
+                : null;
+
             using var httpResponse = toolName switch {
                 "declare_work_item"      => await client.PostAsync($"{baseUrl}/api/work-items/declare", ToJsonContent(BuildDeclareBody(arguments))),
                 "get_session_work_items" => await client.GetAsync(BuildSessionUrl(baseUrl, arguments)),
@@ -205,6 +212,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "list_dismissed_next_work" => await client.GetAsync($"{baseUrl}/api/next-work/dismissals"),
 
                 "list_loose_ends"  => await client.GetAsync(BuildLooseEndsUrl(baseUrl, arguments, McpToolArguments.OptionalString(arguments, "repo_hash") ?? await cwdRepoHash())),
+                "claim_loose_end"  => await client.PostAsync($"{baseUrl}/api/loose-ends/claim", ToJsonContent(BuildClaimOperationBody(arguments, "loose_end_id"))),
+                "release_loose_end" => await client.PostAsync($"{baseUrl}/api/loose-ends/release", ToJsonContent(BuildClaimOperationBody(arguments, "claim_id"))),
+                "close_loose_end" when claimedClose is not null => await client.PostAsync($"{baseUrl}/api/loose-ends/complete", ToJsonContent(claimedClose)),
                 "close_loose_end"  => await CloseLooseEndAsync(client, baseUrl, arguments),
                 "reopen_loose_end" => await client.PostAsync($"{baseUrl}/api/loose-ends/reopen", ToJsonContent(BuildReopenLooseEndBody(arguments))),
 
@@ -260,7 +270,21 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             // way get_next_work's rows do, so they go through the same untrusted-data boundary
             // rather than reaching the agent verbatim.
             if (IsNextWorkTargetTool(toolName)) return RenderNextWorkTargetResult(id, toolName, httpResponse.StatusCode, body);
-            if (toolName == "list_loose_ends") return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
+            if (toolName is "claim_loose_end" or "release_loose_end") {
+                var (text, isError) = LooseEndClaimToolResults.Render((int)httpResponse.StatusCode, body);
+                return BuildToolResult(id, text, isError);
+            }
+            if (toolName == "list_loose_ends") {
+                if (httpResponse.IsSuccessStatusCode && McpToolArguments.OptionalString(arguments, "claimed_session_id") is { } worker
+                    && !LooseEndClaimToolResults.ConfirmsWorker(body, worker))
+                    return BuildToolResult(id, "Error: the server did not confirm the worker-filtered claim metadata. Check server support before treating these rows as owned work.", isError: true);
+                return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
+            }
+            if (claimedClose is not null) {
+                var (text, isError) = LooseEndClaimToolResults.RenderCompletion((int)httpResponse.StatusCode, body,
+                    claimedClose["claim_id"]!.GetValue<string>(), claimedClose["session_id"]!.GetValue<string>());
+                return BuildToolResult(id, text, isError);
+            }
             if (toolName is "close_loose_end" or "reopen_loose_end") return RenderLooseEndChangeResult(id, toolName, httpResponse.StatusCode, body);
 
             if (!httpResponse.IsSuccessStatusCode) {
@@ -463,6 +487,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         if (repoHash is not null) qs.Add($"repo_hash={Uri.EscapeDataString(repoHash)}");
         if (WorkContextIds.CanonicalSessionId(McpToolArguments.OptionalString(args, "session_id")) is { } sessionId)
             qs.Add($"session_id={Uri.EscapeDataString(sessionId)}");
+        if (WorkContextIds.CanonicalSessionId(McpToolArguments.OptionalString(args, "claimed_session_id")) is { } worker)
+            qs.Add($"claimed_session_id={Uri.EscapeDataString(worker)}");
         if (McpToolArguments.TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
         if (McpToolArguments.OptionalString(args, "cursor") is { } cursor) qs.Add($"cursor={Uri.EscapeDataString(cursor)}");
 
@@ -542,6 +568,9 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 var sighted = NextWorkUntrustedText.Render(item.Str("last_sighted_at"), 64);
 
                 rows.Add($"{looseEndId} [{family}] {text} (last sighted {sighted})");
+                if (item.Arr("claims") is { } claims)
+                    foreach (var claim in claims.EnumerateArray())
+                        if (LooseEndClaimToolResults.ClaimLine(claim) is { } line) rows.Add("  " + line);
             }
 
             var sb = new StringBuilder();
@@ -840,20 +869,23 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         return obj.ToJsonString();
     }
 
-    /// <summary>The session is optional context for the server, so a close outside any harness session
-    /// still goes through.</summary>
+    static JsonObject BuildClaimOperationBody(JsonObject? args, string field) =>
+        (JsonObject)JsonNode.Parse($"{{\"{field}\":\"{JsonEncodedText.Encode(McpToolArguments.RequireString(args, field))}\",\"session_id\":\"{JsonEncodedText.Encode(McpSessionId.Resolve(args))}\"}}")!;
+
     internal static JsonObject BuildCloseLooseEndBody(JsonObject? args, string? ambientSessionId) {
         var body      = BuildReopenLooseEndBody(args);
         var sessionId = McpSessionId.TryResolveWithin(args, ambientSessionId);
 
+        if (args?["claim_id"] is not null) {
+            body["claim_id"] = AotJsonString(McpToolArguments.RequireString(args, "claim_id"));
+            sessionId = McpSessionId.ResolveWithin(args, ambientSessionId);
+        }
         if (sessionId is not null) body["session_id"] = AotJsonString(sessionId);
 
         return body;
     }
 
-    /// <summary>A session the server cannot attribute to the caller is refused <c>session_not_found</c>.
-    /// When that session was only the harness default rather than the agent's own argument, the close
-    /// is retried once without it, since the session is context the close does not need.</summary>
+    // Only an unclaimed close may discard an unattributable, inferred session.
     static async Task<HttpResponseMessage> CloseLooseEndAsync(HttpClient client, string baseUrl, JsonObject? args) {
         var url       = $"{baseUrl}/api/loose-ends/close";
         var ambient   = HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId;
@@ -861,7 +893,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         var defaulted = body.ContainsKey("session_id") && McpSessionId.TryResolveWithin(args, null) is null;
 
         var response = await client.PostAsync(url, ToJsonContent(body));
-        if (!defaulted || response.StatusCode != HttpStatusCode.NotFound) return response;
+        if (body.ContainsKey("claim_id") || !defaulted || response.StatusCode != HttpStatusCode.NotFound) return response;
         if (NextWorkTargetErrorCode(await response.Content.ReadAsStringAsync()) != "session_not_found") return response;
 
         response.Dispose();
@@ -1086,21 +1118,41 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         new("list_loose_ends",
             "List the user's loose ends with their loose_end_id — open ones by default, or closed ones — to find the id "
-          + "close_loose_end or reopen_loose_end needs. Pass next_cursor back as cursor for the next page.",
+          + "close_loose_end or reopen_loose_end needs. Claims are execution ownership, not closed work. "
+          + "Use claimed_session_id to find a worker's claims independently of the source session_id. Pass next_cursor back as cursor for the next page.",
             new("object", new() {
                 ["status"]     = new("string", "open (default) or closed."),
                 ["repo_hash"]  = new("string", "Repository to list for. Defaults to the repository this server runs in."),
                 ["session_id"] = new("string", "Only ends this session sighted."),
+                ["claimed_session_id"] = new("string", "Only ends currently claimed by this working session. Independent of session_id."),
                 ["limit"]      = new("integer", "How many to return. Default 20, max 50."),
                 ["cursor"]     = new("string", "The next_cursor from a previous page.")
             }, []), McpToolAnnotations.Read),
 
+        new("claim_loose_end",
+            "Claim a loose end before working on it in this session. It stays open but leaves next-work suggestions while owned. "
+          + "Keep the returned claim_id for completion or release. Explicit session_id wins over the harness session. "
+          + "If refused, inspect the existing claim; do not close, dismiss, or launch a duplicate. recorded_catching_up means ownership was recorded, not that acquisition failed.",
+            new("object", new() {
+                ["loose_end_id"] = new("string", "The loose_end_id from the ledger or next-work feed."),
+                ["session_id"] = new("string", "The working session. Defaults to this harness session.")
+            }, ["loose_end_id"]), McpToolAnnotations.Upsert),
+
+        new("release_loose_end",
+            "Give up this session's loose-end claim without completing the work. Pass the current claim_id; a stale predecessor cannot release its successor. The work remains open and becomes available again.",
+            new("object", new() {
+                ["claim_id"] = new("string", "The current attempt's claim_id from claim_loose_end or list_loose_ends."),
+                ["session_id"] = new("string", "The working session. Defaults to this harness session.")
+            }, ["claim_id"]), McpToolAnnotations.Upsert),
+
         new("close_loose_end",
             "Mark a loose end done once its work is finished, so it leaves the user's next work. Name it by the "
-          + "loose_end_id from list_loose_ends or get_next_work. A later sighting of the same work reopens it.",
+          + "loose_end_id from list_loose_ends or get_next_work. For claimed work, pass the current claim_id and working session. "
+          + "Starting work is not completion: use claim_loose_end instead. A later sighting of the same work reopens it.",
             new("object", new() {
                 ["loose_end_id"] = new("string", "The end's loose_end_id."),
-                ["session_id"]   = new("string", "The session that finished it. Defaults to the session this server runs in.")
+                ["session_id"]   = new("string", "The session that finished it. Defaults to the session this server runs in."),
+                ["claim_id"]     = new("string", "The current ownership attempt. Required for claimed work; obtain it from claim_loose_end or list_loose_ends.")
             }, ["loose_end_id"]), McpToolAnnotations.Upsert),
 
         new("reopen_loose_end",

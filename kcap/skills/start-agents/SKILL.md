@@ -96,7 +96,8 @@ Call `start_agent` once for each agent.
   exactly as `get_next_work` printed it; or a work item id; or `requester` to
   use the work item this session is attached to; or `none`. Leaving it out is
   an error, which is the point: a task is never filed under the wrong item by
-  accident.
+  accident. A `le:` target reserves a durable loose-end claim before dispatch,
+  even without a work item. Do not claim it for the calling session first.
 - `vendor`: the harness the user chose, as `list_start_agent_options` lists
   it.
 - `model`: optional. Pass it only when the user named one.
@@ -123,10 +124,22 @@ repository and tell the agent to read it.
 
 ## After the calls
 
-Each call answers `requested`, with the agent's id and the url of its page.
-`requested` means the launch command was sent. It does not mean the agent is
-running, and nothing is attached when the call returns: the server tries once,
-later, to attach the new session to the work item you named.
+Read the returned status and dispatch state together:
+
+- `requested` / `sent`: the launch command was sent, not confirmed running.
+- `pending` / `unknown`: ownership is reserved, but delivery is uncertain.
+- `pending` / `not_sent`: ownership is reserved, but dispatch has not happened.
+
+For loose-end launches retain `loose_end_claim_id`, agent id and URL, and show
+all three to the user with the dispatch state. A pending result is not permission
+to launch again: inspect the claim/agent through the dashboard. It is neither
+completion nor a failed acquisition. The worker can find its linked claim with
+`list_loose_ends(claimed_session_id: <worker>)` and must close with that claim id
+only after completing the work.
+
+Attachment is separate: when a work item exists, the server attempts attachment
+once the new session is known; nothing is attached when the call returns.
+Itemless loose ends need no work-item creation.
 
 Do not wait for the agents, and do not poll them. Do not call `start_agent`
 again to find out whether an agent started.
@@ -140,8 +153,11 @@ Then report to the user:
 
 A refusal states its reason. Relay it; do not retry in a loop.
 
-- `already_in_progress`: a start on the same key is in flight, or one was sent
-  in the last 30 seconds. Do not repeat it.
+- `already_in_progress`: the key is reserved or being worked on. Inspect the
+  existing claim or agent; waiting 30 seconds does not release durable ownership.
+  Do not bypass it with another key, dismissal, closure or another launch path.
+- `loose_end_claims_unavailable`: ownership could not be verified or recorded.
+  Report the readiness failure; do not launch without the claim.
 - `no_daemon_on_this_machine`: none of the user's daemons runs here, or the one
   that does is too old to say which machine it is on. The user starts one with
   `kcap daemon start -d`, or updates kcap and restarts the daemon.
