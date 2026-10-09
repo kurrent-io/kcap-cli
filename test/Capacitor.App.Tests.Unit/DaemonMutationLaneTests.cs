@@ -36,8 +36,8 @@ public class DaemonMutationLaneTests {
 
     static ServiceSnapshot Ownership(
             int? jobPid = 111, int? daemonPid = 111, bool txnMarker = false, bool txnActive = false,
-            string state = "running", bool unitPresent = true) =>
-        new("daemon-a", unitPresent, state, "/opt/kcap/kcapd", "/opt/kcap/kcapd", jobPid, daemonPid, txnMarker, txnActive);
+            string state = "running", bool unitPresent = true, string? loadedSpawnType = "daemon") =>
+        new("daemon-a", unitPresent, state, "/opt/kcap/kcapd", "/opt/kcap/kcapd", jobPid, daemonPid, txnMarker, txnActive, loadedSpawnType);
 
     // expectation must match Req()'s canonical server — TryAttribute also checks
     // ServerIdentity.Matches(Expectation, request.CanonicalServer) on top of schema/attempt/etc.
@@ -1567,5 +1567,144 @@ public class DaemonMutationLaneTests {
         } finally {
             await lane.DisposeAsync();
         }
+    }
+
+    [Test]
+    public async Task Reload_is_refused_before_dispatch_when_the_pinned_cli_reports_no_spawn_type() {
+        var cli = new FakeKcapCli { StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: null)) };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory);
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("reload_unsupported", RecoverySurface.Attention));
+        await Assert.That(cli.ReloadCallCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Reload_is_refused_when_the_pinned_cli_cannot_report_status_at_all() {
+        var cli = new FakeKcapCli { StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(null) };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory);
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("reload_unsupported", RecoverySurface.Attention));
+        await Assert.That(cli.ReloadCallCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Reload_is_refused_as_not_loaded_when_the_label_is_not_loaded() {
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(jobPid: null, daemonPid: null, state: "not_installed", loadedSpawnType: null)),
+        };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory);
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("not_loaded", RecoverySurface.Attention));
+        await Assert.That(cli.ReloadCallCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Reload_dispatches_the_forced_refresh_once_the_field_is_present() {
+        var cli = new FakeKcapCli { StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")) };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory, classify: CannedSucceeded);
+        await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+        await Assert.That(cli.ReloadCallCount).IsEqualTo(1);
+    }
+
+    [Test, NotInParallel]
+    public async Task Reload_failure_logs_the_cli_detail_line() {
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(1, "", "refresh_outcome=failed\nlaunchctl bootstrap failed (exit 5); the previous unit was restored and reloaded\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli });
+
+        using var capture = ConsoleOutput.StartErrorCapture();
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Failed(1, "failed", RecoverySurface.Attention));
+        await Assert.That(capture.GetCapturedError()).Contains("launchctl bootstrap failed (exit 5)");
+    }
+
+    [Test]
+    public async Task Reload_timeout_is_unconfirmed_and_nonzero_exit_carries_the_token() {
+        var timedOut = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "", true)),
+        };
+        await using var lane1 = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => timedOut });
+        await Assert.That(await lane1.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded))
+            .IsEqualTo(new MutationOutcome.UnconfirmedNoAttach());
+
+        var failed = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(1, "", "refresh_outcome=contended\n", false)),
+        };
+        await using var lane2 = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => failed });
+        await Assert.That(await lane2.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded))
+            .IsEqualTo(new MutationOutcome.Failed(1, "contended", RecoverySurface.Attention));
+
+        var noToken = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(1, "", "", false)),
+        };
+        await using var lane3 = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => noToken });
+        await Assert.That(await lane3.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded))
+            .IsEqualTo(new MutationOutcome.Failed(1, null, RecoverySurface.Attention));
+    }
+
+    [Test]
+    public async Task Reload_waits_for_the_successor_within_the_window_then_requires_a_positive_spawn_type() {
+        var time = new FakeTimeProvider();
+        var observation = new ScriptedObservation {
+            Sequence = new Queue<ObservedEvidence?>([
+                new ObservedEvidence(false, null, null, null, null, null, null, false),
+                new ObservedEvidence(false, null, null, null, null, null, null, false),
+                MatchingEvidence(), MatchingEvidence(), MatchingEvidence()]),
+        };
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "daemon")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "refresh_outcome=reloaded\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation, time: time);
+
+        var outcome = await Drive(lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None), time, DaemonMutationLane.DetachedPollInterval);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
+        await Assert.That(observation.CallCount).IsGreaterThanOrEqualTo(3);
+    }
+
+    [Test]
+    public async Task Reload_whose_daemon_never_comes_back_is_unconfirmed_after_the_window() {
+        var time = new FakeTimeProvider();
+        var observation = new ScriptedObservation { Behavior = (_, _) => Task.FromResult<ObservedEvidence?>(new ObservedEvidence(false, null, null, null, null, null, null, false)) };
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "adaptive")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "refresh_outcome=reloaded\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation, time: time);
+        var outcome = await Drive(lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None), time, DaemonMutationLane.DetachedPollInterval);
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.UnconfirmedNoAttach());
+    }
+
+    [Test]
+    [Arguments("adaptive", "background_band")]
+    [Arguments("background", "background_band")]
+    [Arguments("app", "spawn_type_unknown")]
+    [Arguments(null, "spawn_type_unknown")]
+    public async Task Reload_exit_zero_without_positive_priority_is_a_skew(string? word, string expected) {
+        var calls = 0;
+        var cli = new FakeKcapCli {
+            // The pre-dispatch gate reads a present field; the ownership read after the run reports the word under test.
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: calls++ == 0 ? "adaptive" : word)),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "refresh_outcome=current\n", false)),
+        };
+        var observation = new ScriptedObservation { Behavior = (_, _) => Task.FromResult<ObservedEvidence?>(MatchingEvidence()) };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation);
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.AttentionSkew(expected));
     }
 }

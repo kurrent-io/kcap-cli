@@ -249,7 +249,7 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
                     declarations.Turns, declarations.Refusals, inline, budgetMs),
                 budget - time.GetElapsedTime(started));
         } catch {
-            return PolicyJudgeResult.PassThrough("judge_error");
+            return PolicyJudgeResult.PassThrough(PolicyJudgeResult.Error);
         }
     }
 

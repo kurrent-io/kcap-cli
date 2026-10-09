@@ -28,10 +28,11 @@ public class WorkspaceViewModelTests {
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
-            SessionAccessService? access = null, IPlanArtifactSource? planArtifacts = null, IUrlOpener? opener = null, IPlanSource? plans = null) =>
+            SessionAccessService? access = null, IPlanArtifactSource? planArtifacts = null, IUrlOpener? opener = null, IPlanSource? plans = null,
+            BackgroundCommandActivity? commands = null) =>
         new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, opener ?? new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            new NoAttachmentUploader(), access: access, plans: plans, planArtifacts: planArtifacts);
+            new NoAttachmentUploader(), access: access, plans: plans, planArtifacts: planArtifacts, commands: commands);
 
     const string Session = "0123456789abcdef0123456789abcdef";
 
@@ -603,6 +604,35 @@ public class WorkspaceViewModelTests {
             await Assert.That(vm.WorkContext.RunsHeader).IsEqualTo("1 running");
             await Assert.That(vm.WorkContext.Runs.Single().Name).IsEqualTo("Explore");
             await vm.TeardownAsync();
+        });
+    }
+
+    const string ShellCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""";
+    const string ShellLaunchLine = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
+
+    /// The rail reads a session's running commands from here; the subagent beside it is left
+    /// out, since the daemon already counts that one. The header reads them too, so a finished
+    /// turn with a command still running is Working there as well.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_background_commands_are_reported_until_the_workspace_is_torn_down() {
+        await RunOnUiAsync(async () => {
+            var commands = new BackgroundCommandActivity();
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), commands: commands);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, ShellCallLine, ShellLaunchLine]);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, AwaitingInput = true });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
+            await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
+            await vm.TeardownAsync();
+            await Assert.That(latest.ContainsKey("local:a1")).IsFalse();
         });
     }
 }

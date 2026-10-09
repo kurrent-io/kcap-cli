@@ -45,4 +45,17 @@ public class TranscriptCaptureTests {
         await Assert.That(parsed.RootElement.GetProperty("reason").GetString()).IsEqualTo(expected);
         await Assert.That(parsed.RootElement.GetProperty("type").GetString()).IsEqualTo("kcap_capture_loss");
     }
+
+    [Test]
+    public async Task A_tail_stops_at_a_line_its_budget_cannot_redact() {
+        var clock = new SwitchableRedactionClock();
+        var losses = new List<RedactionLossReason>();
+
+        var tail = TranscriptCapture.EncodeTail(["{\"token\":\"x\"}", "{\"a\":1}"], [0, 1],
+            new RedactionBudget(clock, TimeSpan.FromSeconds(1)), (_, _) => null, (reason, _) => losses.Add(reason));
+
+        await Assert.That(tail.Consumed).IsEqualTo(0);
+        await Assert.That(tail.Lines.Count).IsEqualTo(0);
+        await Assert.That(losses.Count).IsEqualTo(0);
+    }
 }

@@ -306,14 +306,16 @@ public class ClaudeChatRulesTests {
         var started = (RunSignal.Started)R(call).Runs.Single();
         await Assert.That(started.Provisional).IsTrue();
         await Assert.That(started.Name).IsEqualTo("make check");
-        await Assert.That(started.Description).IsEqualTo("make check");
+        await Assert.That(started.Description).IsEmpty();
     }
 
+    /// A cut name keeps the whole line under it, so nothing of the command is lost.
     [Test]
     public async Task A_long_command_name_is_cut_to_eighty_characters() {
         var command = new string('x', 120);
         var started = (RunSignal.Started)R($$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Bash","input":{"command":"{{{command}}}"}}]}}""").Runs.Single();
         await Assert.That(started.Name).IsEqualTo(new string('x', 79) + "…");
+        await Assert.That(started.Description).IsEqualTo(command);
     }
 
     [Test]

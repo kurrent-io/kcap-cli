@@ -494,10 +494,11 @@ public sealed class BrowserFirstRunFlow(
 
         progress.Importing(answer.Choices.Count, SessionsInScope(state.Discovered, answer));
 
-        FirstRunImportTotals? moved = null;
+        FirstRunImportResult? moved = null;
 
         try {
-            moved = await importing.ImportAsync(answer, state.WindowsAsOf(_clock), ct);
+            moved = await importing.ImportAsync(
+                answer, state.WindowsAsOf(_clock), ct, FirstRunFlowOutcomes.Agents(view));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception) {
@@ -510,9 +511,9 @@ public sealed class BrowserFirstRunFlow(
         // A run that lost a pass reports the token, not its counts: its sessions are unaccounted, and the
         // surviving pass's figures alone would state a clean import. Silence is not available either — it
         // reads exactly like a machine that died, and the browser waits that out before saying anything.
-        state.Outcome = moved is { } totals
-            ? Outcome(answer.DecidedAt, totals, null)
-            : ReasonOnly(answer.DecidedAt, FirstRunImportOutcomeReasons.RunFailed);
+        state.Outcome = moved is { Totals: { } totals }
+            ? Outcome(answer.DecidedAt, totals, null, moved)
+            : ReasonOnly(answer.DecidedAt, FirstRunImportOutcomeReasons.RunFailed, moved);
 
         await DeliverOutcomeAsync(serverUrl, flowId, state, ct);
 
@@ -521,21 +522,26 @@ public sealed class BrowserFirstRunFlow(
 
     /// <summary>The outcome as the route takes it.</summary>
     static ReportFirstRunImportOutcomeRequest Outcome(
-            DateTimeOffset decidedAt, FirstRunImportTotals totals, string? reason) =>
+            DateTimeOffset decidedAt, FirstRunImportTotals totals, string? reason, FirstRunImportResult? moved = null) =>
         new() {
-            DecidedAt = decidedAt,
-            Imported  = totals.Imported,
-            Skipped   = totals.Skipped,
-            Failed    = totals.Failed,
-            Reason    = reason
+            DecidedAt           = decidedAt,
+            Imported            = totals.Imported,
+            Skipped             = totals.Skipped,
+            Failed              = totals.Failed,
+            Reason              = reason,
+            Background          = moved?.Background,
+            BackgroundRemaining = moved?.BackgroundRemaining,
+            HandoffPrompt       = moved?.HandoffPrompt,
+            HandoffSuppressed   = moved?.HandoffSuppressed
         };
 
     /// <summary>A token and no figures. The server rejects the report outright if a reason arrives on
     /// non-zero counts, so the zeroes are the wire's requirement — on
     /// <see cref="FirstRunImportOutcomeReasons.RunFailed"/> they are not a claim that nothing
     /// landed.</summary>
-    static ReportFirstRunImportOutcomeRequest ReasonOnly(DateTimeOffset decidedAt, string reason) =>
-        Outcome(decidedAt, default, reason);
+    static ReportFirstRunImportOutcomeRequest ReasonOnly(
+            DateTimeOffset decidedAt, string reason, FirstRunImportResult? moved = null) =>
+        Outcome(decidedAt, default, reason, moved);
 
     /// <summary>Hands over the owed outcome, keeping it for a later tick unless the server took it.</summary>
     async Task DeliverOutcomeAsync(

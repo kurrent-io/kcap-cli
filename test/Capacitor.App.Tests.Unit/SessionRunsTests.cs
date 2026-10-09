@@ -555,4 +555,19 @@ public class SessionRunsTests {
         unstamped.Apply(Result("c9"));
         await Assert.That(Only(unstamped).StateText).IsEqualTo("9s");
     }
+
+    /// One projection that ends a command and starts a subagent keeps the running total; the
+    /// command count still drops, and its readers hear of it.
+    [Test]
+    public async Task A_command_ending_beside_a_new_subagent_still_reports_the_command_count() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Shell("c1"), Detached("c1", "b1")));
+        await Assert.That(s.RunningCommandCount).IsEqualTo(1);
+        var changes = 0;
+        s.Changed += () => changes++;
+        s.Apply(Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Started("a1")));
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+        await Assert.That(s.RunningCommandCount).IsEqualTo(0);
+        await Assert.That(changes).IsEqualTo(1);
+    }
 }
