@@ -9,8 +9,12 @@ namespace Capacitor.Cli.Core.Harness;
 public static class JsonSettingsFile {
     static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
 
-    public static SettingsEdit Edit(string path, Func<JsonObject, bool> edit, bool createIfMissing = true) {
+    /// <summary>Holds the file's <see cref="ConfigFileLock"/> from the read to the replace, so two kcap
+    /// processes cannot each drop the other's edit. A caller holding the account registry lock takes
+    /// it first; nothing here may take the registry lock.</summary>
+    public static SettingsEdit Edit(string path, Func<JsonObject, bool> edit, bool createIfMissing = true, TimeSpan? lockTimeout = null) {
         try {
+            using var _ = ConfigFileLock.Acquire(PhysicalPath.Of(path), lockTimeout);
             JsonObject root;
 
             if (File.Exists(path)) {
@@ -34,6 +38,10 @@ public static class JsonSettingsFile {
         } catch (IOException) {
             return SettingsEdit.Failed;
         } catch (UnauthorizedAccessException) {
+            return SettingsEdit.Failed;
+        } catch (TimeoutException) {
+            return SettingsEdit.Failed;
+        } catch (WaitHandleCannotBeOpenedException) {
             return SettingsEdit.Failed;
         }
     }

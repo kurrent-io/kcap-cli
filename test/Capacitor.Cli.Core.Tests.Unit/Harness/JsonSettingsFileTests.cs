@@ -93,4 +93,38 @@ public class JsonSettingsFileTests {
         await Assert.That(root["theme"]!.GetValue<string>()).IsEqualTo("dark");
         await Assert.That(root["a"]!.GetValue<int>()).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task Two_concurrent_edits_of_one_file_both_survive() {
+        var path    = Tmp.CreateFile("settings.json", "{}");
+        using var gate = new Barrier(2);
+
+        SettingsEdit EditAdding(string key) => JsonSettingsFile.Edit(path, root => {
+            root[key] = true;
+            Thread.Sleep(300);
+            return true;
+        });
+
+        var results = await Task.WhenAll(
+            Task.Run(() => { gate.SignalAndWait(); return EditAdding("a"); }),
+            Task.Run(() => { gate.SignalAndWait(); return EditAdding("b"); }));
+
+        var root = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        await Assert.That(results).IsEquivalentTo([SettingsEdit.Changed, SettingsEdit.Changed]);
+        await Assert.That(root.ContainsKey("a")).IsTrue();
+        await Assert.That(root.ContainsKey("b")).IsTrue();
+    }
+
+    [Test]
+    public async Task An_edit_that_cannot_take_the_file_lock_fails_without_writing() {
+        var path = Tmp.CreateFile("settings.json", "{}");
+
+        using (ConfigFileLock.Acquire(PhysicalPath.Of(path))) {
+            var result = await Task.Run(() => JsonSettingsFile.Edit(path, root => { root["a"] = 1; return true; }, lockTimeout: TimeSpan.FromMilliseconds(200)));
+
+            await Assert.That(result).IsEqualTo(SettingsEdit.Failed);
+        }
+
+        await Assert.That(File.ReadAllText(path)).IsEqualTo("{}");
+    }
 }
