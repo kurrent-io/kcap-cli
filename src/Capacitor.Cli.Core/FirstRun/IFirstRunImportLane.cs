@@ -38,5 +38,8 @@ public interface IFirstRunImportLane {
     /// <returns>What the passes moved, with <see cref="FirstRunImportResult.Totals"/> null when a pass
     /// produced no accounting at all — it threw, or finished without reaching its own summary. Null is
     /// not <c>(0,0,0)</c>: there is no way to say "some unknown number failed" in three counts.</returns>
-    Task<FirstRunImportResult> ImportAsync(FirstRunImportAnswer answer, DateOnly today, CancellationToken ct);
+    /// <param name="agents">The Agents answer, whose installs run after this leg: a harness it turns on
+    /// will carry the eval-watch skill by the time the prompt can be used.</param>
+    Task<FirstRunImportResult> ImportAsync(
+        FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null);
 }

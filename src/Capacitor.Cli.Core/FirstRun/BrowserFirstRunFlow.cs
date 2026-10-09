@@ -497,7 +497,8 @@ public sealed class BrowserFirstRunFlow(
         FirstRunImportResult? moved = null;
 
         try {
-            moved = await importing.ImportAsync(answer, state.WindowsAsOf(_clock), ct);
+            moved = await importing.ImportAsync(
+                answer, state.WindowsAsOf(_clock), ct, FirstRunFlowOutcomes.Agents(view));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception) {

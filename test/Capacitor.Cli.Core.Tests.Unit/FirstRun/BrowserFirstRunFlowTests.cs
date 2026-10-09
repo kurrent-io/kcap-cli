@@ -299,9 +299,12 @@ public class BrowserFirstRunFlowTests {
         /// lost a pass, whose counts are unaccounted rather than zero.</summary>
         public FirstRunImportResult Moved { get; set; } = new(new(3, 1, 0));
 
+        public List<FirstRunAgentsAnswer?> AgentsSeen { get; } = [];
+
         public async Task<FirstRunImportResult> ImportAsync(
-                FirstRunImportAnswer answer, DateOnly today, CancellationToken ct) {
+                FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null) {
             log.Add("import");
+            AgentsSeen.Add(agents);
             Advance?.Invoke();
             Imports.Add(answer);
             Dates.Add(today);
@@ -1630,6 +1633,20 @@ public class BrowserFirstRunFlowTests {
         await Assert.That(sent.BackgroundRemaining).IsEqualTo(4);
         await Assert.That(sent.HandoffPrompt).IsEqualTo(prompt);
         await Assert.That(sent.HandoffSuppressed).IsNull();
+    }
+
+    [Test]
+    public async Task The_import_is_told_which_harnesses_the_agents_answer_installs() {
+        var h = Build(importing: true);
+        h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
+        h.Channel.Polls.Enqueue(new(200, Done()));
+
+        await Run(h);
+
+        var agents = h.Importing!.AgentsSeen.Single();
+
+        await Assert.That(agents).IsNotNull();
+        await Assert.That(agents!.Records(HarnessId.Claude)).IsTrue();
     }
 
     [Test]

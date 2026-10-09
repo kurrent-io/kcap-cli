@@ -638,6 +638,34 @@ public class SetupImportLaneTests {
         await Assert.That(result.HandoffSuppressed).IsEqualTo("no_agent_detected");
     }
 
+    /// <summary>A detected harness with no eval-watch skill yet, so only the Agents answer can make it eligible.</summary>
+    SetupImportLane LaneWithCodexButNoSkill() =>
+        new(Config.Root, Resolutions.None(Config.Root), Home, new FixedCapacitorHttpClient(),
+            TestHarnesses.Under(Home, TestBinaries.Searching(Bin, "codex")),
+            new GitProviderRouter(), TimeProvider.System,
+            FakeBackgroundImportSpawner.Running(), ChosenServer, "work", "org_public", Config.Directory,
+            Paths(), _ => Landed(["s0"], "s0"), _ => { });
+
+    [Test]
+    public async Task A_harness_without_the_skill_is_not_eligible() {
+        var result = await LaneWithCodexButNoSkill().ImportAsync(
+            Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(result.HandoffSuppressed).IsEqualTo("skill_not_installed");
+    }
+
+    [Test]
+    public async Task A_harness_the_agents_answer_installs_is_eligible_before_the_install_runs() {
+        var agents = new FirstRunAgentsAnswer(
+            [new FirstRunAgentsChoice(HarnessId.Codex, Record: true, Tools: true)], DateTimeOffset.UnixEpoch, 0);
+
+        var result = await LaneWithCodexButNoSkill().ImportAsync(
+            Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None, agents);
+
+        await Assert.That(result.HandoffPrompt).IsNotNull();
+        await Assert.That(result.HandoffSuppressed).IsNull();
+    }
+
     [Test]
     public async Task A_handoff_write_failure_reports_handoff_file_unwritten() {
         var result = await Lane(_ => Landed(["s0"], "s0"), evalWatch: true,

@@ -367,7 +367,7 @@ sealed class SetupImportLane(
         RunPassAsync(config, profiles, home, http, harnesses, router, time, pass);
 
     public async Task<FirstRunImportResult> ImportAsync(
-            FirstRunImportAnswer answer, DateOnly today, CancellationToken ct) {
+            FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null) {
         var since   = answer.Since(today);
         var totals  = new FirstRunImportTotals(0, 0, 0);
         var counted = true;
@@ -432,12 +432,13 @@ sealed class SetupImportLane(
 
         if (_runs.Count == 0) return new FirstRunImportResult(counted ? totals : null);
 
-        return HandOff(answer, since, counted ? totals : null);
+        return HandOff(answer, since, counted ? totals : null, agents);
     }
 
     /// <summary>One child for every chosen level, whatever the foreground selected: the capped passes
     /// defer visibility work on sessions they did not select, and only the uncapped child performs it.</summary>
-    FirstRunImportResult HandOff(FirstRunImportAnswer answer, DateOnly? since, FirstRunImportTotals? totals) {
+    FirstRunImportResult HandOff(
+            FirstRunImportAnswer answer, DateOnly? since, FirstRunImportTotals? totals, FirstRunAgentsAnswer? agents) {
         var runId = Guid.NewGuid().ToString("N");
 
         var (merged, cohort, remaining) = ForegroundImportMerge.Merge(
@@ -449,7 +450,8 @@ sealed class SetupImportLane(
 
         var decision = HandoffDecision.Decide(
             merged, launch.Status,
-            HandoffVendorEligibility.Eligible(harnesses, paths).Count,
+            HandoffVendorEligibility.Eligible(
+                harnesses, paths, h => agents is not null && (agents.Records(h) || agents.Tools(h))).Count,
             HandoffVendorEligibility.Detected(harnesses));
 
         var file = ImportHandoffFile.Compose(
