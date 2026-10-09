@@ -41,7 +41,7 @@ nothing before or after it: no preamble, no commentary, no summary of what the c
 |---|---|---|
 | `{{AGENT}}` | the product name of the harness running this tour: Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, OpenCode, Pi or Antigravity | — |
 | `{{OTHER_AGENT}}` on card 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
-| `{{OTHER_AGENT}}` on card 5 | the first vendor from `list_reviewer_vendors` that is not `{{AGENT}}` | as card 4 |
+| `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding `{{AGENT}}`: `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
 | `{{T1}}`, `{{T2}}`, `{{T3}}` | the first names of up to three distinct teammates, most recent first (TEAMMATES below) | `my teammate` for each one missing; capitalise it when it opens the question |
 | `{{CAPTURE}}` | the team table, or the one-line variant (CAPTURE below) | — |
 
