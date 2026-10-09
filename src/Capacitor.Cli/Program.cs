@@ -883,6 +883,9 @@ switch (command) {
         return 0;
     }
     case "hook": {
+        if (HarnessRegistry.Identities.FirstOrDefault(i => args.Contains($"--{i.VendorId}")) is { } hookVendor)
+            new HookActivity(config, time).Stamp(hookVendor.VendorId);
+
         // Blocks the agent's Read, so it skips the spool drain below.
         if (args.Contains("--claude") && args.Contains("--plan-read")) {
             return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));

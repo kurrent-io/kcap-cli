@@ -128,14 +128,17 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
         if (capability == FirstRunMachineCapabilities.DaemonService) _wait.Stop();
 
         Say(SetupAuthProgress.Indent(capability switch {
-            FirstRunMachineCapabilities.PathShim =>
-                "The browser asked to put kcap on your terminal PATH. "
-              + "[dim]Your Mac will ask for your password.[/]",
+            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS()),
             FirstRunMachineCapabilities.DaemonService =>
                 "The browser asked to run the agent daemon as a service, so this machine stays reachable.",
             _ => "The browser asked this machine to do something this version of kcap does not know."
         }));
     }
+
+    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none.</summary>
+    internal static string PathShimNotice(bool macOS) =>
+        "The browser asked to put kcap on your terminal PATH."
+      + (macOS ? " [dim]Your Mac will ask for your password.[/]" : "");
 
     public void ActionEnded() => Refresh();
 
