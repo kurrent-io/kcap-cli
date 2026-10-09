@@ -50,7 +50,7 @@ public static class WorkOSDiscovery {
             CancellationToken                               ct = default,
             IAuthProgress?                                  progress = null,
             TenantPickContext?                              pickContext = null,
-            Func<DiscoveredTenant, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
+            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
@@ -77,7 +77,7 @@ public static class WorkOSDiscovery {
             return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
-        var tenants = probe is null ? result.Tenants : await DropGoneAsync(result.Tenants, probe, progress, ct);
+        var tenants = probe is null ? result.Tenants : await DropGoneAsync(result.Tenants, probe, auth.AccessToken, progress, ct);
 
         if (tenants.Length == 0) {
             return await OfferCreateAsync(
@@ -105,10 +105,10 @@ public static class WorkOSDiscovery {
     /// configure a profile against a host that only answers 404; leaving it out lets an account whose
     /// every workspace is gone reach the create offer instead.
     /// </summary>
-    static async Task<DiscoveredTenant[]> DropGoneAsync(
-            DiscoveredTenant[] tenants, Func<DiscoveredTenant, CancellationToken, Task<WorkspaceAnswer>> probe,
-            IAuthProgress progress, CancellationToken ct) {
-        var answers = await Task.WhenAll(tenants.Select(t => probe(t, ct)));
+    internal static async Task<DiscoveredTenant[]> DropGoneAsync(
+            DiscoveredTenant[] tenants, Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> probe,
+            string bearer, IAuthProgress progress, CancellationToken ct) {
+        var answers = await Task.WhenAll(tenants.Select(t => probe(t, bearer, ct)));
         var kept    = new List<DiscoveredTenant>(tenants.Length);
 
         for (var i = 0; i < tenants.Length; i++) {

@@ -12,11 +12,17 @@ public static class WorkspaceProbe {
 
     public static async Task<WorkspaceAnswer> AskAsync(
             HttpClient anonymous, string origin, TimeProvider time, CancellationToken ct = default) {
+        // A discovered origin is server-supplied; one that is not an absolute http(s) URL says nothing
+        // about the workspace, and GetAsync would throw outside the filter below.
+        if (!Uri.TryCreate($"{origin.TrimEnd('/')}/auth/config", UriKind.Absolute, out var url)
+         || url.Scheme is not ("http" or "https"))
+            return WorkspaceAnswer.NoAnswer;
+
         using var timeout = new CancellationTokenSource(Timeout, time);
         using var cts     = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
 
         try {
-            using var response = await anonymous.GetAsync($"{origin.TrimEnd('/')}/auth/config", cts.Token);
+            using var response = await anonymous.GetAsync(url, cts.Token);
 
             return response.IsSuccessStatusCode                   ? WorkspaceAnswer.Live
                  : response.StatusCode == HttpStatusCode.NotFound ? WorkspaceAnswer.Gone

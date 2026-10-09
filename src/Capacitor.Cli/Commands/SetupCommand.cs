@@ -670,6 +670,9 @@ sealed class SetupCommand(
             if (resolved is null) return 1;
 
             (serverUrl, provider) = resolved.Value;
+
+            // A named server can be one still being created, which the provisioner says to re-run setup against.
+            if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         } else if (noPrompt && requestedWorkspace is null) {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace)");

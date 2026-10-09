@@ -32,4 +32,17 @@ public class WorkspaceProbeTests {
 
         await Assert.That(await WorkspaceProbe.AskAsync(client, url, TimeProvider.System)).IsEqualTo(WorkspaceAnswer.NoAnswer);
     }
+
+    /// <summary>A discovered origin comes from the server; a malformed one must not escape as an
+    /// exception and abort discovery of the others.</summary>
+    [Test]
+    [Arguments("")]
+    [Arguments("not a url")]
+    [Arguments("/relative")]
+    [Arguments("ftp://acme.kcap.ai")]
+    public async Task An_unusable_origin_is_no_answer(string origin) {
+        using var client = new HttpClient();
+
+        await Assert.That(await WorkspaceProbe.AskAsync(client, origin, TimeProvider.System)).IsEqualTo(WorkspaceAnswer.NoAnswer);
+    }
 }

@@ -212,10 +212,10 @@ public sealed class OnboardingFacade(
     internal IKeyWatcher KeyWatcher { get; init; } = NoKeyWatcher.Instance;
 
     /// <summary>
-    /// Whether each discovered WorkOS workspace still answers; one that does not is left out. Unset, every
-    /// listed workspace is offered.
+    /// Whether each discovered WorkOS workspace still answers, given the org-less sign-in's bearer; one
+    /// that does not is left out. Unset, every listed workspace is offered.
     /// </summary>
-    internal Func<DiscoveredTenant, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
+    internal Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
 
     /// <param name="adoptServer">
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the
@@ -389,8 +389,12 @@ public sealed class OnboardingFacade(
         if (result.Error != DiscoveryError.None)
             return Halted(AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
 
+        var tenants = ProbeWorkspace is null
+            ? result.Tenants
+            : await WorkOSDiscovery.DropGoneAsync(result.Tenants, ProbeWorkspace, auth.AccessToken, progress, ct);
+
         // The hosted lane is the only one that can provision, and only for an account with none.
-        return new DiscoveryReport(result.Tenants, AuthProvider.WorkOS, CanCreate: result.Tenants.Length == 0);
+        return new DiscoveryReport(tenants, AuthProvider.WorkOS, CanCreate: tenants.Length == 0);
     }
 
     async Task<DiscoveryReport> ListGitHubAsync(

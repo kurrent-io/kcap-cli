@@ -56,7 +56,7 @@ public class SetupCommandTests {
     /// <summary>The real façade: these tests drive the import and argv legs, not a substituted login.</summary>
     IOnboardingFacadeFactory RealFacades() =>
         new SetupFacadeFactory(Config.Root, AuthFixtures.NewTokenStore(Config.Root), HttpFactory, Proxy,
-            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System);
+            Github, Workos, new RecordingBrowser(), NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System, Provisioning);
 
     /// <summary>A vendor's CLI name, matching <c>HandoffLaunchRecipe</c>'s own vendor list.</summary>
     static string CliBinaryFor(HarnessId id) => id switch {

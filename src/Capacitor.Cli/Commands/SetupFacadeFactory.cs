@@ -10,7 +10,8 @@ namespace Capacitor.Cli.Commands;
 sealed class SetupFacadeFactory(
         ConfigRoot config, TokenStore store, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
         GitHubOAuthClient github, WorkOSClient workos, IBrowserLauncher browser,
-        CliTelemetry telemetry, AuthEndpoints endpoints, TimeProvider time) : IOnboardingFacadeFactory {
+        CliTelemetry telemetry, AuthEndpoints endpoints, TimeProvider time,
+        TenantProvisioningClient provisioning) : IOnboardingFacadeFactory {
     public OnboardingFacade Create(
             ITenantProvisioner? provisioner, ITenantPicker? picker = null, RequestedWorkspace? requested = null,
             IAuthProgress? progress = null) =>
@@ -18,10 +19,23 @@ sealed class SetupFacadeFactory(
             picker ?? SetupCommand.DefaultPicker(browser, () => true, time), provisioner, telemetry, endpoints,
             time, SetupCommand.WorkspaceGuard(requested)) {
             KeyWatcher     = ConsoleKeyWatcher.Instance,
-            ProbeWorkspace = async (tenant, ct) => {
-                using var client = httpFactory.CreateClient(CapacitorClients.Anonymous);
-
-                return await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
-            }
+            ProbeWorkspace = ProbeWorkspaceAsync
         };
+
+    /// <summary>
+    /// A workspace still being created 404s at its address too, and must not be read as removed: the
+    /// create offer it would lead to cannot make a second one while the first is pending.
+    /// </summary>
+    async Task<WorkspaceAnswer> ProbeWorkspaceAsync(DiscoveredTenant tenant, string bearer, CancellationToken ct) {
+        WorkspaceAnswer answer;
+
+        using (var client = httpFactory.CreateClient(CapacitorClients.Anonymous))
+            answer = await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
+
+        if (answer != WorkspaceAnswer.Gone || tenant.Slug is not { Length: > 0 } slug) return answer;
+
+        var status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+
+        return ProvisioningPoll.IsPending(status.StatusCode, status.Body?.State) ? WorkspaceAnswer.NoAnswer : answer;
+    }
 }

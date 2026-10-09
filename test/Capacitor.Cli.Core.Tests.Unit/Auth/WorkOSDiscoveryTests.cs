@@ -85,7 +85,7 @@ public class WorkOSDiscoveryTests {
                 return Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" });
             },
             provisioner: provisioner, time: TimeProvider.System, progress: progress,
-            probe: (_, _) => Task.FromResult(WorkspaceAnswer.Gone));
+            probe: (_, _, _) => Task.FromResult(WorkspaceAnswer.Gone));
 
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
         await Assert.That(switchedTo).IsEqualTo("org_new");
@@ -113,7 +113,7 @@ public class WorkOSDiscoveryTests {
             orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
             orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
             provisioner: provisioner, time: TimeProvider.System,
-            probe: (_, _) => Task.FromResult(answer));
+            probe: (_, _, _) => Task.FromResult(answer));
 
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
         await Assert.That(((WorkOSDiscoveryFlow.Ready)flow).Picked.Slug).IsEqualTo("acme");
