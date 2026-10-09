@@ -1275,6 +1275,19 @@ public class SetupCommandTests {
     }
 
     [Test, NotInParallel]
+    public async Task A_browser_prompt_no_agent_can_answer_after_install_is_withheld() {
+        var prompt  = SetupCommand.HandoffPromptText("0123456789abcdef0123456789abcdef");
+        var noSkill = PathsWithEvalWatchFor(HarnessId.Codex) with { AgentsSkillsDir = Home.PathTo("no-skills") };
+        using var console = new SpectreCapture();
+
+        var result = await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap"), paths: noSkill) with { BrowserHandoffPrompt = prompt });
+
+        await Assert.That(result.PasteBlock).IsNull();
+        await Assert.That(console.Flat).Contains("/sessions?status=ended");
+    }
+
+    [Test, NotInParallel]
     public async Task Terminal_flow_background_failure_still_names_kcap_import_all() {
         var runner = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
         using var console = new SpectreCapture();

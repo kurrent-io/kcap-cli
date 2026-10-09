@@ -1494,6 +1494,16 @@ sealed class SetupCommand(
         if (inputs.BrowserImport is { } browser) {
             foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed, inputs.BrowserBackground)) AnsiConsole.MarkupLine(line);
 
+            // The browser offered the prompt on installs still to run; one that was skipped or failed
+            // leaves no agent able to answer it.
+            if (inputs.BrowserHandoffPrompt is not null && HandoffVendorEligibility.Eligible(harnesses, inputs.Paths).Count == 0) {
+                AnsiConsole.MarkupLine(
+                    $"  [yellow]![/] No agent has the kcap {EvalWatchSkillName} skill, so the prompt the browser showed has nothing to answer it. "
+                  + $"Follow the import in Capacitor instead: {Markup.Escape(inputs.ServerUrl.TrimEnd('/'))}/sessions?status=ended");
+
+                return new ImportStepResult(false, null, null, null);
+            }
+
             return new ImportStepResult(false, null, null, inputs.BrowserHandoffPrompt);
         }
 
