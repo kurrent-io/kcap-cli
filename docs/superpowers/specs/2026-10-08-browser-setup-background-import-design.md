@@ -125,9 +125,11 @@ Mechanism — a detached-only plan file, not new CLI flags:
   so it is not a user-facing input.
 - **The plan mode is dispatched before the "No server configured" gate.** On a first run the profile
   has no server yet, so `baseUrl` is null and `Program.cs` would exit 1 before reaching import. The
-  bypass is narrow: `command == "import"`, the detached log variable set, and a plan that parses and
-  names an absolute `https://` (or `http://localhost`) server. Anything else falls through to the gate
-  unchanged.
+  bypass is narrow: `command == "import"`, the detached log variable set, and a non-empty plan
+  variable. The runner then requires a plan that parses and names an absolute `https://` (or
+  `http://localhost`) server, and otherwise exits 1 with a logged error rather than falling through to
+  an unscoped import. It deletes the plan file only when it is an `import-plan-*.json` directly in the
+  config directory.
 - The terminal flow's spawn is unchanged (`import --all --yes --skip-title`, no plan).
 - One log, `import-<runId>.log`, as in the terminal flow.
 
@@ -309,9 +311,9 @@ CLI (TUnit):
 - Child context and client: the plan's server with the pinned profile's identity, and requests reach
   the plan's server, on a profile that has no server and on one that has a different server.
 - Browser-flow failure lines name `kcap setup`, not `kcap import`.
-- `Program` gate: a detached import with a valid plan and no configured server reaches the plan mode;
-  without the detached log, or with an unreadable plan or a non-absolute server, it still exits
-  "No server configured".
+- `Program` gate: a detached import with a plan variable and no configured server reaches the plan
+  mode; without the detached log it still exits "No server configured". An unreadable plan or a
+  non-absolute server fails the runner with exit 1 and imports nothing.
 - `BrowserFirstRunFlow`: outcome carries `background`, `background_remaining` and exactly one of
   prompt/suppressed, including on `run_failed`; handoff-file write failure reports the suppression.
 
