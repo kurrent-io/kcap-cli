@@ -39,6 +39,18 @@ public class AccountSetupStepTests {
     }
 
     [Test]
+    public async Task The_hint_quotes_a_directory_containing_a_space() {
+        Home.CreateFile(".claude work/settings.json", "{}");
+        var dir   = AccountDirectory.Normalize(Home.PathTo(".claude work"));
+        var lines = new List<string>();
+
+        Sut().Run(Options(noPrompt: true), true, _ => true, lines.Add);
+
+        await Assert.That(lines.Any(l => l.Contains(
+            $"kcap accounts add claude {(OperatingSystem.IsWindows() ? $"\"{dir}\"" : $"'{dir}'")}"))).IsTrue();
+    }
+
+    [Test]
     public async Task A_yes_adds_and_wires_the_candidate() {
         Home.CreateFile(".claude-work/settings.json", "{}");
 

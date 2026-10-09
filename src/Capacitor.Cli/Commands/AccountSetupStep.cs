@@ -39,7 +39,7 @@ internal sealed class AccountSetupStep(AccountStore accounts, PluginEnvironment 
             var name = candidate.Vendor.ToString().ToLowerInvariant();
             var dir  = Markup.Escape(candidate.Directory);
 
-            var hint = $"  Also found {dir} — add it with: kcap accounts add {name} {dir}";
+            var hint = $"  Also found {dir} — add it with: kcap accounts add {name} {Markup.Escape(ShellArgument.Quote(candidate.Directory))}";
 
             if (options.NoPrompt || !interactive) {
                 writeLine(hint);

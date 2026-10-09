@@ -64,7 +64,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
             await Console.Out.WriteLineAsync("");
             await Console.Out.WriteLineAsync("Found but not added:");
             foreach (var c in candidates)
-                await Console.Out.WriteLineAsync($"  kcap accounts add {c.Vendor.ToString().ToLowerInvariant()} {c.Directory}   ({c.Reason})");
+                await Console.Out.WriteLineAsync($"  kcap accounts add {c.Vendor.ToString().ToLowerInvariant()} {ShellArgument.Quote(c.Directory)}   ({c.Reason})");
         }
 
         return 0;

@@ -136,6 +136,18 @@ public class AccountsCommandTests {
     }
 
     [Test]
+    public async Task List_quotes_a_candidate_directory_containing_a_space() {
+        Home.CreateFile(".codex b/config.toml", "");
+        var dir = AccountDirectory.Normalize(Home.PathTo(".codex b"));
+        using var capture = ConsoleOutput.StartCapture();
+
+        await Sut().HandleAsync(["accounts", "list"]);
+
+        await Assert.That(capture.GetCapturedOutput())
+            .Contains($"kcap accounts add codex {(OperatingSystem.IsWindows() ? $"\"{dir}\"" : $"'{dir}'")}");
+    }
+
+    [Test]
     public async Task List_reports_a_corrupt_registry_and_exits_1() {
         Tmp.CreateFile("accounts/accounts.json", "{ not json");
         using var capture = ConsoleOutput.StartErrorCapture();
