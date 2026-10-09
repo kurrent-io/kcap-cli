@@ -598,7 +598,12 @@ partial class WatchCommand(
         var vibeSubagents = new List<MistralVibeSubagent>();
 
         Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
-            if (vendor == "mistral-vibe") vibeSubagents.AddRange(MistralVibeLiveTranscript.Refresh(transcriptPath));
+            // Vibe replaces journal segments as it publishes, so a refresh can race a file away;
+            // the next drain retries it.
+            if (vendor == "mistral-vibe") {
+                try { vibeSubagents.AddRange(MistralVibeLiveTranscript.Refresh(transcriptPath)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
 
             return GatedDrainNewLinesAsync(
                 cursorRewindGate, hubConnection, sessionId, transcriptPath, agentId, state, vendor, drainCt,
@@ -1105,9 +1110,6 @@ partial class WatchCommand(
         if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
-
-        if (endReason is not null && agentId is null && vendor == "mistral-vibe")
-            MistralVibeLiveTranscript.Discard(config, sessionId, transcriptPath);
 
         // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
         // on a recycled pid (KillWatcher's token guard is the crash-exit backstop).

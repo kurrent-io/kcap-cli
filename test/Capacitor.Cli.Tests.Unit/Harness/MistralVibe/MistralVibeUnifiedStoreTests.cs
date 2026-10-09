@@ -173,21 +173,7 @@ public class MistralVibeUnifiedStoreTests {
     }
 
     [Test]
-    public async Task Discard_deletes_kcaps_copy_and_never_a_transcript_vibe_owns() {
-        var copy = MistralVibeLiveTranscript.PathFor(Config.Root, "s1");
-        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
-        File.WriteAllText(copy, "{}");
-        var vibeOwned = Tmp.CreateFile("session_1/messages.jsonl", "{}");
-
-        MistralVibeLiveTranscript.Discard(Config.Root, "s1", copy);
-        MistralVibeLiveTranscript.Discard(Config.Root, "s1", vibeOwned);
-
-        await Assert.That(File.Exists(copy)).IsFalse();
-        await Assert.That(File.Exists(vibeOwned)).IsTrue();
-    }
-
-    [Test]
-    public async Task A_copy_rebuilt_after_discard_stamps_only_the_tokens_counted_since() {
+    public async Task A_later_sync_stamps_only_the_tokens_counted_since_the_last_stamp() {
         var copy = MistralVibeLiveTranscript.PathFor(Config.Root, "s1");
         Publish("s", """{"path":"projection-state.json","sha256":"x"}""");
         Tmp.CreateFile($"s/generations/{Generation}/projection-state.json",
@@ -195,7 +181,6 @@ public class MistralVibeUnifiedStoreTests {
           + Message("m1", "user", "go") + "," + Message("a1", "assistant", "first") + "]}}}");
 
         MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), copy, model: null);
-        MistralVibeLiveTranscript.Discard(Config.Root, "s1", copy);
 
         Tmp.CreateFile("s/journal/0000000000000002.jsonl", new[] {
             Delta(2, Append(Message("a2", "assistant", "resumed")),
