@@ -252,4 +252,18 @@ public class AccountsCommandTests {
         await Assert.That(File.Exists(Path.Combine(dir, "hooks.json"))).IsTrue();
         await Assert.That(File.ReadAllText(Path.Combine(dir, "config.toml"))).DoesNotContain("cap.example.test");
     }
+
+    [Test]
+    public async Task List_skips_a_hand_edited_entry_whose_directory_is_not_a_valid_path() {
+        Tmp.CreateFile("accounts/accounts.json", """
+            { "version": 1, "revision": 1, "accounts": [
+                { "id": "nul", "vendor": "Claude", "directory": "/h/bad\u0000dir", "label": "bad", "added_at": "2026-01-01T00:00:00Z" }
+            ] }
+            """);
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await Sut().HandleAsync(["accounts"]);
+
+        await Assert.That(exit).IsEqualTo(0).Because(capture.GetCapturedError());
+    }
 }

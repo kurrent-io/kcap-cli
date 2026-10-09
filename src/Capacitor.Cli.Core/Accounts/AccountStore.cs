@@ -39,7 +39,16 @@ public sealed class AccountStore(string directory) {
 
     // A hand edit can leave an entry no path lookup can use; dropping it keeps every hook working.
     static bool Usable(VendorAccount? account) =>
-        account is { Id.Length: > 0, Directory: { } dir } && !string.IsNullOrWhiteSpace(dir) && Path.IsPathRooted(dir);
+        account is { Id.Length: > 0, Directory: { } dir } && !string.IsNullOrWhiteSpace(dir) && Path.IsPathRooted(dir) && Normalizable(dir);
+
+    static bool Normalizable(string dir) {
+        try {
+            AccountDirectory.Normalize(dir);
+            return true;
+        } catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException) {
+            return false;
+        }
+    }
 
     /// <summary>For hooks and watchers, which must never fail on the registry: null sends the caller to
     /// the environment-derived layout.</summary>

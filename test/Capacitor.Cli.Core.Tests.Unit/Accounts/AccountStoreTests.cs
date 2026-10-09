@@ -166,6 +166,7 @@ public class AccountStoreTests {
             { "id": "nodir", "vendor": "Codex", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
             { "id": "blank", "vendor": "Codex", "directory": " ", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
             { "id": "relative", "vendor": "Claude", "directory": "relative/.claude", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
+            { "id": "nul", "vendor": "Claude", "directory": "/h/bad\u0000dir", "label": "x", "added_at": "2026-01-01T00:00:00Z" },
             { "id": "ok", "vendor": "Claude", "directory": "/h/.claude-work", "label": "work", "added_at": "2026-01-01T00:00:00Z" }
         ] }
         """;
@@ -188,6 +189,17 @@ public class AccountStoreTests {
 
         await Assert.That(AccountPaths.ClaudeForTranscript(Tmp.PathTo("t.jsonl"), registry, home)).IsNull();
         await Assert.That(AccountPaths.CodexForRollout(Tmp.PathTo("r.jsonl"), registry, home)).IsNull();
+    }
+
+    [Test]
+    public async Task Discovery_and_wiring_state_do_not_throw_on_a_hand_edited_registry() {
+        Tmp.CreateFile("accounts/accounts.json", HandEditedRegistry);
+        Tmp.CreateFile("home/.claude-other/settings.json", "{}");
+        var registry = Store().Load();
+        var home     = new UserHome(Tmp.PathTo("home"));
+
+        await Assert.That(AccountDiscovery.Find(home, registry, _ => null).Count).IsEqualTo(1);
+        foreach (var account in registry.Accounts) AccountWiring.State(account, home);
     }
 
     [Test]
