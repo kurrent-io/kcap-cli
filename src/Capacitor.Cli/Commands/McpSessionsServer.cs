@@ -20,11 +20,13 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
-    public async Task<int> RunAsync() {
-        var baseUrl = profiles.Resolution.ServerUrl!;
+    HttpClient?    _client;
+    CwdRepository? _repository;
 
-        var repository = new CwdRepository(config, workdir.Path, router, time);
-        var tools      = BuildToolsList();
+    string BaseUrl => profiles.Resolution.ServerUrl!;
+
+    public async Task<int> RunAsync() {
+        var tools = BuildToolsList();
 
         // Best-effort, and recorded even when the read throws: a stale token on disk must never
         // block the server from starting, and an absent property is a different value in a funnel
@@ -39,38 +41,6 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         telemetry.AddSharedProperty("logged_in", loggedIn);
 
         await using var mcp = new McpTelemetry(telemetry);
-
-        // Validate the server_url shape once, locally (pure string check — no network, token,
-        // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
-        var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
-
-        // The authenticated client and the cwd repository are resolved on the first tools/call,
-        // not at startup: kcap-sessions auto-registers, so Claude Code spawns `kcap mcp sessions`
-        // for every session — deferring keeps startup local-only (no GET /auth/config, token load,
-        // repo detection, or stderr) for sessions that never invoke a tool. The client is created
-        // on demand into a nullable field (rather than a Lazy<Task>) so a transient creation
-        // failure leaves it null and the next call retries, instead of a faulted task sticking for
-        // the rest of the session. Safe without locking: the stdio loop handles one request at a
-        // time.
-        HttpClient? client = null;
-
-        // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
-        // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
-        // return a JSON-RPC tool error instead so it keeps serving.
-        async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-            if (!urlOk)
-                return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
-
-            try {
-                client ??= await http.ForSessionAsync();
-                return await HandleToolCallAsync(callId, callRequest, client, baseUrl, await repository.GetHashAsync());
-            } catch (Exception ex) {
-                // Unexpected: log the detail to stderr (not to the client, which could leak local
-                // paths from IO errors) and return a generic tool error, keeping the loop alive.
-                await Console.Error.WriteLineAsync($"kcap mcp sessions: unexpected error handling tools/call: {ex}");
-                return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
-            }
-        }
 
         // Records which MCP tools agents actually reach for. Never touches the response path:
         // the result (or the exception) is returned exactly as DispatchToolCallAsync produced it.
@@ -125,14 +95,39 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 await writer.WriteLineAsync(response);
             }
         } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
+            if (_client is not null) {
+                try { _client.Dispose(); } catch {
                     /* swallow — best-effort cleanup */
                 }
             }
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Never lets the stdio loop die on one bad request. The authenticated client and the cwd
+    /// repository are resolved on the first call that needs the server, not at startup:
+    /// kcap-sessions auto-registers, so a session that never calls a tool must stay local-only. A
+    /// failed client creation leaves the field null so the next call retries; the stdio loop is
+    /// serial, so no locking.
+    /// </summary>
+    internal async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
+        if (callRequest["params"]?["name"] is JsonValue name && name.TryGetValue(out string? toolName) && toolName == ConnectionTool.Name)
+            return BuildToolResult(callId, ConnectionTool.Result(BaseUrl, profiles.Name).ToJsonString());
+
+        if (!HttpClientExtensions.IsAcceptableUrl(BaseUrl))
+            return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
+
+        try {
+            _client     ??= await http.ForSessionAsync();
+            _repository ??= new CwdRepository(config, workdir.Path, router, time);
+            return await HandleToolCallAsync(callId, callRequest, _client, BaseUrl, await _repository.GetHashAsync());
+        } catch (Exception ex) {
+            // The detail goes to stderr only: IO errors can carry local paths.
+            await Console.Error.WriteLineAsync($"kcap mcp sessions: unexpected error handling tools/call: {ex}");
+            return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
+        }
     }
 
     // Server-level usage preamble (MCP `instructions`) — steers clients toward these tools for
@@ -1126,6 +1121,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             ),
             McpToolAnnotations.Read
         ),
-        SessionEvalsTool.Definition
+        SessionEvalsTool.Definition,
+        ConnectionTool.Definition
     ];
 }
