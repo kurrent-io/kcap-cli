@@ -1223,7 +1223,8 @@ sealed class SetupCommand(
             BrowserImport:       browserAnswers.Import,
             BrowserImportFailed: browserAnswers.ImportFailed,
             BrowserFinished:     browserAnswers.FlowStillLive,
-            BrowserHandoffPrompt: browserAnswers.HandoffPrompt));
+            BrowserHandoffPrompt: browserAnswers.HandoffPrompt,
+            BrowserBackground:   browserAnswers.Background));
 
         await Console.Out.WriteLineAsync();
 
@@ -1468,7 +1469,8 @@ sealed class SetupCommand(
         FirstRunImportAnswer?         BrowserImport,
         bool                          BrowserImportFailed,
         bool                          BrowserFinished = false,
-        string?                       BrowserHandoffPrompt = null);
+        string?                       BrowserHandoffPrompt = null,
+        BackgroundImportLaunch?       BrowserBackground = null);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1490,7 +1492,7 @@ sealed class SetupCommand(
         // so it reports rather than prompting. Re-prompting would offer to import one repository
         // again, right after a screen that chose several.
         if (inputs.BrowserImport is { } browser) {
-            foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed)) AnsiConsole.MarkupLine(line);
+            foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed, inputs.BrowserBackground)) AnsiConsole.MarkupLine(line);
 
             return new ImportStepResult(false, null, null, inputs.BrowserHandoffPrompt);
         }
@@ -2024,7 +2026,8 @@ sealed class SetupCommand(
             importing?.Failed == true,
             FlowId(result),
             result is FirstRunFlowResult.Finished,
-            importing?.HandoffPrompt);
+            importing?.HandoffPrompt,
+            importing?.Background);
     }
 
     /// <summary>
@@ -2042,13 +2045,16 @@ sealed class SetupCommand(
     /// than the silence it would be covering.</param>
     /// <param name="HandoffPrompt">The eval-watch prompt the import offered, printed again at the end of
     /// setup for a user who closed the tab.</param>
+    /// <param name="Background">The child importing the rest of the chosen history, or null where the
+    /// import spawned none.</param>
     internal sealed record BrowserFlowAnswers(
-            FirstRunAgentsAnswer? Agents,
-            FirstRunImportAnswer? Import,
-            bool                  ImportFailed  = false,
-            string?               FlowId        = null,
-            bool                  FlowStillLive = false,
-            string?               HandoffPrompt = null) {
+            FirstRunAgentsAnswer?   Agents,
+            FirstRunImportAnswer?   Import,
+            bool                    ImportFailed  = false,
+            string?                 FlowId        = null,
+            bool                    FlowStillLive = false,
+            string?                 HandoffPrompt = null,
+            BackgroundImportLaunch? Background    = null) {
         /// <summary>No browser leg ran, or it ended with nothing to spend.</summary>
         public static BrowserFlowAnswers None { get; } = new(null, null);
     }
@@ -2080,7 +2086,10 @@ sealed class SetupCommand(
     /// from the write so the copy is testable.</summary>
     /// <param name="failed">A pass returned non-zero. The line then says so rather than showing a
     /// tick, or the closing summary contradicts the warning the import itself already printed.</param>
-    internal static IReadOnlyList<string> BrowserImportSummary(FirstRunImportAnswer answer, bool failed = false) {
+    /// <param name="background">The child importing the rest. While it runs nothing is finished yet and
+    /// it is already the retry; one that did not start leaves the rest unimported.</param>
+    internal static IReadOnlyList<string> BrowserImportSummary(
+            FirstRunImportAnswer answer, bool failed = false, BackgroundImportLaunch? background = null) {
         if (answer.IsDecline) return ["  [dim]· You chose not to import past sessions in the browser.[/]"];
 
         if (answer.NoReadableVendors)
@@ -2096,10 +2105,16 @@ sealed class SetupCommand(
             var subject = $"{repos} repositor{(repos == 1 ? "y" : "ies")} as chosen in the browser "
                         + $"[dim]({Markup.Escape(FirstRunImportWindows.Label(answer.Window))})[/]";
 
-            lines.Add(failed
-                ? $"  [yellow]![/] Partly imported {subject}. "
-                + "Run [cyan]kcap setup[/] again and choose the same repositories to finish it."
-                : $"  [green]✓[/] Imported {subject}");
+            var running = background is { Status: BackgroundImportStatus.Running };
+            var rest    = running ? $" [dim]· the rest is importing in the background · log: {Markup.Escape(background!.LogPath ?? "")}[/]" : "";
+
+            lines.Add((failed || background is { Status: BackgroundImportStatus.Failed }, running) switch {
+                (true, true)  => $"  [yellow]![/] Partly imported {subject}{rest}",
+                (true, false) => $"  [yellow]![/] Partly imported {subject}. "
+                               + "Run [cyan]kcap setup[/] again and choose the same repositories to finish it.",
+                (false, true) => $"  [green]✓[/] Imported your newest sessions from {subject}{rest}",
+                _             => $"  [green]✓[/] Imported {subject}",
+            });
         }
 
         if (answer.Unreadable > 0)

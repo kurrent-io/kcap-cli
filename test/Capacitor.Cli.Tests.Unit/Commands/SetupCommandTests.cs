@@ -341,6 +341,62 @@ public class SetupCommandTests {
         await Assert.That(string.Join("\n", lines)).DoesNotContain("[green]");
     }
 
+    static BackgroundImportLaunch Launch(BackgroundImportStatus status) =>
+        new(status, "/logs/import-run1.log", status is BackgroundImportStatus.Failed ? 3 : null,
+            status is BackgroundImportStatus.Failed ? "exit 3" : null);
+
+    [Test]
+    public async Task BrowserImportSummary_while_the_child_runs_claims_only_the_newest_sessions() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), background: Launch(BackgroundImportStatus.Running)));
+
+        await Assert.That(text).Contains("Imported your newest sessions from 1 repository");
+        await Assert.That(text).Contains("the rest is importing in the background");
+        await Assert.That(text).Contains("/logs/import-run1.log");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_a_partial_run_names_no_remedy_while_the_child_runs() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), failed: true, background: Launch(BackgroundImportStatus.Running)));
+
+        await Assert.That(text).Contains("Partly imported");
+        await Assert.That(text).Contains("importing in the background");
+        await Assert.That(text).DoesNotContain("kcap setup");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_a_child_that_did_not_start_is_partial_with_the_setup_remedy() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), background: Launch(BackgroundImportStatus.Failed)));
+
+        await Assert.That(text).Contains("Partly imported");
+        await Assert.That(text).Contains("kcap setup");
+        await Assert.That(text).DoesNotContain("[green]");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_keeps_the_tick_when_no_child_is_still_running() {
+        foreach (var status in new[] { BackgroundImportStatus.NotNeeded, BackgroundImportStatus.ExitedZero }) {
+            var text = string.Join("\n", SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap"), background: Launch(status)));
+
+            await Assert.That(text).Contains("[green]✓[/] Imported 1 repository");
+            await Assert.That(text).DoesNotContain("background");
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task Browser_import_step_passes_the_running_child_to_its_summary() {
+        using var console = new SpectreCapture();
+
+        await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap")) with {
+                BrowserBackground = Launch(BackgroundImportStatus.Running)
+            });
+
+        await Assert.That(console.Flat).Contains("the rest is importing in the background");
+    }
+
     [Test]
     public async Task BrowserImportSummary_an_answer_it_read_whole_gets_one_line() {
         await Assert.That(SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap")).Count).IsEqualTo(1);
