@@ -302,7 +302,7 @@ public sealed class KcapCli : IKcapCli {
     // the spawn's own token, never a detached one.
     async Task<Dictionary<string, string>> EnvWithTerminalPathAsync(Dictionary<string, string> env, CancellationToken ct) {
         var terminalPath = _terminalPathAsync is null ? null : await _terminalPathAsync(ct).ConfigureAwait(false);
-        if (terminalPath is not null) env["PATH"] = terminalPath;
+        if (!string.IsNullOrWhiteSpace(terminalPath)) env["PATH"] = terminalPath; // an empty answer would unset PATH for the child
 
         return env;
     }

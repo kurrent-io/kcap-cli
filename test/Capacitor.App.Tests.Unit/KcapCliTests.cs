@@ -265,9 +265,12 @@ public class KcapCliTests {
     }
 
     [Test]
-    public async Task An_unknown_terminal_path_leaves_PATH_out_of_the_overlay() {
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("  ")]
+    public async Task An_unknown_or_empty_terminal_path_leaves_PATH_out_of_the_overlay(string? terminalPath) {
         var runner = new FakeProcessRunner();
-        var cli = MakeCli(runner);
+        var cli = MakeCli(runner, terminalPath: terminalPath);
 
         await cli.VersionAsync(CancellationToken.None);
 
