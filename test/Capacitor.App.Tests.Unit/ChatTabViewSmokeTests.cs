@@ -1475,25 +1475,28 @@ public class ChatTabViewSmokeTests {
     public async Task A_question_waiting_for_its_card_does_not_loop_layout() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            var prose = string.Join("\\n\\n", Enumerable.Range(1, 60).Select(i => $"Paragraph {i} of a long reply that wraps across the column."));
-            var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
-            const string question = """{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}""";
-            var ask = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q-tool","name":"AskUserQuestion","input":{{{question}}}}]}}""";
-            var path = Tmp.CreateFile("pending-question.jsonl",
-                [tall, tall, tall, UserLine, ThinkingLine, CallLine(1), ResultLine(1), UserLine, ThinkingLine, CallLine(2), ResultLine(2),
-                 ThinkingLine, CallLine(3), ResultLine(3), CallLine(4), ResultLine(4), ask]);
-            await host.LoadAsync(path);
-            await Assert.That(host.Chat.Items[^1] is ToolGroupItem { SuppressedForPendingQuestion: true }).IsTrue();
+            try {
+                var prose = string.Join("\\n\\n", Enumerable.Range(1, 60).Select(i => $"Paragraph {i} of a long reply that wraps across the column."));
+                var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
+                const string question = """{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}""";
+                var ask = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q-tool","name":"AskUserQuestion","input":{{{question}}}}]}}""";
+                var path = Tmp.CreateFile("pending-question.jsonl",
+                    [tall, tall, tall, UserLine, ThinkingLine, CallLine(1), ResultLine(1), UserLine, ThinkingLine, CallLine(2), ResultLine(2),
+                     ThinkingLine, CallLine(3), ResultLine(3), CallLine(4), ResultLine(4), ask]);
+                await host.LoadAsync(path);
+                await Assert.That(host.Chat.Items[^1] is ToolGroupItem { SuppressedForPendingQuestion: true }).IsTrue();
 
-            var extent = host.Scroll.Extent.Height;
-            for (var i = 0; i < 5; i++) {
-                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
-                Dispatcher.UIThread.RunJobs();
+                var extent = host.Scroll.Extent.Height;
+                for (var i = 0; i < 5; i++) {
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    Dispatcher.UIThread.RunJobs();
+                }
+
+                await Assert.That(host.Scroll.Extent.Height).IsEqualTo(extent);
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally {
+                await host.CloseAsync();
             }
-
-            await Assert.That(host.Scroll.Extent.Height).IsEqualTo(extent);
-            await Assert.That(host.AtBottom()).IsTrue();
-            await host.CloseAsync();
         });
     }
 
