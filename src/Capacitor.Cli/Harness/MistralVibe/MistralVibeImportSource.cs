@@ -146,7 +146,8 @@ internal sealed class MistralVibeImportSource(MistralVibePaths paths, TimeProvid
 
         var startLine = classification.Status switch {
             ImportCommand.ClassificationStatus.Partial       => classification.ResumeFromLine,
-            ImportCommand.ClassificationStatus.AlreadyLoaded => classification.TotalLines,
+            // TotalLines counts nonblank lines; the server's watermark is a raw line index.
+            ImportCommand.ClassificationStatus.AlreadyLoaded => LastNonBlankIndex(lines) + 1,
             _                                                => 0,
         };
 
@@ -279,7 +280,7 @@ internal sealed class MistralVibeImportSource(MistralVibePaths paths, TimeProvid
 
         var body = await resp.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.ValueKind == JsonValueKind.Number ? ln.GetInt32() : null;
+        return doc.RootElement.TryGetProperty("last_line_number", out var ln) && ln.IsNumber ? ln.GetInt32() : null;
     }
 
     ImportCommand.SessionClassification Classify(

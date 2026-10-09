@@ -1189,7 +1189,8 @@ partial class WatchCommand(
         if (found.Count == 0 || MistralVibeLiveTranscript.SourceOf(transcriptPath) is not { } source) return;
         if (Path.GetDirectoryName(source.SessionDir) is not { } storeRoot) return;
 
-        var pending = found.ToList();
+        // Every refresh re-reports each spawn the store holds, so one child arrives many times.
+        var pending = found.DistinctBy(s => s.ChildSessionId, StringComparer.Ordinal).ToList();
         found.Clear();
 
         foreach (var subagent in pending) {

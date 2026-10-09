@@ -14,12 +14,12 @@ internal sealed record MistralVibeTokenUsage(long InputTokens, long OutputTokens
             Math.Max(0, CachedInputTokens - other.CachedInputTokens));
 
     public static MistralVibeTokenUsage? From(JsonElement? usage) =>
-        usage is { ValueKind: JsonValueKind.Object } u
+        usage is { IsObject: true } u
             ? new(Count(u, "inputTokens"), Count(u, "outputTokens"), Count(u, "cachedInputTokens"))
             : null;
 
     static long Count(JsonElement usage, string name) =>
-        usage.TryGetProperty(name, out var v) && v.TryGetInt64(out var n) ? n : 0;
+        usage.TryGetProperty(name, out var v) && v.IsNumber && v.TryGetInt64(out var n) ? n : 0;
 
     public void WriteTo(Utf8JsonWriter writer) {
         writer.WriteNumber("inputTokens", InputTokens);

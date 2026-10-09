@@ -26,11 +26,8 @@ namespace Capacitor.Cli.Commands.Harness;
 /// why <c>hook</c> is a <c>CrashReporter.FailOpenCommand</c>; kcap also never installs its hooks as
 /// strict.)
 ///
-/// <para><b>Certification note:</b> Vibe exposes no end-of-session hook, so clean finalization relies
-/// on the watcher's own parent-exit fallback (it claims the agent pid for a single-session vendor and
-/// finalizes when the agent exits). The exact hook payload field names and the end-of-session
-/// behaviour must be confirmed against a real <c>vibe</c> binary; <c>parent_session_id</c> subagent
-/// handling is deferred until that session layout is known.</para>
+/// <para>Vibe exposes no end-of-session hook, so finalization relies on the watcher's parent-exit
+/// fallback: it claims the agent pid for a single-session vendor and finalizes when the agent exits.</para>
 /// </remarks>
 sealed class MistralVibeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,

@@ -133,8 +133,8 @@ public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
     /// <c>structured_content</c> its built-in tools return (<c>stdout</c>/<c>stderr</c> from a shell,
     /// <c>content</c> from a read), else the raw JSON.
     static string OutputText(JsonElement output) {
-        if (output.ValueKind == JsonValueKind.String) return output.GetString() ?? "";
-        if (output.ValueKind != JsonValueKind.Object) return output.ValueKind == JsonValueKind.Null ? "" : output.GetRawText();
+        if (output.IsString) return output.GetString() ?? "";
+        if (!output.IsObject) return output.IsNull ? "" : output.GetRawText();
 
         if (output.Arr("content") is { } blocks && JoinTextBlocks(blocks, "text") is { Length: > 0 } text) return text;
 
@@ -209,10 +209,13 @@ public sealed class MistralVibeTranscriptEvents : ITranscriptProjection {
         return Wrap("arguments", arguments ?? "");
     }
 
+    static readonly double MinUnixMs = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    static readonly double MaxUnixMs = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
     /// A unified-store entry's <c>createdAt</c> is epoch milliseconds (a number); a legacy
     /// messages.jsonl line has no timestamp, so the batch's receive time rides along.
     static (DateTimeOffset At, string? Record) ResolveTimestamp(JsonElement root, DateTimeOffset receivedAt) {
-        if (root.TryGetProperty("createdAt", out var c) && c.ValueKind == JsonValueKind.Number && c.TryGetDouble(out var ms)) {
+        if (root.TryGetProperty("createdAt", out var c) && c.IsNumber && c.TryGetDouble(out var ms) && ms >= MinUnixMs && ms <= MaxUnixMs) {
             var at = DateTimeOffset.FromUnixTimeMilliseconds((long)ms);
             return (at, at.ToString("O"));
         }

@@ -114,13 +114,13 @@ internal static class MistralVibeUnifiedStore {
 
         if (projection.Arr("chunks") is { } chunks) {
             foreach (var digest in chunks.EnumerateArray()) {
-                if (digest.ValueKind != JsonValueKind.String || FileName(digest.GetString()) is not { } name) return null;
+                if (!digest.IsString || FileName(digest.GetString()) is not { } name) return null;
                 using var chunk = ReadJson(Path.Combine(sessionDir, "chunks", name + ".json"));
-                if (chunk?.RootElement is not { ValueKind: JsonValueKind.Array } items) return null;
-                entries.AddRange(items.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
+                if (chunk?.RootElement is not { IsArray: true } items) return null;
+                entries.AddRange(items.EnumerateArray().Where(i => i.IsObject).Select(Capture));
             }
         } else if (snapshot?.Obj("history")?.Arr("entries") is { } inline) {
-            entries.AddRange(inline.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
+            entries.AddRange(inline.EnumerateArray().Where(i => i.IsObject).Select(Capture));
         }
 
         var segment = manifest.RootElement.Obj("recovery_journal_segment");
@@ -147,7 +147,7 @@ internal static class MistralVibeUnifiedStore {
 
             using (record) {
                 var root = record.RootElement;
-                if (root.ValueKind != JsonValueKind.Object || root.Str("type") != "projection_delta") continue;
+                if (!root.IsObject || root.Str("type") != "projection_delta") continue;
                 if (root.TryGetProperty("sequence", out var s) && s.TryGetInt64(out var sequence) && sequence < firstSequence) continue;
                 if (root.Obj("payload")?.Arr("delta") is not { } delta) continue;
 
@@ -171,7 +171,7 @@ internal static class MistralVibeUnifiedStore {
                 break;
             case "set_history_entries" when op.Arr("entries") is { } all:
                 entries.Clear();
-                entries.AddRange(all.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.Object).Select(Capture));
+                entries.AddRange(all.EnumerateArray().Where(i => i.IsObject).Select(Capture));
                 break;
             case "set_envelope":
                 state.TakeEnvelope(op.Obj("state"));
@@ -184,7 +184,7 @@ internal static class MistralVibeUnifiedStore {
     /// when the file is missing/unreadable or names none.</summary>
     public static string? ReadCwd(string sessionDir) {
         using var meta = ReadJson(Path.Combine(sessionDir, "meta.json"));
-        return meta?.RootElement is { ValueKind: JsonValueKind.Object } root
+        return meta?.RootElement is { IsObject: true } root
             ? root.Obj("environment")?.Str("working_directory") ?? root.Str("origin_directory")
             : null;
     }
