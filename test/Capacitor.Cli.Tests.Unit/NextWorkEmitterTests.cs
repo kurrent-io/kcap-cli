@@ -52,7 +52,20 @@ public class NextWorkEmitterTests {
     public async Task The_guidance_names_deferral_and_completion() {
         await Assert.That(NextWorkEmitter.Guidance).Contains("Finish a listed item before starting new work.");
         await Assert.That(NextWorkEmitter.Guidance).Contains("declare it at that moment with declare_loose_end (one call per item, never \"none\")");
-        await Assert.That(NextWorkEmitter.Guidance).EndsWith("When the user's task is complete and you are about to report it: declare any remaining loose ends with declare_loose_end (one call per item, never \"none\"), then call get_next_work and tell the user, in a few lines, what to consider working on next and why.");
+        await Assert.That(NextWorkEmitter.Guidance).EndsWith(NextWorkEmitter.CompletionInstruction);
+    }
+
+    /// <summary>The unit is the piece of work, not the request: the instruction names the terminal states,
+    /// the answered-question case that keeps agents from presenting after every reply, and the open-work hold.</summary>
+    [Test]
+    public async Task The_completion_instruction_gates_on_the_piece_of_work_reaching_a_terminal_state() {
+        var text = NextWorkEmitter.CompletionInstruction;
+
+        await Assert.That(text).StartsWith("Present next work once per piece of work the user framed");
+        await Assert.That(text).Contains("a question answered with nothing pending");
+        await Assert.That(text).Contains("Never present after a step inside work that is still open");
+        await Assert.That(text).Contains("attached work is still open, do not present unless the user asked for next work or said they are done with or parking that work");
+        await Assert.That(text).Contains("declare_loose_end (one call per item, never \"none\"), call get_next_work");
     }
 
     [Test]
