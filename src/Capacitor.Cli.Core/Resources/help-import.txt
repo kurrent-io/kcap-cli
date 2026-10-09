@@ -1,7 +1,7 @@
 kcap import — Import local sessions from every detected coding agent
 
-Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, and
-Antigravity sessions on this machine and imports them in a single run. Most agents
+Discovers Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity,
+and Mistral Vibe sessions on this machine and imports them in a single run. Most agents
 ship a per-session .jsonl transcript (OpenCode is a SQLite db):
   Claude   — ~/.claude/projects/<encoded-cwd>/<sid>.jsonl
   Codex    — ~/.codex/sessions/.../rollout-<sid>.jsonl
@@ -67,7 +67,7 @@ Options:
                           sessions. Titling shells out to your own `claude` /
                           `codex`, once per session, on your subscription — the
                           same opt-out `kcap watch` takes. Sessions are searchable
-                          without a title, and the other seven agents never title
+                          without a title, and the other eight agents never title
                           locally, so this changes nothing for them.
   --generate-summaries    Also generate per-session what's-done summaries
   --repair-capture        Recover omitted file-tool records for one ended session

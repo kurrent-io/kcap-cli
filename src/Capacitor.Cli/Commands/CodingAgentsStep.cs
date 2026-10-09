@@ -186,6 +186,8 @@ internal static class CodingAgentsStep {
         Add(r.AntigravityMcpRegistered, p.AntigravityMcpPath);
         Add(r.AntigravityInstructionsInstalled, p.AntigravityInstructionsPath);
         Add(r.AntigravitySkillsInstalled, p.AntigravitySkillsDir);
+        Add(r.VibeHooksInstalled, p.VibeHooksPath);
+        Add(r.VibeMcpRegistered, p.VibeConfigPath);
 
         return paths;
     }
@@ -679,7 +681,7 @@ internal static class CodingAgentsStep {
         // hooks.toml writes the bare "kcap hook --mistral-vibe" command and relies on Vibe finding it on PATH.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Vibe hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }

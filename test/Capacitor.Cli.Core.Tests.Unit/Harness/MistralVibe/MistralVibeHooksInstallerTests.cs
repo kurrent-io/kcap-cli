@@ -43,6 +43,15 @@ public class MistralVibeHooksInstallerTests {
     }
 
     [Test]
+    public async Task Install_into_a_hooks_value_it_declines_to_replace_fails_and_marks_nothing() {
+        Tmp.CreateFile("hooks.toml", "hooks = \"not an array\"\n");
+        var path = Tmp.GetResolvedPath("hooks.toml");
+
+        await Assert.That(MistralVibeHooksInstaller.Install(path)).IsEqualTo(TomlConfigFile.Outcome.Failed);
+        await Assert.That(MistralVibeHooksInstaller.IsInstalled(path)).IsFalse();
+    }
+
+    [Test]
     public async Task Remove_on_a_file_without_our_hooks_is_a_no_op() {
         Tmp.CreateFile("hooks.toml",
             "[[hooks]]\nname = \"mine\"\ntype = \"pre_tool\"\ncommand = \"echo hi\"\n");

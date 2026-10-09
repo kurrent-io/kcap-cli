@@ -23,10 +23,16 @@ public static class MistralVibeHooksInstaller {
     }
 
     /// <summary>Ensures exactly one kcap entry per <see cref="MistralVibeHooksParser.VibeHookTypes"/>
-    /// exists, preserving every non-kcap entry. Writes the version marker on success.</summary>
+    /// exists, preserving every non-kcap entry. Writes the version marker only once the file holds
+    /// them: a <c>hooks</c> value kcap declines to replace leaves the edit unchanged yet unhooked.</summary>
     public static TomlConfigFile.Outcome Install(string hooksTomlPath) {
         var outcome = TomlConfigFile.Edit(hooksTomlPath, InstallMutate);
-        if (outcome != TomlConfigFile.Outcome.Failed) WriteMarker(hooksTomlPath);
+        if (outcome == TomlConfigFile.Outcome.Failed) return outcome;
+        if (TomlConfigFile.Read(hooksTomlPath) is not { } root
+         || !MistralVibeHooksParser.HasCapacitorHooksFor(root, MistralVibeHooksParser.VibeHookTypes))
+            return TomlConfigFile.Outcome.Failed;
+
+        WriteMarker(hooksTomlPath);
         return outcome;
     }
 

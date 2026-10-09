@@ -27,6 +27,7 @@ internal static class SetupDecisions {
         if (d.Pi)          names.Add("Pi");
         if (d.OpenCode)    names.Add("OpenCode");
         if (d.Antigravity) names.Add("Antigravity");
+        if (d.Vibe)        names.Add("Mistral Vibe");
 
         return names.Count == 0 ? null : string.Join(", ", names);
     }

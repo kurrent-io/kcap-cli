@@ -984,6 +984,7 @@ sealed class SetupCommand(
         OfferedIf(detected.Pi,          skipPiFlag,          HarnessId.Pi);
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
+        OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
         new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
@@ -1308,6 +1309,7 @@ sealed class SetupCommand(
             installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
             installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
+            installResult.VibeHooksInstalled,
         }.Count(installed => installed);
 
         telemetry.Funnel.Succeeded(agentsConfigured);
