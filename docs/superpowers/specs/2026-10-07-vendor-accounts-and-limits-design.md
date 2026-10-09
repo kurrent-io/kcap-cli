@@ -64,7 +64,8 @@ changes. The directory is owner-only (0700, files 0600). It holds:
 **Mutations** — add, remove, rename, wire, unwire, identity update — take `accounts.lock`, re-read
 `accounts.json`, apply, increment `revision`, and replace it atomically. Any kcap process may mutate:
 `kcap accounts`, `kcap setup`, `kcap plugin`, `kcap uninstall`, the npm refresh, or a daemon acting
-for the desktop app. No daemon has to be running. Daemons are readers and publishers (Section 6.1).
+for the desktop app. No daemon has to be running. A daemon publishes, and mutates only on behalf of the desktop app
+(Section 6.1).
 
 **Lock order** is always `accounts.lock` before `readings.lock`. Removal and identity retirement hold
 both: update `accounts.json`, then delete the account's reading. Reading writers take only
