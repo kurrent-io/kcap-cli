@@ -187,6 +187,27 @@ public class MistralVibeUnifiedStoreTests {
     }
 
     [Test]
+    public async Task A_copy_rebuilt_after_discard_stamps_only_the_tokens_counted_since() {
+        var copy = MistralVibeLiveTranscript.PathFor(Config.Root, "s1");
+        Publish("s", """{"path":"projection-state.json","sha256":"x"}""");
+        Tmp.CreateFile($"s/generations/{Generation}/projection-state.json",
+            "{\"snapshot\":{\"session\":{\"tokenUsage\":{\"inputTokens\":100,\"outputTokens\":10,\"cachedInputTokens\":0}},\"history\":{\"entries\":["
+          + Message("m1", "user", "go") + "," + Message("a1", "assistant", "first") + "]}}}");
+
+        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), copy, model: null);
+        MistralVibeLiveTranscript.Discard(Config.Root, "s1", copy);
+
+        Tmp.CreateFile("s/journal/0000000000000002.jsonl", new[] {
+            Delta(2, Append(Message("a2", "assistant", "resumed")),
+                     """{"op":"set_envelope","state":{"session":{"tokenUsage":{"inputTokens":150,"outputTokens":15,"cachedInputTokens":0}}}}"""),
+        });
+        MistralVibeLiveTranscript.Sync(Tmp.PathTo("s"), copy, model: null);
+
+        var resumed = File.ReadAllLines(copy).Single(line => line.Contains("\"a2\""));
+        await Assert.That(resumed).Contains("\"kcapUsage\":{\"inputTokens\":50,\"outputTokens\":5");
+    }
+
+    [Test]
     public async Task Refresh_follows_the_store_after_the_last_hook() {
         // The turn's closing message often completes after post_agent, when no hook is left to sync it.
         var live = Tmp.PathTo("live/s.jsonl");

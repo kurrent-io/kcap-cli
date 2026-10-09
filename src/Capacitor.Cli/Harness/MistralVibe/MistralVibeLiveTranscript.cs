@@ -78,14 +78,36 @@ internal static class MistralVibeLiveTranscript {
     /// <summary>Deletes the copy, and its subagents' copies, once the session has ended. A resumed
     /// session rebuilds them in the same order, so the server's line positions still line up. Only
     /// kcap's own copies are touched: a legacy session tails Vibe's <c>messages.jsonl</c> itself.</summary>
+    /// <remarks>Each copy's last usage stamp outlives it in a sidecar: the server already holds the
+    /// tokens stamped so far, and a rebuilt copy that started from zero would count them again.</remarks>
     public static void Discard(ConfigRoot config, string sessionId, string transcriptPath) {
         var own = PathFor(config, sessionId);
         if (!string.Equals(Path.GetFullPath(transcriptPath), Path.GetFullPath(own), StringComparison.Ordinal)) return;
 
-        var dir      = Path.GetDirectoryName(own)!;
-        var children = Directory.Exists(dir) ? Directory.EnumerateFiles(dir, $"{sessionId}-*").ToList() : [];
-        foreach (var file in children.Append(own).Append(SourceFileFor(own)))
+        var dir   = Path.GetDirectoryName(own)!;
+        var files = (Directory.Exists(dir) ? Directory.EnumerateFiles(dir, $"{sessionId}-*").ToList() : [])
+            .Append(own).Append(SourceFileFor(own))
+            .Where(file => !file.EndsWith(UsageSuffix, StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var copy in files.Where(file => file.EndsWith(".jsonl", StringComparison.Ordinal))) KeepLastStamp(copy);
+        foreach (var file in files)
             try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    const string UsageSuffix = ".usage";
+
+    static void KeepLastStamp(string copy) {
+        try {
+            if (!File.Exists(copy)) return;
+            if (File.ReadLines(copy).LastOrDefault(line => line.Contains(MistralVibeUsageStamp.Key, StringComparison.Ordinal)) is { } stamped)
+                File.WriteAllLines(copy + UsageSuffix, [stamped]);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    static IEnumerable<string> StampedBefore(string transcriptPath) {
+        try { return File.Exists(transcriptPath + UsageSuffix) ? File.ReadAllLines(transcriptPath + UsageSuffix) : []; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
     }
 
     /// <summary>Appends the entries finished since the last sync, stamping the tokens counted since
@@ -111,7 +133,8 @@ internal static class MistralVibeLiveTranscript {
 
             var written = existing.Select(EntryKey).OfType<string>().ToHashSet(StringComparer.Ordinal);
             var fresh   = session.Lines.Where(line => EntryKey(line) is { } key && written.Add(key)).ToList();
-            var stamped = MistralVibeUsageStamp.Apply(fresh, MistralVibeUsageStamp.LastStamped(existing), session.Usage, model);
+            var since   = MistralVibeUsageStamp.LastStamped(StampedBefore(transcriptPath).Concat(existing));
+            var stamped = MistralVibeUsageStamp.Apply(fresh, since, session.Usage, model);
 
             stream.Seek(0, SeekOrigin.End);
             using var writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { NewLine = "\n" };
@@ -126,7 +149,7 @@ internal static class MistralVibeLiveTranscript {
         if (string.IsNullOrWhiteSpace(line)) return null;
         try {
             using var doc = JsonDocument.Parse(line);
-            return doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.Str("id") is { } id ? id : line;
+            return doc.RootElement.IsObject && doc.RootElement.Str("id") is { } id ? id : line;
         } catch (JsonException) {
             return null;
         }
