@@ -40,9 +40,9 @@
       "args": ["mcp", "handoff"],
       "description": "Continue a session whose agent is gone — continue_session attaches this session to that session's work items and unfinished plans, refusing while it may still be running."
     },
-    "kcap-artefacts": {
+    "kcap-pages": {
       "command": "kcap",
-      "args": ["mcp", "artefacts"],
+      "args": ["mcp", "pages"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
       "description": "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. The page is sandboxed with no network access, so inline everything as data URIs. Private until you set visibility."
     },

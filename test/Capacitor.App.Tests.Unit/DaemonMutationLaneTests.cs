@@ -372,6 +372,20 @@ public class DaemonMutationLaneTests {
         await lane.DisposeAsync();
     }
 
+    /// A probe that did not answer (a shim that could not start, a timeout) says nothing about the CLI's age.
+    [Test]
+    public async Task An_unanswered_version_probe_refuses_as_version_unknown_without_a_mutation_call() {
+        var cli = new FakeKcapCli { VersionBehavior = _ => Task.FromResult<string?>(null) };
+        var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
+        await using var lane = MakeLane(factory);
+
+        var outcome = await lane.RunAsync(Req(), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("cli_version_unknown", RecoverySurface.Attention));
+        await Assert.That(cli.VersionCallCount).IsEqualTo(1);
+        await Assert.That(cli.StartVerifiedCallCount).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Below_floor_version_refuses_without_a_mutation_call() {
         var cli = new FakeKcapCli { VersionBehavior = _ => Task.FromResult<string?>("0.1.0") };

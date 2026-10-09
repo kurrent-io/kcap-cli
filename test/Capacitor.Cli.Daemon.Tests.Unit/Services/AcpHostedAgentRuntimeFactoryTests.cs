@@ -1189,7 +1189,7 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     [Arguments("kcap-memory")]
     [Arguments("kcap-workitems")]
     [Arguments("kcap-plans")]
-    [Arguments("kcap-artefacts")]
+    [Arguments("kcap-pages")]
     [Arguments("kcap-analytics")]
     [Arguments("kcap-knowledge")]
     [Arguments("totally-unknown")]

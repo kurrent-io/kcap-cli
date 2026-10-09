@@ -206,8 +206,9 @@ agent on this machine (equivalent to `kcap import --all`), whether or not the
 current directory is a git repo. It's only offered when authentication
 requirements are satisfied (including no-auth servers, auth provider None);
 otherwise it's skipped with a one-line reason and the usual `kcap import` hint.
-If you answered the browser's Import screen, that import has already run and
-this step reports it instead of asking. Opt out with --skip-import, which
+If you answered the browser's Import screen, its newest sessions have already
+imported, the rest continue in a detached background import (logged under the
+config directory), and this step reports it instead of asking. Opt out with --skip-import, which
 does not cancel an import chosen in the browser.
 
 --no-prompt answers yes to this step too, so `kcap setup --no-prompt` uploads

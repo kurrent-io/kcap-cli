@@ -130,7 +130,7 @@ public class McpArtefactsServerTests {
     [Test]
     public async Task An_absent_grants_key_is_not_an_empty_audience() {
         // Absence means "leave the audience to the visibility tier"; an empty array means "granted
-        // to nobody". Collapsing them would silently widen or narrow who can open the artefact.
+        // to nobody". Collapsing them would silently widen or narrow who can open the page.
         await Assert.That(McpArtefactsServer.ReadGrants(Args("""{"visibility":"org"}"""))).IsNull();
 
         var empty = McpArtefactsServer.ReadGrants(Args("""{"grants":[]}"""));
@@ -172,7 +172,7 @@ public class McpArtefactsServerTests {
 
     [Test]
     public async Task Visibility_body_requires_a_visibility() {
-        await Assert.That(() => McpArtefactsServer.BuildVisibilityBody(Args("""{"artefact_id":"a1"}""")))
+        await Assert.That(() => McpArtefactsServer.BuildVisibilityBody(Args("""{"page_id":"a1"}""")))
                     .Throws<ArgumentException>();
     }
 
@@ -180,7 +180,7 @@ public class McpArtefactsServerTests {
 
     [Test]
     public async Task Artefact_url_escapes_the_id() {
-        var url = McpArtefactsServer.ArtefactUrl("https://kcap.test", Args("""{"artefact_id":"a b"}"""), "visibility");
+        var url = McpArtefactsServer.ArtefactUrl("https://kcap.test", Args("""{"page_id":"a b"}"""), "visibility");
 
         await Assert.That(url).IsEqualTo("https://kcap.test/api/artefacts/a%20b/visibility");
     }
@@ -188,7 +188,7 @@ public class McpArtefactsServerTests {
     [Test]
     public async Task Artefact_url_refuses_an_id_that_would_walk_out_of_its_route() {
         foreach (var id in new[] { ".", "..", "a/b", "a\\b" }) {
-            var args = new JsonObject { ["artefact_id"] = id };
+            var args = new JsonObject { ["page_id"] = id };
 
             await Assert.That(() => McpArtefactsServer.ArtefactUrl("https://kcap.test", args, "visibility"))
                         .Throws<ArgumentException>();
@@ -210,8 +210,8 @@ public class McpArtefactsServerTests {
         var names = McpArtefactsServer.BuildToolsList().Select(t => t.Name).ToArray();
 
         await Assert.That(names).IsEquivalentTo(new[] {
-            "publish_artefact", "await_artefact_responses", "get_artefact_results",
-            "close_artefact_responses", "list_my_artefacts", "set_artefact_visibility"
+            "publish_page", "await_page_responses", "get_page_results",
+            "close_page_responses", "list_my_pages", "set_page_visibility"
         });
     }
 
@@ -296,7 +296,7 @@ public class McpArtefactsServerTests {
 
     [Test]
     public async Task A_wait_defaults_to_one_respondent_on_the_latest_version() {
-        var url = McpArtefactsServer.WaitUrl("https://kcap.test", Args("""{"artefact_id":"a1"}"""));
+        var url = McpArtefactsServer.WaitUrl("https://kcap.test", Args("""{"page_id":"a1"}"""));
 
         await Assert.That(url).IsEqualTo("https://kcap.test/api/artefacts/a1/responses/wait?min_respondents=1");
     }
@@ -304,7 +304,7 @@ public class McpArtefactsServerTests {
     [Test]
     public async Task A_wait_on_a_named_version_still_reaches_the_wait_route() {
         var url = McpArtefactsServer.WaitUrl(
-            "https://kcap.test", Args("""{"artefact_id":"a1","version":2,"min_respondents":3,"timeout_s":60}"""));
+            "https://kcap.test", Args("""{"page_id":"a1","version":2,"min_respondents":3,"timeout_s":60}"""));
 
         await Assert.That(url).IsEqualTo(
             "https://kcap.test/api/artefacts/a1/responses/wait?min_respondents=3&version=2&timeout_s=60");

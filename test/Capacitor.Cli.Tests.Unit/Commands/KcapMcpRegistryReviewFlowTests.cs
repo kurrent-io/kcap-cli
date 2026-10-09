@@ -60,12 +60,19 @@ public class KcapMcpRegistryReviewFlowTests {
         await Assert.That(rejected).IsEqualTo("kcap-plans");
     }
 
+    /// <summary>Stored flow definitions may still name the server <c>kcap-artefacts</c>.</summary>
     [Test]
-    public async Task Resolve_rejects_write_server_kcap_artefacts() {
-        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-artefacts"], out _, out var rejected);
+    public async Task The_old_artefacts_id_resolves_to_the_pages_server() {
+        await Assert.That(KcapMcpRegistry.Resolve("kcap-artefacts")!.Id).IsEqualTo("kcap-pages");
+        await Assert.That(KcapMcpRegistry.AllIds.Count(id => id == "kcap-pages")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Resolve_rejects_write_server_kcap_pages() {
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-pages"], out _, out var rejected);
 
         await Assert.That(ok).IsFalse();
-        await Assert.That(rejected).IsEqualTo("kcap-artefacts");
+        await Assert.That(rejected).IsEqualTo("kcap-pages");
     }
 
     [Test]

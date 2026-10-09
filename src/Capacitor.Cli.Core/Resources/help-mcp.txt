@@ -22,7 +22,7 @@ Subcommands:
                           session whose agent is gone.
   analytics               Start the MCP analytics server (stdio) — governed
                           read-only SQL over the org's coding-agent analytics.
-  artefacts               Start the MCP artefacts server (stdio) — publish a
+  pages                   Start the MCP pages server (stdio) — publish a
                           self-contained HTML page and get back a link.
 
 Options for review:
@@ -45,9 +45,9 @@ Options for judge:
                           (written by kcap eval and the daemon; not for manual use)
 
 mcp sessions:
-  Exposes nine tools — search_sessions, list_repo_sessions,
+  Exposes ten tools — search_sessions, list_repo_sessions,
   get_session_summary, list_turns, get_turn, get_session_transcript,
-  list_repo_plans, get_declared_plans, get_session_evals — for agents to
+  list_repo_plans, get_declared_plans, get_session_evals, get_connection — for agents to
   search and inspect past Kurrent Capacitor sessions and their evals. The active repo is resolved from cwd at startup;
   cd into your project before spawning. Requires `kcap login`.
 
@@ -249,25 +249,25 @@ mcp analytics:
       # desktop app launches with no shell PATH, so command
       # needs an absolute path (e.g. /opt/homebrew/bin/kcap)
 
-mcp artefacts:
+mcp pages:
   Exposes six tools for an agent to publish a self-contained HTML page (a plan,
   a report, a comparison), hand back a link, and wait for people to answer it.
 
-    publish_artefact          Publish a page and get its URL. `update_id`
-                               revises an existing artefact without changing
+    publish_page               Publish a page and get its URL. `update_id`
+                               revises an existing page without changing
                                that URL; `response_schema` makes it answerable.
-    await_artefact_responses  Block until min_respondents people have answered
+    await_page_responses       Block until min_respondents people have answered
                                the version, or it closes, or the timeout
                                elapses. A timeout returns what there is — it is
                                a result, not an error.
-    get_artefact_results      Tallies and each person's current answer, now.
-    close_artefact_responses  Freeze a version's answers; closed=false reopens.
-    list_my_artefacts         The artefacts you can see.
-    set_artefact_visibility   Replace an artefact's audience.
+    get_page_results           Tallies and each person's current answer, now.
+    close_page_responses       Freeze a version's answers; closed=false reopens.
+    list_my_pages              The pages you can see.
+    set_page_visibility        Replace a page's audience.
 
   The page is served under a sandbox with no network access, so every style,
   script and image has to be inlined as a data URI; an external URL renders as
-  nothing. An artefact is private to its owner until visibility says otherwise.
+  nothing. A page is private to its owner until visibility says otherwise.
 
   A declared response_schema turns the page into a form the server validates and
   tallies — fields of type choice, multi, score or text — plus a results_mode
@@ -301,7 +301,7 @@ INSTALL
 
   `kcap setup` registers `kcap-sessions`, `kcap-review`, `kcap-memory`,
   `kcap-flows`, `kcap-workitems`, `kcap-plans`, `kcap-analytics`,
-  `kcap-artefacts`, and `kcap-knowledge`
+  `kcap-pages`, and `kcap-knowledge`
   for both Claude Code (via the plugin's `.mcp.json`) and Codex CLI (`kcap setup`
   / `kcap plugin install --codex` write them into `~/.codex/config.toml`),
   so no manual `claude mcp add` or TOML edit is needed. Enabling the kcap

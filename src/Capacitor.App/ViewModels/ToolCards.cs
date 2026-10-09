@@ -29,13 +29,15 @@ public static class ToolCards {
         if (string.IsNullOrWhiteSpace(resultText)) return null;
         try {
             using var doc = JsonDocument.Parse(resultText);
-            if (!doc.RootElement.IsObject || doc.RootElement.Obj("artefact") is not { } artefact) return null;
-            var title = artefact.Str("title");
-            var url = artefact.Str("url");
+            if (!doc.RootElement.IsObject) return null;
+            // The pages tool names the object `page`; a recorded result may carry the server's `artefact`.
+            if ((doc.RootElement.Obj("page") ?? doc.RootElement.Obj("artefact")) is not { } page) return null;
+            var title = page.Str("title");
+            var url = page.Str("url");
             if (string.IsNullOrEmpty(title) || string.IsNullOrEmpty(url)) return null;
-            var version = artefact.Num("latest_version") ?? 1;
+            var version = page.Num("latest_version") ?? 1;
             return new ToolCard(ToolCardKind.Page, version > 1 ? "Updated page" : "Published page",
-                TextElision.End(title, NameCap), $"v{version} · {Audience(artefact.Str("visibility"))}", url, null);
+                TextElision.End(title, NameCap), $"v{version} · {Audience(page.Str("visibility"))}", url, null);
         } catch (JsonException) {
             return null;
         }

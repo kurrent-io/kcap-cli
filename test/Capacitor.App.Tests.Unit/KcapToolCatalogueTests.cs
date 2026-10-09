@@ -56,6 +56,8 @@ public class KcapToolCatalogueTests {
 
     [Test]
     [Arguments("publish_artefact", ToolCategory.Artefact, "Published page", "title", ToolCardKind.Page)]
+    [Arguments("mcp__plugin_kcap_kcap-pages__publish_page", ToolCategory.Artefact, "Published page", "title", ToolCardKind.Page)]
+    [Arguments("kcap_pages_await_page_responses", ToolCategory.Artefact, "Waiting for answers", null, ToolCardKind.None)]
     [Arguments("declare_work_item", ToolCategory.Work, "Attached work item", "issue_key", ToolCardKind.None)]
     [Arguments("save_memory", ToolCategory.Memory, "Saved memory", "slug", ToolCardKind.None)]
     [Arguments("search_sessions", ToolCategory.Session, "Searched sessions", "query", ToolCardKind.None)]

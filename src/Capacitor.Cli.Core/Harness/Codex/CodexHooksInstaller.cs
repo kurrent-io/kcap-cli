@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 /// the marker already matches.
 /// </summary>
 /// <remarks>
-/// The hooks.json itself is written by <c>PluginCommand.InstallCodexHooks</c>;
+/// The hooks.json itself is written by <see cref="CodexHooksWriter"/>;
 /// this type owns only the marker side-channel and pre-marker detection.
 /// </remarks>
 public static class CodexHooksInstaller {

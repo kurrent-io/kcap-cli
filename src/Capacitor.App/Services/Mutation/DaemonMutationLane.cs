@@ -248,6 +248,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
         var executor = _executorFactory(request, pinnedPath); // built ONCE; the same instance runs the probe and the mutation
         var version = await executor.VersionAsync(ct).ConfigureAwait(false);
+        if (version is null) return new MutationOutcome.Refused("cli_version_unknown", RecoverySurface.Attention); // the probe did not answer; nothing is known about its age
         if (!KcapCliCompatibility.Satisfies(version)) return new MutationOutcome.Refused("cli_below_floor", RecoverySurface.Attention);
 
         // An older CLI ignores --force and the daemon name and runs its all-daemon idle refresh, so the

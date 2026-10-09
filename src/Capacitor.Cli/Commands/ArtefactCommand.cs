@@ -3,7 +3,7 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// <c>kcap artefact</c> — publish a self-contained HTML page to the server and get a link back.
+/// <c>kcap page</c> — publish a self-contained HTML page to the server and get a link back.
 ///
 /// <para>The command deliberately does not compose that link itself: the server returns the URL it
 /// will actually serve, and anything composed here would be a guess that goes stale the moment a
@@ -12,16 +12,16 @@ namespace Capacitor.Cli.Commands;
 class ArtefactCommand(IArtefactsApi artefacts) {
     const string Usage = """
         Usage:
-          kcap artefact publish <file.html> [--title T] [--description D]
+          kcap page publish <file.html> [--title T] [--description D]
                                 [--visibility none|org|scoped] [--to user:<id>|team:<slug>|project:<id>]...
-                                [--session <id>]... [--update <artefactId>]
-          kcap artefact list [--mine]
-          kcap artefact share <artefactId> --visibility none|org|scoped [--to ...]...
-          kcap artefact delete <artefactId>
+                                [--session <id>]... [--update <pageId>]
+          kcap page list [--mine]
+          kcap page share <pageId> --visibility none|org|scoped [--to ...]...
+          kcap page delete <pageId>
 
         --to names one audience member and may be repeated; it is only read under `scoped`.
         --session cites a session and may be repeated; it defaults to KCAP_SESSION_ID when set.
-        --update publishes a new version of an existing artefact, which keeps its URL.
+        --update publishes a new version of an existing page, which keeps its URL.
         """;
 
     public async Task<int> HandleAsync(string[] args) {
@@ -33,7 +33,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
                 "list"    => await ListAsync(args),
                 "share"   => await ShareAsync(args),
                 "delete"  => await DeleteAsync(args),
-                _         => Fail($"Unknown artefact subcommand: {args[1]}")
+                _         => Fail($"Unknown page subcommand: {args[1]}")
             };
         } catch (CapacitorApiException ex) {
             await Console.Error.WriteLineAsync(ex.Message);
@@ -53,7 +53,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         // rather than appear to have applied them.
         if (flags.Value("--update") is { Length: > 0 } updateId) {
             if (flags.Has("--title") || flags.Has("--description") || flags.Has("--visibility") || flags.Has("--to"))
-                return Fail("--update publishes content only. Change the audience with `kcap artefact share`; a title cannot be changed after publishing.");
+                return Fail("--update publishes content only. Change the audience with `kcap page share`; a title cannot be changed after publishing.");
 
             return Report(await artefacts.PublishVersionAsync(updateId, html), "published");
         }
@@ -82,7 +82,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
         if (flags.Has("--mine")) listed = [.. listed.Where(a => a.IsOwner)];
 
         if (listed.Count == 0) {
-            Console.WriteLine(flags.Has("--mine") ? "No artefacts of yours." : "No artefacts.");
+            Console.WriteLine(flags.Has("--mine") ? "No pages of yours." : "No pages.");
             return 0;
         }
 
@@ -94,7 +94,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
 
     async Task<int> ShareAsync(string[] args) {
         if (Parse(args, "--visibility", "--to") is not { } flags) return 1;
-        if (flags.Positionals.Count != 1) return Fail("Share takes exactly one artefact id.");
+        if (flags.Positionals.Count != 1) return Fail("Share takes exactly one page id.");
 
         if (flags.Value("--visibility") is not { Length: > 0 } visibility)
             return Fail("Share needs --visibility (none, org or scoped).");
@@ -108,7 +108,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
 
     async Task<int> DeleteAsync(string[] args) {
         if (Parse(args) is not { } flags) return 1;
-        if (flags.Positionals.Count != 1) return Fail("Delete takes exactly one artefact id.");
+        if (flags.Positionals.Count != 1) return Fail("Delete takes exactly one page id.");
 
         return Report(await artefacts.DeleteAsync(flags.Positionals[0]), "deleted");
     }
@@ -124,7 +124,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
                 return 0;
 
             case ArtefactWriteResult.Gone:
-                Console.WriteLine($"Artefact {verb}.");
+                Console.WriteLine($"Page {verb}.");
                 return 0;
 
             case ArtefactWriteResult.Refused(var error):
@@ -134,11 +134,11 @@ class ArtefactCommand(IArtefactsApi artefacts) {
                 return 1;
 
             case ArtefactWriteResult.NotFound:
-                Console.Error.WriteLine("No such artefact, or it is not visible to this profile.");
+                Console.Error.WriteLine("No such page, or it is not visible to this profile.");
                 return 1;
 
             case ArtefactWriteResult.NotYours:
-                Console.Error.WriteLine("That artefact is not yours to change.");
+                Console.Error.WriteLine("That page is not yours to change.");
                 return 1;
 
             default:
@@ -164,7 +164,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
 
     /// <summary>Parses <c>type:id</c>, the <c>--to</c> grammar. Returns null once it has reported a
     /// malformed entry — a partial audience is worse than none, so one bad grant stops the whole
-    /// write rather than quietly narrowing who can see the artefact.</summary>
+    /// write rather than quietly narrowing who can see the page.</summary>
     static List<ArtefactGrantDto>? ParseGrants(List<string> raw) {
         var grants = new List<ArtefactGrantDto>();
 
@@ -189,7 +189,7 @@ class ArtefactCommand(IArtefactsApi artefacts) {
     static List<T>? Nullify<T>(List<T> items) => items.Count == 0 ? null : items;
 
     /// <summary>A value flag given without its value stops the command: read as absent, a forgotten
-    /// <c>--update</c> id publishes a second artefact and a forgotten <c>--to</c> empties an
+    /// <c>--update</c> id publishes a second page and a forgotten <c>--to</c> empties an
     /// audience.</summary>
     static Flags? Parse(string[] args, params string[] known) {
         var flags = Flags.Parse(args, 2);

@@ -117,6 +117,26 @@ public sealed record ReportFirstRunImportOutcomeRequest {
     /// <summary>A <see cref="FirstRunImportOutcomeReasons"/> token, and only alongside three zeroes —
     /// the server rejects the whole report otherwise.</summary>
     [JsonPropertyName("reason")] public string? Reason { get; init; }
+
+    // Omitted rather than written as null, so a server that predates them sees the request it knows.
+
+    /// <summary>A <see cref="FirstRunImportBackground"/> token.</summary>
+    [JsonPropertyName("background")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Background { get; init; }
+
+    [JsonPropertyName("background_remaining")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? BackgroundRemaining { get; init; }
+
+    /// <summary>Never sent alongside <see cref="HandoffSuppressed"/>.</summary>
+    [JsonPropertyName("handoff_prompt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HandoffPrompt { get; init; }
+
+    [JsonPropertyName("handoff_suppressed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HandoffSuppressed { get; init; }
 }
 
 /// <summary>

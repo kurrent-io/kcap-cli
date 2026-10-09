@@ -54,6 +54,10 @@ public static class JsonMcpConfigWriter {
                 changed = true;
             }
 
+            foreach (var name in KcapMcpServers.Retired)
+                if (block[name] is JsonNode retired && marker.Owns(configPath, name, retired) && block.Remove(name))
+                    changed = true;
+
             return changed;
         });
 
@@ -71,6 +75,13 @@ public static class JsonMcpConfigWriter {
             // canonical shape it renders.
             try { marker.Record(configPath, written); }
             catch { /* degraded: ownership heals via adoption on the next pass */ }
+        }
+
+        // A retired name is never written again, so a claim left on it would only let a later
+        // hand-added entry under that name read as kcap's and be deleted.
+        if (change != Change.Failed) {
+            try { marker.Forget(configPath, KcapMcpServers.Retired); }
+            catch { /* best-effort, like Record */ }
         }
         return change;
     }
@@ -117,7 +128,7 @@ public static class JsonMcpConfigWriter {
         if (cwd is not null && s.NeedsProjectCwd) o["cwd"] = cwd;
         if (shape.Enable == EnableStyle.EnabledTrue) o["enabled"] = true;
 
-        // Only where the harness has a per-server trust knob; flows, memory and artefacts keep prompting.
+        // Only where the harness has a per-server trust knob; flows, memory and pages keep prompting.
         if (s.AutoApprove && shape.Trust == TrustStyle.TrustBool) o["trust"] = true;   // Gemini
 
         return o;

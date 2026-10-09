@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
@@ -11,8 +12,8 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time, UserHome home,
-        bool? appBundled = null) {
+        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time,
+        AccountStore accounts, UserHome home, bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
 
@@ -41,6 +42,11 @@ public sealed class StatusCommand(
         var line = BuildHooksStatusLine(harnesses.Select(h => (h.Id, h.Signals.IsWired)));
 
         await Console.Out.WriteLineAsync(line);
+
+        var accountLines = BuildAccountLines(
+            accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
+            vendor => AccountLayouts.DefaultDirectory(vendor, home));
+        if (accountLines.Length > 0) await Console.Out.WriteLineAsync(accountLines);
 
         // Newly-installed-but-unconfigured harnesses. Ledger-independent (a dismissed vendor is
         // still surfaced here) — status always tells the truth, unlike the nudge which respects
@@ -424,6 +430,17 @@ public sealed class StatusCommand(
     /// </summary>
     internal static string BuildHooksStatusLine(IEnumerable<(HarnessId Id, bool Wired)> wiring) =>
         string.Join("  ", wiring.Select(w => $"{ShortLabel(w.Id)} {(w.Wired ? "✓" : "✗")}"));
+
+    /// <summary>One line per registered account, but only once some account is not its vendor's
+    /// environment-derived directory: those alone are what the Hooks line already reports.</summary>
+    internal static string BuildAccountLines(
+            IEnumerable<(VendorAccount Account, RecordingState State)> accounts, Func<HarnessId, string> defaultDirectoryOf) {
+        var list = accounts.ToList();
+        if (list.All(a => AccountDirectory.Same(a.Account.Directory, defaultDirectoryOf(a.Account.Vendor)))) return "";
+
+        return string.Join(Environment.NewLine, list.Select(a =>
+            $"  Account: {a.Account.Vendor.ToString().ToLowerInvariant(),-6} {a.Account.Label,-20} {AccountStateLabels.For(a.Account.Vendor, a.State)}"));
+    }
 
     /// <summary>Every vendor shares one line, so the one label carrying a product suffix is
     /// shortened to fit beside the rest.</summary>
