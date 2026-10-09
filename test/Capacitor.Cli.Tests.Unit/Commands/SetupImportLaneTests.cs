@@ -586,7 +586,7 @@ public class SetupImportLaneTests {
             await Lane(_ => Reported(new(Counts(errored: 1), 0)), spawner)
                 .ImportAsync(Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None);
 
-            await Assert.That(console.Flat).Contains("Run kcap setup again and choose the same repositories to retry");
+            await Assert.That(console.Flat).Contains("Run kcap setup again and choose the same repositories and levels to retry");
         }
     }
 

@@ -254,7 +254,7 @@ foreground passes only.
 - **Suppressed by the import itself** (`import_failed`, `no_new_sessions`, `nothing_landed`) or
   `handoff_file_unwritten`: no panel.
 - **`background` failed**: a warning line saying the rest did not start importing and that running
-  `kcap setup` again with the same repositories finishes it — shown on `run_failed` too. Not plain
+  `kcap setup` again with the same repositories and levels finishes it — shown on `run_failed` too. Not plain
   `kcap import`: it applies `--private` only when asked and otherwise the profile's default
   visibility, which can be wider than an "only me" choice. Setup's import lane re-applies each
   repository's chosen level.
@@ -279,14 +279,14 @@ foreground passes only.
   be offered for what landed (`HandoffDecision` already distinguishes these).
 - **Retry advice never names plain `kcap import` for a browser-flow run**, because plain import applies
   the profile's default visibility, which can be wider than an "only me" choice. Every retry path
-  says to run `kcap setup` again with the same repositories instead:
+  says to run `kcap setup` again with the same repositories and levels instead:
   - CLI: `SetupImportLane`'s per-pass lines, `PrintBackground`'s failure line when printed for this
     flow, and `BrowserImportSummary`'s failure and unreadable-answer lines.
   - Server: every Done page line that names `kcap import` — the failed-count row, the reason texts,
     and the announcements. The Done page only ever follows a browser-flow (repository-scoped,
     per-level) import, older CLIs' included, so the change is unconditional there.
   - eval-watch: the `import_failed` advice keys on the handoff file's `scope` — `"all"` keeps
-    `kcap import --all --yes`; `"repos"` says to run `kcap setup` again with the same repositories.
+    `kcap import --all --yes`; `"repos"` says to run `kcap setup` again with the same repositories and levels.
 
   The terminal flow's own lines are unchanged: its import is `--all` at the profile default, which
   `kcap import --all` reproduces.

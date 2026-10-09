@@ -78,7 +78,7 @@ If `handoff_offered` is false, branch on `handoff_suppressed` and CLOSE:
   `kcap import --all` for per-session reasons; no retry.
 - `import_failed` → "that import did not get running"; name `kcap import --all --yes` when the
   file's `scope` is `all`; when it is `repos`, say to run `kcap setup` again and choose the same
-  repositories (plain `kcap import` would not keep their privacy levels); and the `background_log`
+  repositories at the same Only me / Shared levels (plain `kcap import` would not keep those levels); and the `background_log`
   when displayable.
 - `analytics_not_in_plan` / `skill_not_installed` / `no_agent_detected` → the import ran and you
   can follow it now: continue as if offered, watching the file's cohort as usual (sections 4–5).

@@ -480,7 +480,7 @@ sealed class SetupImportLane(
     internal static string RetryLine(BackgroundImportLaunch launch) =>
         launch.Status is BackgroundImportStatus.Running
             ? $"  [dim]The background import retries what did not import · log: {Markup.Escape(launch.LogPath ?? "")}[/]"
-            : "  Run [cyan]kcap setup[/] again and choose the same repositories to retry what did not import.";
+            : "  Run [cyan]kcap setup[/] again and choose the same repositories and levels to retry what did not import.";
 
     BackgroundImportLaunch Spawn(string runId, FirstRunImportAnswer answer, DateOnly? since) {
         var plan = new ImportPlan(serverUrl, [
@@ -1644,7 +1644,7 @@ sealed class SetupCommand(
                 AnsiConsole.MarkupLine(
                     $"  [yellow]![/] Background import did not start{code}: {Markup.Escape(launch.Error ?? "unknown error")}. "
                   + (browser
-                        ? "Run [cyan]kcap setup[/] again and choose the same repositories to import the rest."
+                        ? "Run [cyan]kcap setup[/] again and choose the same repositories and levels to import the rest."
                         : "Run [cyan]kcap import --all --yes[/] to import the rest."));
                 break;
             case BackgroundImportStatus.NotNeeded:
@@ -2111,7 +2111,7 @@ sealed class SetupCommand(
             lines.Add((failed || background is { Status: BackgroundImportStatus.Failed }, running) switch {
                 (true, true)  => $"  [yellow]![/] Partly imported {subject}{rest}",
                 (true, false) => $"  [yellow]![/] Partly imported {subject}. "
-                               + "Run [cyan]kcap setup[/] again and choose the same repositories to finish it.",
+                               + "Run [cyan]kcap setup[/] again and choose the same repositories and levels to finish it.",
                 (false, true) => $"  [green]✓[/] Imported your newest sessions from {subject}{rest}",
                 _             => $"  [green]✓[/] Imported {subject}",
             });
