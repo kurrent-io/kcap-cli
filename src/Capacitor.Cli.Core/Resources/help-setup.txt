@@ -160,7 +160,8 @@ machine's, then numbered variants of that, and ends with an error naming
 setting is kept as it is; change it with
 `kcap config set use_provider_api_key true|false`. When the browser's Done
 screen ran the daemon as a service, setup says so instead of suggesting
-`kcap daemon start -d`.
+`kcap daemon start -d`. A finished browser flow with no import answer skips
+the import prompt and names `kcap import --all` for later.
 
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
 asks how to continue: create one for you (organization name + workspace slug) and

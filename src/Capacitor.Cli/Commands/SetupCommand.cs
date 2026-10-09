@@ -1104,7 +1104,8 @@ sealed class SetupCommand(
             WorkingDirectory:    workdir.Path,
             Paths:               stepPaths,
             BrowserImport:       browserAnswers.Import,
-            BrowserImportFailed: browserAnswers.ImportFailed));
+            BrowserImportFailed: browserAnswers.ImportFailed,
+            BrowserFinished:     browserAnswers.FlowStillLive));
 
         await Console.Out.WriteLineAsync();
 
@@ -1347,7 +1348,8 @@ sealed class SetupCommand(
         string                        WorkingDirectory,
         CodingAgentsStep.Paths        Paths,
         FirstRunImportAnswer?         BrowserImport,
-        bool                          BrowserImportFailed);
+        bool                          BrowserImportFailed,
+        bool                          BrowserFinished = false);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1370,6 +1372,16 @@ sealed class SetupCommand(
         // again, right after a screen that chose several.
         if (inputs.BrowserImport is { } browser) {
             foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed)) AnsiConsole.MarkupLine(line);
+
+            return new ImportStepResult(false, null, null, null);
+        }
+
+        // A browser flow that finished without an import answer left nothing to run, and the user is
+        // looking at the browser, not here. Handing back with `t` or abandoning the tab leaves
+        // BrowserFinished false, so the terminal prompt still covers those.
+        if (inputs.BrowserFinished) {
+            AnsiConsole.MarkupLine(
+                "  [dim]· Nothing chosen to import in the browser. Run[/] [cyan]kcap import --all[/] [dim]to import past sessions later.[/]");
 
             return new ImportStepResult(false, null, null, null);
         }

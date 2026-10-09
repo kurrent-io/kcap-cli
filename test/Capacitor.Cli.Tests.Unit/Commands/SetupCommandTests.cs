@@ -1075,11 +1075,12 @@ public class SetupCommandTests {
     SetupCommand.ImportStepInputs Inputs(
             bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
             bool auth = true, bool skip = false, string visibility = "org_public",
-            CodingAgentsStep.Paths? paths = null) => new(
+            CodingAgentsStep.Paths? paths = null, bool browserFinished = false) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
-        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false);
+        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
+        BrowserFinished: browserFinished);
 
     /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
     /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
@@ -1100,6 +1101,21 @@ public class SetupCommandTests {
         var summary = ImportDiscoverySummary.Build(sessions, repoBySession, []);
 
         return new ImportCommand.ImportDiscoveryResult(summary, [.. HarnessRegistry.Identities.Select(i => i.Id)]);
+    }
+
+    /// <summary>A finished browser flow with no import answer must not leave a terminal prompt behind
+    /// the browser's Done screen, and must not import by default either.</summary>
+    [Test]
+    public async Task A_browser_flow_that_finished_without_an_import_answer_neither_prompts_nor_imports() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var prompted = false;
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => prompted = true, browserFinished: true));
+
+        await Assert.That(prompted).IsFalse();
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Captured).IsNull();
     }
 
     [Test]
