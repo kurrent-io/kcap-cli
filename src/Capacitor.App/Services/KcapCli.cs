@@ -111,7 +111,7 @@ public sealed class KcapCli : IKcapCli {
     // Bound once at construction (one KcapCli per owned action); null is fine until a mutation runs.
     readonly string? _canonicalServer;
     // Lazy, not a static ctor value: the terminal PATH is only known once the async probe has run,
-    // and the probe itself caches — so resolving it per install call is cheap and always current.
+    // and the probe itself caches — so resolving it per spawn is cheap and always current.
     readonly Func<CancellationToken, Task<string?>>? _terminalPathAsync;
 
     public KcapCli(
@@ -134,7 +134,8 @@ public sealed class KcapCli : IKcapCli {
     public async Task<string?> VersionAsync(CancellationToken ct) {
         if (CliPath is not { } cliPath) return null;
 
-        var result = await Run(cliPath, ["--version", "--no-update-check"], new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct)
+        var result = await Run(cliPath, ["--version", "--no-update-check"],
+                new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: VersionTimeout), ct)
             .ConfigureAwait(false);
 
         return result.ExitCode == 0 && !result.TimedOut ? CliResolver.ParseVersion(result.Stdout) : null;
@@ -145,7 +146,7 @@ public sealed class KcapCli : IKcapCli {
 
         var result = await Run(cliPath,
                 ["daemon", "service", "status", "--name", _daemonName, "--json"],
-                new RunOptions(EnvOverlay: Env(), Timeout: StatusTimeout), ct)
+                new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: StatusTimeout), ct)
             .ConfigureAwait(false);
 
         if (result.ExitCode != 0 || result.TimedOut) return null;
@@ -161,25 +162,23 @@ public sealed class KcapCli : IKcapCli {
     public async Task<bool> SupportsServiceRetireAsync(CancellationToken ct) {
         if (CliPath is not { } cliPath) return false;
         var help = await Run(cliPath, ["daemon", "--help", "--no-update-check"],
-            new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct).ConfigureAwait(false);
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: VersionTimeout), ct).ConfigureAwait(false);
         return !help.TimedOut && help.ExitCode == 0 &&
             (help.Stdout.Contains("--retire", StringComparison.Ordinal) || help.Stderr.Contains("--retire", StringComparison.Ordinal));
     }
 
-    public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {
+    public async Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
-        return CliPath is not { } cliPath
-            ? NoCliResult()
-            : Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
-                new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        return await Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
+            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
-    public Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
+    public async Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
-        return CliPath is not { } cliPath
-            ? NoCliResult()
-            : Run(cliPath, ["daemon", "service", "refresh", "--name", _daemonName, "--force"],
-                new RunOptions(EnvOverlay: env, Timeout: ReloadTimeout), ct);
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        return await Run(cliPath, ["daemon", "service", "refresh", "--name", _daemonName, "--force"],
+            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: ReloadTimeout), ct).ConfigureAwait(false);
     }
 
     // The profile flag and environment overlay must agree with the identity the lane verifies.
@@ -201,34 +200,34 @@ public sealed class KcapCli : IKcapCli {
             Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
-    public Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
+    public async Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         env[BootAttemptVar] = bootAttemptId;
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
 
-        return CliPath is not { } cliPath
-            ? NoCliResult()
-            : Run(cliPath, ["daemon", "start", "-d", "--name", _daemonName],
-                new RunOptions(
-                    EnvOverlay: env, Timeout: DetachedStartTimeout,
-                    CancelMode: CancelMode.AbandonWait, TimeoutKill: TimeoutKillScope.ProcessOnly),
-                ct);
+        return await Run(cliPath, ["daemon", "start", "-d", "--name", _daemonName],
+            new RunOptions(
+                EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: DetachedStartTimeout,
+                CancelMode: CancelMode.AbandonWait, TimeoutKill: TimeoutKillScope.ProcessOnly),
+            ct).ConfigureAwait(false);
     }
 
     // Neither this nor ImportAsync overlays MutationEnv — non-daemon shelling keeps lenient
     // classification; the vendor flag itself is the caller's exclusive-flag choice.
-    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) {
-        if (CliPath is not { } cliPath) return NoCliResult();
+    public async Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
 
         List<string> args = ["plugin", "install"];
         if (vendorFlag is not null) args.Add(vendorFlag);
         if (options is not null) args.AddRange(options);
 
-        return Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env(), Timeout: MutationTimeout), ct);
+        return await Run(cliPath, args.ToArray(),
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
-    public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {
+    public async Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {
         if (CliPath is not { } cliPath)
-            return Task.FromResult(new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]));
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
         List<string> args = ["import"];
         args.Add(request.Scope switch {
@@ -255,14 +254,16 @@ public sealed class KcapCli : IKcapCli {
         args.Add("--yes");
         args.AddRange(request.VendorFlags);
 
-        return _runner.RunStreamingAsync(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env()), onLine, ct);
+        return await _runner.RunStreamingAsync(cliPath, args.ToArray(),
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, ct).ConfigureAwait(false);
     }
 
     public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {
         if (CliPath is not { } cliPath) return null;
 
         string[] args = ["import", "--discover", "--json", .. vendorFlags];
-        var result = await Run(cliPath, args, new RunOptions(EnvOverlay: Env(), Timeout: DiscoverTimeout), ct).ConfigureAwait(false);
+        var result = await Run(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: DiscoverTimeout), ct).ConfigureAwait(false);
 
         return result is { ExitCode: 0, TimedOut: false } ? ImportDiscoveryReport.Parse(result.Stdout) : null;
     }
@@ -281,6 +282,10 @@ public sealed class KcapCli : IKcapCli {
         [SpawnNoTelemetryVar] = "1",
     };
 
+    // The login shell can resolve kcap to a shim whose interpreter sits outside a GUI app's PATH, so
+    // every spawn carries the terminal's.
+    Task<Dictionary<string, string>> SpawnEnvAsync(CancellationToken ct) => EnvWithTerminalPathAsync(Env(), ct);
+
     // Null canonicalServer here is a construction bug (mutations are action-scoped) — fail loudly, don't spawn.
     Dictionary<string, string> MutationEnv() {
         if (_canonicalServer is not { } server)
@@ -292,15 +297,12 @@ public sealed class KcapCli : IKcapCli {
         return env;
     }
 
-    // PATH overlaid ONLY here: install is the sole unit-writing mutation, so it's
-    // the only call that needs the terminal's PATH baked into the launchd unit. Start-verify
-    // (bootstrap/kickstart of an already-installed unit) and every read-only query are exempt.
-    // Resolved lazily against the mutation's own token, never a detached one; an unknown probe
-    // result (null) leaves PATH out rather than overlaying a value that isn't actually the user's —
-    // ServiceEnvironment.Capture then honestly bakes whatever the app itself inherited.
+    // An unknown probe result (null) leaves PATH out rather than overlaying a value that is not the
+    // user's; install then bakes whatever the app itself inherited into the unit. Resolved against
+    // the spawn's own token, never a detached one.
     async Task<Dictionary<string, string>> EnvWithTerminalPathAsync(Dictionary<string, string> env, CancellationToken ct) {
         var terminalPath = _terminalPathAsync is null ? null : await _terminalPathAsync(ct).ConfigureAwait(false);
-        if (terminalPath is not null) env["PATH"] = terminalPath;
+        if (!string.IsNullOrWhiteSpace(terminalPath)) env["PATH"] = terminalPath; // an empty answer would unset PATH for the child
 
         return env;
     }

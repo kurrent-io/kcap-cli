@@ -1597,6 +1597,7 @@ public partial class App : Application {
         "cli_not_found"            => "kcap CLI not found. Can't manage the daemon from this app.",
         // App↔CLI floor — never "for the daemon"; this gate runs before any daemon contact.
         "cli_below_floor"          => "This kcap is too old for this app. Update kcap, then press Start daemon.",
+        "cli_version_unknown"      => "kcap did not answer a version check. Run `kcap --version` in a terminal, then try again.",
         "no_server_configured"     => "No server is configured. Sign in or run setup first.",
         "consent_seed_unwritable"  => "Couldn't write consent data. Check permissions on the kcap config directory.",
         "internal_error"           => "Couldn't finish daemon setup. Press Start daemon to try again.",
