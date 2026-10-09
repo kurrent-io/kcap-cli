@@ -114,7 +114,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     /// </summary>
     internal async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
         if (callRequest["params"]?["name"] is JsonValue name && name.TryGetValue(out string? toolName) && toolName == ConnectionTool.Name)
-            return BuildToolResult(callId, ConnectionTool.Result(BaseUrl, profiles.Name).ToJsonString());
+            return BuildToolResult(callId, ConnectionTool.Result(profiles.Resolution.ServerUrl, profiles.Name).ToJsonString());
 
         if (!HttpClientExtensions.IsAcceptableUrl(BaseUrl))
             return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);

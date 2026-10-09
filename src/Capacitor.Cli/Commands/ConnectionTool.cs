@@ -16,6 +16,8 @@ static class ConnectionTool {
         McpToolAnnotations.Read
     );
 
-    internal static JsonObject Result(string serverUrl, string profile) =>
-        new() { ["server_url"] = serverUrl.TrimEnd('/'), ["profile"] = profile };
+    /// <summary>A null <c>server_url</c> is a process with no server configured, which no import's
+    /// handoff file can match.</summary>
+    internal static JsonObject Result(string? serverUrl, string profile) =>
+        new() { ["server_url"] = serverUrl?.TrimEnd('/'), ["profile"] = profile };
 }

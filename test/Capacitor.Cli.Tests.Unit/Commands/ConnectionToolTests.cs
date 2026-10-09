@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class ConnectionToolTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    McpSessionsServer Server(string serverUrl, string profile) =>
+    McpSessionsServer Server(string? serverUrl, string profile) =>
         new(Config.Root, Resolutions.Of(new Profile { ServerUrl = serverUrl }, profile, serverUrl), AuthFixtures.NewTokenStore(Config.Root),
             new UnusableHttpClient(), NoTelemetry.Startup, new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
 
@@ -26,6 +26,15 @@ public class ConnectionToolTests {
     public async Task Lists_get_connection() {
         await Assert.That(McpSessionsServer.BuildToolsList().Select(t => t.Name)).Contains(ConnectionTool.Name);
         await Assert.That(ConnectionTool.Name).IsEqualTo("get_connection");
+    }
+
+    [Test]
+    public async Task An_unconfigured_server_answers_with_a_null_url_rather_than_failing() {
+        var response = await Server(null, "work").DispatchToolCallAsync(JsonValue.Create(1)!, Call(ConnectionTool.Name));
+
+        var payload = Payload(response);
+        await Assert.That(payload["server_url"]).IsNull();
+        await Assert.That(payload["profile"]!.GetValue<string>()).IsEqualTo("work");
     }
 
     [Test]

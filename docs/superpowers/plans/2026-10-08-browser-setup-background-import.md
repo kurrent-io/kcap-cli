@@ -10,9 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-08-browser-setup-background-import-design.md` (kcap-cli repo)
 
-**Worktrees:**
-- CLI: `/Users/tony/dev/kcap-cli/.claude/worktrees/browser-install-background-import-02c2ae` (branch `claude-tyoung/browser-install-background-import-02c2ae`)
-- Server: `/Users/tony/dev/kcap-server/.claude/worktrees/browser-import-background-done` (branch `claude-tyoung/browser-import-background-done`)
+**Branches:** CLI `claude-tyoung/browser-install-background-import-02c2ae`; server `claude-tyoung/browser-import-background-done`.
 
 ## Global Constraints
 
@@ -40,7 +38,7 @@
 
 ## Part 1 — kcap-server (PR 1)
 
-Work in the server worktree. Build: `~/.dotnet/dotnet build src/Capacitor.Server/Capacitor.Server.csproj`. Before pushing: `~/.dotnet/dotnet run --project test/Capacitor.Source.Tests/Capacitor.Source.Tests.csproj`.
+Work on the server branch. Build: `~/.dotnet/dotnet build src/Capacitor.Server/Capacitor.Server.csproj`. Before pushing: `~/.dotnet/dotnet run --project test/Capacitor.Source.Tests/Capacitor.Source.Tests.csproj`.
 
 ### Task S1: Record the four outcome fields
 
@@ -201,7 +199,7 @@ if (_rendered && Observable) StartPoll();
 
 ## Part 2 — kcap-cli (PR 2)
 
-Work in the CLI worktree. Build: `~/.dotnet/dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj`. Unit suites run as `~/.dotnet/dotnet run --project test/<Suite>/<Suite>.csproj -- --treenode-filter "/*/*/<Class>/*"`.
+Work on the CLI branch. Build: `~/.dotnet/dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj`. Unit suites run as `~/.dotnet/dotnet run --project test/<Suite>/<Suite>.csproj -- --treenode-filter "/*/*/<Class>/*"`.
 
 ### Task C1: Capped visibility work covers only the selection
 
