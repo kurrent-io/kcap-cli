@@ -1571,6 +1571,8 @@ class ImportCommand(
         // the user just excluded, which is worse than not importing it at all.
         IReadOnlySet<string> privacyBlocked = FrozenSet<string>.Empty;
 
+        // Not bounded by a cap's selection: narrowing is the safe direction, and a session this pass
+        // leaves for a later one must not stay shared if that later pass never runs.
         if (forcePrivate) {
             var existing = classifications
                 .Where(c => c.Status is ClassificationStatus.Partial
@@ -1621,7 +1623,8 @@ class ImportCommand(
             foreach (var c in classifications) {
                 if (c.Status is ClassificationStatus.New
                              or ClassificationStatus.Partial
-                             or ClassificationStatus.AlreadyLoaded) {
+                             or ClassificationStatus.AlreadyLoaded
+                 && (selectedIds is null || selectedIds.Contains(c.SessionId))) {
                     scopedSessionIds.Add(c.SessionId);
                 }
             }

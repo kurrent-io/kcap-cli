@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 
-public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable {
+public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider time) : IPullRequestReaderProvider, IDisposable, IAsyncDisposable {
     static readonly PullRequestReaderTool GitHubCliTool = new("GitHub CLI", "https://cli.github.com",
         host => host is null ? "gh auth login" : "gh auth login --hostname " + host);
     readonly TimeProvider _time = time;
@@ -117,7 +117,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
             "checks" => ((object)view.Checks, view.ChecksCapped), "reviewers" => ((object)view.Reviewers, false),
             "reviews" => ((object)view.Reviews, view.ReviewsCapped), _ => ((object)view.Comments, view.CommentsCapped)
         };
-        var entry = new GitHubCliCursorEntry(GitHubCliCursors.NewHandle(), key, Now, section == "checks" ? view.HeadSha : null, frozen.Items, 0, null, frozen.Capped);
+        var entry = new GitHubCliCursorEntry(GitHubCliCursors.NewHandle(), key, view.FetchedAt, section == "checks" ? view.HeadSha : null, frozen.Items, 0, null, frozen.Capped);
         return Slice<T>(_cursors.Mint(entry), key, entry, subject, started);
     }
 
@@ -221,7 +221,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
         try {
             var result = await cli.RunAsync(["pr", "view", subject.Number.ToString(CultureInfo.InvariantCulture), "--repo", Repo(subject.Host, subject.Owner, subject.RepoName),
                 "--json", GitHubCliMapping.ViewFields], GitHubCliRunner.ViewOutputLimit, CancellationToken.None).ConfigureAwait(false);
-            var view = result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.View(result.Stdout, subject, Now) : null;
+            var view = result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.View(result.Stdout, Now) : null;
             if (view is not null) lock (_views) {
                 _recent[key] = (_time.GetTimestamp(), view);
                 while (_recent.Count > 64) _recent.Remove(_recent.MinBy(pair => pair.Value.At).Key);
@@ -231,6 +231,8 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
     }
 
     PullRequestRead<T>? Refuse<T>(PullRequestSubjectDto subject) where T : class {
+        // Ahead of the reuse window and the cursors: a disposed reader serves nothing, cached or not.
+        if (cli.IsStopped) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "tool_failed", AccessFailure: "transient");
         if (!Serves(subject.Provider, subject.Host)) return new(PullRequestReadKind.Unavailable, Subject: subject, Reason: "no_reader", AccessFailure: "invalid");
         if (!PullRequestWire.ValidSubject(subject) || !GitHubCliRunner.ValidHost(subject.Host) || !GitHubCliRunner.ValidOwner(subject.Owner)
             || !GitHubCliRunner.ValidRepo(subject.RepoName) || !GitHubCliRunner.ValidNumber(subject.Number)) return Invalid<T>(subject);
@@ -247,5 +249,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
 
     public static string Repo(string host, string owner, string name) => $"{host}/{owner}/{name}";
 
-    public void Dispose() => _probeGate.Dispose();
+    // Owns the runner: disposing cancels its in-flight gh runs. _probeGate is left alone so a probe racing teardown can still release it.
+    public void Dispose() => cli.Dispose();
+    public ValueTask DisposeAsync() => cli.DisposeAsync();
 }

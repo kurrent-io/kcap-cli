@@ -280,6 +280,29 @@ public partial class LauncherPaneView : UserControl {
         flyout.ShowAt(anchor);
     }
 
+    void OnCodexSandboxChipClick(object? sender, RoutedEventArgs e) {
+        if (DataContext is HomeViewModel vm && sender is Control anchor)
+            ShowChoices(anchor, HostedHarnessCatalog.CodexSandboxes, vm.SelectedCodexSandbox, t => vm.SelectedCodexSandbox = t);
+    }
+
+    void OnCodexApprovalChipClick(object? sender, RoutedEventArgs e) {
+        if (DataContext is HomeViewModel vm && sender is Control anchor)
+            ShowChoices(anchor, HostedHarnessCatalog.CodexApprovals, vm.SelectedCodexApproval, t => vm.SelectedCodexApproval = t);
+    }
+
+    void ShowChoices(Control anchor, IReadOnlyList<PermissionModeChoice> choices, string current, Action<string> pick) {
+        var rows = new StackPanel { Spacing = 2, Margin = new Thickness(6) };
+        var flyout = PanelFlyout(rows, minWidth: 200);
+        foreach (var choice in choices) {
+            var token = choice.Token;
+            rows.Children.Add(ChoiceRow(choice.Label, string.Equals(current, token, StringComparison.Ordinal), () => {
+                pick(token);
+                flyout.Hide();
+            }));
+        }
+        flyout.ShowAt(anchor);
+    }
+
     // Shared chip-picker chrome: kcapPanel Flyout + ghost rows; selection is weight, not green.
     static Flyout PanelFlyout(Control content, double minWidth) {
         var host = new Border { Child = content, MinWidth = minWidth };

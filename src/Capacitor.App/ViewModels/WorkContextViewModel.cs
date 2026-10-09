@@ -64,7 +64,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly Action<string>? _openWorkItem;
-    readonly SessionSubagents _subagents;
+    readonly SessionRuns _runs;
     readonly BehaviorSubject<bool> _canOpenWorkItem = new(false);
     readonly CompositeDisposable _disposables = new();
     readonly List<ReadLease> _outstanding = [];
@@ -102,15 +102,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     /// The session's subagents, shared with the chat tab; a session-local fact like the ones
     /// under SESSION, so it renders in every pane phase.
-    public IAvaloniaReadOnlyList<SubagentRow> Subagents => _subagents.Rows;
-    public bool HasSubagents => _subagents.Rows.Count > 0;
+    public IAvaloniaReadOnlyList<RunRow> Runs => _runs.Rows;
+    public bool HasRuns => _runs.Rows.Count > 0;
     /// What the collapsed section lists.
-    public IAvaloniaReadOnlyList<SubagentRow> RunningSubagents => _subagents.Running;
-    public bool HasRunningSubagents => _subagents.RunningCount > 0;
-    public string SubagentsHeader {
+    public IAvaloniaReadOnlyList<RunRow> RunningRuns => _runs.Running;
+    public bool HasRunningRuns => _runs.RunningCount > 0;
+    public string RunsHeader {
         get {
-            var running = _subagents.RunningCount;
-            var total = _subagents.Rows.Count;
+            var running = _runs.RunningCount;
+            var total = _runs.Rows.Count;
             return running switch {
                 0                     => $"{total}",
                 var r when r == total => $"{r} running",
@@ -119,23 +119,23 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
-    static readonly SubagentState[] SubagentCountOrder =
-        [SubagentState.Running, SubagentState.Done, SubagentState.Failed, SubagentState.Stopped];
+    static readonly RunState[] RunCountOrder =
+        [RunState.Running, RunState.Done, RunState.Failed, RunState.Stopped];
 
     /// What the collapsed header shows: one entry per state something is in, so the numbers
     /// add up to the list.
-    public IReadOnlyList<SubagentCount> SubagentCounts =>
-        [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
+    public IReadOnlyList<RunCount> RunCounts =>
+        [.. RunCountOrder.Select(state => new RunCount(state, _runs.Count(state))).Where(c => c.Count > 0)];
 
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
     public PlanSectionViewModel Plan { get; }
 
-    void RefreshSubagents() {
-        this.RaisePropertyChanged(nameof(HasSubagents));
-        this.RaisePropertyChanged(nameof(HasRunningSubagents));
-        this.RaisePropertyChanged(nameof(SubagentsHeader));
-        this.RaisePropertyChanged(nameof(SubagentCounts));
+    void RefreshRuns() {
+        this.RaisePropertyChanged(nameof(HasRuns));
+        this.RaisePropertyChanged(nameof(HasRunningRuns));
+        this.RaisePropertyChanged(nameof(RunsHeader));
+        this.RaisePropertyChanged(nameof(RunCounts));
     }
 
     internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
@@ -232,6 +232,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ? $"Refresh this work · {RefreshShortcut.Label} or {fromTerminal}"
             : $"Refresh this work · {RefreshShortcut.Label}";
 
+    /// The Artefacts tab's model, when this pane's workspace has one; the pane shows its summary
+    /// row and switches its session beside the plan's.
+    public ArtefactsTabViewModel? Artefacts { get; }
+    public ReactiveCommand<Unit, Unit> OpenArtefactsCommand { get; }
+
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     /// The item's own page in the web UI; enabled once a read has named the item.
     public ReactiveCommand<Unit, Unit> OpenWorkItemCommand { get; }
@@ -242,15 +247,19 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
-            SessionSubagents subagents, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
-            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null) {
+            SessionRuns runs, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
+            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
+            ArtefactsTabViewModel? artefacts = null) {
         _source = source;
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
+        Artefacts = artefacts;
+        OpenArtefactsCommand = ReactiveCommand.Create(() => Artefacts?.RequestOpen());
+        _disposables.Add(OpenArtefactsCommand);
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
-        _subagents = subagents;
-        _subagents.Changed += RefreshSubagents;
+        _runs = runs;
+        _runs.Changed += RefreshRuns;
         InitializeProjections();
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
@@ -264,6 +273,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 ResolveBranch();
                 PullRequests?.Refresh();
                 Plan.Refresh();
+                Artefacts?.Refresh();
                 if (_current is null) return;
                 IsRefreshing = true;
                 if (_current.IsReading) _current.RefreshPending = true;
@@ -331,6 +341,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Phase = WorkContextPhase.Loading;
         StartRead(_current);
         Plan.SwitchSession(id);
+        Artefacts?.SwitchSession(id, WorktreePath ?? RepositoryPath);
     }
 
     void StartRead(ReadLease lease) {
@@ -372,12 +383,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void OnTick() {
         if (_tornDown) return;
         Plan.Refresh();
+        if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
         if (_current is { IsReading: false } lease) StartRead(lease);
     }
 
     void OnSignInCompleted() {
         if (_tornDown) return;
         Plan.Refresh();
+        Artefacts?.Refresh();
         if (_current is not { } lease) return;
         if (lease.IsReading) lease.RefreshPending = true;
         else StartRead(lease);
@@ -412,7 +425,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public async Task TeardownAsync() {
         if (_tornDown) return;
         _tornDown = true;
-        _subagents.Changed -= RefreshSubagents;
+        _runs.Changed -= RefreshRuns;
         _timer?.Dispose();
         _timer = null;
         _disposables.Dispose();

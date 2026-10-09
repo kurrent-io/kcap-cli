@@ -79,6 +79,10 @@ public sealed class AgentActionService {
     /// CLI's `IsProtectedKind`.
     internal static bool IsProtectedKind(string kind) => kind is not "agent";
 
+    /// Whether the user can type at this kind, mirroring the daemon's AcceptsTypedInput: a PR-review
+    /// agent is a dialogue, a flow participant is not, and an unrecognised kind fails safe as read-only.
+    internal static bool AcceptsTypedInput(string kind) => kind is "agent" or "review";
+
     /// Per-agent gating: a second Stop for the same agent no-ops while one is pending — including
     /// while a protected kind's confirm-then-force dialog is still open, since the agent stays
     /// in-flight for the whole RunStopAsync call — other agents run concurrently.

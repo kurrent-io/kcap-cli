@@ -27,7 +27,8 @@ public class DaemonShimCommandsTests {
             Func<string, ShimPreflight>? preflight = null, bool isMacOs = false) {
         using var capture = ConsoleOutput.StartFullCapture();
         var exit = await DaemonShimCommands.Ensure(args, TimeProvider.System, resolveTarget: () => target,
-            probe: new FakeProbe(onPath), install: install, preflight: preflight, isMacOs: isMacOs);
+            probe: new FakeProbe(onPath), install: install,
+            preflight: preflight ?? (_ => ShimPreflight.Installable), isMacOs: isMacOs);
         var text = capture.GetCapturedOutput() + capture.GetCapturedError();
         ShimEnsureJson? json = null;
         if (text.Contains("{\"capability\"")) json = JsonSerializer.Deserialize<ShimEnsureJson>(text, ShimJsonContext.Default.ShimEnsureJson);

@@ -232,12 +232,23 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", RefreshTokenHandoff.Command];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
 // server configured. Only that form: a real import obviously needs one.
 var offlineDiscover = command == "import" && args.Contains("--discover");
+
+// Ahead of the gate: on a first run the profile has no server yet, and the plan names the one setup
+// chose. A plan the runner rejects fails there, never as a scope-less ordinary import.
+if (command == "import" && detachedImport is not null
+ && Environment.GetEnvironmentVariable(ImportPlan.EnvVar) is { Length: > 0 } importPlanPath) {
+    try {
+        return await Run<DetachedImportPlanRunner>().RunAsync(importPlanPath);
+    } finally {
+        detachedImportLog?.Dispose();
+    }
+}
 
 if (baseUrl is null && !offlineCommands.Contains(command) && !offlineDiscover) {
     Console.Error.WriteLine($"No server configured. Run `kcap setup` or set {ProfileOverrides.UrlVar}.");
@@ -455,6 +466,8 @@ switch (command) {
     }
     case "update":
         return await Run<UpdateCommand>().HandleAsync(args);
+    case "refresh":
+        return await Run<RefreshCommand>().HandleAsync(args);
     case "review": {
         if (args.Length < 2) {
             Console.Error.WriteLine("Usage: kcap review <pr-url-or-shorthand>");
@@ -885,6 +898,10 @@ switch (command) {
         return 0;
     }
     case "hook": {
+        // Blocks the agent's Read, so it skips the spool drain below.
+        if (args.Contains("--claude") && args.Contains("--plan-read")) {
+            return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));
+        }
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
         // added (removed from their Handle methods so this runs exactly once per invocation) and
@@ -967,7 +984,7 @@ return 1;
 }
 
 } finally {
-    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<NpmRegistryClient>, time);
+    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<IReleaseFeed>, time);
     await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>, time);
 }
 

@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, NpmRegistryClient npm, MachineAuth machine, TimeProvider time,
+        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time,
         AccountStore accounts, UserHome home, bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
@@ -226,7 +226,7 @@ public sealed class StatusCommand(
 
         if (args.Contains("--no-update-check") || profile?.UpdateCheck == false) return (current, default, false);
 
-        var channel = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+        var channel = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result  = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config), false);
@@ -277,7 +277,7 @@ public sealed class StatusCommand(
             return;
         }
 
-        var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+        var channel  = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         // Cap the recommendation at the connected server's version (min(npm latest, server)).

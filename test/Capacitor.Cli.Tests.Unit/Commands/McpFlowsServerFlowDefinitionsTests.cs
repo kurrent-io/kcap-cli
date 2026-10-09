@@ -164,4 +164,40 @@ public class McpFlowsServerFlowDefinitionsTests {
         await Assert.That(tool.Description).Contains("before start_flow");
         await Assert.That(tool.Description).Contains("does NOT start");
     }
+
+    [Test]
+    public async Task A_proactive_definition_says_when_to_offer_it() {
+        var text = McpFlowsServer.FormatFlowDefinitions("""
+            {"definitions":[{"id":"code-review","version":4,"is_single_participant":true,
+              "participants":[{"role":"reviewer","model":"default"}],
+              "offer":"proactive","when_to_use":"After a change\nis complete."}]}
+            """)!;
+
+        await Assert.That(text).Contains("  when to use (offer proactively): After a change is complete.");
+    }
+
+    [Test]
+    public async Task An_on_request_definition_shows_its_when_to_use_without_inviting_an_offer() {
+        var text = McpFlowsServer.FormatFlowDefinitions("""
+            {"definitions":[{"id":"triage","participants":[{"role":"reviewer","model":"default"}],
+              "offer":"on_request","when_to_use":"When asked to triage."}]}
+            """)!;
+
+        await Assert.That(text).Contains("  when to use (on request): When asked to triage.");
+        await Assert.That(text).DoesNotContain("offer proactively");
+    }
+
+    [Test]
+    public async Task A_server_without_guidance_fields_renders_as_before() {
+        var text = McpFlowsServer.FormatFlowDefinitions(TwoDefinitions)!;
+
+        await Assert.That(text).DoesNotContain("when to use");
+    }
+
+    [Test]
+    public async Task The_listing_points_to_get_flow_definition() {
+        var tool = McpFlowsServer.BuildToolsList().Single(t => t.Name == "list_flow_definitions");
+
+        await Assert.That(tool.Description).Contains("get_flow_definition");
+    }
 }

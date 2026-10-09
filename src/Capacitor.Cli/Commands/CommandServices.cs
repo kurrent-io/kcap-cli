@@ -122,6 +122,7 @@ public static class CommandServices {
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
         services.AddSingleton<IBackgroundImportSpawner, BackgroundImportSpawner>();
+        services.AddTransient<DetachedImportPlanRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
@@ -138,6 +139,12 @@ public static class CommandServices {
         services.AddTransient<McpJudgeServer>();
         services.AddTransient<UninstallCommand>();
         services.AddTransient<UpdateCommand>();
+        services.AddTransient<RefreshCommand>();
+        // A script install checks the installer's channel manifest; every other install checks npm.
+        services.AddTransient<IReleaseFeed>(sp => InstallProvenance.Kind() == InstallKind.Script
+            ? sp.GetRequiredService<KcapReleaseClient>()
+            : sp.GetRequiredService<NpmRegistryClient>());
+        services.AddTransient<ScriptUpdater>();
         services.AddTransient<UseCommand>();
         services.AddTransient<ValidatePlanCommand>();
         services.AddTransient<WatchCommand>();

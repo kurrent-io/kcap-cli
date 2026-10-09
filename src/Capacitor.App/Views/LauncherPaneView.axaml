@@ -112,6 +112,20 @@
                                         Content="{Binding SelectedPermissionMode, Converter={x:Static views:PermissionChipTextConverter.Instance}}"
                                         IsVisible="{Binding SelectedVendor, Converter={x:Static views:PermissionChipVisibleConverter.Instance}}"
                                         ToolTip.Tip="Permission mode. How much Claude asks before acting" />
+
+                                <Button x:Name="CodexSandboxChip" Classes="kcapChip" Click="OnCodexSandboxChipClick"
+                                        Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                        Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                        Content="{Binding SelectedCodexSandbox, Converter={x:Static views:CodexPostureChipTextConverter.Sandbox}}"
+                                        IsVisible="{Binding SelectedVendor, Converter={x:Static views:CodexPostureChipVisibleConverter.Instance}}"
+                                        ToolTip.Tip="Sandbox. What Codex may read and write" />
+
+                                <Button x:Name="CodexApprovalChip" Classes="kcapChip" Click="OnCodexApprovalChipClick"
+                                        Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                        Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
+                                        Content="{Binding SelectedCodexApproval, Converter={x:Static views:CodexPostureChipTextConverter.Approval}}"
+                                        IsVisible="{Binding SelectedVendor, Converter={x:Static views:CodexPostureChipVisibleConverter.Instance}}"
+                                        ToolTip.Tip="Approvals. When Codex asks before acting" />
                             </WrapPanel>
 
                             <Button Grid.Column="1" x:Name="StartButton" Classes="kcapPrimary" Command="{Binding StartCommand}"

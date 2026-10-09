@@ -45,10 +45,10 @@ Options for judge:
                           (written by kcap eval and the daemon; not for manual use)
 
 mcp sessions:
-  Exposes eight tools — search_sessions, list_repo_sessions,
+  Exposes ten tools — search_sessions, list_repo_sessions,
   get_session_summary, list_turns, get_turn, get_session_transcript,
-  list_repo_plans, get_declared_plans — for agents to search and inspect past
-  Kurrent Capacitor sessions. The active repo is resolved from cwd at startup;
+  list_repo_plans, get_declared_plans, get_session_evals, get_connection — for agents to
+  search and inspect past Kurrent Capacitor sessions and their evals. The active repo is resolved from cwd at startup;
   cd into your project before spawning. Requires `kcap login`.
 
 mcp handoff:
@@ -77,6 +77,10 @@ mcp flows:
       close_review_flow      Close a completed review flow.
 
     Generic-flow tools (catalog + dynamic definitions):
+      list_flow_definitions  List the definitions this server can start, with when
+                             to use each and whether agents may offer it unprompted.
+      get_flow_definition    Read one definition's driver guide: what to submit,
+                             how to iterate, when to close.
       start_flow             Start a catalog flow by `definition_id`, or an inline
                              `definition_yaml` dynamic flow. `vendor`/`model` apply to
                              single-participant catalog definitions only (rejected for
@@ -98,6 +102,11 @@ mcp flows:
   `kcap setup` / `kcap plugin install --codex` register it conservatively
   in Codex's config.toml, and the native Codex plugin descriptor includes it.
   The work-launching server is never auto-approved on registration.
+
+  When `kcap-flows` is registered for a harness, the SessionStart hook lists the
+  catalogue flows an operator marked `offer: proactive`, so the agent can offer
+  them at the right moment. Nothing is listed against a server that predates
+  flow guidance.
 
 mcp memory:
   Exposes six tools — search_memories, get_memory, save_memory, update_memory,

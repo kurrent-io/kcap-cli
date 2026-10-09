@@ -8,6 +8,7 @@ record StartAgentDto(
     [property: JsonPropertyName("cwd")]             string  Cwd,
     [property: JsonPropertyName("repo_path")]       string  RepoPath,
     [property: JsonPropertyName("prompt")]          string  Prompt,
+    [property: JsonPropertyName("title")]           string  Title,
     [property: JsonPropertyName("work_item")]       string  WorkItem,
     [property: JsonPropertyName("vendor")]          string  Vendor,
     [property: JsonPropertyName("machine_id")]      string? MachineId     = null,

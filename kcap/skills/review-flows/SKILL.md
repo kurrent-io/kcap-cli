@@ -8,7 +8,8 @@ description: >-
   this skill (and do NOT call the flows MCP tools) for an ordinary review
   request such as "review my PR", "review this diff/spec/design", or "code
   review" where the user just wants you to review it yourself — perform that
-  review directly instead.
+  review directly instead. For any other catalogue flow, or a flow offered
+  from your session context, use `agent-flows`.
 ---
 
 # Review Flows
@@ -156,7 +157,10 @@ After applying the role-surface safety gate, if `start_review_flow` / `submit_re
 ## Workflow
 
 ```
-start_review_flow(kind, target_kind, target_ref, target_title, context)
+get_flow_definition(kind)
+  → follow its guide: what to submit, how to iterate (a server that publishes no guides says so; the rest of this skill applies)
+
+start_review_flow(kind, target_kind, target_ref, target_title, session_title, context)
   → reviewer returns a result: findings (with the findings text) | clean
 
 if clean:
@@ -176,7 +180,7 @@ if findings:
 
 | Tool | Required args | Optional args | When to call |
 |---|---|---|---|
-| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (explicit reviewer model override — REQUIRES `vendor`; only pass it when the user named a model), `instructions`, `mode` (`context-only` — optional) | Once, at the start of a review task. |
+| `start_review_flow` | `kind` (`spec-review`\|`code-review`), `target_kind` (what is being reviewed: `spec`, `code`, `pr`, `branch`, `file`, etc.), `target_ref` (a path, branch name, or PR URL/number that identifies the target), `target_title` (short human-readable title, e.g. spec name or PR title), `session_title` (the reviewer session's title: a short phrase naming this review, specific enough to tell it apart from other sessions — it replaces the generic "Review this PR/code" name), `context` (background context: what to focus on, constraints, definition of done) | `vendor` (explicit reviewer vendor; omit to use the definition's authored vendor, or your saved `flows.reviewer_vendor` preference if it declares none), `model` (explicit reviewer model override — REQUIRES `vendor`; only pass it when the user named a model), `instructions`, `mode` (`context-only` — optional) | Once, at the start of a review task. |
 | `submit_review_round` | `flow_run_id`, `context` | `instructions` | After addressing findings. Pass the same `flow_run_id` and the updated context. |
 | `get_review_flow_status` | — | `flow_run_id` (omit to read the newest open flow this session started, or on a harness without a session identity the newest one started from this workspace; several open flows are listed instead), `session_id` (look up another session's flows; defaults to this session), `wait` (`true`/`false`, defaults to `false`) — when `true`, blocks until the round is terminal or roughly 3.5 minutes pass, instead of returning the current snapshot immediately | Poll or check the current status of a flow (running, waiting, completed, failed). Use `wait: true` to ride out a long round instead of polling repeatedly yourself, and omit `flow_run_id` to recover a flow whose id you never received or lost. |
 | `close_review_flow` | `flow_run_id` | — | Only after the reviewer returns `clean`. |
@@ -184,13 +188,14 @@ if findings:
 ## Example (code review)
 
 ```
-# Step 1 — start (all five required args required; the reviewer sees a mirror of THIS SESSION's
+# Step 1 — start (all six args required; the reviewer sees a mirror of THIS SESSION's
 # project directory, not of the directory you are working in — pass mode="context-only" to opt out)
 start_review_flow(
   kind="code-review",
   target_kind="branch",
   target_ref="feature/add-null-check",
   target_title="Add null check on user input",
+  session_title="Review the null check on user input",
   context="Review the diff on this branch for correctness and adherence to project conventions."
 )
 # → returns flow_run_id, e.g. "flow_abc123"

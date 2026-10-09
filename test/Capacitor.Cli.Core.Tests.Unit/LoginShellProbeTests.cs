@@ -533,4 +533,35 @@ public class LoginShellProbeTests {
 
         await Assert.That(await Probe(runner).KcapOnPathAsync(CancellationToken.None)).IsFalse();
     }
+
+    // --- SetVariablesAsync ---
+
+    [Test]
+    public async Task SetVariablesAsync_names_only_the_variables_the_shell_sets() {
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(0, Wrap("OPENAI_API_KEY "), "", false));
+
+        var set = await Probe(runner).SetVariablesAsync(["ANTHROPIC_API_KEY", "OPENAI_API_KEY"], CancellationToken.None);
+
+        await Assert.That(set).IsEquivalentTo(["OPENAI_API_KEY"]);
+        // The script tests each name for non-empty and prints the name, never the value.
+        await Assert.That(runner.Calls[0].Args[1]).Contains("[ -n \"${ANTHROPIC_API_KEY}\" ] && printf 'ANTHROPIC_API_KEY '");
+    }
+
+    [Test]
+    public async Task SetVariablesAsync_is_null_when_the_shell_could_not_be_asked() {
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(1, "", "", false));
+        runner.Enqueue(new ProcessResult(1, "", "", false));
+
+        await Assert.That(await Probe(runner).SetVariablesAsync(["ANTHROPIC_API_KEY"], CancellationToken.None)).IsNull();
+    }
+
+    [Test]
+    public async Task SetVariablesAsync_refuses_a_name_that_is_not_an_identifier() {
+        var runner = new FakeProcessRunner();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => Probe(runner).SetVariablesAsync(["A; rm -rf ~"], CancellationToken.None));
+        await Assert.That(runner.Calls).IsEmpty();
+    }
 }

@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -342,9 +341,84 @@ public class SetupCommandTests {
         await Assert.That(string.Join("\n", lines)).DoesNotContain("[green]");
     }
 
+    static BackgroundImportLaunch Launch(BackgroundImportStatus status) =>
+        new(status, "/logs/import-run1.log", status is BackgroundImportStatus.Failed ? 3 : null,
+            status is BackgroundImportStatus.Failed ? "exit 3" : null);
+
+    [Test]
+    public async Task BrowserImportSummary_while_the_child_runs_claims_only_the_newest_sessions() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), background: Launch(BackgroundImportStatus.Running)));
+
+        await Assert.That(text).Contains("Imported your newest sessions from 1 repository");
+        await Assert.That(text).Contains("the rest is importing in the background");
+        await Assert.That(text).Contains("/logs/import-run1.log");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_a_partial_run_names_no_remedy_while_the_child_runs() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), failed: true, background: Launch(BackgroundImportStatus.Running)));
+
+        await Assert.That(text).Contains("Partly imported");
+        await Assert.That(text).Contains("importing in the background");
+        await Assert.That(text).DoesNotContain("kcap setup");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_a_child_that_did_not_start_is_partial_with_the_setup_remedy() {
+        var text = string.Join("\n", SetupCommand.BrowserImportSummary(
+            ImportAnswer(repos: "kcap"), background: Launch(BackgroundImportStatus.Failed)));
+
+        await Assert.That(text).Contains("Partly imported");
+        await Assert.That(text).Contains("kcap setup");
+        await Assert.That(text).DoesNotContain("[green]");
+    }
+
+    [Test]
+    public async Task BrowserImportSummary_keeps_the_tick_when_no_child_is_still_running() {
+        foreach (var status in new[] { BackgroundImportStatus.NotNeeded, BackgroundImportStatus.ExitedZero }) {
+            var text = string.Join("\n", SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap"), background: Launch(status)));
+
+            await Assert.That(text).Contains("[green]✓[/] Imported 1 repository");
+            await Assert.That(text).DoesNotContain("background");
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task Browser_import_step_passes_the_running_child_to_its_summary() {
+        using var console = new SpectreCapture();
+
+        await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap")) with {
+                BrowserBackground = Launch(BackgroundImportStatus.Running)
+            });
+
+        await Assert.That(console.Flat).Contains("the rest is importing in the background");
+    }
+
     [Test]
     public async Task BrowserImportSummary_an_answer_it_read_whole_gets_one_line() {
         await Assert.That(SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap")).Count).IsEqualTo(1);
+    }
+
+    /// <summary>Plain import applies the profile's default visibility, which can be wider than an
+    /// "only me" choice; setup re-applies each repository's chosen level.</summary>
+    [Test]
+    public async Task Browser_summary_never_names_kcap_import() {
+        var arms = new[] {
+            SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap"), failed: true),
+            SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap") with { Vendors = [] }),
+            SetupCommand.BrowserImportSummary(ImportAnswer(unreadable: 1, repos: "kcap")),
+            SetupCommand.BrowserImportSummary(ImportAnswer(repos: "kcap")),
+            SetupCommand.BrowserImportSummary(ImportAnswer()),
+        };
+
+        foreach (var lines in arms)
+            await Assert.That(string.Join("\n", lines)).DoesNotContain("kcap import");
+
+        foreach (var lines in arms.Take(3))
+            await Assert.That(string.Join("\n", lines)).Contains("kcap setup");
     }
 
     static FirstRunAgentsAnswer VisibilityAnswer(string? visibility) =>
@@ -577,6 +651,119 @@ public class SetupCommandTests {
         var reloaded = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(reloaded.ActiveProfile).IsEqualTo("acme");
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
+    }
+
+    /// <summary>A service the browser's request put in place replaces the start-it-yourself advice, which
+    /// would otherwise start a second daemon beside it.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionOutcomes.Enabled)]
+    [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
+    [Arguments(FirstRunMachineActionOutcomes.EnabledUnverified)]
+    public async Task DaemonClosingLine_drops_the_start_hint_once_a_service_runs(string outcome) {
+        var line = SetupCommand.DaemonClosingLine(new FirstRunMachineActionResult(outcome, null));
+
+        await Assert.That(line).DoesNotContain("kcap daemon start");
+        await Assert.That(line).Contains("background service");
+    }
+
+    /// <summary>No request, or one that did not end in a service, keeps the optional start hint.</summary>
+    [Test]
+    public async Task DaemonClosingLine_keeps_the_start_hint_without_a_service() {
+        await Assert.That(SetupCommand.DaemonClosingLine(null)).Contains("kcap daemon start -d");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon start -d");
+    }
+
+    /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
+    /// changes it, in the direction that would change it.</summary>
+    [Test]
+    public async Task ProviderApiKeyKeptLine_names_the_command_that_flips_the_kept_value() {
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(false)).Contains("use_provider_api_key true");
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(true)).Contains("use_provider_api_key false");
+    }
+
+    /// <summary>The tick is a claim that commits will be filed, so only a git known to run config hooks
+    /// earns it; an unreadable version is a warning, not a pass.</summary>
+    [Test]
+    public async Task GitHookLine_ticks_only_a_git_known_to_run_config_hooks() {
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 50, 1))).Contains("ignores it");
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
+        await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
+        await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
+    }
+
+    /// <summary>The browser path cannot fall back to a prompt, so its fallbacks must be finite.</summary>
+    [Test]
+    public async Task BrowserDaemonNameFallbacks_start_with_the_prompt_s_suggestion_and_stop() {
+        var names = SetupCommand.BrowserDaemonNameFallbacks("tony", "mbp").ToList();
+
+        await Assert.That(names[0]).IsEqualTo("tony-mbp");
+        await Assert.That(names).IsEquivalentTo(["tony-mbp", "tony-mbp-2", "tony-mbp-3", "tony-mbp-4"]);
+    }
+
+    [Test]
+    public async Task CodexTrustReminder_appears_only_when_codex_hooks_were_installed() {
+        var withCodex = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: true, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false);
+        var withoutCodex = withCodex with { CodexHooksInstalled = false, ClaudeInstalled = true };
+
+        await Assert.That(SetupCommand.CodexTrustReminder(withCodex)).Contains("trust");
+        await Assert.That(SetupCommand.CodexTrustReminder(withoutCodex)).IsNull();
+    }
+
+    [Test]
+    public async Task InstalledInLines_lists_each_path_with_home_shortened() {
+        var home  = Path.Combine("users", "kcap-home");
+        var lines = SetupCommand.InstalledInLines(
+            [Path.Combine(home, ".gitconfig"), "/etc/elsewhere"], home).ToList();
+
+        await Assert.That(lines.Count).IsEqualTo(3);
+        await Assert.That(lines[1]).Contains($"~{Path.DirectorySeparatorChar}.gitconfig");
+        await Assert.That(lines[2]).Contains("/etc/elsewhere");
+        await Assert.That(SetupCommand.InstalledInLines([], home)).IsEmpty();
+    }
+
+    [Test]
+    public async Task InstalledPaths_lists_reported_writes_once() {
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "/h/.claude/settings.json", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "/h/.codex/hooks.json", CursorHooksPath: "/h/.cursor/hooks.json",
+            CopilotHooksPath: "/h/.copilot/kcap.json", GeminiSettingsPath: "/h/.gemini/settings.json",
+            AgentsSkillsDir: "/h/.agents/skills", LegacyCodexSkillsDir: "/h/.codex/skills",
+            CodexConfigTomlPath: "/h/.codex/config.toml");
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: true, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            GeminiHooksInstalled: true, GeminiMcpRegistered: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).IsEquivalentTo(["/h/.claude/settings.json", "/h/.gemini/settings.json"]);
+    }
+
+    /// <summary>Kiro's install also switches the default agent in cli.json, and Antigravity's writes the
+    /// plugin.json it cannot load without; both are second files the hook flag alone does not name.</summary>
+    [Test]
+    public async Task InstalledPaths_names_the_second_file_kiro_and_antigravity_write() {
+        var kiroAgent = Path.Combine("h", ".kiro", "agents", "kcap.json");
+        var agyHooks  = Path.Combine("h", ".gemini", "antigravity", "plugins", "kcap", "hooks.json");
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "", CursorHooksPath: "", CopilotHooksPath: "", GeminiSettingsPath: "",
+            AgentsSkillsDir: "", LegacyCodexSkillsDir: "",
+            KiroHooksPath: kiroAgent, AntigravityHooksPath: agyHooks);
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            KiroHooksInstalled: true, AntigravityHooksInstalled: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).Contains(PluginCommand.KiroSettingsPathFor(kiroAgent));
+        await Assert.That(listed).Contains(Path.Combine(Path.GetDirectoryName(agyHooks)!, "plugin.json"));
+        await Assert.That(listed.Count).IsEqualTo(4);
     }
 
     [Test]
@@ -957,11 +1144,12 @@ public class SetupCommandTests {
     SetupCommand.ImportStepInputs Inputs(
             bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
             bool auth = true, bool skip = false, string visibility = "org_public",
-            CodingAgentsStep.Paths? paths = null) => new(
+            CodingAgentsStep.Paths? paths = null, bool browserFinished = false) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
-        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false);
+        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
+        BrowserFinished: browserFinished);
 
     /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
     /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
@@ -982,6 +1170,21 @@ public class SetupCommandTests {
         var summary = ImportDiscoverySummary.Build(sessions, repoBySession, []);
 
         return new ImportCommand.ImportDiscoveryResult(summary, [.. HarnessRegistry.Identities.Select(i => i.Id)]);
+    }
+
+    /// <summary>A finished browser flow with no import answer must not leave a terminal prompt behind
+    /// the browser's Done screen, and must not import by default either.</summary>
+    [Test]
+    public async Task A_browser_flow_that_finished_without_an_import_answer_neither_prompts_nor_imports() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var prompted = false;
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => prompted = true, browserFinished: true));
+
+        await Assert.That(prompted).IsFalse();
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Captured).IsNull();
     }
 
     [Test]
@@ -1055,24 +1258,49 @@ public class SetupCommandTests {
         await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
     }
 
-    /// <summary>Captures what a step writes through Spectre. <c>AnsiConsole</c> caches its writer at
-    /// first use, so redirecting <c>Console.Out</c> (as <c>ConsoleOutput</c> does) never reaches it —
-    /// the singleton itself has to be swapped, as <c>SetupFacadeParityTests.SpectreCapture</c> does.</summary>
-    sealed class SpectreCapture : IDisposable {
-        readonly IAnsiConsole  _original = AnsiConsole.Console;
-        readonly StringBuilder _text     = new();
+    [Test]
+    public async Task Browser_summary_hands_back_the_prompt_as_a_paste_block() {
+        var prompt = SetupCommand.HandoffPromptText("0123456789abcdef0123456789abcdef");
 
-        public SpectreCapture() {
-            AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings {
-                Ansi        = AnsiSupport.No,
-                ColorSystem = ColorSystemSupport.NoColors,
-                Out         = new AnsiConsoleOutput(new StringWriter(_text)),
-            });
-        }
+        var result = await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap")) with { BrowserHandoffPrompt = prompt });
 
-        public string Text => _text.ToString();
+        await Assert.That(result.PasteBlock).IsEqualTo(prompt);
+        await Assert.That(result.Ran).IsFalse();
+    }
 
-        public void Dispose() => AnsiConsole.Console = _original;
+    [Test, NotInParallel]
+    public async Task A_browser_prompt_no_agent_can_answer_after_install_is_withheld() {
+        var prompt  = SetupCommand.HandoffPromptText("0123456789abcdef0123456789abcdef");
+        var noSkill = PathsWithEvalWatchFor(HarnessId.Codex) with { AgentsSkillsDir = Home.PathTo("no-skills") };
+        using var console = new SpectreCapture();
+
+        var result = await Command(FakeImportRunner.Succeeding(), Config.Directory)
+            .RunImportStepAsync(Inputs(browser: ImportAnswer(repos: "kcap"), paths: noSkill) with { BrowserHandoffPrompt = prompt });
+
+        await Assert.That(result.PasteBlock).IsNull();
+        await Assert.That(console.Flat).Contains("/sessions?status=ended");
+    }
+
+    [Test, NotInParallel]
+    public async Task Terminal_flow_background_failure_still_names_kcap_import_all() {
+        var runner = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        using var console = new SpectreCapture();
+
+        await Command(runner, FakeBackgroundImportSpawner.Failing(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs());
+
+        await Assert.That(console.Flat).Contains("kcap import --all --yes");
+    }
+
+    [Test, NotInParallel]
+    public async Task Browser_flow_background_failure_names_kcap_setup() {
+        using var console = new SpectreCapture();
+
+        SetupCommand.PrintBackground(new(BackgroundImportStatus.Failed, null, null, "exit 3"), browser: true);
+
+        await Assert.That(console.Text).Contains("kcap setup");
+        await Assert.That(console.Text).DoesNotContain("kcap import");
     }
 
     [Test, NotInParallel]

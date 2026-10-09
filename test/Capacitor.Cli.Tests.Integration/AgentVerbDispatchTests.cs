@@ -5,8 +5,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// <summary>
 /// `kcap agent …` must reach <c>AgentCommand</c>. Pinned through the real binary because the
 /// dispatch lives in Program.cs's top-level flow, where a guard added ahead of the switch can
-/// shadow the whole group without failing a single unit test — which is exactly what happened
-/// when the retired-verb tombstone and this command group landed in the same release.
+/// shadow the whole group without failing a single unit test.
 ///
 /// Every case asserts a string only <c>AgentCommand</c> emits. Asserting merely "not the
 /// tombstone" would pass for any other pre-dispatch guard that exits 1 (the missing-server gate
@@ -16,8 +15,8 @@ public class AgentVerbDispatchTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
 
-    /// Emitted by AgentCommand and nothing else: the Unix subcommand paths all prefix their
-    /// usage/errors with `kcap agent`, and Windows refuses the group with the same prefix.
+    /// Emitted by AgentCommand and nothing else: every subcommand path prefixes its usage and
+    /// errors with `kcap agent`.
     const string HandlerMarker = "kcap agent";
 
     [Test]
@@ -49,11 +48,7 @@ public class AgentVerbDispatchTests {
         await Assert.That(output).DoesNotContain("No server configured");
         await Assert.That(output).DoesNotContain("unknown subcommand");
 
-        if (!OperatingSystem.IsWindows()) {
-            await Assert.That(output).Contains("No local daemon running.");
-        } else {
-            await Assert.That(output).Contains(HandlerMarker);
-        }
+        await Assert.That(output).Contains("No local daemon running.");
     }
 
     [Test]
@@ -70,20 +65,17 @@ public class AgentVerbDispatchTests {
 
     [Test]
     public async Task Daemon_only_subcommand_points_at_the_daemon_group() {
-        // `status` only ever meant the daemon. Signposted ahead of the platform guard, so this
-        // holds on Windows too — where `kcap daemon status` is supported but this group is not.
+        // `status` only ever meant the daemon.
         var (_, stderr, exitCode) = await RunCli("agent status");
 
         await Assert.That(exitCode).IsEqualTo(1);
         await Assert.That(stderr).Contains("kcap daemon status");
-        await Assert.That(stderr).DoesNotContain("not supported on Windows");
     }
 
     [Test]
     public async Task Start_without_a_server_reports_the_missing_server_itself() {
         // The group is offline-callable, so the server requirement belongs to `start` alone and
         // must still be reported — just by the handler, not by the global gate.
-        if (OperatingSystem.IsWindows()) return;
 
         var (_, stderr, exitCode) = await RunCli("agent start claude", clearServerUrl: true);
 

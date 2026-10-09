@@ -24,4 +24,11 @@ assert "matching tarball passes"      "$tmp/match.tgz"        0
 assert "different daemon fails"       "$tmp/other-daemon.tgz" 1
 assert "different cli fails"          "$tmp/other-cli.tgz"    1
 assert "missing tarball fails"        "$tmp/absent.tgz"       1
+
+# A win-* platform package carries .exe binaries.
+win="$(mktemp -d)"; mkdir -p "$win/package/bin"
+printf 'cli-bytes' > "$win/package/bin/kcap.exe"; printf 'daemon-bytes' > "$win/package/bin/kcap-daemon.exe"
+tar -czf "$tmp/win.tgz" -C "$win" package; rm -rf "$win"
+rc=0; set +e; KCAP_NPM_PLATFORM=win-x64 bash "$sh" "0.12.0-beta.2" "$tmp/kcap.sha256" "$tmp/daemon.sha256" --tarball "$tmp/win.tgz" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" -eq 0 ] || { echo "FAIL: win-x64 package with .exe binaries -> rc=$rc (want 0)"; fail=1; }
 [ "$fail" -eq 0 ] && echo "ok" || exit 1

@@ -39,6 +39,8 @@ public class ChatTabViewSmokeTests {
     const string ToolCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
     const string ThinkingLine = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"weighing it"}]}}""";
     const string ToolResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
+    const string PublishCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_pub","name":"mcp__plugin_kcap_kcap-artefacts__publish_artefact","input":{"title":"Retention brief","html":"<p>x</p>"}}]}}""";
+    const string PublishResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_pub","content":"{\"artefact\":{\"artefact_id\":\"01ec\",\"title\":\"Retention brief\",\"owner_user_id\":\"u1\",\"visibility\":\"org\",\"latest_version\":1,\"updated_at\":\"2026-10-07T10:00:00Z\",\"is_owner\":true,\"url\":\"https://kurrent.kcap.ai/artefacts/01ec\"}}"}]}}""";
     const string ToolErrorLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}""";
     static readonly TimeSpan CrDelay = TimeSpan.FromMilliseconds(150);
     const string ReadCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/repo/x/src/a.cs"}}]}}""";
@@ -101,7 +103,7 @@ public class ChatTabViewSmokeTests {
         public FakeTerminalAttachClientFactory Attach { get; } = new();
         public RecordingOpener Opener { get; } = new();
         public FakePermissionService Permissions { get; } = new();
-        public SessionSubagents Subagents { get; }
+        public SessionRuns Runs { get; }
         public TerminalTabViewModel Terminal { get; }
         public ChatTabViewModel Chat { get; }
         public ChatTabView View { get; }
@@ -114,10 +116,10 @@ public class ChatTabViewSmokeTests {
         /// ScrollViewer until Show() is called — the order production takes, where the tab's
         /// first read starts before the workspace view exists.
         public Host(bool show = true, IObservable<string?>? sessionId = null) {
-            Subagents = new SessionSubagents(Time);
+            Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Attach.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Subagents,
+                "a1", Daemon, new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), _presence), new NoAttachmentUploader(), TranscriptChat.For("claude"), Opener, Time, Permissions, Runs,
                 sessionId: sessionId, localDaemonOnAppServer: Observable.Return(true));
             View = new ChatTabView { DataContext = Chat };
             Window = new Window { Content = View, Width = 800, Height = 600 };
@@ -402,6 +404,34 @@ public class ChatTabViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { "https://example.com/docs" });
+            await host.CloseAsync();
+        });
+    }
+
+    /// A labelled row shows its verb phrase beside the detail; once the result lands the same item
+    /// renders as a card with the page's name and its actions, and the plain row is gone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_publish_row_turns_into_a_card_when_its_result_lands() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("pub.jsonl", [PublishCallLine]);
+            await host.LoadAsync(path);
+
+            var label = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
+            await Assert.That(label.Text).IsEqualTo("Published page");
+            await Assert.That(host.View.GetVisualDescendants().OfType<Control>().Any(c => c.Name == "ToolCard" && c.IsEffectivelyVisible)).IsFalse();
+
+            await host.AppendLinesAndTickAsync(path, PublishResultLine);
+
+            await Assert.That(host.View.GetVisualDescendants().OfType<Border>().Count(b => b.Name == "ToolCard" && b.IsEffectivelyVisible)).IsEqualTo(1);
+            var title = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardTitle");
+            var name = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardName");
+            await Assert.That(title.Text).IsEqualTo("Published page");
+            await Assert.That(name.Text).IsEqualTo("Retention brief");
+            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink").IsEffectivelyVisible).IsTrue();
+            await Assert.That(ToolRows(host.View).Any(r => r.IsEffectivelyVisible)).IsFalse();
             await host.CloseAsync();
         });
     }
@@ -1647,6 +1677,35 @@ public class ChatTabViewSmokeTests {
 
             await host.AppendLinesAndTickAsync(path, AgentFinishLine);
             await Assert.That(banner.IsVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    /// A command's name can run to 80 characters; on a narrow pane the name gives way, never the
+    /// state line with its timer. 550 is the chat pane at the window's minimum width, beside the
+    /// rail and the work-context pane.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(600, true)]
+    [Arguments(550, true)]
+    [Arguments(550, false)]
+    public async Task A_long_command_name_never_pushes_the_state_line_out_of_the_banner(double width, bool described) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            host.Window.Width = width;
+            var text = "Run every integration suite against the staging server and collect the coverage";
+            var input = described ? $$$"""{"command":"make it","description":"{{{text}}}"}""" : $$$"""{"command":"{{{text}}}"}""";
+            var call = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{{{input}}}}]}}""";
+            var launch = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
+            await host.LoadAsync(Tmp.CreateFile("sh.jsonl", [call, launch]));
+            host.Settle();
+
+            var banner = host.View.FindControl<Border>("SubagentsBanner")!;
+            var state = banner.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.IsEffectivelyVisible && t.Text!.StartsWith("running in background · ", StringComparison.Ordinal));
+            var right = state.TranslatePoint(new Point(state.Bounds.Width, 0), banner)!.Value.X;
+            await Assert.That(right).IsLessThanOrEqualTo(banner.Bounds.Width);
+            await Assert.That(state.Bounds.Width).IsGreaterThan(0);
             await host.CloseAsync();
         });
     }

@@ -3,6 +3,7 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -27,10 +28,131 @@ public class WorkspaceViewModelTests {
     static WorkspaceViewModel Build(
             FakeDaemonClientService daemon, AgentActionService actions, FakeTerminalAttachClientFactory factory,
             FakeTimeProvider time, string agentId = "a1", IPermissionService? permissions = null,
-            SessionAccessService? access = null) =>
-        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, new RecordingOpener(),
+            SessionAccessService? access = null, IPlanArtifactSource? planArtifacts = null, IUrlOpener? opener = null, IPlanSource? plans = null,
+            BackgroundCommandActivity? commands = null) =>
+        new(agentId, daemon, actions, factory.Factory, () => new FakeTerminalSurface(), time, opener ?? new RecordingOpener(),
             permissions ?? new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(),
-            new NoAttachmentUploader(), access: access);
+            new NoAttachmentUploader(), access: access, plans: plans, planArtifacts: planArtifacts, commands: commands);
+
+    const string Session = "0123456789abcdef0123456789abcdef";
+
+    /// The tab exists only while the session has a document, like Pull request with its changes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pane_document_row_opens_the_tab_and_the_tabs_selection_marks_the_row() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var plans = new FakePlanSource();
+            plans.Enqueue(new SessionPlansRead(SessionPlansReadKind.Ready, [new SessionPlanDto {
+                PlanId = "p1", IsCurrent = true, Tasks = [],
+                Documents = [new PlanDocumentDto { DocumentKey = "k", Kind = "design", Path = "docs/x-design.md" }],
+            }]));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source, plans: plans);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await (vm.WorkContext.Plan.PendingReadForTesting ?? Task.CompletedTask);
+
+            var row = vm.WorkContext.Plan.Documents.Single();
+            await vm.WorkContext.Plan.OpenDocumentCommand.Execute(row);
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Artefacts);
+            await Assert.That(vm.Artefacts.Selected!.Path).IsEqualTo("docs/x-design.md");
+            await Assert.That(row.IsOpen).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_tab_appears_with_the_first_document_and_falls_back_to_chat_when_none_remain() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.ShowsSurfaceSwitch).IsTrue();
+
+            await vm.ShowArtefactsCommand.Execute();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+            await Assert.That(vm.Artefacts.IsShown).IsTrue();
+
+            source.Enqueue(Ready());
+            vm.Artefacts.Refresh();
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await Assert.That(vm.Artefacts.IsShown).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A card's Open: a document goes to the tab, a page to the browser.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_opens_a_document_in_the_tab_and_a_page_in_the_browser() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var opener = new RecordingOpener();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), opener), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source, opener: opener);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared design doc", "x-design.md", "docs/x-design.md", null, "/repo/x/docs/x-design.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Artefacts);
+            await Assert.That(vm.Artefacts.Selected!.Path).IsEqualTo("docs/x-design.md");
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Page, "Published page", "Brief", "v1 · Org", "https://x/artefacts/1", null));
+            await Assert.That(opener.Opened).IsEquivalentTo(new[] { "https://x/artefacts/1" });
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_document_card_matching_no_row_still_opens_the_tab_when_it_has_documents() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared plan", "other.md", "docs/other.md", null, "/repo/x/docs/other.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Artefacts);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_document_card_leaves_the_tab_alone_when_it_has_no_documents() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready());
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            vm.OpenCard(new ToolCard(ToolCardKind.Document, "Declared plan", "other.md", "docs/other.md", null, "/repo/x/docs/other.md"));
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await vm.TeardownAsync();
+        });
+    }
 
     static FakeServerLane ConnectedLane() {
         var lane = new FakeServerLane();
@@ -477,11 +599,40 @@ public class WorkspaceViewModelTests {
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
 
-            await Assert.That(vm.Chat.HasRunningSubagents).IsTrue();
-            await Assert.That(vm.WorkContext.HasSubagents).IsTrue();
-            await Assert.That(vm.WorkContext.SubagentsHeader).IsEqualTo("1 running");
-            await Assert.That(vm.WorkContext.Subagents.Single().Name).IsEqualTo("Explore");
+            await Assert.That(vm.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(vm.WorkContext.HasRuns).IsTrue();
+            await Assert.That(vm.WorkContext.RunsHeader).IsEqualTo("1 running");
+            await Assert.That(vm.WorkContext.Runs.Single().Name).IsEqualTo("Explore");
             await vm.TeardownAsync();
+        });
+    }
+
+    const string ShellCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""";
+    const string ShellLaunchLine = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
+
+    /// The rail reads a session's running commands from here; the subagent beside it is left
+    /// out, since the daemon already counts that one. The header reads them too, so a finished
+    /// turn with a command still running is Working there as well.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Running_background_commands_are_reported_until_the_workspace_is_torn_down() {
+        await RunOnUiAsync(async () => {
+            var commands = new BackgroundCommandActivity();
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), commands: commands);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, ShellCallLine, ShellLaunchLine]);
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, AwaitingInput = true });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
+            await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
+            await vm.TeardownAsync();
+            await Assert.That(latest.ContainsKey("local:a1")).IsFalse();
         });
     }
 }

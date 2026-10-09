@@ -267,10 +267,10 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(line.Offset).IsEqualTo(2);
         await Assert.That(line.Projection.Envelopes).IsEmpty();
         await Assert.That(line.Projection.SubmittedInputs).IsEmpty();
-        var finished = (SubagentSignal.Finished)line.Projection.Subagents.Single();
+        var finished = (RunSignal.Finished)line.Projection.Runs.Single();
         await Assert.That(finished.CallId).IsEqualTo("toolu_A");
         await Assert.That(finished.AgentId).IsEqualTo("a9f262478e032f427");
-        await Assert.That(finished.Outcome).IsEqualTo(SubagentOutcome.Done);
+        await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
     }
 
     /// The server's lifecycle event ends the row with no notification on the stream at all.
@@ -283,7 +283,7 @@ public class RemoteTranscriptFeedTests {
                 Event(1, CanonicalEventTypes.ToolResultReceived,
                     """{"call_id":"toolu_A","result":"launched","timestamp":"2026-09-17T10:00:01Z","extensions":{"claude_code":{"tool_use_result":{"status":"async_launched","agentId":"a9f262478e032f427"}}}}"""))),
         };
-        var subagents = new SessionSubagents(h.Time);
+        var subagents = new SessionRuns(h.Time);
         h.Access.OnNext(SessionAccessState.Established);
         await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
         foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
@@ -294,7 +294,7 @@ public class RemoteTranscriptFeedTests {
         await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the completion");
         foreach (var line in h.Feed.ReadAppended().Lines) subagents.Apply(line.Projection);
         await Assert.That(subagents.RunningCount).IsEqualTo(0);
-        await Assert.That(subagents.Rows.Single().State).IsEqualTo(SubagentState.Done);
+        await Assert.That(subagents.Rows.Single().State).IsEqualTo(RunState.Done);
         await Assert.That(subagents.Rows.Single().EndedAt).IsEqualTo(DateTimeOffset.Parse("2026-09-17T10:02:05Z", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
     }
 

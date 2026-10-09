@@ -1,6 +1,8 @@
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Plans;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -20,6 +22,17 @@ static class WorkspaceFixtures {
         RequesterDisplay: null, HasTerminal: hasTerminal,
         WorktreePath: worktreePath, WorkLocation: workLocation, BorrowedFrom: borrowedFrom,
         SessionId: sessionId, Branch: branch);
+
+    public const string DocumentSession = "0123456789abcdef0123456789abcdef";
+
+    public static PlanArtifactDto Doc(string path, string kind = "design") => new() {
+        ArtifactId = path, Kind = kind, Title = path, Source = "declared", SessionId = DocumentSession, Path = path, Content = "# x",
+        ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+        DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+    };
+
+    public static PlanArtifactsRead Ready(params PlanArtifactDto[] docs) =>
+        new(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto { Artifacts = [.. docs] });
 
     /// An AgentActionService over the scripted/recording deps, for suites that never assert on
     /// those deps individually.

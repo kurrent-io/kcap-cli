@@ -55,7 +55,7 @@ public class ChatAttachmentsTests {
 
         public Harness(IChatTranscriptProjection? projection) =>
             Chat = new ChatTabViewModel(
-                "a1", Daemon, Input, Uploader, projection, new RecordingOpener(), Time, new FakePermissionService(), new SessionSubagents(Time));
+                "a1", Daemon, Input, Uploader, projection, new RecordingOpener(), Time, new FakePermissionService(), new SessionRuns(Time));
 
         public async Task PushAsync(AgentStatusDto dto) {
             Daemon.Agents.AddOrUpdate(dto);

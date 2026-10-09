@@ -333,4 +333,80 @@ public class LaunchdUnitTests {
         await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = running")).IsEqualTo(ServiceState.Running);
         await Assert.That(LaunchdUnit.StatusFromPrint(0, "state = not running")).IsEqualTo(ServiceState.Installed);
     }
+
+    [Test]
+    [Arguments("\tspawn type = daemon (3)\n", "daemon")]
+    [Arguments("\tspawn type = interactive (4)\n", "interactive")]
+    [Arguments("\tspawn type = background (5)\n", "background")]
+    [Arguments("\tspawn type = adaptive (6)\n", "adaptive")]
+    [Arguments("\tspawn type = app (1)\n", "app")]
+    [Arguments("\tspawn type = Adaptive (6)\r\n", "adaptive")]
+    public async Task LoadedSpawnType_reads_the_word(string print, string expected) {
+        await Assert.That(LaunchdUnit.LoadedSpawnType($"gui/501/x = {{\n{print}}}\n")).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task LoadedSpawnType_is_null_without_the_line() {
+        await Assert.That(LaunchdUnit.LoadedSpawnType("gui/501/x = {\n\tstate = running\n}\n")).IsNull();
+        await Assert.That(LaunchdUnit.LoadedSpawnType("gui/501/x = {\n\tspawn type = \n}\n")).IsNull();
+    }
+
+    const string CanonicalAdaptive =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n" +
+        "<plist version=\"1.0\">\n<dict>\n" +
+        "\t<key>Label</key>\n\t<string>io.kurrent.kcap.daemon.laptop</string>\n" +
+        "\t<key>ProcessType</key>\n\t<string>Adaptive</string>\n" +
+        "\t<key>ProgramArguments</key>\n\t<array>\n\t\t<string>/opt/kcap/kcap-daemon</string>\n\t</array>\n" +
+        "</dict>\n</plist>\n";
+
+    [Test]
+    public async Task UpgradeProcessType_rewrites_the_canonical_layout_and_keeps_every_other_byte() {
+        var upgraded = LaunchdUnit.UpgradeProcessType(CanonicalAdaptive);
+        await Assert.That(upgraded).IsEqualTo(CanonicalAdaptive.Replace("<string>Adaptive</string>", "<string>Standard</string>"));
+    }
+
+    [Test]
+    public async Task UpgradeProcessType_keeps_crlf_and_a_missing_final_newline() {
+        var crlf = CanonicalAdaptive.Replace("\n", "\r\n").TrimEnd('\r', '\n');
+        var upgraded = LaunchdUnit.UpgradeProcessType(crlf);
+        await Assert.That(upgraded).IsEqualTo(crlf.Replace("<string>Adaptive</string>", "<string>Standard</string>"));
+    }
+
+    [Test]
+    public async Task UpgradeProcessType_rewrites_the_writer_layout_and_a_background_value() {
+        var writer = LaunchdUnit.Plist(Spec()).Replace("<string>Standard</string>", "<string>Adaptive</string>");
+        await Assert.That(LaunchdUnit.UpgradeProcessType(writer)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+        var background = CanonicalAdaptive.Replace("Adaptive", "Background");
+        await Assert.That(LaunchdUnit.UpgradeProcessType(background)).IsEqualTo(background.Replace("<string>Background</string>", "<string>Standard</string>"));
+    }
+
+    [Test]
+    public async Task UpgradeProcessType_skips_a_comment_between_key_and_value_and_a_decoy_comment() {
+        var decoy = CanonicalAdaptive
+            .Replace("\t<key>ProcessType</key>\n\t<string>Adaptive</string>\n",
+                "\t<!-- <key>ProcessType</key><string>Adaptive</string> -->\n\t<key>ProcessType</key>\n\t<!-- real value below -->\n\t<string>Adaptive</string>\n");
+        var upgraded = LaunchdUnit.UpgradeProcessType(decoy)!;
+        await Assert.That(upgraded).Contains("<!-- <key>ProcessType</key><string>Adaptive</string> -->");
+        await Assert.That(upgraded).Contains("<!-- real value below -->\n\t<string>Standard</string>");
+    }
+
+    [Test]
+    [Arguments("<string>Standard</string>")]
+    [Arguments("<string>Interactive</string>")]
+    [Arguments("<string><![CDATA[Adaptive]]></string>")]
+    [Arguments("<string>Adap<!-- x -->tive</string>")]
+    public async Task UpgradeProcessType_returns_null_for_values_it_must_not_touch(string value) {
+        await Assert.That(LaunchdUnit.UpgradeProcessType(CanonicalAdaptive.Replace("<string>Adaptive</string>", value))).IsNull();
+    }
+
+    [Test]
+    public async Task UpgradeProcessType_returns_null_for_missing_duplicate_or_nested_keys_and_malformed_xml() {
+        await Assert.That(LaunchdUnit.UpgradeProcessType(CanonicalAdaptive.Replace("\t<key>ProcessType</key>\n\t<string>Adaptive</string>\n", ""))).IsNull();
+        await Assert.That(LaunchdUnit.UpgradeProcessType(CanonicalAdaptive.Replace("</dict>", "\t<key>ProcessType</key>\n\t<string>Adaptive</string>\n</dict>"))).IsNull();
+        var nestedOnly = CanonicalAdaptive.Replace("\t<key>ProcessType</key>\n\t<string>Adaptive</string>\n",
+            "\t<key>Inner</key>\n\t<dict>\n\t\t<key>ProcessType</key>\n\t\t<string>Adaptive</string>\n\t</dict>\n");
+        await Assert.That(LaunchdUnit.UpgradeProcessType(nestedOnly)).IsNull();
+        await Assert.That(LaunchdUnit.UpgradeProcessType("<plist><dict><key>ProcessType</key>")).IsNull();
+    }
 }

@@ -113,7 +113,21 @@ public class ImportAccountsTests : IDisposable {
         WriteClaudeSession(".claude-b", "22222222-2222-2222-2222-222222222222");
 
         var lane = new SetupImportLane(Config.Root, Resolutions.None(Config.Root), Home, new FixedCapacitorHttpClient(),
-            TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System, accounts: store);
+            TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System,
+            FakeBackgroundImportSpawner.Running(), "https://chosen.example", "work", "org_public", Config.Directory,
+            new CodingAgentsStep.Paths(
+                ClaudeSettingsPath:   Home.PathTo("claude-settings.json"),
+                ClaudeScopeLabel:     "user",
+                PluginDir:            null,
+                CodexHooksPath:       Home.PathTo("codex-hooks.json"),
+                CursorHooksPath:      Home.PathTo("cursor-hooks.json"),
+                CopilotHooksPath:     Home.PathTo("copilot-hooks.json"),
+                GeminiSettingsPath:   Home.PathTo("gemini-settings.json"),
+                AgentsSkillsDir:      Home.PathTo("agents-skills"),
+                LegacyCodexSkillsDir: Home.PathTo("legacy-codex-skills"),
+                KiroSkillsDir:        Home.PathTo("kiro-skills"),
+                AntigravitySkillsDir: Home.PathTo("antigravity-skills")),
+            accounts: store);
 
         var report = await lane.DiscoverAsync([HarnessId.Claude], DateTimeOffset.UtcNow, CancellationToken.None);
 

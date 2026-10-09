@@ -13,12 +13,14 @@ public sealed class ServerClients : IAsyncDisposable {
     volatile bool _cleanupRequested;
     readonly Action _invalidateAuthentication;
 
-    public ServerClients(IAsyncDisposable? launch, IAsyncDisposable? workContext, IAsyncDisposable? pullRequests = null, IAsyncDisposable? plans = null) {
-        _cleanup = new Lazy<Task>(() => CleanupAsync(launch, workContext, _signIn, pullRequests, plans), LazyThreadSafetyMode.ExecutionAndPublication);
+    public ServerClients(IAsyncDisposable? launch, IAsyncDisposable? workContext, IAsyncDisposable? pullRequests = null,
+            IAsyncDisposable? plans = null, IAsyncDisposable? planArtifacts = null) {
+        _cleanup = new Lazy<Task>(() => CleanupAsync(launch, workContext, _signIn, pullRequests, plans, planArtifacts), LazyThreadSafetyMode.ExecutionAndPublication);
         _invalidateAuthentication = () => {
             (workContext as ServerWorkContextSource)?.InvalidateAuthentication();
             (pullRequests as ServerPullRequestSource)?.InvalidateAuthentication();
             (plans as ServerPlanSource)?.InvalidateAuthentication();
+            (planArtifacts as ServerPlanArtifactSource)?.InvalidateAuthentication();
         };
     }
 
@@ -44,11 +46,12 @@ public sealed class ServerClients : IAsyncDisposable {
     /// Launch client, then the sources, then the subject completed and disposed — each step guarded
     /// so a throwing disposal never skips the next.
     internal static async Task CleanupAsync(IAsyncDisposable? launch, IAsyncDisposable? workContext, Subject<Unit> signIn,
-            IAsyncDisposable? pullRequests = null, IAsyncDisposable? plans = null) {
+            IAsyncDisposable? pullRequests = null, IAsyncDisposable? plans = null, IAsyncDisposable? planArtifacts = null) {
         await DisposeGuarded(launch, "launch client").ConfigureAwait(false);
         await DisposeGuarded(workContext, "work-context source").ConfigureAwait(false);
         await DisposeGuarded(pullRequests, "pull-request source").ConfigureAwait(false);
         await DisposeGuarded(plans, "plan source").ConfigureAwait(false);
+        await DisposeGuarded(planArtifacts, "plan-artifacts source").ConfigureAwait(false);
         try {
             signIn.OnCompleted();
             signIn.Dispose();

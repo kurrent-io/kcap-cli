@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Mcp;
@@ -133,6 +134,52 @@ internal static class CodingAgentsStep {
         /// </summary>
         internal bool AnyHooksInstalled =>
             ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || KiroCrewHookInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled;
+    }
+
+    /// <summary>
+    /// Every file or directory this run put kcap into, without repeats. Read off the result rather than
+    /// collected by the installers, so a path appears only for a write the step reports as done; an
+    /// installer that writes a second file needs that file added here too.
+    /// </summary>
+    internal static IReadOnlyList<string> InstalledPaths(Result r, Paths p) {
+        var paths = new List<string>();
+
+        void Add(bool done, string path) {
+            if (done && !string.IsNullOrEmpty(path) && !paths.Contains(path)) paths.Add(path);
+        }
+
+        Add(r.ClaudeInstalled, p.ClaudeSettingsPath);
+        Add(r.CodexHooksInstalled, p.CodexHooksPath);
+        Add(r.CodexNetworkAccessApplied || r.CodexMcpRegistered, p.CodexConfigTomlPath);
+        Add(r.AgentSkillsInstalled, p.AgentsSkillsDir);
+        Add(r.CursorHooksInstalled, p.CursorHooksPath);
+        Add(r.CursorMcpRegistered, p.CursorMcpPath);
+        Add(r.CopilotHooksInstalled, p.CopilotHooksPath);
+        Add(r.CopilotMcpRegistered, p.CopilotMcpPath);
+        Add(r.CopilotInstructionsInstalled, p.CopilotInstructionsPath);
+        Add(r.GeminiHooksInstalled || r.GeminiMcpRegistered, p.GeminiSettingsPath);
+        Add(r.GeminiInstructionsInstalled, p.GeminiInstructionsPath);
+        Add(r.KiroHooksInstalled, p.KiroHooksPath);
+        if (r.KiroHooksInstalled && p.KiroHooksPath.Length > 0)
+            Add(true, PluginCommand.KiroSettingsPathFor(p.KiroHooksPath));
+        Add(r.KiroMcpRegistered, p.KiroMcpPath);
+        Add(r.KiroSkillsInstalled, p.KiroSkillsDir);
+        Add(r.KiroCrewHookInstalled, p.KiroCrewHookScript);
+        Add(r.KiroCrewSkillsInstalled, p.KiroCrewSkillsDir);
+        Add(r.PiExtensionInstalled, p.PiExtensionPath);
+        Add(r.PiMcpInstalled, p.PiMcpExtensionPath);
+        Add(r.PiInstructionsInstalled, p.PiAgentsMdPath);
+        Add(r.OpenCodeExtensionInstalled, p.OpenCodeExtensionPath);
+        Add(r.OpenCodeMcpRegistered, p.OpenCodeMcpPath);
+        Add(r.OpenCodeInstructionsInstalled, p.OpenCodeInstructionsPath);
+        Add(r.AntigravityHooksInstalled, p.AntigravityHooksPath);
+        if (r.AntigravityHooksInstalled && Path.GetDirectoryName(p.AntigravityHooksPath) is { Length: > 0 } agyDir)
+            Add(true, Path.Combine(agyDir, AntigravityHooksInstaller.PluginManifestFileName));
+        Add(r.AntigravityMcpRegistered, p.AntigravityMcpPath);
+        Add(r.AntigravityInstructionsInstalled, p.AntigravityInstructionsPath);
+        Add(r.AntigravitySkillsInstalled, p.AntigravitySkillsDir);
+
+        return paths;
     }
 
     /// <summary>
@@ -283,7 +330,7 @@ internal static class CodingAgentsStep {
         // same precheck as the Cursor/Copilot branches. No kcap → neither hooks nor MCP.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Kiro integration skipped — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -492,7 +539,7 @@ internal static class CodingAgentsStep {
         // on Copilot finding it on PATH — same precheck as the Cursor branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Copilot hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -557,7 +604,7 @@ internal static class CodingAgentsStep {
         // on Gemini finding it on PATH — same precheck as the Cursor/Copilot branch.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Gemini hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -631,7 +678,7 @@ internal static class CodingAgentsStep {
         // Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Pi extension not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -757,7 +804,7 @@ internal static class CodingAgentsStep {
         // precheck as the Pi/Cursor/Copilot branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] OpenCode plugin not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -823,7 +870,7 @@ internal static class CodingAgentsStep {
         // Antigravity must find kcap on PATH (same precheck as the OpenCode/Pi branches).
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Antigravity hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -1224,7 +1271,7 @@ internal static class CodingAgentsStep {
         // instead. Mirror of PluginCommand.InstallCursor's precheck.
         if (!installers.CapacitorOnPath()) {
             writeLine("  [yellow]⚠[/] Cursor hooks not installed — 'kcap' is not on PATH.");
-            writeLine("    [dim]Re-install via npm: [/][cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }
@@ -1516,8 +1563,8 @@ internal static class CodingAgentsStep {
         }
 
         if (paths.PluginDir is null) {
-            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap via npm:");
-            writeLine("    [cyan]npm install -g @kurrent/kcap[/]");
+            writeLine("  [yellow]⚠[/] Plugin directory not found. Re-install kcap:");
+            writeLine("    [cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
 
             return false;
         }

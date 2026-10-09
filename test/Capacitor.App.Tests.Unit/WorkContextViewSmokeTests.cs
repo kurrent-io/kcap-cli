@@ -35,15 +35,17 @@ public class WorkContextViewSmokeTests {
         public FakeWorkContextSource Source { get; } = new();
         public FakeTimeProvider Time { get; } = new();
         public RecordingOpener Opener { get; } = new();
-        public SessionSubagents Subagents { get; }
+        public SessionRuns Runs { get; }
         public FakePlanSource Plans { get; } = new();
         public PlanActivity PlanActivity { get; } = new();
+        public FakePlanArtifactSource Artefacts { get; } = new();
         public WorkContextViewModel Vm { get; }
         public Window Window { get; }
 
         public Host() {
-            Subagents = new SessionSubagents(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents, plans: Plans, planActivity: PlanActivity);
+            Runs = new SessionRuns(Time);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, plans: Plans, planActivity: PlanActivity,
+                artefacts: new ArtefactsTabViewModel(Artefacts, PlanActivity, Time));
             Window = new Window { Content = new WorkContextView { DataContext = Vm }, Width = 320, Height = 900 };
         }
 
@@ -53,6 +55,7 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             Presence.OnNext(WorkspaceFixtures.Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: SessionA));
             await (Vm.PendingReadForTesting ?? Task.CompletedTask);
+            await (Vm.Artefacts!.PendingReadForTesting ?? Task.CompletedTask);
             await (Vm.Plan.PendingReadForTesting ?? Task.CompletedTask);
             Dispatcher.UIThread.RunJobs();
             Window.UpdateLayout();
@@ -66,6 +69,68 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Vm.TeardownAsync();
         }
+    }
+
+    /// The pane's two ways into the tab: a clickable document row and the summary row.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Document_rows_are_buttons_and_the_summary_row_shows_once_the_tab_has_something() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "design", Path = "docs/x-design.md" }]));
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+                Artifacts = [new PlanArtifactDto {
+                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
+                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+                }],
+            }));
+            var opens = 0;
+            host.Vm.Artefacts!.OpenRequested += () => opens++;
+            await host.ShowAsync(KeyOnlyRead());
+
+            await Assert.That(host.Find<Button>("ArtefactsSummaryRow").IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Find<TextBlock>("ArtefactsSummaryText").Text).IsEqualTo("1 document");
+            await host.Vm.OpenArtefactsCommand.Execute();
+            await Assert.That(opens).IsEqualTo(1);
+
+            await host.Vm.Plan.ToggleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            var rowButton = host.Window.GetVisualDescendants().OfType<Button>().Single(b => b.DataContext is PlanDocumentRow);
+            await Assert.That(rowButton.Classes.Contains("copyValue")).IsTrue();
+
+            host.Vm.Plan.MarkOpen("docs/x-design.md");
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
+            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
+            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(purple.Color);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_tick_re_reads_a_failed_first_read_with_the_tab_hidden() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Unreachable, null));
+            await host.ShowAsync(KeyOnlyRead());
+            await Assert.That(host.Vm.Artefacts!.HasAny).IsFalse();
+            await Assert.That(host.Vm.Artefacts.IsShown).IsFalse();
+
+            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+                Artifacts = [new PlanArtifactDto {
+                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
+                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+                }],
+            }));
+            host.Time.Advance(WorkContextViewModel.PollInterval);
+            await (host.Vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(host.Vm.Artefacts.HasAny).IsTrue();
+        });
     }
 
     /// A key-titled item with no tracker title, its seed issue untitled too, one contributor
@@ -483,6 +548,63 @@ public class WorkContextViewSmokeTests {
     static List<string> VisibleTexts(Visual root) =>
         root.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
 
+    /// The title covers both kinds, and only a shell row is led by the `$` glyph — in the folded
+    /// running list and in the opened full list alike, since both use one item template.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_section_is_titled_for_agents_and_commands_and_marks_shell_rows() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var now = host.Time.GetUtcNow();
+            host.Runs.Apply(new ChatProjectionResult([], [], [
+                new RunSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
+                new RunSignal.Started("c2", "Run the full suite", "dotnet test", now.AddSeconds(-40), RunKind.Shell, Provisional: true),
+                new RunSignal.Detached("c2", "b1"),
+            ]));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var section = host.Find<StackPanel>("SubagentsSection");
+            await Assert.That(VisibleTexts(section)).Contains("AGENTS & COMMANDS");
+            await Assert.That(VisibleGlyphs(host.Find<ItemsControl>("RunningSubagentList"))).IsEqualTo(1);
+            await Assert.That(VisibleTexts(section)).Contains("Run the full suite");
+
+            await host.Vm.ToggleRunsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(VisibleGlyphs(host.Find<ItemsControl>("SubagentList"))).IsEqualTo(1);
+        });
+
+        static int VisibleGlyphs(ItemsControl list) =>
+            list.GetVisualDescendants().OfType<TextBlock>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
+    }
+
+    /// Driven through the Claude projection: a command with no description is named by its own
+    /// text, so the row has nothing else to say under that name.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_command_without_a_description_shows_its_text_once() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(KeyOnlyRead());
+            var chat = TranscriptChat.For("claude");
+            var context = chat.CreateContext("s1", null);
+            string[] lines = [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""",
+                """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""",
+            ];
+            for (var i = 0; i < lines.Length; i++)
+                host.Runs.Apply(chat.ProjectWithInputs(lines[i], i + 1, host.Time.GetUtcNow(), context));
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var list = host.Find<ItemsControl>("RunningSubagentList");
+            await Assert.That(list.IsEffectivelyVisible).IsTrue();
+            await Assert.That(VisibleTexts(list).Count(t => t.Contains("make check", StringComparison.Ordinal))).IsEqualTo(1);
+        });
+    }
+
     /// Folded, the section lists the running rows alone and nothing once none runs; opening it
     /// swaps that list for the full one rather than showing a running row twice.
     [Test]
@@ -492,10 +614,10 @@ public class WorkContextViewSmokeTests {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
             var now = host.Time.GetUtcNow();
-            host.Subagents.Apply(new ChatProjectionResult([], [], [
-                new SubagentSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
-                new SubagentSignal.Started("c2", "Reviewer", "Check the plan", now.AddMinutes(-3)),
-                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
+            host.Runs.Apply(new ChatProjectionResult([], [], [
+                new RunSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
+                new RunSignal.Started("c2", "Reviewer", "Check the plan", now.AddMinutes(-3)),
+                new RunSignal.Finished("c2", null, RunOutcome.Failed, now.AddSeconds(-132)),
             ]));
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
@@ -510,15 +632,15 @@ public class WorkContextViewSmokeTests {
             await Assert.That(texts).Contains("running · 18s");
             await Assert.That(texts).DoesNotContain("Reviewer");
 
-            await host.Vm.ToggleSubagentsCommand.Execute();
+            await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(running.IsEffectivelyVisible).IsFalse();
             await Assert.That(VisibleTexts(section).Count(t => t == "Explore")).IsEqualTo(1);
             await Assert.That(VisibleTexts(section)).Contains("Reviewer");
 
-            await host.Vm.ToggleSubagentsCommand.Execute();
-            host.Subagents.Apply(new ChatProjectionResult([], [], [new SubagentSignal.Finished("c1", null, SubagentOutcome.Done, now)]));
+            await host.Vm.ToggleRunsCommand.Execute();
+            host.Runs.Apply(new ChatProjectionResult([], [], [new RunSignal.Finished("c1", null, RunOutcome.Done, now)]));
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(host.Find<Border>("RunningSubagentsBody").IsEffectivelyVisible).IsFalse();
@@ -539,11 +661,11 @@ public class WorkContextViewSmokeTests {
             await Assert.That(section.IsEffectivelyVisible).IsFalse();
 
             var now = host.Time.GetUtcNow();
-            host.Subagents.Apply(new ChatProjectionResult([], [], [
-                new SubagentSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
-                new SubagentSignal.Started("c2", "Reviewer", "Check the plan", now.AddMinutes(-3)),
-                new SubagentSignal.Detached("c1", "a1"),
-                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
+            host.Runs.Apply(new ChatProjectionResult([], [], [
+                new RunSignal.Started("c1", "Explore", "Map desktop chat UI surfaces", now.AddSeconds(-18)),
+                new RunSignal.Started("c2", "Reviewer", "Check the plan", now.AddMinutes(-3)),
+                new RunSignal.Detached("c1", "a1"),
+                new RunSignal.Finished("c2", null, RunOutcome.Failed, now.AddSeconds(-132)),
             ]));
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
@@ -551,7 +673,7 @@ public class WorkContextViewSmokeTests {
             await Assert.That(section.IsEffectivelyVisible).IsTrue();
             await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
 
-            await host.Vm.ToggleSubagentsCommand.Execute();
+            await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(host.Find<ItemsControl>("SubagentsSummary").IsEffectivelyVisible).IsFalse();
@@ -568,7 +690,7 @@ public class WorkContextViewSmokeTests {
             await Assert.That(((ISolidColorBrush)failed.Foreground!).Color).IsEqualTo(danger.Color);
             await Assert.That(section.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
 
-            await host.Vm.ToggleSubagentsCommand.Execute();
+            await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(host.Find<ItemsControl>("SubagentList").IsEffectivelyVisible).IsFalse();
@@ -585,12 +707,12 @@ public class WorkContextViewSmokeTests {
             await using var host = new Host();
             await host.ShowAsync(KeyOnlyRead());
             var now = host.Time.GetUtcNow();
-            host.Subagents.Apply(new ChatProjectionResult([], [], [
-                new SubagentSignal.Started("c1", "Explore", "", now.AddSeconds(-18)),
-                new SubagentSignal.Started("c2", "Reviewer", "", now.AddMinutes(-3)),
-                new SubagentSignal.Started("c3", "Planner", "", now.AddMinutes(-4)),
-                new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(-132)),
-                new SubagentSignal.Finished("c3", null, SubagentOutcome.Failed, now.AddSeconds(-140)),
+            host.Runs.Apply(new ChatProjectionResult([], [], [
+                new RunSignal.Started("c1", "Explore", "", now.AddSeconds(-18)),
+                new RunSignal.Started("c2", "Reviewer", "", now.AddMinutes(-3)),
+                new RunSignal.Started("c3", "Planner", "", now.AddMinutes(-4)),
+                new RunSignal.Finished("c2", null, RunOutcome.Failed, now.AddSeconds(-132)),
+                new RunSignal.Finished("c3", null, RunOutcome.Failed, now.AddSeconds(-140)),
             ]));
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
@@ -621,11 +743,11 @@ public class WorkContextViewSmokeTests {
 
             var now = host.Time.GetUtcNow();
             var longName = new string('x', 80);
-            host.Subagents.Apply(new ChatProjectionResult([], [], [
-                new SubagentSignal.Started("c1", longName, "", now.AddSeconds(-18)),
-                new SubagentSignal.Detached("c1", "a1"),
+            host.Runs.Apply(new ChatProjectionResult([], [], [
+                new RunSignal.Started("c1", longName, "", now.AddSeconds(-18)),
+                new RunSignal.Detached("c1", "a1"),
             ]));
-            await host.Vm.ToggleSubagentsCommand.Execute();
+            await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
 
@@ -836,7 +958,7 @@ public class WorkContextViewSmokeTests {
                 [new PlanDocumentDto { DocumentKey = "k1", Kind = "spec", Path = "docs/specs/plan-widget-design.md" }],
                 ("completed", "Read the route", null), ("in_progress", "Draw the rows", "glyphs first"), ("pending", "Pin the order", null), ("skipped", "Animate the fold", null)));
             await host.ShowAsync(KeyOnlyRead());
-            host.Subagents.Apply(new ChatProjectionResult([], [], [new SubagentSignal.Started("c1", "Explore", "Map the UI", host.Time.GetUtcNow())]));
+            host.Runs.Apply(new ChatProjectionResult([], [], [new RunSignal.Started("c1", "Explore", "Map the UI", host.Time.GetUtcNow())]));
             await host.Vm.Plan.ToggleCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();

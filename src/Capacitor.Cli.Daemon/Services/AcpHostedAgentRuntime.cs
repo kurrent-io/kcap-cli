@@ -507,7 +507,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             PolicySnapshot?                                                                 policySnapshot = null,
             Action<PolicyDecisionEventV1>?                                                  notifyPolicyDecision = null,
             string?                                                                         policyCwd = null,
-            TranscriptJournal?                                                              journal = null
+            TranscriptJournal?                                                              journal = null,
+            PolicyJudgeGateway?                                                             policyJudge = null
         ) {
         _journal = journal;
         _admittedToolIds = admittedToolIds;
@@ -559,7 +560,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // and the launch's vendor are the same fact, so they cannot be given two answers.
                 vendor,
                 notifyPolicyDecision,
-                policyCwd);
+                policyCwd,
+                policyJudge);
         }
 
         // The original launch's incarnation. Every later candidate goes through the same wiring

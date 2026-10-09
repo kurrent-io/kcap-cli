@@ -12,23 +12,24 @@ internal sealed record ImportHandoffFile(
         string RunId, DateTimeOffset WrittenAt, bool HandoffOffered, HandoffSuppressedReason? HandoffSuppressed,
         ForegroundCertainty Certainty, string ServerUrl, string Profile, HandoffCohort Cohort,
         IReadOnlyList<string> SessionIds, IReadOnlyList<string> ForegroundSucceededIds, int UnattributedOnDisk,
-        BackgroundImportStatus Background, string? BackgroundLog) {
+        BackgroundImportStatus Background, string? BackgroundLog, string Scope = "all") {
     public const int SchemaVersion = 1;
     public const int CohortCap     = 500;
     public static readonly TimeSpan Retention = TimeSpan.FromDays(7);
 
     public static ImportHandoffFile Compose(
             string runId, DateTimeOffset now, bool offered, HandoffSuppressedReason? reason,
-            ForegroundImportOutcome outcome, BackgroundImportLaunch background, string serverUrl, string profile, int unattributedOnDisk) {
+            ForegroundImportOutcome outcome, BackgroundImportLaunch background, string serverUrl, string profile, int unattributedOnDisk,
+            HandoffCohort? cohortOverride = null, string scope = "all") {
         var candidates = outcome.RunCandidateIds;
-        var cohort = candidates is null ? HandoffCohort.Unknown
+        var cohort = cohortOverride ?? (candidates is null ? HandoffCohort.Unknown
                    : candidates.Count > CohortCap ? HandoffCohort.PartialExact
-                   : HandoffCohort.Exact;
+                   : HandoffCohort.Exact);
 
         return new ImportHandoffFile(
             runId, now, offered, reason, outcome.Certainty, serverUrl.TrimEnd('/'), profile, cohort,
             candidates is null ? [] : CappedCohort(candidates, outcome.SucceededIds),
-            outcome.SucceededIds, unattributedOnDisk, background.Status, background.LogPath);
+            outcome.SucceededIds, unattributedOnDisk, background.Status, background.LogPath, scope);
     }
 
     /// <summary>At most <see cref="CohortCap"/> candidates in run order, foreground sessions
@@ -67,16 +68,12 @@ internal sealed record ImportHandoffFile(
             ["foreground_certainty"]     = Certainty == ForegroundCertainty.Complete ? "complete" : "incomplete",
             ["server_url"]               = ServerUrl,
             ["profile"]                  = Profile,
-            ["scope"]                    = "all",
+            ["scope"]                    = Scope,
             ["cohort"]                   = Cohort switch { HandoffCohort.Exact => "exact", HandoffCohort.PartialExact => "partial_exact", _ => "unknown" },
             ["session_ids"]              = ids,
             ["foreground_succeeded_ids"] = succeeded,
             ["unattributed_on_disk"]     = UnattributedOnDisk,
-            ["background"]               = Background switch {
-                BackgroundImportStatus.NotNeeded  => "not_needed",
-                BackgroundImportStatus.Running    => "running",
-                BackgroundImportStatus.ExitedZero => "exited_zero",
-                _                                 => "failed" },
+            ["background"]               = Background.Wire(),
             ["background_log"]           = BackgroundLog is { } log ? (JsonNode?)log : null,
         };
 

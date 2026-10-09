@@ -1057,6 +1057,54 @@ public class MainWindowSmokeTests {
         }
     });
 
+    /// Off macOS the help flyout carries the app menu's Settings, Changelog and version — the only
+    /// in-window route to Settings where no native menu bar is drawn. Settings stays inert until the
+    /// app hands it an action.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(true)]
+    [Arguments(false)]
+    public Task Rail_help_carries_the_app_menu_when_no_native_menu_is_drawn(bool inWindow) => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var settings = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
+        var opened = 0;
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            settingsAction: settings, appMenuInWindow: inWindow);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+
+            var items = rail.FindControl<StackPanel>("RailAppMenuItems")!;
+            var settingsButton = rail.FindControl<Button>("RailHelpSettingsButton")!;
+            await Assert.That(items.IsVisible).IsEqualTo(inWindow);
+            await Assert.That(settingsButton.Content).IsEqualTo("Settings…");
+            await Assert.That(rail.FindControl<Button>("RailHelpChangelogButton")!.Content).IsEqualTo("Changelog");
+            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Kurrent Capacitor ");
+            await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
+
+            settings.OnNext(() => opened++);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(settingsButton.IsEffectivelyEnabled).IsTrue();
+            settingsButton.Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(opened).IsEqualTo(1);
+
+            flyout.Hide();
+            Dispatcher.UIThread.RunJobs();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// Hover copy names what each footer fragment is. Extra info the compact row dropped (URL,
     /// lane diagnostic, pending-update copy) sits on the lighter line; the fragment's name is
     /// the darker caption under it, or the whole tip when there is nothing extra. Visible
@@ -1268,5 +1316,62 @@ public class MainWindowSmokeTests {
             await Assert.That(window.MinHeight).IsEqualTo(WindowSizeMemory.MinHeight);
             await Assert.That(window.Height).IsEqualTo(WindowSizeMemory.DefaultHeight);
         });
+    }
+
+    /// The priority block carries three things: the indicator line, the Reload button, and a failure line
+    /// that outlives a lowered indicator until a success clears it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_priority_block_binds_indicator_button_and_failure() {
+        var shown = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            var background = new BehaviorSubject<bool>(false);
+            var reload = new BehaviorSubject<ReloadState?>(new ReloadState(ReloadOutcomeKind.Failed, "unit_missing", 1, "daemon-a", 1));
+            var reloading = new BehaviorSubject<bool>(false);
+            service.SnapshotsSubject.OnNext(Snap(daemon: "daemon-a", version: "1.1.0", serverUrl: "http://localhost:9999", connection: "connected", active: 2, max: 5));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent", backgroundPriority: background, reloadState: reload, isReloading: reloading,
+                reloadDaemon: _ => Task.CompletedTask);
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail    = window.FindDescendantOfType<SessionRailView>()!;
+            var block   = rail.FindControl<Border>("RailPriorityBlock")!;
+            var line    = rail.FindControl<TextBlock>("RailPriorityText")!;
+            var button  = rail.FindControl<Button>("RailReloadButton")!;
+            var failure = rail.FindControl<TextBlock>("RailReloadFailureText")!;
+
+            var withFailureOnly = (Block: block.IsVisible, Line: line.IsVisible, Button: button.IsEffectivelyEnabled, Failure: failure.IsVisible, FailureText: failure.Text,
+                Warning: ReferenceEquals(failure.Foreground, window.FindResource("KcapWarningBrush")));
+
+            background.OnNext(true);
+            reloading.OnNext(true);
+            Dispatcher.UIThread.RunJobs();
+            var whileReloading = (Line: line.IsVisible, Button: button.IsEffectivelyEnabled, LineText: line.Text);
+
+            reloading.OnNext(false);
+            reload.OnNext(null);
+            background.OnNext(false);
+            Dispatcher.UIThread.RunJobs();
+            var cleared = block.IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (withFailureOnly, whileReloading, cleared);
+        });
+
+        await Assert.That(shown.withFailureOnly.Block).IsTrue();
+        await Assert.That(shown.withFailureOnly.Line).IsFalse();
+        await Assert.That(shown.withFailureOnly.Button).IsTrue();
+        await Assert.That(shown.withFailureOnly.Failure).IsTrue();
+        await Assert.That(shown.withFailureOnly.FailureText).Contains("No service unit is installed for daemon-a");
+        await Assert.That(shown.withFailureOnly.Warning).IsTrue();
+        await Assert.That(shown.whileReloading.Line).IsTrue();
+        await Assert.That(shown.whileReloading.LineText).IsEqualTo(MainWindowViewModel.BackgroundPriorityMessage);
+        await Assert.That(shown.whileReloading.Button).IsFalse();
+        await Assert.That(shown.cleared).IsFalse();
     }
 }
