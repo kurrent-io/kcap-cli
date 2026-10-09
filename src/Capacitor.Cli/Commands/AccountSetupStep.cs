@@ -65,10 +65,12 @@ internal sealed class AccountSetupStep(AccountStore accounts, PluginEnvironment 
         IReadOnlyCollection<string>? domains = options.SkipCodexNetworkAccess || env.CodexNetworkAllowDomains() is not { Count: > 0 } d ? null : d;
         var wiring = new WiringOptions(env.ResolvePluginPath(), env.Agents.UserSkillsDir, env.ResolveMcpBinaryPath, NetworkAllowDomains: domains);
 
-        using var _ = accounts.Lock();
-
         try {
+            using var _ = accounts.Lock();
+
             return AccountWiring.Wire(account, env.Home, wiring);
+        } catch (Exception ex) when (ex is TimeoutException or WaitHandleCannotBeOpenedException) {
+            return [new WiringStep("registry lock", false, ex.Message)];
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return [new WiringStep("wiring", false, ex.Message)];
         }

@@ -111,4 +111,18 @@ public class AccountSetupStepTests {
         await Assert.That(lines.Any(l => l.Contains("kcap accounts add claude"))).IsTrue();
         await Assert.That(Store.Find(HarnessId.Claude, Home.PathTo(".claude-work"))).IsNull();
     }
+
+    [Test]
+    public async Task A_held_registry_lock_fails_each_account_and_moves_on() {
+        var store = Store;
+        foreach (var name in new[] { ".claude-a", ".claude-b" })
+            AccountAdoption.EnsureDefault(store, HarnessId.Claude, Directory.CreateDirectory(Home.PathTo(name)).FullName, TimeProvider.System);
+        var lines = new List<string>();
+
+        using (store.Lock())
+            await Task.Run(() => Sut().Run(Options(noPrompt: true, skipCodex: true), true, _ => true, lines.Add));
+
+        await Assert.That(lines.Count(l => l.Contains("Could not wire"))).IsEqualTo(2);
+        await Assert.That(lines.Any(l => l.Contains("Skipped vendor accounts"))).IsFalse();
+    }
 }
