@@ -3020,13 +3020,6 @@ class ImportCommand(
     }
 
     /// <summary>
-    /// Group the import-bound subset (New + Partial) into ordered chains by slug.
-    /// A chain is a list of classifications sharing the same slug, ordered by
-    /// FirstTimestamp ascending. Sessions without a slug (or with a unique slug)
-    /// become chains of length 1. Chains are dispatched newest-first via
-    /// <see cref="ImportOrdering.ChainDispatch"/>; within-chain order is untouched.
-    /// </summary>
-    /// <summary>
     /// Drops a session an earlier source already discovered. Two account roots can hold the same
     /// session file, and every later stage keys on the session id, so a second copy would be counted
     /// and imported twice.
@@ -3037,6 +3030,13 @@ class ImportCommand(
         return [.. perSource.Select(IReadOnlyList<DiscoveredSession> (d) => [.. d.Where(s => seen.Add((s.Vendor, s.SessionId)))])];
     }
 
+    /// <summary>
+    /// Group the import-bound subset (New + Partial) into ordered chains by slug.
+    /// A chain is a list of classifications sharing the same slug, ordered by
+    /// FirstTimestamp ascending. Sessions without a slug (or with a unique slug)
+    /// become chains of length 1. Chains are dispatched newest-first via
+    /// <see cref="ImportOrdering.ChainDispatch"/>; within-chain order is untouched.
+    /// </summary>
     internal static List<List<SessionClassification>> BuildImportChains(List<SessionClassification> classifications) {
         var importable = classifications
             .Where(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial)

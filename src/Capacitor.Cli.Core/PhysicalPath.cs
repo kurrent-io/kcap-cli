@@ -37,7 +37,7 @@ public static class PhysicalPath {
             try {
                 var info = new FileInfo(current);
                 target = info.LinkTarget is null ? null : info.ResolveLinkTarget(returnFinalTarget: true);
-            } catch (IOException) {
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 continue;
             }
 
