@@ -282,6 +282,19 @@ public class McpWorkItemsNextWorkTests {
         await Assert.That(Result(response).Text).Contains(outcome);
     }
 
+    [Test]
+    [Arguments("completed")]
+    [Arguments("recorded_catching_up")]
+    public async Task Release_of_a_completed_attempt_does_not_claim_the_work_is_open(string outcome) {
+        var (h, response) = await DispatchToolAsync("release_loose_end", """{"claim_id":"attempt","session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.OK,
+            $$$"""{"outcome":"{{{outcome}}}","claim":{"claim_id":"attempt","status":"completed","loose_end_ids":["end"],"session_id":"worker"}}""");
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(Result(response).IsError).IsFalse();
+        await Assert.That(Result(response).Text).Contains("already completed");
+        await Assert.That(Result(response).Text).DoesNotContain("work remains open");
+    }
+
     [Test, NotInParallel]
     [Arguments("claim_loose_end", "loose_end_id")]
     [Arguments("release_loose_end", "claim_id")]

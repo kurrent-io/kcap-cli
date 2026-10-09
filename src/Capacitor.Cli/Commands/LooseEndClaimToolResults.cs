@@ -19,13 +19,15 @@ static class LooseEndClaimToolResults {
         }
 
         var outcome = root.Str("outcome");
-        if (outcome is not ("acquired" or "already_owned" or "released" or "recorded_catching_up") ||
+        if (outcome is not ("acquired" or "already_owned" or "released" or "completed" or "recorded_catching_up") ||
             root.Obj("claim") is not { } claim || ClaimLine(claim) is not { } description)
             return ("Error: the server returned an unreadable claim response. Inspect the ledger before retrying.", true);
 
-        var guidance = outcome == "released"
-            ? "Ownership released; the work remains open."
-            : "The work remains open. Retain claim_id for completion or release.";
+        var guidance = claim.Str("status") == "completed" || outcome == "completed"
+            ? "This attempt is already completed; it was not released."
+            : outcome == "released"
+                ? "Ownership is released. Releasing an attempt does not close or reopen work."
+                : "The work remains open. Retain claim_id for completion or release.";
         if (outcome == "recorded_catching_up") guidance += " Ownership was recorded; do not create another attempt while the read model catches up.";
         return ($"outcome: {outcome}\n{Data(description)}\n{guidance}", false);
     }
