@@ -29,8 +29,14 @@ static partial class ClaudeSessionEnv {
         if (sessionId is null || !SafeId().IsMatch(sessionId)) return;
 
         try {
-            using var file = new FileStream(envFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            file.Write(Encoding.UTF8.GetBytes($"export KCAP_SESSION_ID={sessionId}\n"));
+            using var file = new FileStream(envFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+            var unterminated = false;
+            if (file.Length > 0) {
+                file.Seek(-1, SeekOrigin.End);
+                unterminated = file.ReadByte() != '\n';
+            }
+            file.Seek(0, SeekOrigin.End);
+            file.Write(Encoding.UTF8.GetBytes($"{(unterminated ? "\n" : "")}export KCAP_SESSION_ID={sessionId}\n"));
         } catch (Exception e) {
             stderr.WriteLine($"kcap: KCAP_SESSION_ID not exported to {envFile}: {e.Message}");
         }

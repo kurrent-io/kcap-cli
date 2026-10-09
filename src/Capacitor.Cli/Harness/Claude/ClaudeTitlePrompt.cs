@@ -23,7 +23,7 @@ static partial class ClaudeTitlePrompt {
     public static int Handle(string body, ConfigRoot config, WatcherPaths watchers, TextWriter stdout, TextWriter stderr) {
         string? sessionId;
         try {
-            sessionId = JsonNode.Parse(body)?["session_id"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+            sessionId = JsonNode.Parse(body) is JsonObject hook && hook["session_id"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
         } catch (JsonException) {
             return 0;
         }

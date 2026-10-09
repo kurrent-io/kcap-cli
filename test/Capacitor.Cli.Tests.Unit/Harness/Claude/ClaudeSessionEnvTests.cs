@@ -19,6 +19,16 @@ public class ClaudeSessionEnvTests {
             .IsEqualTo("export EXISTING=1\nexport KCAP_SESSION_ID=9dc2775376454e4691ecc2d69973c152\n");
     }
 
+    /// <summary>Another hook can leave the file without a final LF; the export must not join its line.</summary>
+    [Test]
+    public async Task Starts_the_export_on_its_own_line_after_an_unterminated_one() {
+        var envFile = Tmp.CreateFile("env.sh", "export EXISTING=1");
+
+        ClaudeSessionEnv.Persist(Hook("SessionStart", "abc"), envFile, TextWriter.Null);
+
+        await Assert.That(File.ReadAllText(envFile)).IsEqualTo("export EXISTING=1\nexport KCAP_SESSION_ID=abc\n");
+    }
+
     [Test]
     public async Task Other_events_leave_the_file_alone() {
         var envFile = Tmp.PathTo("env.sh");

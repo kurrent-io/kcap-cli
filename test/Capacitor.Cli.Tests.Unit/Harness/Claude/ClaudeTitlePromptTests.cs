@@ -66,10 +66,12 @@ public class ClaudeTitlePromptTests {
     }
 
     [Test]
-    public async Task Survives_a_payload_that_is_not_json() {
+    [Arguments("not json")]
+    [Arguments("[]")]
+    public async Task Survives_a_payload_that_is_not_a_json_object(string body) {
         using var stderr = new StringWriter();
 
-        await Assert.That(Run("not json", stderr)).IsEqualTo("");
+        await Assert.That(Run(body, stderr)).IsEqualTo("");
         await Assert.That(stderr.ToString()).IsEqualTo("");
     }
 }
