@@ -127,4 +127,18 @@ public class JsonSettingsFileTests {
 
         await Assert.That(File.ReadAllText(path)).IsEqualTo("{}");
     }
+
+    /// <summary>Discriminates on Windows only, where a read that denies Write fails against the
+    /// vendor's own open handle.</summary>
+    [Test]
+    public async Task Edit_reads_a_file_the_vendor_holds_open_for_writing() {
+        var path = Tmp.CreateFile("settings.json", """{ "theme": "dark" }""");
+
+        SettingsEdit result;
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+            result = JsonSettingsFile.Edit(path, root => { root["a"] = 1; return true; });
+
+        await Assert.That(result).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(JsonNode.Parse(File.ReadAllText(path))!["theme"]!.GetValue<string>()).IsEqualTo("dark");
+    }
 }

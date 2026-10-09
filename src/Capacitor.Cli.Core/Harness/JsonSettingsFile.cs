@@ -18,7 +18,7 @@ public static class JsonSettingsFile {
             JsonObject root;
 
             if (File.Exists(path)) {
-                var text = File.ReadAllText(path);
+                var text = File.ReadAllTextShared(path);
                 JsonNode? parsed;
                 try { parsed = string.IsNullOrWhiteSpace(text) ? new JsonObject() : JsonNode.Parse(text); }
                 catch (JsonException) { return SettingsEdit.Malformed; }
