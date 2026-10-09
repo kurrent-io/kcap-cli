@@ -41,7 +41,7 @@ nothing before or after it: no preamble, no commentary, no summary of what the c
 |---|---|---|
 | `{{AGENT}}` | the product name of the harness running this tour: Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, OpenCode, Pi or Antigravity | — |
 | `{{OTHER_AGENT}}` on card 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
-| `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding its `driver_vendor` (the harness running the tour): `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
+| `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding the harness running the tour (its `driver_vendor`, or `{{AGENT}}`'s token when that is absent): `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
 | `{{T1}}`, `{{T2}}`, `{{T3}}` | the first names of up to three distinct teammates, most recent first (TEAMMATES below) | `my teammate` for each one missing; capitalise it when it opens the question |
 | `{{CAPTURE}}` | the team table, or the one-line variant (CAPTURE below) | — |
 
@@ -68,7 +68,7 @@ load all of them in one lookup in that same message.
    )
    SELECT r.owner || '/' || r.repo_name AS repo,
           COUNT(*) AS sessions,
-          ROUND(COALESCE(SUM(p.cost_usd), 0)::numeric, 2) AS cost_usd
+          ROUND(SUM(p.cost_usd)::numeric, 2) AS cost_usd
    FROM v_an_sessions s
    JOIN v_an_repositories r ON r.repo_hash  = s.repo_hash
    LEFT JOIN per_session p  ON p.session_id = s.session_id
@@ -103,10 +103,10 @@ refused with `analytics_not_in_plan`. Pick the variant from what Q-CAPTURE retur
   | <repo> | <sessions> | $<cost_usd> |
   ```
 
-  Sessions with thousands separators; cost with `$` and thousands separators, two decimals.
+  Sessions with thousands separators; cost with `$` and thousands separators, two decimals. A
+  NULL cost means no cost is known for that repo: print `—`, never `$0.00`.
 - **Refused, failed, timed out or no rows** — one line. Run `search_sessions` with
-  `author: "<user>"`,
-  `repo: "all"`, `limit: 1`, empty `query`, and read `resolved_author.session_count` as `<N>`:
+  `author: "<user>"`, `repo: "all"`, `limit: 1`, empty `query`, and read `resolved_author.session_count` as `<N>`:
 
   `Kcap has **<N>** of your sessions`
 
