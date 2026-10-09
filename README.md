@@ -76,7 +76,7 @@ Use an agent kcap is installed into: setup installs it unless you decline, and `
 
 ### 3. Check it in the dashboard
 
-Open your workspace URL (e.g. `https://acme.kcap.ai`). The session you just started should be there, updating as you work — that is the check that recording works. `kcap status` shows that kcap is configured and can reach the server, not that sessions are recorded. If the session is missing, see [Sessions are not recorded](#sessions-are-not-recorded).
+Open your workspace URL (e.g. `https://acme.kcap.ai`). The session you just started should be there, updating as you work — that is the check that recording works. `kcap status` shows that kcap is configured and can reach the server, and when each agent last ran a kcap hook on this machine; that proves the hooks loaded, not that a session reached the dashboard. If the session is missing, see [Sessions are not recorded](#sessions-are-not-recorded).
 
 kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt out.
 
@@ -2353,6 +2353,11 @@ You'll see the offer on whichever surface reaches you:
   stderr (never in scripts or pipes), like the "update available" notice.
 - **`kcap status`** always lists any installed-but-unconfigured agent with the command to fix it —
   even one you've dismissed (status tells the whole truth).
+- **`kcap status`** also shows whether each wired agent's hooks are actually running: when it last
+  ran a kcap hook on this machine, or that it has not yet (start a new session; Codex runs no hook
+  until you trust kcap's). A hook running proves the integration loaded, not that a session reached
+  the server. `--json` carries the time as `last_hook_event`, and a git older than 2.54,
+  which ignores the commit hook, gets its own warning line.
 
 Manage the nudges with `kcap harness`:
 
@@ -2386,7 +2391,7 @@ after a `--all` dismiss is still offered once.
 ### Other commands
 
 ```bash
-kcap status         # server health check
+kcap status         # server, auth, hooks (and when each agent last ran one), daemon
 kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)

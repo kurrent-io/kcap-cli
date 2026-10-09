@@ -767,6 +767,12 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task PathShimNotice_mentions_a_password_only_on_macOS() {
+        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(macOS: true)).Contains("password");
+        await Assert.That(SpectreFirstRunFlowProgress.PathShimNotice(macOS: false)).DoesNotContain("password");
+    }
+
+    [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(
             ClaudeInstalled:       true,

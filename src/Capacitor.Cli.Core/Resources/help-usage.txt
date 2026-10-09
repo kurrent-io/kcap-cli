@@ -4,7 +4,7 @@ Usage: kcap <command> [options]
 
 Getting Started:
   setup                            Configure server, login, and install plugin
-  status                           Show server, auth, and daemon status
+  status                           Show server, auth, hook activity, and daemon status
   login                            Authenticate via OAuth (browser)
   logout                           Remove stored credentials
   whoami                           Show current user; verify the server accepts your token

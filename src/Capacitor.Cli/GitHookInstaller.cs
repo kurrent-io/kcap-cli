@@ -34,6 +34,8 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
 
     public void Remove() => Git("--remove-section", Section);
 
+    public bool IsInstalled() => Entry() is not null;
+
     /// <summary>
     /// The hook's command for <paramref name="binary"/>. git runs it through sh: single-quoted, with
     /// forward slashes for Git for Windows.

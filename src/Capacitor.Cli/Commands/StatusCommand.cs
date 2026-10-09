@@ -58,6 +58,15 @@ public sealed class StatusCommand(
                 $"           {h.Label} installed but kcap not configured — run `{InstallCommandFor(h.Id)}`");
         }
 
+        var activity = new HookActivity(config, time);
+
+        foreach (var h in harnesses.Where(h => h.Signals.IsWired))
+            await Console.Out.WriteLineAsync(
+                $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
+
+        if (new GitHookInstaller(home).IsInstalled() && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
+            await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
+
         // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
         Console.Write("  Daemon:  ");
         await WriteAgentStatusAsync(store);
@@ -77,13 +86,17 @@ public sealed class StatusCommand(
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
 
+        var activity = new HookActivity(config, time);
+
         var payload = BuildPayload(
             profiles.Name, server, auth, current, advisory, bundled,
             [.. harnesses.Select(h => {
                 var installed = harnesses.Detected(h.Id);
                 var wired     = h.Signals.IsWired;
 
-                return new StatusHarnessJson(h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null);
+                return new StatusHarnessJson(
+                    h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null,
+                    wired ? activity.LastEvent(h.VendorId) : null);
             })],
             ReadDaemonEntries(store));
 
@@ -383,6 +396,30 @@ public sealed class StatusCommand(
 
     /// <param name="Pid">Null when the marker is present but carries no usable PID.</param>
     internal sealed record DaemonEntry(string Name, int? Pid, bool Alive);
+
+    /// <summary>
+    /// Whether a wired agent has run a kcap hook on this machine: proof the hooks loaded (and, for
+    /// Codex, were trusted), not that a session reached the server. Hooks load only in a new session.
+    /// </summary>
+    internal static string RecordingLine(HarnessId id, string label, DateTimeOffset? lastEvent, DateTimeOffset now) =>
+        lastEvent is { } at
+            ? $"{label}: hooks running, last hook event {Ago(now - at)}"
+            : id is HarnessId.Codex
+                ? $"{label}: no hook event yet. Start a new {label} session and accept its prompt to trust the kcap hooks"
+                : $"{label}: no hook event yet. Start a new {label} session";
+
+    static string Ago(TimeSpan elapsed) => elapsed switch {
+        { TotalMinutes: < 1 } => "just now",
+        { TotalHours: < 1 }   => $"{(int)elapsed.TotalMinutes}m ago",
+        { TotalDays: < 2 }    => $"{(int)elapsed.TotalHours}h ago",
+        _                     => $"{(int)elapsed.TotalDays}d ago"
+    };
+
+    /// <summary>Only a git known to be too old is worth a line: a missing git has nothing to attribute.</summary>
+    internal static string? GitHookWarning(Version? git) =>
+        git is not null && git < GitHookInstaller.MinimumGit
+            ? $"{git.ToString(3)} ignores kcap's commit hook (needs {GitHookInstaller.MinimumGit}+); commits are read from the agent's shell commands"
+            : null;
 
     /// <summary>
     /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"
