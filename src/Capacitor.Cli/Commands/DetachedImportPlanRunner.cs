@@ -26,10 +26,11 @@ sealed class DetachedImportPlanRunner(
         GitProviderRouter router,
         TimeProvider time,
         Func<ImportPlanLevel, ProfileContext, Task<SetupImportRun>>? passRunner = null) {
-    /// <returns>0 when every level reported an outcome; 1 otherwise.</returns>
+    /// <returns>0 when every level finished with nothing failed; 1 otherwise.</returns>
     public async Task<int> RunAsync(string planPath) {
         if (ImportPlan.Read(planPath) is not { } plan || !ImportPlan.IsUsableServer(plan.ServerUrl)) {
             Console.Error.WriteLine($"Could not read the import plan at {planPath}.");
+            DeletePlan(planPath);
 
             return 1;
         }
@@ -49,14 +50,30 @@ sealed class DetachedImportPlanRunner(
                 if (run.Fault is { } fault)
                     Console.Error.WriteLine($"The {Label(level)} import failed: {fault.Message}");
 
-                if (run.Fault is not null || run.Outcome is null) exit = 1;
+                if (run.Fault is not null || run.Outcome is not { AnythingFailed: false }) exit = 1;
             }
         } finally {
             if (scoped is not null) await scoped.DisposeAsync();
-            try { File.Delete(planPath); } catch { /* best effort; pruned with the handoff files */ }
+            DeletePlan(planPath);
         }
 
         return exit;
+    }
+
+    /// <summary>Only a plan file setup wrote: the path arrives through the environment, so anything
+    /// else it names is not this runner's to delete.</summary>
+    void DeletePlan(string planPath) {
+        try {
+            var full = Path.GetFullPath(planPath);
+            var name = Path.GetFileName(full);
+            if (!string.Equals(Path.GetDirectoryName(full), Path.GetFullPath(config.Directory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal)
+             || !name.StartsWith("import-plan-", StringComparison.Ordinal)
+             || !name.EndsWith(".json", StringComparison.Ordinal)
+             || !File.Exists(full))
+                return;
+
+            File.Delete(full);
+        } catch { /* best effort; pruned with the handoff files */ }
     }
 
     static string Label(ImportPlanLevel level) =>

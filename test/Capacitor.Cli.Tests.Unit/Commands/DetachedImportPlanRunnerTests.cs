@@ -29,8 +29,10 @@ public class DetachedImportPlanRunnerTests {
     static ImportPlanLevel Level(FirstRunImportLevel level, string owner, string name) =>
         new(level, [new FirstRunImportChoice(owner, name, level)], null, null, true);
 
-    string WritePlan(params ImportPlanLevel[] levels) {
-        var path = ImportPlan.PathFor(Config.Root, "run1");
+    string WritePlan(params ImportPlanLevel[] levels) => WritePlanAs("run1", levels);
+
+    string WritePlanAs(string runId, params ImportPlanLevel[] levels) {
+        var path = ImportPlan.PathFor(Config.Root, runId);
         new ImportPlan("https://new.example", levels).Write(path);
 
         return path;
@@ -69,14 +71,64 @@ public class DetachedImportPlanRunnerTests {
 
     [Test]
     public async Task An_unreadable_plan_fails_without_importing() {
-        var garbage = Config.CreateFile("import-plan-run1.json", "not a plan");
+        var garbage  = Config.CreateFile("import-plan-run1.json", "not a plan");
+        var insecure = Config.PathTo("import-plan-run2.json");
+        new ImportPlan("http://new.example", [Level(FirstRunImportLevel.Shared, "a", "b")]).Write(insecure);
 
         var missing = await Runner(Resolutions.None(Config.Root)).RunAsync(Config.PathTo("import-plan-none.json"));
         var invalid = await Runner(Resolutions.None(Config.Root)).RunAsync(garbage);
+        var cleartext = await Runner(Resolutions.None(Config.Root)).RunAsync(insecure);
 
         await Assert.That(missing).IsEqualTo(1);
         await Assert.That(invalid).IsEqualTo(1);
+        await Assert.That(cleartext).IsEqualTo(1);
         await Assert.That(_seen).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_rejected_plan_file_in_the_config_directory_is_removed() {
+        var garbage = Config.CreateFile("import-plan-run1.json", "not a plan");
+
+        await Runner(Resolutions.None(Config.Root)).RunAsync(garbage);
+
+        await Assert.That(File.Exists(garbage)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_path_that_is_not_a_setup_plan_file_is_left_alone() {
+        using var elsewhere = new TempDir();
+        var outside   = elsewhere.CreateFile("import-plan-run1.json", "not a plan");
+        var misnamed  = Config.CreateFile("config.json", "not a plan");
+        var nested    = Config.CreateFile(Path.Combine("sub", "import-plan-run1.json"), "not a plan");
+
+        await Runner(Resolutions.None(Config.Root)).RunAsync(outside);
+        await Runner(Resolutions.None(Config.Root)).RunAsync(misnamed);
+        await Runner(Resolutions.None(Config.Root)).RunAsync(nested);
+
+        await Assert.That(File.Exists(outside)).IsTrue();
+        await Assert.That(File.Exists(misnamed)).IsTrue();
+        await Assert.That(File.Exists(nested)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_level_that_reports_failures_fails_the_run_and_the_next_still_runs() {
+        var path = WritePlan(Level(FirstRunImportLevel.OnlyMe, "a", "b"), Level(FirstRunImportLevel.Shared, "a", "c"));
+        var failedSessions = new SetupImportRun(0, ImportRunSelection.Empty, new(
+            new ImportCommand.FinalCounts(0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, RanBackground: false, RequestedSummaries: false), 0), null);
+        var failedVisibility = new SetupImportRun(0, ImportRunSelection.Empty, new(
+            new ImportCommand.FinalCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, RanBackground: false, RequestedSummaries: false), 1), null);
+
+        var sessions = await Runner(Resolutions.None(Config.Root),
+            l => l.Level is FirstRunImportLevel.OnlyMe ? failedSessions : Reported()).RunAsync(path);
+        var ran = _seen.Count;
+        var visibility = await Runner(Resolutions.None(Config.Root),
+            l => l.Level is FirstRunImportLevel.OnlyMe ? failedVisibility : Reported()).RunAsync(WritePlanAs("run2",
+                Level(FirstRunImportLevel.OnlyMe, "a", "b"), Level(FirstRunImportLevel.Shared, "a", "c")));
+
+        await Assert.That(sessions).IsEqualTo(1);
+        await Assert.That(ran).IsEqualTo(2);
+        await Assert.That(visibility).IsEqualTo(1);
+        await Assert.That(_seen.Count).IsEqualTo(4);
     }
 
     [Test]

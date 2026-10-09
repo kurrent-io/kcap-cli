@@ -238,10 +238,10 @@ string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout",
 // server configured. Only that form: a real import obviously needs one.
 var offlineDiscover = command == "import" && args.Contains("--discover");
 
-// Ahead of the gate: on a first run the profile has no server yet, and the plan names the one setup chose.
+// Ahead of the gate: on a first run the profile has no server yet, and the plan names the one setup
+// chose. A plan the runner rejects fails there, never as a scope-less ordinary import.
 if (command == "import" && detachedImport is not null
- && Environment.GetEnvironmentVariable(ImportPlan.EnvVar) is { Length: > 0 } importPlanPath
- && ImportPlan.Read(importPlanPath) is { } importPlan && ImportPlan.IsUsableServer(importPlan.ServerUrl)) {
+ && Environment.GetEnvironmentVariable(ImportPlan.EnvVar) is { Length: > 0 } importPlanPath) {
     try {
         return await Run<DetachedImportPlanRunner>().RunAsync(importPlanPath);
     } finally {
