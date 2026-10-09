@@ -29,14 +29,18 @@ public sealed class HookActivity(ConfigRoot config, TimeProvider time) {
             }
 
             File.SetLastWriteTimeUtc(path, now);
-        } catch (Exception) {
-            // Swallowed by design; see the summary.
-        }
+        } catch (Exception) { }
     }
 
+    /// <summary>Null when the agent never ran a hook here, or when the stamp cannot be read: status
+    /// reports what it can rather than failing over a best-effort file.</summary>
     public DateTimeOffset? LastEvent(string vendorId) {
-        var file = new FileInfo(PathFor(vendorId));
+        try {
+            var file = new FileInfo(PathFor(vendorId));
 
-        return file.Exists ? new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero) : null;
+            return file.Exists ? new DateTimeOffset(file.LastWriteTimeUtc, TimeSpan.Zero) : null;
+        } catch (Exception) {
+            return null;
+        }
     }
 }
