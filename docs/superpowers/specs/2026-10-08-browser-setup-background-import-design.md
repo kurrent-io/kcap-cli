@@ -71,11 +71,12 @@ terminal blocking on the whole import.
   by both the foreground passes and the background child (section 2), so the two cannot drift on
   scope, `since`, vendors, titles, `forcePrivate`/`shareWithOrg` or `autoSkipExclusions`.
 
-**Visibility work under a cap is restricted to the selection** (`ImportCommand.HandleImport`, only
+**Sharing under a cap is restricted to the selection** (`ImportCommand.HandleImport`, only
 when `maxSessions` is set):
 
-- The `forcePrivate` preflight runs only over selected sessions the server already has. It still runs
-  before any of them receives content, and a session whose write failed is still dropped from the run.
+- The `forcePrivate` preflight is not capped: it still narrows every in-scope session the server
+  already has, because privatizing is the safe direction and an "only me" repository must not stay
+  shared if the child never runs. A session whose write failed is still dropped from the run.
 - The `shareWithOrg` write covers only the selected sessions.
 - Everything else — unselected sessions, `AlreadyLoaded` sessions, and any visibility write that failed
   in the foreground — is the background child's: it is uncapped, so it runs the full preflight and
@@ -295,8 +296,8 @@ foreground passes only.
 CLI (TUnit):
 - `SetupImportLane`: each chosen level runs capped; a throwing pass still leaves the other level's
   outcome in the result; exactly one spawn whenever any level was chosen, none on a decline.
-- `ImportCommand` under `maxSessions` with `forcePrivate` / `shareWithOrg`: visibility writes cover
-  only selected sessions; a selected existing session whose private write fails is dropped.
+- `ImportCommand` under `maxSessions`: the `forcePrivate` preflight covers every existing session,
+  the `shareWithOrg` write only selected ones; an existing session whose private write fails is dropped.
 - Child plan path: the plan round-trips; `Program`'s detached plan mode runs levels in order with each
   level's `forcePrivate`/`shareWithOrg`; the plan variable is ignored without the detached log; an
   unreadable plan fails the child.

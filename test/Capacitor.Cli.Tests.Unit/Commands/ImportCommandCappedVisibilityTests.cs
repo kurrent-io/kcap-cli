@@ -63,10 +63,10 @@ public class ImportCommandCappedVisibilityTests : IDisposable {
     }
 
     [Test]
-    public async Task Private_preflight_under_a_cap_touches_only_the_selected_session() {
+    public async Task Private_preflight_under_a_cap_still_narrows_every_existing_session() {
         var written = await RunAndCollectVisibilityWrites(maxSessions: 1, forcePrivate: true, shareWithOrg: false);
 
-        await Assert.That(written).IsEquivalentTo(new[] { "capvis-new" });
+        await Assert.That(written).IsEquivalentTo(SessionIds);
     }
 
     [Test]
