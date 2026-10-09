@@ -1465,6 +1465,38 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// Pins that a trailing group hidden behind a question card whose card has not arrived does not
+    /// loop layout. A zero-height last row is re-estimated at the average row size on every pass,
+    /// so the extent grows each pass, follow-tail chases it, and the render loop gives up with
+    /// "Infinite layout loop detected". The rows above genuinely have to be uneven — with uniform
+    /// rows the estimate is exact and this test proves nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_question_waiting_for_its_card_does_not_loop_layout() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var prose = string.Join("\\n\\n", Enumerable.Range(1, 60).Select(i => $"Paragraph {i} of a long reply that wraps across the column."));
+            var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
+            const string question = """{"questions":[{"question":"Pick","options":[{"label":"A"},{"label":"B"}]}]}""";
+            var ask = $$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"q-tool","name":"AskUserQuestion","input":{{{question}}}}]}}""";
+            var path = Tmp.CreateFile("pending-question.jsonl",
+                [tall, tall, tall, UserLine, ThinkingLine, CallLine(1), ResultLine(1), UserLine, ThinkingLine, CallLine(2), ResultLine(2),
+                 ThinkingLine, CallLine(3), ResultLine(3), CallLine(4), ResultLine(4), ask]);
+            await host.LoadAsync(path);
+            await Assert.That(host.Chat.Items[^1] is ToolGroupItem { SuppressedForPendingQuestion: true }).IsTrue();
+
+            var extent = host.Scroll.Extent.Height;
+            for (var i = 0; i < 5; i++) {
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            await Assert.That(host.Scroll.Extent.Height).IsEqualTo(extent);
+            await Assert.That(host.AtBottom()).IsTrue();
+            await host.CloseAsync();
+        });
+    }
+
     /// Pins the reader at the bottom across a series answer, by click and by Enter. Either is an
     /// input inside the list, and the card swaps to the next question in the same layout pass; that
     /// growth is the card's, not the reader scrolling, so following has to carry on and land the
