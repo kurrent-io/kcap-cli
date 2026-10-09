@@ -295,11 +295,11 @@ public class BrowserFirstRunFlowTests {
 
         public List<DateOnly> Dates { get; } = [];
 
-        /// <summary>What the run reports. Null models a run that lost a pass, whose counts are
-        /// unaccounted rather than zero.</summary>
-        public FirstRunImportTotals? Moved { get; set; } = new(3, 1, 0);
+        /// <summary>What the run reports. <see cref="FirstRunImportResult.Lost"/> models a run that
+        /// lost a pass, whose counts are unaccounted rather than zero.</summary>
+        public FirstRunImportResult Moved { get; set; } = new(new(3, 1, 0));
 
-        public async Task<FirstRunImportTotals?> ImportAsync(
+        public async Task<FirstRunImportResult> ImportAsync(
                 FirstRunImportAnswer answer, DateOnly today, CancellationToken ct) {
             log.Add("import");
             Advance?.Invoke();
@@ -1501,7 +1501,7 @@ public class BrowserFirstRunFlowTests {
     [Test]
     public async Task Reports_what_the_run_moved_against_the_decision_that_ran() {
         var h = Build(importing: true);
-        h.Importing!.Moved = new FirstRunImportTotals(7, 2, 1);
+        h.Importing!.Moved = new FirstRunImportResult(new(7, 2, 1));
         h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
         h.Channel.Polls.Enqueue(new(200, Done()));
 
@@ -1597,7 +1597,7 @@ public class BrowserFirstRunFlowTests {
     [Test]
     public async Task Reports_a_token_and_no_figures_for_a_run_that_lost_a_pass() {
         var h = Build(importing: true);
-        h.Importing!.Moved = null;
+        h.Importing!.Moved = FirstRunImportResult.Lost;
         h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
         h.Channel.Polls.Enqueue(new(200, Done()));
 

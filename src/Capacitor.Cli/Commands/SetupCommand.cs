@@ -242,7 +242,7 @@ sealed class SetupImportLane(
         HarnessRegistry harnesses,
         GitProviderRouter router,
         TimeProvider time,
-        Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null) : IFirstRunImportLane {
+        Func<SetupImportLane.Pass, Task<SetupImportRun>>? runner = null) : IFirstRunImportLane {
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
     internal sealed record Pass(
@@ -250,7 +250,8 @@ sealed class SetupImportLane(
         IReadOnlyList<FirstRunImportChoice> Repos,
         DateOnly?                           Since,
         bool                                SkipTitle,
-        IReadOnlyList<HarnessId>?           Vendors);
+        IReadOnlyList<HarnessId>?           Vendors,
+        int?                                MaxSessions);
 
     public async Task<ReportFirstRunImportRequest?> DiscoverAsync(
             IReadOnlyList<HarnessId>? vendors, DateTimeOffset asOf, CancellationToken ct) {
@@ -307,28 +308,50 @@ sealed class SetupImportLane(
     /// reporting a backfill that did not happen.</summary>
     public bool Failed { get; private set; }
 
-    async Task<ImportCommand.ImportRunOutcome?> Run(Pass pass) {
-        ImportCommand.ImportRunOutcome? outcome = null;
+    readonly List<(FirstRunImportLevel Level, SetupImportRun Run)> _runs = [];
 
-        await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
-            filterCwd:          null,
-            sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
-            since:              pass.Since,
-            scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
-            skipConfirmation:   true,
-            forcePrivate:       pass.Level is FirstRunImportLevel.OnlyMe,
-            autoSkipExclusions: true,
-            skipTitle:          pass.SkipTitle,
-            // What makes the shared stop honest, since the profile default cannot reach the class the
-            // visibility predicate admits unconditionally.
-            shareWithOrg:       pass.Level is FirstRunImportLevel.Shared,
-            onFinished:         o => outcome = o,
-            nested:             true);
+    /// <summary>Every pass this lane ran, in run order — a pass that threw included, carrying its
+    /// fault.</summary>
+    internal IReadOnlyList<(FirstRunImportLevel Level, SetupImportRun Run)> Runs => _runs;
 
-        return outcome;
+    /// <summary>One level's import, totalized: anything but a cancellation comes back as the run's
+    /// <see cref="SetupImportRun.Fault"/>.</summary>
+    internal static async Task<SetupImportRun> RunPassAsync(
+            ConfigRoot config, ProfileContext profiles, UserHome home, ICapacitorHttpClient http,
+            HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time, Pass pass) {
+        ImportRunSelection?             selection = null;
+        ImportCommand.ImportRunOutcome? outcome   = null;
+
+        try {
+            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
+                filterCwd:          null,
+                sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
+                since:              pass.Since,
+                scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
+                skipConfirmation:   true,
+                forcePrivate:       pass.Level is FirstRunImportLevel.OnlyMe,
+                autoSkipExclusions: true,
+                skipTitle:          pass.SkipTitle,
+                // What makes the shared stop honest, since the profile default cannot reach the class the
+                // visibility predicate admits unconditionally.
+                shareWithOrg:       pass.Level is FirstRunImportLevel.Shared,
+                maxSessions:        pass.MaxSessions,
+                onSelected:         s => selection = s,
+                onFinished:         o => outcome = o,
+                nested:             true);
+
+            return new SetupImportRun(exit, selection, outcome, null);
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            return new SetupImportRun(1, selection, outcome, ex);
+        }
     }
 
-    public async Task<FirstRunImportTotals?> ImportAsync(
+    Task<SetupImportRun> Run(Pass pass) =>
+        RunPassAsync(config, profiles, home, http, harnesses, router, time, pass);
+
+    public async Task<FirstRunImportResult> ImportAsync(
             FirstRunImportAnswer answer, DateOnly today, CancellationToken ct) {
         var since   = answer.Since(today);
         var totals  = new FirstRunImportTotals(0, 0, 0);
@@ -339,27 +362,33 @@ sealed class SetupImportLane(
         foreach (var level in (FirstRunImportLevel[])[FirstRunImportLevel.OnlyMe, FirstRunImportLevel.Shared]) {
             if (answer.At(level) is not { Count: > 0 } chosen) continue;
 
-            ImportCommand.ImportRunOutcome? outcome;
+            SetupImportRun run;
 
-            // Per pass, so a throw in the private one does not cancel the shared one, and so a
-            // failure that arrived as an exception counts the same as one the run reported.
             try {
-                outcome = await (runner ?? Run)(
-                    new Pass(level, chosen, since, answer.SkipTitle, answer.Vendors));
+                run = await (runner ?? Run)(new Pass(
+                    level, chosen, since, answer.SkipTitle, answer.Vendors, SetupCommand.ForegroundImportCap));
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 Failed = true;
 
                 throw;
             } catch (Exception ex) {
+                run = new SetupImportRun(1, null, null, ex);
+            }
+
+            _runs.Add((level, run));
+
+            if (run.Fault is { } fault) {
                 Failed  = true;
                 counted = false;
 
                 AnsiConsole.MarkupLine(
-                    $"  [yellow]![/] That history did not import: {Markup.Escape(ex.Message)}. "
+                    $"  [yellow]![/] That history did not import: {Markup.Escape(fault.Message)}. "
                   + "Run [cyan]kcap import[/] to retry it.");
 
                 continue;
             }
+
+            var outcome = run.Outcome;
 
             // The exit code cannot answer this: an import is best-effort and returns 0 for a run whose
             // sessions failed, so reading it would call a partial or total failure a success. A run
@@ -385,7 +414,7 @@ sealed class SetupImportLane(
                 outcome.Counts.Failed + outcome.VisibilityFailures);
         }
 
-        return counted ? totals : null;
+        return new FirstRunImportResult(counted ? totals : null);
     }
 }
 
