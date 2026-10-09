@@ -44,7 +44,8 @@ public sealed class StatusCommand(
         await Console.Out.WriteLineAsync(line);
 
         var accountLines = BuildAccountLines(
-            accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? []);
+            accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
+            vendor => AccountLayouts.DefaultDirectory(vendor, home));
         if (accountLines.Length > 0) await Console.Out.WriteLineAsync(accountLines);
 
         // Newly-installed-but-unconfigured harnesses. Ledger-independent (a dismissed vendor is
@@ -393,11 +394,12 @@ public sealed class StatusCommand(
     internal static string BuildHooksStatusLine(IEnumerable<(HarnessId Id, bool Wired)> wiring) =>
         string.Join("  ", wiring.Select(w => $"{ShortLabel(w.Id)} {(w.Wired ? "✓" : "✗")}"));
 
-    /// <summary>One line per registered account, but only once some vendor has two: a single account
-    /// per vendor is the default the Hooks line already reports.</summary>
-    internal static string BuildAccountLines(IEnumerable<(VendorAccount Account, RecordingState State)> accounts) {
+    /// <summary>One line per registered account, but only once some account is not its vendor's
+    /// environment-derived directory: those alone are what the Hooks line already reports.</summary>
+    internal static string BuildAccountLines(
+            IEnumerable<(VendorAccount Account, RecordingState State)> accounts, Func<HarnessId, string> defaultDirectoryOf) {
         var list = accounts.ToList();
-        if (list.GroupBy(a => a.Account.Vendor).All(g => g.Count() < 2)) return "";
+        if (list.All(a => AccountDirectory.Same(a.Account.Directory, defaultDirectoryOf(a.Account.Vendor)))) return "";
 
         return string.Join(Environment.NewLine, list.Select(a =>
             $"  Account: {a.Account.Vendor.ToString().ToLowerInvariant(),-6} {a.Account.Label,-20} {AccountStateLabels.For(a.Account.Vendor, a.State)}"));

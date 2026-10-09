@@ -133,14 +133,25 @@ public class StatusCommandHooksTests {
     static VendorAccount Account(HarnessId vendor, string dir) =>
         new(dir, vendor, dir, Path.GetFileName(dir), DateTimeOffset.UnixEpoch);
 
+    static string DefaultOf(HarnessId vendor) => vendor is HarnessId.Claude ? "/h/.claude" : "/h/.codex";
+
     [Test]
     public async Task Account_lines_are_omitted_for_a_single_default_per_vendor() {
         var line = StatusCommand.BuildAccountLines([
             (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
             (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Recording),
-        ]);
+        ], DefaultOf);
 
         await Assert.That(line).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Account_lines_show_a_lone_account_outside_the_default_directory() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Recording),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains(".claude-work");
     }
 
     [Test]
@@ -148,7 +159,7 @@ public class StatusCommandHooksTests {
         var line = StatusCommand.BuildAccountLines([
             (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
             (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Broken),
-        ]);
+        ], DefaultOf);
 
         await Assert.That(line).Contains(".claude-work");
         await Assert.That(line).Contains("broken — run kcap accounts rewire");
@@ -160,7 +171,7 @@ public class StatusCommandHooksTests {
         var line = StatusCommand.BuildAccountLines([
             (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Installed),
             (Account(HarnessId.Codex, "/h/.codex-work"), RecordingState.NotWired),
-        ]);
+        ], DefaultOf);
 
         await Assert.That(line).Contains("hooks installed (trust in Codex)");
         await Assert.That(line).Contains("not wired");
