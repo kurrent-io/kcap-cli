@@ -32,7 +32,8 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
-  --daemon-name <name>        Daemon name (skip prompt)
+  --daemon-name <name>        Daemon name, used with --no-prompt and after a
+                              browser answer (the terminal prompt asks otherwise)
   --default-visibility <vis>  Default visibility: private, project, org_public, public
   --org <name>                Organization name for a workspace to create, instead
                               of being prompted for it. Requires --slug.
@@ -134,7 +135,9 @@ on PATH. Setup lists the
 detected agents, then asks a single yes/no prompt to install kcap (hooks,
 skills, instructions, MCP) for all of them, instead of one prompt per agent.
 Hooks are installed user-wide (Pi, OpenCode, and Antigravity install a
-plugin/hooks-block rather than a shell-hooks file).
+plugin/hooks-block rather than a shell-hooks file). The closing summary lists
+every file and directory the run installed kcap into, including the git config
+that carries the commit hook, under "Changed on this machine".
 
 Codex runs only hooks you have trusted. After Codex hooks install, the next
 `codex` CLI launch prompts to trust them — accept once to trust them all, or
@@ -143,7 +146,12 @@ desktop app never shows that prompt: if you only use the desktop app, trust
 the kcap hooks in Settings → Hooks there (and since setup detects Codex by
 `codex` on PATH, you may need `kcap plugin install --codex` to install the
 hooks first). Until trusted, the hooks are installed but inert and no
-sessions are captured.
+sessions are captured; setup reminds you of this whenever it installs them.
+
+The git hook that files commits under their agent session needs git 2.54 or
+later. Setup adds the hook entry, then checks `git --version` and warns when
+an older git will ignore it (or when it cannot read the version); commits are
+then read from the agent's shell commands.
 
 Once you are signed in, on a server that offers browser setup kcap creates a
 setup link, opens your browser on it, and waits while you work through the
@@ -162,6 +170,17 @@ which agents you picked. A --skip-<agent> flag still wins, so a scripted opt-out
 is never overridden. Answering "Not now" installs nothing. The audience chosen
 on that screen becomes your default visibility, and the Import screen's answer
 runs the import from this machine, so the terminal does not ask either again.
+
+After a browser answer the terminal asks nothing more. The daemon takes
+--daemon-name if given, else this profile's name (your user name on a first
+run). If another machine holds it, setup tries the name suffixed with this
+machine's, then numbered variants of that, and ends with an error naming
+--daemon-name if all of them are taken. The provider API key
+setting is kept as it is; change it with
+`kcap config set use_provider_api_key true|false`. When the browser's Done
+screen ran the daemon as a service, setup says so instead of suggesting
+`kcap daemon start -d`. A finished browser flow with no import answer skips
+the import prompt and names `kcap import --all` for later.
 
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
 asks how to continue: create one for you (organization name + workspace slug) and

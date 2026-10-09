@@ -818,8 +818,21 @@ sealed class SetupCommand(
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
-        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
-            WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
+        var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
+        var gitHook        = new GitHookInstaller(home);
+
+        if (installResult.AnyHooksInstalled && gitHook.Install(out var gitConfigChanged)) {
+            WriteLine(GitHookLine(GitHookInstaller.InstalledGitVersion()));
+
+            if (gitConfigChanged) installedPaths.Add(gitHook.ConfigFilePath);
+        }
+
+        if (CodexTrustReminder(installResult) is { } codexTrust) WriteLine(codexTrust);
+
+        // A run that ends early from here on has still changed these, so it lists them on the way out.
+        void ListChangedBeforeExit() {
+            foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
+        }
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -845,9 +858,13 @@ sealed class SetupCommand(
         var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
         var openaiSet        = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         var promptApiKey      = (anthropicSet && !skipClaude) || (openaiSet && !skipCodexFlag);
+        // Discovery can switch the active profile after `existing` was read, so what this run keeps comes
+        // from the profile it is about to write.
+        var selected = (await AppConfig.LoadProfileConfig(config)).Profiles.GetValueOrDefault(activeProfile);
+
         // Preserve any previous opt-in when no key is in the current env (we just
         // don't have anything to prompt about; the on-disk value is still valid).
-        var useProviderApiKey = existing?.UseProviderApiKey ?? false;
+        var useProviderApiKey = selected?.UseProviderApiKey ?? false;
 
         if (promptApiKey) {
             await Console.Out.WriteLineAsync();
@@ -870,11 +887,17 @@ sealed class SetupCommand(
                     if (parsed is null) {
                         await Console.Error.WriteLineAsync(
                             $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
+                        ListChangedBeforeExit();
+
                         return 1;
                     }
                     useProviderApiKey = parsed.Value;
                 }
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
+            } else if (browserAgents is not null) {
+                // The browser has no question for this, and a terminal prompt after it has said setup
+                // finished goes unseen. Keep the setting and say how to change it.
+                AnsiConsole.MarkupLine(ProviderApiKeyKeptLine(useProviderApiKey));
             } else {
                 useProviderApiKey = AnsiConsole.Prompt(
                     new ConfirmationPrompt("  Use these API keys for kcap's headless calls?") { DefaultValue = useProviderApiKey });
@@ -892,6 +915,13 @@ sealed class SetupCommand(
         if (noPrompt) {
             daemonName = GetArg(args, "--daemon-name") ?? defaultName;
             await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else if (browserAgents is not null) {
+            // Not asked: the browser has no daemon-name screen, and its service request waits on this
+            // name. The profile's own name comes before the default so a re-run never renames a daemon
+            // in use.
+            daemonName = GetArg(args, "--daemon-name")
+                      ?? (selected?.Daemon?.Name is { Length: > 0 } kept ? kept : defaultName);
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
         } else {
             daemonName = AnsiConsole.Prompt(
                 new TextPrompt<string>("Daemon name:")
@@ -904,6 +934,12 @@ sealed class SetupCommand(
         var loggedInto   = new ProfileContext(
             new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
 
+        // The browser path cannot fall back to a prompt: the user is looking at the browser, and its
+        // service request waits on this name. So it walks a bounded list instead.
+        var browserFallbacks = browserAgents is null
+            ? null
+            : new Queue<string>(BrowserDaemonNameFallbacks(daemonName, MachineSlug()));
+
         while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
             AnsiConsole.MarkupLine(
                 $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
@@ -912,8 +948,24 @@ sealed class SetupCommand(
 
             if (noPrompt) {
                 await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+                ListChangedBeforeExit();
 
                 return 1;
+            }
+
+            if (browserFallbacks is not null) {
+                if (!browserFallbacks.TryDequeue(out var next)) {
+                    await Console.Error.WriteLineAsync(
+                        "  Every fallback daemon name is taken too. Re-run `kcap setup --daemon-name <name>`.");
+                    ListChangedBeforeExit();
+
+                    return 1;
+                }
+
+                daemonName = next;
+                await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+
+                continue;
             }
 
             daemonName = AnsiConsole.Prompt(
@@ -953,6 +1005,8 @@ sealed class SetupCommand(
         // Here rather than in the browser leg, and after the write above rather than before it: the unit
         // bakes the profile, the expected server and the daemon name, and `saved` is the only context that
         // carries what this run actually chose.
+        FirstRunMachineActionResult? daemonService = null;
+
         if (browserAnswers.FlowId is { } browserFlowId) {
             try {
                 // Every flow route is authenticated, and a poll that 401s answers an empty body —
@@ -988,7 +1042,7 @@ sealed class SetupCommand(
                         ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
                         : null;
 
-                    await SetupDaemonService.RunAsync(
+                    daemonService = await SetupDaemonService.RunAsync(
                         channel, serverUrl, browserFlowId, config, saved, home, time);
                 }
                 else
@@ -1050,7 +1104,8 @@ sealed class SetupCommand(
             WorkingDirectory:    workdir.Path,
             Paths:               stepPaths,
             BrowserImport:       browserAnswers.Import,
-            BrowserImportFailed: browserAnswers.ImportFailed));
+            BrowserImportFailed: browserAnswers.ImportFailed,
+            BrowserFinished:     browserAnswers.FlowStillLive));
 
         await Console.Out.WriteLineAsync();
 
@@ -1072,6 +1127,8 @@ sealed class SetupCommand(
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath(config)));
 
         AnsiConsole.Write(new Padder(grid).Padding(2, 0, 0, 0));
+
+        foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
 
         // hooks only load at coding-agent session start. The common case is a user
         // running `kcap setup` from inside an already-running session, which won't stream
@@ -1100,7 +1157,7 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        AnsiConsole.MarkupLine("\n  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
+        AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -1291,7 +1348,8 @@ sealed class SetupCommand(
         string                        WorkingDirectory,
         CodingAgentsStep.Paths        Paths,
         FirstRunImportAnswer?         BrowserImport,
-        bool                          BrowserImportFailed);
+        bool                          BrowserImportFailed,
+        bool                          BrowserFinished = false);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1314,6 +1372,16 @@ sealed class SetupCommand(
         // again, right after a screen that chose several.
         if (inputs.BrowserImport is { } browser) {
             foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed)) AnsiConsole.MarkupLine(line);
+
+            return new ImportStepResult(false, null, null, null);
+        }
+
+        // A browser flow that finished without an import answer left nothing to run, and the user is
+        // looking at the browser, not here. Handing back with `t` or abandoning the tab leaves
+        // BrowserFinished false, so the terminal prompt still covers those.
+        if (inputs.BrowserFinished) {
+            AnsiConsole.MarkupLine(
+                "  [dim]· Nothing chosen to import in the browser. Run[/] [cyan]kcap import --all[/] [dim]to import past sessions later.[/]");
 
             return new ImportStepResult(false, null, null, null);
         }
@@ -2333,6 +2401,74 @@ sealed class SetupCommand(
         } catch (Exception e) {
             // Swallow — see method-doc. KCAP_DEBUG surfaces the reason.
             Debug($"failed — {e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>The provider-key line for a run the browser answered, which keeps the stored setting.</summary>
+    internal static string ProviderApiKeyKeptLine(bool useProviderApiKey) => useProviderApiKey
+        ? "  Use provider API key: yes [dim](kept; turn off with[/] [cyan]kcap config set use_provider_api_key false[/][dim])[/]"
+        : "  Use provider API key: no [dim](kept; turn on with[/] [cyan]kcap config set use_provider_api_key true[/][dim])[/]";
+
+    /// <summary>
+    /// The closing daemon line. Suggesting <c>kcap daemon start -d</c> after the browser's request put
+    /// the daemon under a service would start a second one beside it.
+    /// </summary>
+    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => service?.Outcome switch {
+        FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled =>
+            "  [green]✓[/] The agent daemon runs as a background service.",
+        FirstRunMachineActionOutcomes.EnabledUnverified =>
+            "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
+        _ => "  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]"
+    };
+
+    /// <summary>
+    /// The git hook's line. An older git ignores the entry silently, so setup says so rather than
+    /// reporting a hook that will never run, and a version it could not read earns no tick either.
+    /// </summary>
+    internal static string GitHookLine(Version? git) => git switch {
+        null => $"  [yellow]![/] Git hook added, but setup could not read your git version; the hook runs only on git {GitHookInstaller.MinimumGit}+.",
+        _ when git < GitHookInstaller.MinimumGit =>
+            $"  [yellow]![/] Git hook added, but git {git.ToString(3)} ignores it [dim](needs {GitHookInstaller.MinimumGit}+)[/]. "
+          + "Commits are filed from the agent's shell commands until you upgrade git.",
+        _ => "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]"
+    };
+
+    /// <summary>
+    /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the
+    /// machine-suffixed name the terminal prompt would offer, then numbered variants of it.
+    /// </summary>
+    internal static IEnumerable<string> BrowserDaemonNameFallbacks(string chosen, string machine) {
+        var suffixed = $"{chosen}-{machine}";
+
+        yield return suffixed;
+
+        for (var n = 2; n <= 4; n++) yield return $"{suffixed}-{n}";
+    }
+
+    /// <summary>
+    /// Codex runs only hooks the user has trusted, so installed hooks record nothing until then. Null when
+    /// this run installed no Codex hooks.
+    /// </summary>
+    internal static string? CodexTrustReminder(CodingAgentsStep.Result result) => result.CodexHooksInstalled
+        ? "  [yellow]![/] Codex records nothing until you trust the kcap hooks: accept the prompt on the next "
+        + "[cyan]codex[/] launch, or in the Codex desktop app use Settings → Hooks."
+        : null;
+
+    /// <summary>
+    /// The closing list of everything outside kcap's own config that this run changed, so nothing it
+    /// wrote into an agent or git is a surprise later. Empty when it changed nothing.
+    /// </summary>
+    internal static IEnumerable<string> InstalledInLines(IReadOnlyCollection<string> paths, string home) {
+        if (paths.Count == 0) yield break;
+
+        yield return "\n  [bold]Changed on this machine[/]";
+
+        foreach (var path in paths) {
+            var shown = path.StartsWith(home + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                ? "~" + path[home.Length..]
+                : path;
+
+            yield return $"    {Markup.Escape(shown)}";
         }
     }
 

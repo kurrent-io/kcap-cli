@@ -584,6 +584,119 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
+    /// <summary>A service the browser's request put in place replaces the start-it-yourself advice, which
+    /// would otherwise start a second daemon beside it.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionOutcomes.Enabled)]
+    [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
+    [Arguments(FirstRunMachineActionOutcomes.EnabledUnverified)]
+    public async Task DaemonClosingLine_drops_the_start_hint_once_a_service_runs(string outcome) {
+        var line = SetupCommand.DaemonClosingLine(new FirstRunMachineActionResult(outcome, null));
+
+        await Assert.That(line).DoesNotContain("kcap daemon start");
+        await Assert.That(line).Contains("background service");
+    }
+
+    /// <summary>No request, or one that did not end in a service, keeps the optional start hint.</summary>
+    [Test]
+    public async Task DaemonClosingLine_keeps_the_start_hint_without_a_service() {
+        await Assert.That(SetupCommand.DaemonClosingLine(null)).Contains("kcap daemon start -d");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon start -d");
+    }
+
+    /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
+    /// changes it, in the direction that would change it.</summary>
+    [Test]
+    public async Task ProviderApiKeyKeptLine_names_the_command_that_flips_the_kept_value() {
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(false)).Contains("use_provider_api_key true");
+        await Assert.That(SetupCommand.ProviderApiKeyKeptLine(true)).Contains("use_provider_api_key false");
+    }
+
+    /// <summary>The tick is a claim that commits will be filed, so only a git known to run config hooks
+    /// earns it; an unreadable version is a warning, not a pass.</summary>
+    [Test]
+    public async Task GitHookLine_ticks_only_a_git_known_to_run_config_hooks() {
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 50, 1))).Contains("ignores it");
+        await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
+        await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
+        await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
+    }
+
+    /// <summary>The browser path cannot fall back to a prompt, so its fallbacks must be finite.</summary>
+    [Test]
+    public async Task BrowserDaemonNameFallbacks_start_with_the_prompt_s_suggestion_and_stop() {
+        var names = SetupCommand.BrowserDaemonNameFallbacks("tony", "mbp").ToList();
+
+        await Assert.That(names[0]).IsEqualTo("tony-mbp");
+        await Assert.That(names).IsEquivalentTo(["tony-mbp", "tony-mbp-2", "tony-mbp-3", "tony-mbp-4"]);
+    }
+
+    [Test]
+    public async Task CodexTrustReminder_appears_only_when_codex_hooks_were_installed() {
+        var withCodex = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: true, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false);
+        var withoutCodex = withCodex with { CodexHooksInstalled = false, ClaudeInstalled = true };
+
+        await Assert.That(SetupCommand.CodexTrustReminder(withCodex)).Contains("trust");
+        await Assert.That(SetupCommand.CodexTrustReminder(withoutCodex)).IsNull();
+    }
+
+    [Test]
+    public async Task InstalledInLines_lists_each_path_with_home_shortened() {
+        var home  = Path.Combine("users", "kcap-home");
+        var lines = SetupCommand.InstalledInLines(
+            [Path.Combine(home, ".gitconfig"), "/etc/elsewhere"], home).ToList();
+
+        await Assert.That(lines.Count).IsEqualTo(3);
+        await Assert.That(lines[1]).Contains($"~{Path.DirectorySeparatorChar}.gitconfig");
+        await Assert.That(lines[2]).Contains("/etc/elsewhere");
+        await Assert.That(SetupCommand.InstalledInLines([], home)).IsEmpty();
+    }
+
+    [Test]
+    public async Task InstalledPaths_lists_reported_writes_once() {
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "/h/.claude/settings.json", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "/h/.codex/hooks.json", CursorHooksPath: "/h/.cursor/hooks.json",
+            CopilotHooksPath: "/h/.copilot/kcap.json", GeminiSettingsPath: "/h/.gemini/settings.json",
+            AgentsSkillsDir: "/h/.agents/skills", LegacyCodexSkillsDir: "/h/.codex/skills",
+            CodexConfigTomlPath: "/h/.codex/config.toml");
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: true, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            GeminiHooksInstalled: true, GeminiMcpRegistered: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).IsEquivalentTo(["/h/.claude/settings.json", "/h/.gemini/settings.json"]);
+    }
+
+    /// <summary>Kiro's install also switches the default agent in cli.json, and Antigravity's writes the
+    /// plugin.json it cannot load without; both are second files the hook flag alone does not name.</summary>
+    [Test]
+    public async Task InstalledPaths_names_the_second_file_kiro_and_antigravity_write() {
+        var kiroAgent = Path.Combine("h", ".kiro", "agents", "kcap.json");
+        var agyHooks  = Path.Combine("h", ".gemini", "antigravity", "plugins", "kcap", "hooks.json");
+        var paths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath: "", ClaudeScopeLabel: "user", PluginDir: null,
+            CodexHooksPath: "", CursorHooksPath: "", CopilotHooksPath: "", GeminiSettingsPath: "",
+            AgentsSkillsDir: "", LegacyCodexSkillsDir: "",
+            KiroHooksPath: kiroAgent, AntigravityHooksPath: agyHooks);
+        var result = new CodingAgentsStep.Result(
+            ClaudeInstalled: false, CodexHooksInstalled: false, AgentSkillsInstalled: false,
+            CursorHooksInstalled: false, CopilotHooksInstalled: false,
+            KiroHooksInstalled: true, AntigravityHooksInstalled: true);
+
+        var listed = CodingAgentsStep.InstalledPaths(result, paths);
+
+        await Assert.That(listed).Contains(PluginCommand.KiroSettingsPathFor(kiroAgent));
+        await Assert.That(listed).Contains(Path.Combine(Path.GetDirectoryName(agyHooks)!, "plugin.json"));
+        await Assert.That(listed.Count).IsEqualTo(4);
+    }
+
     [Test]
     public async Task LiveRecordingRestartTip_returns_note_when_any_agent_installed() {
         var result = new CodingAgentsStep.Result(
@@ -962,11 +1075,12 @@ public class SetupCommandTests {
     SetupCommand.ImportStepInputs Inputs(
             bool noPrompt = false, Func<bool>? prompt = null, FirstRunImportAnswer? browser = null,
             bool auth = true, bool skip = false, string visibility = "org_public",
-            CodingAgentsStep.Paths? paths = null) => new(
+            CodingAgentsStep.Paths? paths = null, bool browserFinished = false) => new(
         AuthSatisfied: auth, SkipImport: skip, NoPrompt: noPrompt, PromptYesNo: prompt ?? (() => true),
         Profiles: Resolutions.At("https://example.test", Config.Root), ProfileName: "work", ServerUrl: "https://example.test",
         DefaultVisibility: visibility, CurrentRepo: null, WorkingDirectory: Config.Directory,
-        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false);
+        Paths: paths ?? PathsWithEvalWatchFor(HarnessId.Codex), BrowserImport: browser, BrowserImportFailed: false,
+        BrowserFinished: browserFinished);
 
     /// <summary>Synthetic discovery figures: <paramref name="attributed"/> sessions spread round-robin
     /// over <paramref name="repos"/> repositories, plus <paramref name="unmatched"/> sessions with no
@@ -987,6 +1101,21 @@ public class SetupCommandTests {
         var summary = ImportDiscoverySummary.Build(sessions, repoBySession, []);
 
         return new ImportCommand.ImportDiscoveryResult(summary, [.. HarnessRegistry.Identities.Select(i => i.Id)]);
+    }
+
+    /// <summary>A finished browser flow with no import answer must not leave a terminal prompt behind
+    /// the browser's Done screen, and must not import by default either.</summary>
+    [Test]
+    public async Task A_browser_flow_that_finished_without_an_import_answer_neither_prompts_nor_imports() {
+        var runner   = FakeImportRunner.Succeeding().Discovering(Discovered(3, 20, 5));
+        var prompted = false;
+
+        var result = await Command(runner, FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
+            .RunImportStepAsync(Inputs(prompt: () => prompted = true, browserFinished: true));
+
+        await Assert.That(prompted).IsFalse();
+        await Assert.That(result.Ran).IsFalse();
+        await Assert.That(runner.Captured).IsNull();
     }
 
     [Test]

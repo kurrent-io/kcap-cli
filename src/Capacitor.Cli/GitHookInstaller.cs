@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Mcp;
 
@@ -17,7 +18,14 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
 
     const string Section = $"hook.{GitHook.Name}";
 
-    public bool Install() => Entry() == Expected() || Write();
+    public bool Install() => Install(out _);
+
+    /// <param name="changed">Whether this call wrote the config, as opposed to finding it current.</param>
+    public bool Install(out bool changed) {
+        changed = Entry() != Expected();
+
+        return !changed || Write();
+    }
 
     /// <summary>
     /// Repoints an entry already there at this binary, and adds none.
@@ -52,6 +60,8 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
             && Events.All(hookEvent => Git("--add", events, hookEvent) is not null);
     }
 
+    public string ConfigFilePath => ConfigFile();
+
     // The file `git config --global` would write: ~/.gitconfig, unless only the XDG file exists.
     string ConfigFile() {
         var dotfile = Path.Combine(home.Path, ".gitconfig");
@@ -60,15 +70,41 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
         return !File.Exists(dotfile) && File.Exists(xdg) ? xdg : dotfile;
     }
 
+    /// <summary>The first git that runs config hooks; an older one ignores the entry without a word.</summary>
+    public static readonly Version MinimumGit = new(2, 54);
+
+    /// <summary>The installed git's version, or null when git is missing or its output unreadable.</summary>
+    public static Version? InstalledGitVersion() => RunGit(["--version"]) is { } output ? ParseGitVersion(output) : null;
+
+    /// <summary>Reads <c>git version 2.50.1 (Apple Git-155)</c> and <c>git version 2.54.0.windows.1</c>.</summary>
+    public static Version? ParseGitVersion(string output) {
+        const string prefix = "git version ";
+
+        if (!output.StartsWith(prefix, StringComparison.Ordinal)) return null;
+
+        var parts = output[prefix.Length..].Split('.', ' ');
+
+        return parts.Length >= 2
+            && int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var major)
+            && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
+                ? new Version(major, minor,
+                      parts.Length > 2 && int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var patch)
+                          ? patch
+                          : 0)
+                : null;
+    }
+
     // By name, since --global follows $HOME rather than the home kcap was given. Under GIT_CONFIG_GLOBAL
     // git never reads it, and then no watcher relies on the hook.
-    string? Git(params string[] arguments) {
+    string? Git(params string[] arguments) => RunGit(["config", "--file", ConfigFile(), ..arguments]);
+
+    static string? RunGit(string[] arguments) {
         try {
             var start = new ProcessStartInfo("git") {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
             };
 
-            foreach (var argument in (string[])["config", "--file", ConfigFile(), ..arguments])
+            foreach (var argument in arguments)
                 start.ArgumentList.Add(argument);
 
             using var git = Process.Start(start);
