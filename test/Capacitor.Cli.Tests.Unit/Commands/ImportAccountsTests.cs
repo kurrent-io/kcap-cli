@@ -74,6 +74,56 @@ public class ImportAccountsTests : IDisposable {
         await Assert.That(outcome!.Counts.Loaded).IsEqualTo(2);
     }
 
+    const string SharedSid = "33333333-3333-3333-3333-333333333333";
+
+    IReadOnlyList<IImportSource> TwoClaudeRootsHoldingOneSession() {
+        var registry = new AccountRegistry {
+            Accounts = [
+                Account("a", HarnessId.Claude, Home.PathTo(".claude-a")),
+                Account("b", HarnessId.Claude, Home.PathTo(".claude-b"))
+            ]
+        };
+        WriteClaudeSession(".claude-a", SharedSid);
+        WriteClaudeSession(".claude-b", SharedSid);
+
+        return SetupCommand.BuildImportSources(
+            Config.Root, TestHarnesses.Under(Home), new GitProviderRouter(), TimeProvider.System,
+            vendors: [HarnessId.Claude], accounts: registry, home: Home);
+    }
+
+    [Test]
+    public async Task A_session_under_two_account_roots_imports_once() {
+        var sources = TwoClaudeRootsHoldingOneSession();
+        StubImportHooks();
+
+        ImportCommand.ImportRunOutcome? outcome = null;
+        var exit = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home,
+                TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(),
+                time: TimeProvider.System, accounts: TestAccounts.None)
+            .HandleImport(filterCwd: null, minLines: 1, sources: sources, scope: new ImportScope.All(),
+                          skipConfirmation: true, skipTitle: true, onFinished: o => outcome = o);
+
+        var sessionStarts = _server.FindLogEntries(Request.Create().WithPath("/hooks/session-start*").UsingPost()).Count;
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(outcome!.Counts.Loaded).IsEqualTo(1);
+        await Assert.That(sessionStarts).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_session_under_two_account_roots_is_discovered_once() {
+        var sources = TwoClaudeRootsHoldingOneSession();
+
+        ImportCommand.ImportDiscoveryResult? found = null;
+        var exit = await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home,
+                TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(),
+                time: TimeProvider.System, accounts: TestAccounts.None)
+            .HandleImport(filterCwd: null, minLines: 1, sources: sources, discoverOnly: true, onDiscovered: r => found = r);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(found!.Summary.UnmatchedByWindow.Values.Max()).IsEqualTo(1);
+    }
+
     [Test]
     public async Task Discovery_counts_sessions_from_two_claude_accounts() {
         var registry = new AccountRegistry {

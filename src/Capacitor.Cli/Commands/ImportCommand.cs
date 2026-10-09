@@ -853,9 +853,9 @@ class ImportCommand(
             MinLines: minLines
         );
 
-        var discoveriesPerSource = await Task.WhenAll(
+        var discoveriesPerSource = FirstDiscoveryWins(await Task.WhenAll(
             sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None))
-        );
+        ));
 
         for (var i = 0; i < sources.Count; i++) {
             var count = discoveriesPerSource[i].Count;
@@ -3026,6 +3026,17 @@ class ImportCommand(
     /// become chains of length 1. Chains are dispatched newest-first via
     /// <see cref="ImportOrdering.ChainDispatch"/>; within-chain order is untouched.
     /// </summary>
+    /// <summary>
+    /// Drops a session an earlier source already discovered. Two account roots can hold the same
+    /// session file, and every later stage keys on the session id, so a second copy would be counted
+    /// and imported twice.
+    /// </summary>
+    static IReadOnlyList<DiscoveredSession>[] FirstDiscoveryWins(IReadOnlyList<DiscoveredSession>[] perSource) {
+        var seen = new HashSet<(HarnessId, string)>();
+
+        return [.. perSource.Select(IReadOnlyList<DiscoveredSession> (d) => [.. d.Where(s => seen.Add((s.Vendor, s.SessionId)))])];
+    }
+
     internal static List<List<SessionClassification>> BuildImportChains(List<SessionClassification> classifications) {
         var importable = classifications
             .Where(c => c.Status is ClassificationStatus.New or ClassificationStatus.Partial)
