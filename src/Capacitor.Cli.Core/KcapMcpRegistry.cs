@@ -32,7 +32,7 @@ public static class KcapMcpRegistry {
         ["kcap-handoff"]   = new("kcap-handoff",   ["mcp", "handoff"],   false),
         ["kcap-analytics"] = new("kcap-analytics", ["mcp", "analytics"], false),
         ["kcap-pages"]     = Pages,
-        // Flow definitions written before the rename name the server by its old id.
+        // Stored flow definitions may still name the server `kcap-artefacts`.
         ["kcap-artefacts"] = Pages,
         ["kcap-knowledge"] = new("kcap-knowledge", ["mcp", "knowledge"], false),
     };

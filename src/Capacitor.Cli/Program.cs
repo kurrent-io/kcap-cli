@@ -539,7 +539,7 @@ switch (command) {
                 return await Run<McpHandoffServer>().RunAsync();
             case "analytics":
                 return await Run<McpAnalyticsServer>().RunAsync();
-            // `artefacts` is the name harness configs registered before the rename still launch.
+            // Existing harness configs may still launch `kcap mcp artefacts`.
             case "pages":
             case "artefacts":
                 return await Run<McpArtefactsServer>().RunAsync();

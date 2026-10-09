@@ -60,7 +60,7 @@ public class KcapMcpRegistryReviewFlowTests {
         await Assert.That(rejected).IsEqualTo("kcap-plans");
     }
 
-    /// <summary>Flow definitions written before the rename still name the server <c>kcap-artefacts</c>.</summary>
+    /// <summary>Stored flow definitions may still name the server <c>kcap-artefacts</c>.</summary>
     [Test]
     public async Task The_old_artefacts_id_resolves_to_the_pages_server() {
         await Assert.That(KcapMcpRegistry.Resolve("kcap-artefacts")!.Id).IsEqualTo("kcap-pages");

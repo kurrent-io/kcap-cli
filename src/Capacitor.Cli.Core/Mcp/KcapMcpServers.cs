@@ -50,8 +50,8 @@ public static class KcapMcpServers {
             "Read retained facts and curated skills, and fine-tune skills by editing drafts, changing lifecycle or membership, and curating facts. Repo-aware: defaults to the current repo."),
     ];
 
-    /// <summary>Names kcap registered under in earlier releases. Registration removes an entry it still
-    /// owns under one of these, and uninstall removes it too; an entry the user changed is left alone.</summary>
+    /// <summary>Server names an existing harness config may still carry. Registration and uninstall remove
+    /// an entry kcap owns under one of these; an entry the user changed is left alone.</summary>
     public static readonly IReadOnlyList<string> Retired = ["kcap-artefacts"];
 
     /// <summary>Codex receives every canonical server. Flows is never auto-approved.</summary>

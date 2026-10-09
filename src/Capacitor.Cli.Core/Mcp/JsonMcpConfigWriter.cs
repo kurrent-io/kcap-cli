@@ -76,6 +76,13 @@ public static class JsonMcpConfigWriter {
             try { marker.Record(configPath, written); }
             catch { /* degraded: ownership heals via adoption on the next pass */ }
         }
+
+        // A retired name is never written again, so a claim left on it would only let a later
+        // hand-added entry under that name read as kcap's and be deleted.
+        if (change != Change.Failed) {
+            try { marker.Forget(configPath, KcapMcpServers.Retired); }
+            catch { /* best-effort, like Record */ }
+        }
         return change;
     }
 
