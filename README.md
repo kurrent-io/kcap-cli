@@ -2516,8 +2516,9 @@ After installing Codex hooks, the next `codex` launch asks you to trust them; un
 Verify with `kcap whoami` and `kcap status`. `kcap whoami` prints your identity and the profile it
 resolved, then asks the server whether it actually accepts your token — it exits non-zero if the
 server rejects it, or if the token was issued by a different server than the profile now targets
-(re-run `kcap login`). If the server can't be reached it says so and still exits 0, so it stays
-usable offline. If the server rejects your token while a session is running, Claude Code's hook
+(re-run `kcap login`). It exits 2 if no workspace answers at the configured address at all, as
+after the workspace is removed (re-run `kcap setup`). If the server can't be reached it says so and
+still exits 0, so it stays usable offline. If the server rejects your token while a session is running, Claude Code's hook
 says so as an in-session notice — `[kcap] The server rejected your credentials (HTTP 401) —
 session recording is paused. Run 'kcap login' to resume.` — instead of surfacing an opaque hook
 error, so you need not run `kcap whoami` to work out why recording stopped. The lifecycle

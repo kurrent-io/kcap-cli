@@ -20,6 +20,9 @@ public sealed class WhoamiCommand(
 
     static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
 
+    internal const string GoneLine     = "no workspace answers at this address — it may have been removed (run 'kcap setup')";
+    internal const int    GoneExitCode = 2;
+
     /// <summary>The server's verdict on the token, and the exit code it implies.</summary>
     internal readonly record struct ProbeVerdict(string Line, int ExitCode);
 
@@ -79,7 +82,21 @@ public sealed class WhoamiCommand(
             return 1;
         }
 
-        var verdict = Interpret(await ProbeAsync(baseUrl, snapshot.AccessToken));
+        var status = await ProbeAsync(baseUrl, snapshot.AccessToken);
+
+        // The probe path 404s on an older server and on a host with no workspace at all; only the
+        // second leaves nothing to verify against.
+        if (status == HttpStatusCode.NotFound) {
+            using var anonymous = http.Anonymous();
+
+            if (await WorkspaceProbe.AskAsync(anonymous, baseUrl, time) == WorkspaceAnswer.Gone) {
+                await Console.Out.WriteLineAsync($"Server:   {GoneLine}");
+
+                return GoneExitCode;
+            }
+        }
+
+        var verdict = Interpret(status);
         await Console.Out.WriteLineAsync($"Server:   {verdict.Line}");
 
         return verdict.ExitCode;

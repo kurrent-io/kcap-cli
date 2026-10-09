@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Commands;
@@ -16,6 +17,11 @@ sealed class SetupFacadeFactory(
         new OnboardingFacade(config, store, httpFactory, proxy, github, workos, progress ?? SetupCommand.StepProgress, browser,
             picker ?? SetupCommand.DefaultPicker(browser, () => true, time), provisioner, telemetry, endpoints,
             time, SetupCommand.WorkspaceGuard(requested)) {
-            KeyWatcher = ConsoleKeyWatcher.Instance
+            KeyWatcher     = ConsoleKeyWatcher.Instance,
+            ProbeWorkspace = async (tenant, ct) => {
+                using var client = httpFactory.CreateClient(CapacitorClients.Anonymous);
+
+                return await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
+            }
         };
 }

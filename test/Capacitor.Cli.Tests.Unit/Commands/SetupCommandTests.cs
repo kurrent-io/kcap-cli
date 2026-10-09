@@ -1716,6 +1716,35 @@ public class SetupCommandTests {
 
     // These drive argv. The three rejections return before any config read, network call or console
     // rule, so they need none of the E2E fixture below.
+    /// <summary>A removed workspace's host answers 404; setup must stop there rather than finish
+    /// against it and report success.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task WaitForWorkspaceAsync_stops_setup_when_the_workspace_does_not_answer() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(404));
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var answering = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .WaitForWorkspaceAsync(server.Urls[0], TimeSpan.Zero);
+
+        await Assert.That(answering).IsFalse();
+        await Assert.That(capture.GetCapturedError()).Contains("is not answering");
+    }
+
+    [Test]
+    public async Task WaitForWorkspaceAsync_passes_a_workspace_that_answers() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"provider":"WorkOS"}"""));
+
+        var answering = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .WaitForWorkspaceAsync(server.Urls[0], TimeSpan.Zero);
+
+        await Assert.That(answering).IsTrue();
+    }
+
     [Test]
     [NotInParallel]
     public async Task HandleAsync_rejects_half_a_pair_before_doing_anything() {

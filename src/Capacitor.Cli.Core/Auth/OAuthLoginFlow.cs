@@ -105,7 +105,7 @@ public static class OAuthLoginFlow {
     /// <returns>The GitHub access token on success, or <c>null</c> on failure.</returns>
     internal static async Task<string?> RunDeviceFlowAsync(
             GitHubOAuthClient github, string clientId, IBrowserLauncher launcher, TimeProvider time,
-            CancellationToken ct = default, IAuthProgress? progress = null) {
+            CancellationToken ct = default, IAuthProgress? progress = null, bool openBrowser = true) {
         progress ??= ConsoleAuthProgress.Instance;
 
         var deviceResponse = await github.RequestDeviceCodeAsync(clientId, ct);
@@ -119,7 +119,9 @@ public static class OAuthLoginFlow {
         var device   = (await deviceResponse.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.DeviceCodeResponse, ct))!;
         var interval = device.IntervalOrDefault;
 
-        var browserOpened = launcher.TryOpen(device.BrowserUri);
+        // An explicit device request means the browser is on another device: opening one here would
+        // land the code on a machine nobody is looking at.
+        var browserOpened = openBrowser && launcher.TryOpen(device.BrowserUri);
         var prefilled     = browserOpened && !string.IsNullOrEmpty(device.VerificationUriComplete);
 
         // Not copied when the page already carries the code: there is nothing to paste it into, and the
@@ -138,7 +140,7 @@ public static class OAuthLoginFlow {
         progress.Notice(
             browserOpened
                 ? $"  1. Your browser should have opened {shownUri}"
-                : $"  1. Open {shownUri} in a browser"
+                : $"  1. Open {shownUri} in a browser on any device"
         );
 
         if (browserOpened) progress.Notice("     (if it didn't open, go to that URL yourself)");
@@ -530,7 +532,7 @@ public static class OAuthLoginFlow {
             }
         }
 
-        return await RunDeviceFlowAsync(github, clientId, launcher, time, ct, progress);
+        return await RunDeviceFlowAsync(github, clientId, launcher, time, ct, progress, openBrowser: !forceDevice);
     }
 
     internal const string WorkOSApiBase = "https://api.workos.com";
@@ -611,7 +613,7 @@ public static class OAuthLoginFlow {
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> RunWorkOSDeviceFlowAsync(
             WorkOSClient workos, string clientId, IBrowserLauncher launcher, TimeProvider time,
-            CancellationToken ct = default, IAuthProgress? progress = null) {
+            CancellationToken ct = default, IAuthProgress? progress = null, bool openBrowser = true) {
         progress ??= ConsoleAuthProgress.Instance;
 
         var authorize = await workos.AuthorizeDeviceAsync(clientId, ct);
@@ -642,8 +644,9 @@ public static class OAuthLoginFlow {
             return null;
         }
 
-        // Best-effort: the population this flow exists for has no browser here at all.
-        var browserOpened = launcher.TryOpen(device.BrowserUri);
+        // Best-effort: the population this flow exists for has no browser here at all. An explicit
+        // device request skips it, as the GitHub flow does.
+        var browserOpened = openBrowser && launcher.TryOpen(device.BrowserUri);
 
         // The URL printed always matches the instruction under it. Opened: the complete one, which is
         // where the browser actually went, so following the line by hand lands on the same prefilled
@@ -657,7 +660,7 @@ public static class OAuthLoginFlow {
         progress.Notice(
             browserOpened
                 ? $"  1. Your browser should have opened {shownUri}"
-                : $"  1. Open {shownUri} in a browser");
+                : $"  1. Open {shownUri} in a browser on any device");
 
         // No clipboard copy, unlike the GitHub flow: the code has to be READ ALOUD OR RETYPED on
         // another device for this flow to mean anything, and a silent copy invites pasting it into
@@ -695,7 +698,7 @@ public static class OAuthLoginFlow {
         keys     ??= ConsoleKeyWatcher.Instance;
 
         if (ChooseWorkOSFlow(forceDevice) is WorkOSFlow.Device) {
-            return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, time, ct, progress);
+            return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, time, ct, progress, openBrowser: false);
         }
 
         using var escape = CancellationTokenSource.CreateLinkedTokenSource(ct);

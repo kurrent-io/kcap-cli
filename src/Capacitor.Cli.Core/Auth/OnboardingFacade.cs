@@ -211,6 +211,12 @@ public sealed class OnboardingFacade(
     /// </summary>
     internal IKeyWatcher KeyWatcher { get; init; } = NoKeyWatcher.Instance;
 
+    /// <summary>
+    /// Whether each discovered WorkOS workspace still answers; one that does not is left out. Unset, every
+    /// listed workspace is offered.
+    /// </summary>
+    internal Func<DiscoveredTenant, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
+
     /// <param name="adoptServer">
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the
     /// provider stamp, false leaves config untouched (a <c>None</c> server then has nothing to sign in with).
@@ -454,7 +460,8 @@ public sealed class OnboardingFacade(
             pickContext: new TenantPickContext(
                 Proxy: proxy,
                 ProxyUrl: endpoints.ProxyUrl,
-                PickerVersion: proxyConfig.CliPickerVersion));
+                PickerVersion: proxyConfig.CliPickerVersion),
+            probe: ProbeWorkspace);
 
         return flow switch {
             WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(

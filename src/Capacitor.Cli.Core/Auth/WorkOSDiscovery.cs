@@ -49,7 +49,8 @@ public static class WorkOSDiscovery {
             ITenantProvisioner?                             provisioner = null,
             CancellationToken                               ct = default,
             IAuthProgress?                                  progress = null,
-            TenantPickContext?                              pickContext = null) {
+            TenantPickContext?                              pickContext = null,
+            Func<DiscoveredTenant, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
@@ -76,15 +77,17 @@ public static class WorkOSDiscovery {
             return Failed(progress, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
         }
 
-        if (result.Tenants.Length == 0) {
+        var tenants = probe is null ? result.Tenants : await DropGoneAsync(result.Tenants, probe, progress, ct);
+
+        if (tenants.Length == 0) {
             return await OfferCreateAsync(
                 proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
-        var picked = result.Tenants.Length == 1
-            ? result.Tenants[0]
+        var picked = tenants.Length == 1
+            ? tenants[0]
             : await picker.PickAsync(
-                result.Tenants,
+                tenants,
                 (pickContext ?? TenantPickContext.None) with {
                     Bearer      = auth.AccessToken,
                     ViaLoopback = !auth.ViaDeviceGrant
@@ -94,7 +97,28 @@ public static class WorkOSDiscovery {
         // one that contradicts it — "no tenant selected" reads as a choice on a session that had none.
         if (picked is null) return new WorkOSDiscoveryFlow.Failed("No tenant selected.");
 
-        return await SwitchAsync(picked, result.Tenants, auth, proxyConfig.WorkOSClientId!, orgSwitch, progress);
+        return await SwitchAsync(picked, tenants, auth, proxyConfig.WorkOSClientId!, orgSwitch, progress);
+    }
+
+    /// <summary>
+    /// A removed tenant can keep its WorkOS organization, so the proxy still lists it. Picking it would
+    /// configure a profile against a host that only answers 404; leaving it out lets an account whose
+    /// every workspace is gone reach the create offer instead.
+    /// </summary>
+    static async Task<DiscoveredTenant[]> DropGoneAsync(
+            DiscoveredTenant[] tenants, Func<DiscoveredTenant, CancellationToken, Task<WorkspaceAnswer>> probe,
+            IAuthProgress progress, CancellationToken ct) {
+        var answers = await Task.WhenAll(tenants.Select(t => probe(t, ct)));
+        var kept    = new List<DiscoveredTenant>(tenants.Length);
+
+        for (var i = 0; i < tenants.Length; i++) {
+            if (answers[i] == WorkspaceAnswer.Gone)
+                progress.Notice($"{tenants[i].Label} ({tenants[i].Origin}) no longer answers, so it is left out.");
+            else
+                kept.Add(tenants[i]);
+        }
+
+        return [.. kept];
     }
 
     static async Task<WorkOSDiscoveryFlow> OfferCreateAsync(

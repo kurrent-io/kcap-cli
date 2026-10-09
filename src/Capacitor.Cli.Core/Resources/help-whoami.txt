@@ -10,3 +10,5 @@ Exit codes:
      unreachable, endpoint unavailable, or a server-side error)
   1  no token stored, the server rejected the token, or the token was issued by a
      different server than the one this profile targets — run `kcap login`
+  2  nothing answers as a workspace at the configured address (it may have been
+     removed) — run `kcap setup`
