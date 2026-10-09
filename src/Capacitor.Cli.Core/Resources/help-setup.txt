@@ -1,9 +1,23 @@
 kcap setup — Configure server, login, and install hooks
 
-Usage: kcap setup [options]
+Usage: kcap setup [<tenant>] [options]
+
+With no <tenant> or --server-url, setup discovers your workspace: it signs you
+in with your organization's single sign-on, then lets you pick from the
+workspaces you belong to, or offers to create one if you have none. --github
+signs in with GitHub instead, which never creates a workspace: without one,
+pass its URL. The install scripts (https://www.kurrent.io/install,
+install.ps1) run setup for you after a first install from a terminal; setup
+options passed to them without a terminal run it with --no-prompt.
+
+Arguments:
+  <tenant>                    Workspace to configure, skipping discovery: a
+                              bare slug expands to https://<tenant>.kcap.ai,
+                              a full URL is used as-is.
 
 Options:
-  --server-url <url>          Server URL (skip prompt)
+  --server-url <url>          Server URL, skipping discovery (self-hosted
+                              servers, or any full URL)
   --discover                  Sign in, report the workspaces this account can reach,
                               and stop. Configures nothing: no profile is written, no
                               workspace activated, no token stored, and no workspace
@@ -27,8 +41,9 @@ Options:
                               create, instead of being prompted for it. Requires
                               --org. A slug that is taken or malformed ends the run
                               naming it, rather than asking for another.
-  --no-prompt                 Non-interactive mode (requires --server-url, or
-                              --org + --slug to create a workspace as part of the run)
+  --no-prompt                 Non-interactive mode (requires <tenant> or
+                              --server-url, or --org + --slug to create a
+                              workspace as part of the run)
   --github                    Sign in with GitHub instead of org SSO during
                               the login step (default is org SSO when a
                               browser is available)
@@ -103,9 +118,10 @@ Options:
                               error. Omit the flag to preserve the existing
                               profile setting. Default scrub keeps
                               subscription auth working.
-  --skip-import               Don't offer the Step 6 import of this repo's
-                              past sessions. Also disables the auto-import
-                              that --no-prompt now performs by default.
+  --skip-import               Don't offer the Step 6 import of this machine's
+                              past sessions. Also disables the import that
+                              --no-prompt performs by default. An import you
+                              choose on the browser's Import screen still runs.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
@@ -114,7 +130,8 @@ copilot binary on PATH; Gemini CLI via ~/.gemini/ or the gemini binary on PATH;
 AWS Kiro CLI via ~/.kiro/ or the kiro/kiro-cli binary on PATH; Pi (badlogic/pi-mono)
 via ~/.pi/ or the pi binary on PATH; SST OpenCode via ~/.config/opencode/ (or
 ~/.local/share/opencode/) or the opencode binary on PATH; Google Antigravity via
-~/.gemini/antigravity/ or the antigravity binary on PATH. Setup lists the
+~/.gemini/antigravity/, ~/.gemini/antigravity-cli/, or the antigravity/agy binary
+on PATH. Setup lists the
 detected agents, then asks a single yes/no prompt to install kcap (hooks,
 skills, instructions, MCP) for all of them, instead of one prompt per agent.
 Hooks are installed user-wide (Pi, OpenCode, and Antigravity install a
@@ -143,14 +160,16 @@ ones are on your PATH, which have config on disk, which kcap is already wired
 into, and whether your login shell can find kcap — since only the machine can
 know that, and on a device-code sign-in the browser is a different box. The
 link is printed as well as opened, so a machine with no browser of its own can
-be finished from one on another. Press any key to stop waiting; setup carries
+be finished from one on another. Press t to stop waiting; setup carries
 on in the terminal either way. Skipped on servers that do not offer it, on
 servers that need no sign-in (auth provider None), and under --no-prompt.
 
 When you answer the browser's Agents screen, that answer is what gets installed:
 setup applies it instead of asking again, per agent and per choice, and says
 which agents you picked. A --skip-<agent> flag still wins, so a scripted opt-out
-is never overridden. Answering "Not now" installs nothing.
+is never overridden. Answering "Not now" installs nothing. The audience chosen
+on that screen becomes your default visibility, and the Import screen's answer
+runs the import from this machine, so the terminal does not ask either again.
 
 After a browser answer the terminal asks nothing more. The daemon takes
 --daemon-name if given, else this profile's name (your user name on a first
@@ -182,17 +201,25 @@ workspaces that use org SSO, so a workspace whose members sign in with the GitHu
 App appears here as "no tenant": choose "I already have a workspace", or re-run
 with --github.
 
-As a final step, setup offers to import this repository's past sessions across
-every detected agent (equivalent to `kcap import --repo .`). It's only offered
-when the current directory is a git repo with a resolvable origin remote and
-authentication requirements are satisfied (including no-auth servers, auth
-provider None); otherwise it's skipped with a one-line reason and the usual
-`kcap import` hint. Opt out with --skip-import.
+As a final step, setup offers to import past sessions from every detected
+agent on this machine (equivalent to `kcap import --all`), whether or not the
+current directory is a git repo. It's only offered when authentication
+requirements are satisfied (including no-auth servers, auth provider None);
+otherwise it's skipped with a one-line reason and the usual `kcap import` hint.
+If you answered the browser's Import screen, that import has already run and
+this step reports it instead of asking. Opt out with --skip-import, which
+does not cancel an import chosen in the browser.
 
-Behavior change: --no-prompt now auto-imports the current repository's past
-sessions too, matching the wizard's default-yes answer for this step. Existing
-unattended/scripted `kcap setup --no-prompt` invocations will start uploading
-current-repo session history unless they add --skip-import.
+--no-prompt answers yes to this step too, so `kcap setup --no-prompt` uploads
+this machine's session history unless you add --skip-import.
+
+Recording starts with the next session of an agent kcap is installed into
+(`kcap plugin install` adds one setup did not): hooks load when a session
+starts, so restart any agent that was already running. A session you then
+start should appear in your workspace's dashboard; `kcap status` shows that
+kcap is configured and can reach the server, not that sessions are recorded.
+Commits are filed under their agent session by a git config hook that needs
+git 2.54 or later; an older git ignores it.
 
 For project-scope or post-setup re-installs, use:
 
