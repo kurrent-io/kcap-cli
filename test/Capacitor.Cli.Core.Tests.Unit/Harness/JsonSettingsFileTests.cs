@@ -134,11 +134,14 @@ public class JsonSettingsFileTests {
     public async Task Edit_reads_a_file_the_vendor_holds_open_for_writing() {
         var path = Tmp.CreateFile("settings.json", """{ "theme": "dark" }""");
 
+        string? seen = null;
         SettingsEdit result;
+        // The edit changes nothing, so only the read is exercised: Windows cannot rename over a file
+        // another handle holds open, which would fail a replace for a reason unrelated to the read.
         using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
-            result = JsonSettingsFile.Edit(path, root => { root["a"] = 1; return true; });
+            result = JsonSettingsFile.Edit(path, root => { seen = root["theme"]?.ToJsonString(); return false; });
 
-        await Assert.That(result).IsEqualTo(SettingsEdit.Changed);
-        await Assert.That(JsonNode.Parse(File.ReadAllText(path))!["theme"]!.GetValue<string>()).IsEqualTo("dark");
+        await Assert.That(result).IsEqualTo(SettingsEdit.Unchanged);
+        await Assert.That(seen).IsEqualTo("\"dark\"");
     }
 }
