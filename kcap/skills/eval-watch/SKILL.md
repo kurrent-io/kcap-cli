@@ -53,8 +53,8 @@ A failure at a lower layer never re-opens the file for a higher one.
 is a boolean. Fail → not selectable; try the next candidate file, or close with no lookup if none
 remain.
 
-**Layer B** (may its ids drive data): `cohort` ∈ {exact, partial_exact, unknown}; `background` ∈
-{not_needed, running, exited_zero, failed}; `foreground_certainty` ∈ {complete, incomplete};
+**Layer B** (may its ids drive data): `cohort` ∈ {exact, partial_exact, unknown}; `scope` ∈ {all,
+repos} (absent reads as `all`); `background` ∈ {not_needed, running, exited_zero, failed}; `foreground_certainty` ∈ {complete, incomplete};
 `handoff_suppressed` is null or one of import_failed, no_new_sessions, nothing_landed,
 analytics_not_in_plan, skill_not_installed, no_agent_detected (older setups write
 `analytics_not_in_plan`); every entry of `session_ids` and
@@ -76,8 +76,10 @@ If `handoff_offered` is false, branch on `handoff_suppressed` and CLOSE:
 - `no_new_sessions` → "nothing to watch — that import found no new sessions".
 - `nothing_landed` → "the sessions that import selected were skipped at import time"; point at
   `kcap import --all` for per-session reasons; no retry.
-- `import_failed` → "that import did not get running"; name `kcap import --all --yes` and the
-  `background_log` when displayable.
+- `import_failed` → "that import did not get running"; name `kcap import --all --yes` when the
+  file's `scope` is `all`; when it is `repos`, say to run `kcap setup` again and choose the same
+  repositories at the same Only me / Shared levels (plain `kcap import` would not keep those levels); and the `background_log`
+  when displayable.
 - `analytics_not_in_plan` / `skill_not_installed` / `no_agent_detected` → the import ran and you
   can follow it now: continue as if offered, watching the file's cohort as usual (sections 4–5).
 
@@ -87,12 +89,19 @@ If the selected file's `cohort` is `unknown`, skip this check and go straight to
 is no cohort to look up either way, and the mismatch remediation below would be misleading when
 watching was never possible.
 
-Otherwise, run `kcap whoami` and compare its server URL to `server_url`: lowercase scheme and host,
-drop a default port (80 for http, 443 for https only), trim a trailing slash, compare the path
-as-is. Match → continue to section 5. Mismatch or `whoami` failure → make **NO** eval lookup.
-CLOSE with the file's links and this remediation: start your agent from a shell where `kcap whoami`
-reports `<server_url>` — set `KCAP_PROFILE=<profile>`, unset `KCAP_URL`, and set `KCAP_CONFIG_DIR`
-if kcap uses a custom config directory — then prompt again.
+Otherwise, in this order — any CLOSE here makes **NO** eval lookup:
+
+1. If `get_connection` is not among your `kcap-sessions` tools, this kcap is older than the skill:
+   say to update kcap and restart the agent, then CLOSE. `kcap whoami` is no substitute — it runs
+   in another process and cannot say which server the agent's MCP server reads.
+2. Run `kcap whoami`. If it fails because kcap is not logged in, say to run `kcap login`, then CLOSE.
+3. Call `get_connection` and compare its `server_url` to the file's — lowercase scheme and host,
+   drop a default port (80 for http, 443 for https only), trim a trailing slash, compare the path
+   as-is — and its `profile` to the file's `profile`, exactly. Both match → continue to section 5.
+   Either differs → CLOSE with the file's links and this remediation: start your agent from a
+   shell with `KCAP_PROFILE=<profile>`, `KCAP_URL` unset, and `KCAP_CONFIG_DIR` set if kcap uses a
+   custom config directory — restarting the agent, since its kcap-sessions server only reads those
+   when it starts — then prompt again.
 
 ## 5. Watch the cohort
 

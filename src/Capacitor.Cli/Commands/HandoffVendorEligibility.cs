@@ -8,9 +8,12 @@ namespace Capacitor.Cli.Commands;
 internal static class HandoffVendorEligibility {
     public const string SkillName = "eval-watch";
 
-    public static IReadOnlyList<HandoffVendor> Eligible(HarnessRegistry harnesses, CodingAgentsStep.Paths paths) => [
+    /// <param name="installing">Harnesses an install still to run will give the skill — the browser leg
+    /// decides before setup installs anything.</param>
+    public static IReadOnlyList<HandoffVendor> Eligible(
+            HarnessRegistry harnesses, CodingAgentsStep.Paths paths, Func<HarnessId, bool>? installing = null) => [
         .. HarnessRegistry.Identities
-            .Where(i => harnesses.Detected(i.Id) && HasSkill(i.Id, paths))
+            .Where(i => harnesses.Detected(i.Id) && (HasSkill(i.Id, paths) || installing?.Invoke(i.Id) == true))
             .Select(i => new HandoffVendor(i.Id, i.Label, harnesses.ResolveExecutable(i.Id)))
     ];
 

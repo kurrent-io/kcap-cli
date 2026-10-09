@@ -118,6 +118,7 @@ public static class CommandServices {
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
         services.AddSingleton<IBackgroundImportSpawner, BackgroundImportSpawner>();
+        services.AddTransient<DetachedImportPlanRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
