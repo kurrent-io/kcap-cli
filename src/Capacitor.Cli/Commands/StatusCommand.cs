@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time,
+        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time, UserHome home,
         bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
@@ -58,7 +58,7 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync(
                 $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
 
-        if (harnesses.Any(h => h.Signals.IsWired) && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
+        if (new GitHookInstaller(home).IsInstalled() && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
             await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
 
         // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
@@ -392,19 +392,12 @@ public sealed class StatusCommand(
     internal sealed record DaemonEntry(string Name, int? Pid, bool Alive);
 
     /// <summary>
-    /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"
-    /// means is each vendor's own — Gemini merges its hooks into the shared
-    /// <c>~/.gemini/settings.json</c>, while Pi and OpenCode track a live-ingest extension file
-    /// rather than hooks — but all share the line for at-a-glance parity. Pure: the probing happens
-    /// in the caller.
-    /// </summary>
-    /// <summary>
-    /// Whether a wired agent has actually run a hook on this machine. Configured is not recording: the
-    /// hooks load only in a new session, and Codex runs none until they are trusted.
+    /// Whether a wired agent has run a kcap hook on this machine: proof the hooks loaded (and, for
+    /// Codex, were trusted), not that a session reached the server. Hooks load only in a new session.
     /// </summary>
     internal static string RecordingLine(HarnessId id, string label, DateTimeOffset? lastEvent, DateTimeOffset now) =>
         lastEvent is { } at
-            ? $"{label}: recording, last hook event {Ago(now - at)}"
+            ? $"{label}: hooks running, last hook event {Ago(now - at)}"
             : id is HarnessId.Codex
                 ? $"{label}: no hook event yet. Start a new {label} session and accept its prompt to trust the kcap hooks"
                 : $"{label}: no hook event yet. Start a new {label} session";
@@ -422,6 +415,13 @@ public sealed class StatusCommand(
             ? $"{git.ToString(3)} ignores kcap's commit hook (needs {GitHookInstaller.MinimumGit}+); commits are read from the agent's shell commands"
             : null;
 
+    /// <summary>
+    /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"
+    /// means is each vendor's own — Gemini merges its hooks into the shared
+    /// <c>~/.gemini/settings.json</c>, while Pi and OpenCode track a live-ingest extension file
+    /// rather than hooks — but all share the line for at-a-glance parity. Pure: the probing happens
+    /// in the caller.
+    /// </summary>
     internal static string BuildHooksStatusLine(IEnumerable<(HarnessId Id, bool Wired)> wiring) =>
         string.Join("  ", wiring.Select(w => $"{ShortLabel(w.Id)} {(w.Wired ? "✓" : "✗")}"));
 

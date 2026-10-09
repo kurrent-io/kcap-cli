@@ -883,8 +883,10 @@ switch (command) {
         return 0;
     }
     case "hook": {
-        if (HarnessRegistry.Identities.FirstOrDefault(i => args.Contains($"--{i.VendorId}")) is { } hookVendor)
-            new HookActivity(config, time).Stamp(hookVendor.VendorId);
+        var hookVendor = HarnessRegistry.Identities.FirstOrDefault(i => args.Contains($"--{i.VendorId}"))?.VendorId;
+
+        // Codex blocks on this hook's stdout, so its stamp waits until the hook has answered.
+        if (hookVendor is not null && hookVendor != HarnessId.Codex.VendorId) new HookActivity(config, time).Stamp(hookVendor);
 
         // Blocks the agent's Read, so it skips the spool drain below.
         if (args.Contains("--claude") && args.Contains("--plan-read")) {
@@ -915,7 +917,10 @@ switch (command) {
             return await Run<ClaudeHookCommand>().Handle(new StringReader(claudeHookBody!));
         }
         if (args.Contains("--codex")) {
-            return await Run<CodexHookCommand>().Handle(Console.In);
+            var codexExit = await Run<CodexHookCommand>().Handle(Console.In);
+            new HookActivity(config, time).Stamp(HarnessId.Codex.VendorId);
+
+            return codexExit;
         }
         if (args.Contains("--cursor")) {
             return await Run<CursorHookCommand>().Handle(Console.In);

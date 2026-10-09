@@ -16,10 +16,10 @@ Reports:
   Hooks      Per-agent integration state: Claude plugin, Codex / Cursor /
              Copilot / Gemini / Kiro hooks, the Pi / OpenCode live-ingest
              extensions, and the Antigravity hooks block (✓ installed,
-             ✗ not installed). Under it, each wired agent's recording
-             state: when it last ran a kcap hook on this machine, or that
-             it has not yet (start a new session; Codex also needs its
-             kcap hooks trusted). --json carries it as last_hook_event.
-  Git        Shown only when git is older than 2.54, which ignores kcap's
-             commit hook
+             ✗ not installed). Under it, whether each wired agent's hooks
+             run: when it last ran a kcap hook on this machine, or that it
+             has not yet (start a new session; Codex also needs its kcap
+             hooks trusted). --json carries it as last_hook_event.
+  Git        Shown only when kcap's commit hook is installed and git is
+             older than 2.54, which ignores it
   Daemon     Whether the daemon is running (PID file check)

@@ -2336,9 +2336,10 @@ You'll see the offer on whichever surface reaches you:
   stderr (never in scripts or pipes), like the "update available" notice.
 - **`kcap status`** always lists any installed-but-unconfigured agent with the command to fix it —
   even one you've dismissed (status tells the whole truth).
-- **`kcap status`** also shows whether each wired agent is actually recording: when it last ran a
-  kcap hook on this machine, or that it has not yet (start a new session; Codex runs no hook until
-  you trust kcap's). `--json` carries the time as `last_hook_event`, and a git older than 2.54,
+- **`kcap status`** also shows whether each wired agent's hooks are actually running: when it last
+  ran a kcap hook on this machine, or that it has not yet (start a new session; Codex runs no hook
+  until you trust kcap's). A hook running proves the integration loaded, not that a session reached
+  the server. `--json` carries the time as `last_hook_event`, and a git older than 2.54,
   which ignores the commit hook, gets its own warning line.
 
 Manage the nudges with `kcap harness`:

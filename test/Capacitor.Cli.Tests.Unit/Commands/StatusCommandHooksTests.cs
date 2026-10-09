@@ -148,7 +148,7 @@ public class StatusCommandHooksTests {
     public async Task RecordingLine_reports_how_long_ago_the_last_hook_ran(int minutesAgo, string expected) {
         var line = StatusCommand.RecordingLine(HarnessId.Claude, "Claude Code", Now.AddMinutes(-minutesAgo), Now);
 
-        await Assert.That(line).IsEqualTo($"Claude Code: recording, last hook event {expected}");
+        await Assert.That(line).IsEqualTo($"Claude Code: hooks running, last hook event {expected}");
     }
 
     [Test]
