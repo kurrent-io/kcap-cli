@@ -86,6 +86,23 @@ public class McpFlowsServerStartAgentTests {
     }
 
     [Test]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\"}", true)]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\" \" ,\"dispatch_state\":\"sent\"}", true)]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\"}", true)]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\",\"dispatch_state\":\"sent\"}", false)]
+    [Arguments("{\"status\":\"pending\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\",\"dispatch_state\":\"unknown\"}", false)]
+    [Arguments("{\"status\":\"pending\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\",\"dispatch_state\":\"not_sent\"}", false)]
+    public async Task A_loose_end_start_requires_a_claim_receipt_and_never_retries(string answer, bool error) {
+        using var server = Answering(200, answer);
+        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry", ["work_item"] = "le:end" };
+        var (text, isError) = await CallAsync(server, arguments);
+        await Assert.That(isError).IsEqualTo(error);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(1);
+        if (error) await Assert.That(text).IsEqualTo(StartAgentTool.UnreadableAnswer);
+        else await Assert.That(text).Contains("loose_end_claim_id: claim");
+    }
+
+    [Test]
     public async Task A_machine_with_no_persisted_id_sends_none_and_is_left_without_one() {
         using var server = Answering(200, Requested);
 

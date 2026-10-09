@@ -44,6 +44,21 @@ public class RecapContinuationTests {
     }
 
     [Test]
+    [Arguments(404)]
+    [Arguments(405)]
+    public async Task Unsupported_claim_adoption_exits_one_without_claiming_transfer(int status) {
+        using var output = ConsoleOutput.StartCapture();
+        using var client = Serving(path => path switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (status, ""),
+            _ => (200, "[]")
+        });
+        var code = await Command().RunWithAsync(client, "http://x", Previous, Current, force: false);
+        await Assert.That(code).IsEqualTo(1);
+        await Assert.That(output.GetCapturedOutput()).Contains("unsupported");
+    }
+
+    [Test]
     public async Task A_refusal_exits_two_on_stderr() {
         using var error  = ConsoleOutput.StartErrorCapture();
         using var client = Serving(_ => (200, "{}"));

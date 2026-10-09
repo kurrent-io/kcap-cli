@@ -73,6 +73,20 @@ public class McpHandoffServerTests {
     }
 
     [Test]
+    [Arguments(404)]
+    [Arguments(405)]
+    public async Task Unsupported_claim_adoption_is_an_incomplete_takeover(int status) {
+        var handler = new Answers(req => req.RequestUri!.AbsolutePath switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (status, ""),
+            _ => (200, "[]")
+        });
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", handler);
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(Text(response)).Contains("unsupported");
+    }
+
+    [Test]
     public async Task A_refusal_is_a_tool_error_carrying_the_reason() {
         var response = await Call($$"""{"session_id":"{{Current}}"}""", new Answers(_ => (200, "{}")));
 

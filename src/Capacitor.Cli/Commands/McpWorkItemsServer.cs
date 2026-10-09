@@ -198,6 +198,10 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             using var evalDeadline = IsWorkItemEvalTool(toolName) ? new CancellationTokenSource(NextWorkRequestDeadline, time) : null;
             var       evalToken    = evalDeadline?.Token ?? CancellationToken.None;
 
+            var claimedClose = toolName == "close_loose_end" && arguments?["claim_id"] is not null
+                ? BuildCloseLooseEndBody(arguments, HarnessRequesterContext.Resolve(Environment.GetEnvironmentVariable, Directory.Exists).SessionId)
+                : null;
+
             using var httpResponse = toolName switch {
                 "declare_work_item"      => await client.PostAsync($"{baseUrl}/api/work-items/declare", ToJsonContent(BuildDeclareBody(arguments))),
                 "get_session_work_items" => await client.GetAsync(BuildSessionUrl(baseUrl, arguments)),
@@ -210,6 +214,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 "list_loose_ends"  => await client.GetAsync(BuildLooseEndsUrl(baseUrl, arguments, McpToolArguments.OptionalString(arguments, "repo_hash") ?? await cwdRepoHash())),
                 "claim_loose_end"  => await client.PostAsync($"{baseUrl}/api/loose-ends/claim", ToJsonContent(BuildClaimOperationBody(arguments, "loose_end_id"))),
                 "release_loose_end" => await client.PostAsync($"{baseUrl}/api/loose-ends/release", ToJsonContent(BuildClaimOperationBody(arguments, "claim_id"))),
+                "close_loose_end" when claimedClose is not null => await client.PostAsync($"{baseUrl}/api/loose-ends/complete", ToJsonContent(claimedClose)),
                 "close_loose_end"  => await CloseLooseEndAsync(client, baseUrl, arguments),
                 "reopen_loose_end" => await client.PostAsync($"{baseUrl}/api/loose-ends/reopen", ToJsonContent(BuildReopenLooseEndBody(arguments))),
 
@@ -269,7 +274,17 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 var (text, isError) = LooseEndClaimToolResults.Render((int)httpResponse.StatusCode, body);
                 return BuildToolResult(id, text, isError);
             }
-            if (toolName == "list_loose_ends") return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
+            if (toolName == "list_loose_ends") {
+                if (httpResponse.IsSuccessStatusCode && McpToolArguments.OptionalString(arguments, "claimed_session_id") is { } worker
+                    && !LooseEndClaimToolResults.ConfirmsWorker(body, worker))
+                    return BuildToolResult(id, "Error: the server did not confirm the worker-filtered claim metadata. Check server support before treating these rows as owned work.", isError: true);
+                return RenderLooseEndListResult(id, httpResponse.StatusCode, body);
+            }
+            if (claimedClose is not null) {
+                var (text, isError) = LooseEndClaimToolResults.RenderCompletion((int)httpResponse.StatusCode, body,
+                    claimedClose["claim_id"]!.GetValue<string>(), claimedClose["session_id"]!.GetValue<string>());
+                return BuildToolResult(id, text, isError);
+            }
             if (toolName is "close_loose_end" or "reopen_loose_end") return RenderLooseEndChangeResult(id, toolName, httpResponse.StatusCode, body);
 
             if (!httpResponse.IsSuccessStatusCode) {

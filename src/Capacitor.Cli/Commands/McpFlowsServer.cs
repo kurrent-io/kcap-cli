@@ -529,7 +529,7 @@ class McpFlowsServer(
                     if (answer.StatusCode == HttpStatusCode.Unauthorized)
                         return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
-                    var (text, isError) = StartAgentTool.Render((int)answer.StatusCode, await answer.Content.ReadAsStringAsync());
+                    var (text, isError) = StartAgentTool.Render((int)answer.StatusCode, await answer.Content.ReadAsStringAsync(), start.WorkItem);
 
                     return BuildToolResult(id, text, isError);
                 }

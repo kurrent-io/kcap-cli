@@ -283,6 +283,71 @@ public class McpWorkItemsNextWorkTests {
     }
 
     [Test]
+    [Arguments(200, "{\"loose_end_id\":\"end\",\"state\":\"closed\"}", true)]
+    [Arguments(200, "{\"loose_end_id\":\"end\",\"state\":\"closed\",\"claim_id\":\"other\",\"session_id\":\"worker\"}", true)]
+    [Arguments(200, "{\"loose_end_id\":\"end\",\"state\":\"closed\",\"claim_id\":\"attempt\",\"session_id\":\"other\"}", true)]
+    [Arguments(200, "{\"loose_end_id\":\"end\",\"state\":\"open\",\"claim_id\":\"attempt\",\"session_id\":\"worker\"}", true)]
+    [Arguments(200, "{\"loose_end_id\":\"end\",\"state\":\"closed\",\"claim_id\":\"attempt\",\"session_id\":\"worker\"}", false)]
+    [Arguments(404, "", true)]
+    [Arguments(405, "", true)]
+    [Arguments(404, "{\"code\":\"next_work_unavailable\"}", true)]
+    public async Task Claimed_completion_requires_a_matching_receipt_on_its_own_route(int status, string body, bool error) {
+        var (h, response) = await DispatchToolAsync("close_loose_end", """{"loose_end_id":"end","claim_id":"attempt","session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), (HttpStatusCode)status, body);
+        await Assert.That(Result(response).IsError).IsEqualTo(error);
+        if (error) await Assert.That(Result(response).Text).DoesNotContain("Closed loose end");
+        else await Assert.That(Result(response).Text).Contains("Closed loose end end");
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(h.Url).IsEqualTo("http://x/api/loose-ends/complete");
+        var request = JsonNode.Parse(h.RequestBody!)!;
+        await Assert.That(request["claim_id"]!.GetValue<string>()).IsEqualTo("attempt");
+        await Assert.That(request["session_id"]!.GetValue<string>()).IsEqualTo("worker");
+    }
+
+    [Test]
+    [Arguments("[]", false)]
+    [Arguments("[{\"claim_id\":\"c\",\"session_id\":\"other\",\"status\":\"in_progress\"}]", true)]
+    [Arguments("[{\"claim_id\":\"c\",\"session_id\":\"worker\",\"status\":\"released\"}]", true)]
+    [Arguments("[{\"claim_id\":\"c\",\"session_id\":\"worker\",\"status\":\"in_progress\"}]", false)]
+    [Arguments("[{\"claim_id\":\"c\",\"session_id\":\"worker\",\"status\":\"finishing\"}]", false)]
+    public async Task Worker_filtered_lists_require_matching_active_claim_metadata(string claims, bool error) {
+        var items = claims == "[]" ? "[]" : $$"""[{"loose_end_id":"end","claims":{{claims}}}]""";
+        var (h, response) = await DispatchToolAsync("list_loose_ends", """{"claimed_session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.OK, $$"""{"items":{{items}}}""");
+        await Assert.That(Result(response).IsError).IsEqualTo(error);
+        await Assert.That(h.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Completion_acknowledgments_accept_canonical_worker_spellings() {
+        var (_, response) = await DispatchToolAsync("close_loose_end", """{"loose_end_id":"end","claim_id":"attempt","session_id":"AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.OK,
+            """{"loose_end_id":"end","state":"closed","claim_id":"attempt","session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}""");
+        await Assert.That(Result(response).IsError).IsFalse();
+    }
+
+    [Test]
+    public async Task An_older_server_cannot_silently_ignore_the_worker_filter() {
+        var (_, response) = await DispatchToolAsync("list_loose_ends", """{"claimed_session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.OK, """{"items":[{"loose_end_id":"end","text":"legacy row"}]}""");
+        await Assert.That(Result(response).IsError).IsTrue();
+    }
+
+    [Test]
+    [Arguments("released")]
+    [Arguments("recorded_catching_up")]
+    public async Task A_recorded_release_does_not_report_retained_ownership(string outcome) {
+        var (h, response) = await DispatchToolAsync("release_loose_end", """{"claim_id":"attempt","session_id":"worker"}""",
+            () => ValueTask.FromResult<string?>(null), HttpStatusCode.OK,
+            $$$"""{"outcome":"{{{outcome}}}","claim":{"claim_id":"attempt","status":"released","session_id":"worker"}}""");
+        await Assert.That(h.Calls).IsEqualTo(1);
+        await Assert.That(Result(response).IsError).IsFalse();
+        await Assert.That(Result(response).Text).Contains("Ownership is released");
+        await Assert.That(Result(response).Text).DoesNotContain("Retain claim_id");
+        await Assert.That(Result(response).Text).DoesNotContain("Ownership was recorded");
+    }
+
+    [Test]
     [Arguments("completed")]
     [Arguments("recorded_catching_up")]
     public async Task Release_of_a_completed_attempt_does_not_claim_the_work_is_open(string outcome) {

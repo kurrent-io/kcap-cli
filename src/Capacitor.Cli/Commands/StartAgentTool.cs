@@ -108,12 +108,12 @@ static class StartAgentTool {
 
     internal static string Unanswered(string how) => $"Error: the start request (POST {Route}) {how}. {OutcomeUnknown}";
 
-    internal static (string Text, bool IsError) Render(int status, string body) {
+    internal static (string Text, bool IsError) Render(int status, string body, string workItem) {
         using var document = TryParse(body);
         var root = document?.RootElement ?? default;
 
         if (status is >= 200 and < 300)
-            return FormatStart(root) is { } result ? (result, false) : (UnreadableAnswer, true);
+            return FormatStart(root, workItem.StartsWith("le:", StringComparison.Ordinal)) is { } result ? (result, false) : (UnreadableAnswer, true);
 
         var code = root.Str("error") is { Length: > 0 } stated ? stated : null;
 
@@ -147,12 +147,14 @@ static class StartAgentTool {
         }
     }
 
-    static string? FormatStart(JsonElement root) {
+    static string? FormatStart(JsonElement root, bool requiresClaim) {
         if (root.Str("agent_id") is not { Length: > 0 } agentId) return null;
         var status = root.Str("status") ?? "requested";
         var dispatch = root.Str("dispatch_state");
         if (status is not ("requested" or "pending")) return null;
-        if (status == "pending" && (root.Str("loose_end_claim_id") is not { Length: > 0 } || dispatch is not ("unknown" or "not_sent"))) return null;
+        var hasClaim = !string.IsNullOrWhiteSpace(root.Str("loose_end_claim_id"));
+        if (status == "pending" && (!hasClaim || dispatch is not ("unknown" or "not_sent"))) return null;
+        if (requiresClaim && (!hasClaim || status == "requested" && dispatch != "sent")) return null;
 
         var text = new StringBuilder($"status: {status}\nagent_id: {agentId}\n");
 

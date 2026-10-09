@@ -31,6 +31,7 @@ public class SessionTakeoverTests {
         routes.Get($"/api/sessions/{Previous}/summary", 200, summary);
         if (items is not null) routes.Get($"/api/work-items/session/{Previous}", 200, items);
         if (plans is not null) routes.Get($"/api/sessions/{Previous}/plans", 200, plans);
+        routes.Post("/api/loose-ends/adopt", 200, """{"results":[]}""");
         return routes;
     }
 
@@ -461,7 +462,8 @@ public class SessionTakeoverTests {
     }
 
     [Test]
-    [Arguments(404, "", "unsupported", false)]
+    [Arguments(404, "", "unsupported", true)]
+    [Arguments(405, "", "unsupported", true)]
     [Arguments(404, "{\"code\":\"next_work_unavailable\"}", "unavailable", true)]
     [Arguments(404, "{\"code\":\"session_not_found\"}", "failed", true)]
     [Arguments(503, "{\"code\":\"loose_end_claims_unavailable\"}", "failed", true)]
@@ -477,11 +479,40 @@ public class SessionTakeoverTests {
     [Test]
     public async Task A_recorded_adoption_waiting_for_projection_retains_its_identity() {
         var routes = Server(Ended());
-        routes.Post("/api/loose-ends/adopt", 200, """{"results":[{"outcome":"recorded_catching_up","attempted_claim_id":"old","claim":{"claim_id":"new"}}]}""");
+        routes.Post("/api/loose-ends/adopt", 200, """{"results":[{"outcome":"recorded_catching_up","attempted_claim_id":"old","claim":{"claim_id":"new","session_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}""");
         var result = (TakeoverResult.Completed)await Run(routes);
         await Assert.That(result.Unsuccessful).IsFalse();
         await Assert.That(TakeoverReport.Render(result.Outcome)).Contains("recorded_catching_up");
         await Assert.That(TakeoverReport.Render(result.Outcome)).Contains("new");
+    }
+
+    [Test]
+    [Arguments("{\"claim_id\":\"new\",\"session_id\":\"other\"}", "\"old\"")]
+    [Arguments("{\"claim_id\":\"new\"}", "\"old\"")]
+    [Arguments("{\"claim_id\":\"new\",\"session_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}", "null")]
+    [Arguments("{\"claim_id\":\"new\",\"session_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}", "\" \"")]
+    public async Task Claim_adoption_requires_both_the_attempt_and_current_worker(string claim, string attempted) {
+        var routes = Server(Ended());
+        routes.Post("/api/loose-ends/adopt", 200,
+            $$$"""{"results":[{"outcome":"transferred","attempted_claim_id":{{{attempted}}},"claim":{{{claim}}}}]}""");
+        var result = (TakeoverResult.Completed)await Run(routes);
+        await Assert.That(result.Unsuccessful).IsTrue();
+        await Assert.That(result.Outcome["loose_end_claims"]!["status"]!.GetValue<string>()).IsEqualTo("partial");
+        await Assert.That(routes.Posts.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments("acquired")]
+    [Arguments("already_owned")]
+    [Arguments("transferred")]
+    [Arguments("recorded_catching_up")]
+    public async Task Claim_adoption_accepts_current_server_outcomes_and_canonical_worker_ids(string outcome) {
+        var routes = Server(Ended());
+        routes.Post("/api/loose-ends/adopt", 200,
+            $$$"""{"results":[{"outcome":"{{{outcome}}}","attempted_claim_id":"old","claim":{"claim_id":"new","session_id":"BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"}}]}""");
+        var result = (TakeoverResult.Completed)await Run(routes);
+        await Assert.That(result.Unsuccessful).IsFalse();
+        await Assert.That(result.Outcome["loose_end_claims"]!["status"]!.GetValue<string>()).IsEqualTo("ok");
     }
 
     [Test]

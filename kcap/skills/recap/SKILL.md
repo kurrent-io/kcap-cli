@@ -39,7 +39,7 @@ It attaches this session to X's work items and unfinished plans, asks the server
 - **Before resuming a plan task, verify it** as the `plans` skill's "Verify before continuing" says: a task left `in_progress` may be half-written.
 - **Read `loose_end_claims.results` individually.** Each `attempted_claim_id` identifies the predecessor; a transferred or reacquired claim supplies the current `claim_id`. Keep that new identity for completion or release. `recorded_catching_up` is recorded ownership, not a reason to acquire another attempt.
 - **Partial adoption is not success.** `ownership_lost`, `already_claimed` or unavailable ownership can coexist with successful transfers. Report which attempts failed; do not act as their owner, close them with the predecessor id, or launch duplicates. `--force` changes only the local liveness confirmation, not server ownership admission.
-- **`unsupported`** means the server has no claim-adoption route; report that separately from an ordinary API failure. Attachment alone does not prove ownership.
+- **`unsupported`** means the server has no claim-adoption route; report that separately from an ordinary API failure. Takeover is incomplete: the MCP tool returns an error and recap exits 1, even if work-item or plan attachment succeeded. Attachment alone does not prove ownership.
 - Tell the user which work items, plan task and claims you took over, including failures. Work items reported as not available on this plan are expected on the Free plan.
 
 ## Usage

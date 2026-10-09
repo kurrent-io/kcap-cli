@@ -375,7 +375,7 @@ kcap recap 3f2a… --continue         # take over the session's work items and p
 kcap recap 3f2a… --continue --force # same, even when the session looks live
 ```
 
-`--continue` (run inside the session that takes over, with an explicit session id) attaches the current session to the continued session's work items and unfinished plans, then prints the recap. It refuses with exit code 2, and prints no recap, while the continued session may still be running or when no current session can be identified; `--force` overrides that, and should be used only after confirming it is not. It also requests adoption of loose-end claims independently of work-item availability. The report includes each predecessor attempt, outcome and new claim identity. It exits 1, after the recap, when an attachment or claim adoption fails, including partial adoption. An older server without the adoption route is reported as unsupported, not as successful claim transfer. `--force` never bypasses server ownership checks.
+`--continue` (run inside the session that takes over, with an explicit session id) attaches the current session to the continued session's work items and unfinished plans, then prints the recap. It refuses with exit code 2, and prints no recap, while the continued session may still be running or when no current session can be identified; `--force` overrides that, and should be used only after confirming it is not. It also requests adoption of loose-end claims independently of work-item availability. The report includes each predecessor attempt, outcome and new claim identity. It exits 1, after the recap, when an attachment or claim adoption fails, including partial adoption. An older server without the adoption route is reported as unsupported and exits 1: takeover is incomplete, even when work-item and plan attachment succeeded. `--force` never bypasses server ownership checks.
 
 `--per-turn` prints a one-block-per-turn index — useful for orienting in a long session before drilling into a specific turn with `--get-turn <N>` (the turn number shown in the `--per-turn` index). `--get-turn` takes the turn number as its value; the session id is the usual positional (or comes from the current session), so `kcap recap <sessionId> --get-turn <N>` works too.
 
@@ -685,7 +685,7 @@ kcap mcp workitems
 
 Stdio MCP server that lets coding agents correlate the current session to the SDLC work item (issue/PR) it belongs to, **declare that work item's structure** — its breakdown into parts and its blocks/blocked-by dependencies — read that structure back, dismiss or restore next-work suggestions, and close or reopen loose ends. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
 
-It provides twenty-one tools:
+It provides these tools:
 
 - **`declare_work_item`** — attach the current session (and its continuation chain) to a work item. Pass exactly one of `issue_key` (a tracker key such as `"AI-1234"`, an issue number in the session's repository such as `"#123"`, a qualified `"owner/repo#123"`, or a GitHub issue URL), `pr_number`, `work_item_id`, or `new_title` (creates a brand-new work item).
 - **`get_session_work_items`** — list the work items the current session is attached to.

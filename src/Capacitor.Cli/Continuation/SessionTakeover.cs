@@ -209,6 +209,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
             if (!response.IsSuccessStatusCode) {
                 if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed && code is null) {
                     result["status"] = JsonString("unsupported");
+                    writes.Failed++;
                     return result;
                 }
                 if (code == "next_work_unavailable") result["status"] = JsonString("unavailable");
@@ -218,7 +219,9 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
                 result["results"] = results.DeepClone();
                 var partial = results.Any(entry => entry is not JsonObject item ||
                     Str(item["outcome"]) is not ("acquired" or "already_owned" or "transferred" or "recorded_catching_up") ||
-                    item["claim"] is not JsonObject claim || Str(claim["claim_id"]) is null);
+                    Str(item["attempted_claim_id"]) is null ||
+                    item["claim"] is not JsonObject claim || Str(claim["claim_id"]) is null ||
+                    WorkContextIds.CanonicalSessionId(Str(claim["session_id"])) != current);
                 result["status"] = JsonString(partial ? "partial" : "ok");
                 if (partial) writes.Failed++;
                 return result;
@@ -293,7 +296,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
         try { return JsonNode.Parse(text) as JsonArray; } catch { return null; }
     }
 
-    static string? Str(JsonNode? node) => node is JsonValue v && v.TryGetValue(out string? s) && !string.IsNullOrEmpty(s) ? s : null;
+    static string? Str(JsonNode? node) => node is JsonValue v && v.TryGetValue(out string? s) && !string.IsNullOrWhiteSpace(s) ? s : null;
 
     static bool IsTrue(JsonNode? node) => node is JsonValue v && v.TryGetValue(out bool b) && b;
 

@@ -30,5 +30,6 @@ public class LooseEndClaimGuidanceTests {
         await Assert.That(text).Contains("attempted_claim_id");
         await Assert.That(text).Contains("ownership_lost");
         await Assert.That(text).Contains("unsupported");
+        await Assert.That(text).Contains("incomplete");
     }
 }

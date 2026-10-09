@@ -23,13 +23,38 @@ static class LooseEndClaimToolResults {
             root.Obj("claim") is not { } claim || ClaimLine(claim) is not { } description)
             return ("Error: the server returned an unreadable claim response. Inspect the ledger before retrying.", true);
 
-        var guidance = claim.Str("status") == "completed" || outcome == "completed"
+        var completed = claim.Str("status") == "completed" || outcome == "completed";
+        var released = claim.Str("status") == "released" || outcome == "released";
+        var guidance = completed
             ? "This attempt is already completed; it was not released."
-            : outcome == "released"
+            : released
                 ? "Ownership is released. Releasing an attempt does not close or reopen work."
                 : "The work remains open. Retain claim_id for completion or release.";
-        if (outcome == "recorded_catching_up") guidance += " Ownership was recorded; do not create another attempt while the read model catches up.";
+        if (outcome == "recorded_catching_up")
+            guidance += completed || released
+                ? " The mutation was recorded; the read model is catching up."
+                : " Ownership was recorded; do not create another attempt while the read model catches up.";
         return ($"outcome: {outcome}\n{Data(description)}\n{guidance}", false);
+    }
+
+    internal static (string Text, bool IsError) RenderCompletion(int status, string body, string claimId, string sessionId) {
+        if (status is < 200 or > 299) return Render(status, body);
+        using var document = Parse(body);
+        var root = document?.RootElement ?? default;
+        var end = NextWorkUntrustedText.Render(root.Str("loose_end_id"), 128);
+        if (root.Str("state") != "closed" || root.Str("claim_id") != claimId || end.Length == 0 ||
+            WorkContextIds.CanonicalSessionId(root.Str("session_id")) != WorkContextIds.CanonicalSessionId(sessionId))
+            return ("Error: claimed completion could not be confirmed. Inspect the ledger before retrying; never retry without the claim and worker identities.", true);
+        return ($"Closed loose end {end}.", false);
+    }
+
+    internal static bool ConfirmsWorker(string body, string sessionId) {
+        using var document = Parse(body);
+        var root = document?.RootElement ?? default;
+        return root.Arr("items") is { } items && items.EnumerateArray().All(item =>
+            item.Arr("claims") is { } claims && claims.EnumerateArray().Any(claim =>
+                !string.IsNullOrWhiteSpace(claim.Str("claim_id")) && claim.Str("status") is "in_progress" or "finishing" &&
+                WorkContextIds.CanonicalSessionId(claim.Str("session_id")) == WorkContextIds.CanonicalSessionId(sessionId)));
     }
 
     internal static string? ClaimLine(JsonElement claim) {
