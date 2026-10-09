@@ -273,8 +273,8 @@ everyone:
   [Setup Server](https://capacitor.kurrent.io/docs/getting-started/setup-server/). Always listed:
   `kcap` can't tell whether you own the server, so you self-select.
 - **New to Capacitor?** Prompt **"Start kcap guided tour"** in your coding agent (or, in Claude Code,
-  `/kcap:guided-tour`) to see what your team has recorded and work through per-use-case tutorials for
-  evals, session recall, PR review, and analytics. It's a prompt rather than a slash command because
+  `/kcap:guided-tour`) for seven short cards, one per reply — welcome, capture, investigate,
+  collaborate, review, use, reuse — each a few questions to ask your agent. It's a prompt rather than a slash command because
   only Claude Code has slash commands — the skill ships with the plugin and is also installed for
   Codex and the other `~/.agents/skills/` agents (plus Kiro and Antigravity) as `kcap-guided-tour`.
   This item only appears when an agent was detected and one of them carries the skill.
@@ -1488,10 +1488,10 @@ Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--c
 | `kcap-agent-flows` | `kcap mcp flows` | Drive any catalogue flow — named by you or offered from session context — following its driver guide |
 | `kcap-work-items` | `kcap mcp workitems` | Declare a work item's breakdown and its blocks / blocked-by dependencies |
 | `kcap-plans` | `kcap mcp plans` | Declare the plan document and task list a session executes |
-| `kcap-guided-tour` | analytics + sessions MCP | Onboarding tour of what Capacitor has recorded |
+| `kcap-guided-tour` | analytics + sessions + flows MCP | Card-by-card onboarding tour of what Kcap does |
 | `kcap-start-agents` | `kcap mcp flows` | Hand tasks to separate hosted agents that run on their own: check this machine's daemon, ask which harness, one `start_agent` call each |
 
-The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows`; only the two status tools fall back to the session (from `CODEX_THREAD_ID`, or an explicit `session_id`) when no flow ID is passed; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-start-agents` also goes through `kcap mcp flows`; its tools take the calling session from the harness, or from an explicit `session_id`. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics` and `kcap-sessions` MCP servers, so it needs those registered (setup does it) rather than a session id.
+The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows`; only the two status tools fall back to the session (from `CODEX_THREAD_ID`, or an explicit `session_id`) when no flow ID is passed; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-start-agents` also goes through `kcap mcp flows`; its tools take the calling session from the harness, or from an explicit `session_id`. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics`, `kcap-sessions` and `kcap-flows` MCP servers, so it needs those registered (setup does it) rather than a session id. On a plan without Insights its team table falls back to the user's own session count.
 
 > **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
 >
