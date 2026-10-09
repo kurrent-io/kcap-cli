@@ -136,7 +136,8 @@ tell the user, in a few lines, what to consider working on next and why.
 
 Never present after a step inside work that is still open, and never right after
 declaring loose ends you expect to continue yourself in this session. If `get_next_work`
-says this session's attached work is still open and the user did not ask, do not present.
+says this session's attached work is still open, do not present unless the user asked for
+next work or said they are done with or parking that work.
 
 | Request | Piece of work | Terminal? | Present? |
 | -- | -- | -- | -- |
