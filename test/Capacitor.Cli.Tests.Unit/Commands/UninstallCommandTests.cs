@@ -2,6 +2,8 @@ using System.Runtime.Versioning;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
@@ -529,17 +531,16 @@ public class UninstallCommandTests {
         // platform; covering Unix is sufficient for regression purposes.
         await using var fixture = await Fixture.CreateAsync();
 
-        // Force PluginCommand's Claude remove to return 1 by leaving a valid
-        // kcap entry behind a read-only file: File.Exists passes, JSON
-        // parses cleanly, then File.WriteAllText hits UnauthorizedAccessException
-        // — which the remover's catch translates into exit code 1.
+        // Force PluginCommand's Claude remove to fail by leaving a valid kcap
+        // entry in a read-only directory: the atomic replace cannot create its
+        // temp file there, so the edit reports Failed and the remover throws.
         var claudeDir = Path.Combine(fixture.Home, ".claude");
         Directory.CreateDirectory(claudeDir);
         var settingsPath = Path.Combine(claudeDir, "settings.json");
         await File.WriteAllTextAsync(settingsPath, """
             {"enabledPlugins": {"kcap@kcap": true}}
             """);
-        File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        File.SetUnixFileMode(claudeDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
         var sentinel = Path.Combine(fixture.ConfigDir, "profiles.json");
         await File.WriteAllTextAsync(sentinel, """{"sentinel":"survives-partial-failure"}""");
@@ -552,7 +553,7 @@ public class UninstallCommandTests {
             await Assert.That(await File.ReadAllTextAsync(sentinel)).Contains("survives-partial-failure");
         } finally {
             // Restore write so the test fixture can be deleted.
-            File.SetUnixFileMode(settingsPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.SetUnixFileMode(claudeDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
 
@@ -616,11 +617,120 @@ public class UninstallCommandTests {
         }
     }
 
+    static VendorAccount RegisterWiredClaudeAccount(AccountStore accounts, Fixture fixture, string dirName) {
+        var plugin = fixture.Temp.CreateDir("plugin").Path;
+        foreach (var n in AgentsSkillsInstaller.SourceNames)
+            fixture.Temp.CreateFile(["plugin", "skills", n, "SKILL.md"], "---\nname: " + n + "\n---\n");
+
+        var dir     = fixture.Temp.CreateDir(dirName).Path;
+        var account = new VendorAccount(dirName, HarnessId.Claude, AccountDirectory.Normalize(dir), dirName, DateTimeOffset.UnixEpoch);
+
+        accounts.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
+        AccountWiring.Wire(account, fixture.UserHome, new WiringOptions(plugin, fixture.Temp.PathTo(".agents", "skills"), () => "/usr/local/bin/kcap", NetworkAllowDomains: null));
+
+        return account;
+    }
+
+    Task<int> RunUninstall(Fixture fixture, string? workdir = null, params string[] args) =>
+        new UninstallCommand(Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(workdir ?? AppContext.BaseDirectory), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", .. args]);
+
+    [Test]
+    public async Task Uninstall_unwires_every_registered_account_and_deletes_the_registry() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        var work     = RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+        var personal = RegisterWiredClaudeAccount(accounts, fixture, ".claude-personal");
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(0);
+        foreach (var a in new[] { work, personal }) {
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(AccountLayouts.Claude(fixture.UserHome, a.Directory).UserSettings))!.AsObject();
+            await Assert.That(root["enabledPlugins"]?["kcap@kcap"]).IsNull();
+        }
+        await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+    }
+
+    [Test]
+    public async Task Keep_config_still_deletes_the_account_registry() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+
+        var exit = await RunUninstall(fixture, args: "--keep-config");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
+    [Test]
+    public async Task Uninstall_keeps_the_registry_when_an_account_cannot_be_unwired() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        var broken   = RegisterWiredClaudeAccount(accounts, fixture, ".claude-broken");
+        await File.WriteAllTextAsync(AccountLayouts.Claude(fixture.UserHome, broken.Directory).UserSettings, "{ not json");
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(File.Exists(Path.Combine(accounts.Directory, "accounts.json"))).IsTrue();
+    }
+
+    [Test, ExcludeOn(OS.Windows)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Uninstall_keeps_an_unreadable_registry_and_reports_the_uninstall_incomplete() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+        var registry = Path.Combine(accounts.Directory, "accounts.json");
+        File.SetUnixFileMode(registry, UnixFileMode.None);
+
+        try {
+            var exit = await RunUninstall(fixture);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(File.Exists(registry)).IsTrue();
+        } finally {
+            File.SetUnixFileMode(registry, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Test]
+    public async Task Uninstall_deletes_an_unparseable_registry() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+        await File.WriteAllTextAsync(Path.Combine(accounts.Directory, "accounts.json"), "{ not json");
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+    }
+
+    [Test]
+    public async Task Project_scope_uninstall_also_deletes_the_account_registry() {
+        await using var fixture = await Fixture.CreateAsync();
+        var accounts = AccountStore.Beside(Daemons.Store);
+        RegisterWiredClaudeAccount(accounts, fixture, ".claude-work");
+
+        using var tmp = new TempDir();
+        tmp.CreateDir(".git");
+
+        var exit = await RunUninstall(fixture, tmp.Path, "--project");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();
+    }
+
     sealed class Fixture : IAsyncDisposable {
         TempHome? _tempHome;
 
         public required string Home      { get; init; }
         public required string ConfigDir { get; init; }
+
+        public TempHome Temp => _tempHome!;
 
         public ConfigRoot Root     => new(ConfigDir);
         public UserHome   UserHome => new(Home);

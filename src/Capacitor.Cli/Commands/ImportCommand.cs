@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -22,10 +23,26 @@ namespace Capacitor.Cli.Commands;
 
 class ImportCommand(
         ConfigRoot config, ProfileContext profiles, UserHome home, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time) {
+        ICapacitorHttpClient http, GitProviderRouter router, TimeProvider time, AccountStore? accounts = null) {
     static readonly TimeSpan ProgressPollGap = TimeSpan.FromMilliseconds(250);
 
-    readonly CodexImportTitles _codexTitles = new(harnesses.Of<CodexHarness>().Paths.Home, time);
+    // Read from parallel workers; keyed by the normalized home so two spellings of one directory share an index.
+    readonly ConcurrentDictionary<string, CodexImportTitles> _codexTitles = new(
+        OperatingSystem.IsLinux() ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase);
+
+    readonly Lazy<AccountRegistry?> _registry = new(() => accounts?.TryLoad());
+
+    /// <summary>The index of the Codex home the rollout lives in: an account's titles are never read from
+    /// another home's index. A rollout outside every account uses the environment home.</summary>
+    CodexImportTitles CodexTitlesFor(string transcriptPath) {
+        var codexHome = _registry.Value is { } registry
+                     && AccountPaths.CodexForRollout(transcriptPath, registry, home) is { } paths
+            ? paths.Home
+            : harnesses.Of<CodexHarness>().Paths.Home;
+
+        return _codexTitles.GetOrAdd(AccountDirectory.Normalize(codexHome), static (_, a) => new CodexImportTitles(a.Home, a.Time),
+                                     (Home: codexHome, Time: time));
+    }
 
     /// <summary>
     /// Maximum parallel worker count for the Importing phase. Both the
@@ -836,9 +853,9 @@ class ImportCommand(
             MinLines: minLines
         );
 
-        var discoveriesPerSource = await Task.WhenAll(
+        var discoveriesPerSource = FirstDiscoveryWins(await Task.WhenAll(
             sources.Select(s => s.DiscoverAsync(filters, CancellationToken.None))
-        );
+        ));
 
         for (var i = 0; i < sources.Count; i++) {
             var count = discoveriesPerSource[i].Count;
@@ -870,9 +887,6 @@ class ImportCommand(
 
             return 0;
         }
-
-        // Build a vendor → source map for downstream lookups.
-        var byVendor = sources.ToDictionary(s => s.Vendor);
 
         // --- Cwd resolution for scope filtering ---
         // For file-based sources (Claude/Codex) extract cwd from the transcript.
@@ -1196,6 +1210,14 @@ class ImportCommand(
         // Flatten classifications.
         var classifications = classificationsPerSource.SelectMany(c => c).ToList();
 
+        // One vendor can have a source per account root, so a session is routed back to the source that
+        // discovered it rather than to its vendor.
+        var sourceBySession = new Dictionary<(HarnessId Vendor, string SessionId), IImportSource>();
+
+        for (var i = 0; i < sources.Count; i++)
+            foreach (var c in classificationsPerSource[i])
+                sourceBySession.TryAdd((c.Vendor, c.SessionId), sources[i]);
+
         // Capture scope is decided here, over every source's output at once, and nowhere else.
         var captureScope = new CaptureScope(router, config, home,
                                             allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
@@ -1413,7 +1435,7 @@ class ImportCommand(
                 // Cursor sets SupportsTitleGeneration=false because the composer
                 // header carries a name that the server maps to a
                 // SessionTitleCreatedEvent at ingest time.
-                if (byVendor.TryGetValue(vnd, out var src) && !src.SupportsTitleGeneration) return;
+                if (sourceBySession.TryGetValue((vnd, sid), out var src) && !src.SupportsTitleGeneration) return;
 
                 Interlocked.Increment(ref titleTaskCount);
 
@@ -1511,7 +1533,7 @@ class ImportCommand(
         // they asked for, whatever the transcript did.
         var visibilityFailures = 0;
         // Read-only inside the parallel loops below; resolved from the sources actually in play.
-        var replayChildContentVendors = byVendor.Values
+        var replayChildContentVendors = sources
             .Where(s => s.AttachesChildContentOnReplay)
             .Select(s => s.Vendor)
             .ToHashSet();
@@ -1774,7 +1796,7 @@ class ImportCommand(
             );
 
             async Task<ImportSessionResult> ImportOne(SessionClassification c) {
-                if (!byVendor.TryGetValue(c.Vendor, out var src)) {
+                if (!sourceBySession.TryGetValue((c.Vendor, c.SessionId), out var src)) {
                     return ImportOutcome.Failed;
                 }
 
@@ -2998,6 +3020,17 @@ class ImportCommand(
     }
 
     /// <summary>
+    /// Drops a session an earlier source already discovered. Two account roots can hold the same
+    /// session file, and every later stage keys on the session id, so a second copy would be counted
+    /// and imported twice.
+    /// </summary>
+    static IReadOnlyList<DiscoveredSession>[] FirstDiscoveryWins(IReadOnlyList<DiscoveredSession>[] perSource) {
+        var seen = new HashSet<(HarnessId, string)>();
+
+        return [.. perSource.Select(IReadOnlyList<DiscoveredSession> (d) => [.. d.Where(s => seen.Add((s.Vendor, s.SessionId)))])];
+    }
+
+    /// <summary>
     /// Group the import-bound subset (New + Partial) into ordered chains by slug.
     /// A chain is a list of classifications sharing the same slug, ordered by
     /// FirstTimestamp ascending. Sessions without a slug (or with a unique slug)
@@ -3505,7 +3538,7 @@ class ImportCommand(
             CancellationToken           ct
         ) =>
         session.Vendor is HarnessId.Codex
-            ? _codexTitles.PostAsync(httpClient, baseUrl, session.SessionId, progress, ct)
+            ? CodexTitlesFor(session.FilePath).PostAsync(httpClient, baseUrl, session.SessionId, progress, ct)
             : Task.FromResult(false);
 
     /// <summary>Title-only pass for Codex sessions the server already holds: no transcript, lifecycle or generated

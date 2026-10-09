@@ -1,6 +1,5 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
@@ -250,7 +249,8 @@ sealed class SetupImportLane(
         string workingDirectory,
         CodingAgentsStep.Paths paths,
         Func<SetupImportLane.Pass, Task<SetupImportRun>>? runner = null,
-        Action<ImportHandoffFile>? writeHandoff = null) : IFirstRunImportLane {
+        Action<ImportHandoffFile>? writeHandoff = null,
+        AccountStore? accounts = null) : IFirstRunImportLane {
     /// <summary>The handoff suppression for a file that could not be written, so the page never offers
     /// a prompt whose file does not exist.</summary>
     internal const string HandoffFileUnwritten = "handoff_file_unwritten";
@@ -270,9 +270,9 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
             filterCwd:    null,
-            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors),
+            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors, accounts?.TryLoad(), home),
             discoverOnly: true,
             discoverJson: true,
             windowsAsOf:  asOf,
@@ -336,14 +336,15 @@ sealed class SetupImportLane(
     /// <see cref="SetupImportRun.Fault"/>.</summary>
     internal static async Task<SetupImportRun> RunPassAsync(
             ConfigRoot config, ProfileContext profiles, UserHome home, ICapacitorHttpClient http,
-            HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time, Pass pass) {
+            HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time, Pass pass,
+            AccountStore? accounts = null) {
         ImportRunSelection?             selection = null;
         ImportCommand.ImportRunOutcome? outcome   = null;
 
         try {
-            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
+            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
                 filterCwd:          null,
-                sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
+                sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors, accounts?.TryLoad(), home),
                 since:              pass.Since,
                 scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
                 skipConfirmation:   true,
@@ -367,7 +368,7 @@ sealed class SetupImportLane(
     }
 
     Task<SetupImportRun> Run(Pass pass) =>
-        RunPassAsync(config, profiles, home, http, harnesses, router, time, pass);
+        RunPassAsync(config, profiles, home, http, harnesses, router, time, pass, accounts);
 
     public async Task<FirstRunImportResult> ImportAsync(
             FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null) {
@@ -537,7 +538,7 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries) {
+        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
@@ -934,6 +935,9 @@ sealed class SetupCommand(
 
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
+
+        new AccountSetupStep(accounts, pluginEnv, time).Run(
+            stepOptions, AnsiConsole.Profile.Capabilities.Interactive, PromptYesNo, WriteLine);
 
         var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
         var gitHook        = new GitHookInstaller(home);
@@ -1760,13 +1764,18 @@ sealed class SetupCommand(
     /// already scoped to what the user kept.</param>
     internal static IReadOnlyList<IImportSource> BuildImportSources(
             ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time,
-            IReadOnlyCollection<HarnessId>? vendors = null) {
+            IReadOnlyCollection<HarnessId>? vendors = null, AccountRegistry? accounts = null, UserHome? home = null) {
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
 
+        var claudeRoots = DistinctRoots(harnesses.Of<ClaudeHarness>().Paths.Projects, accounts, home, HarnessId.Claude,
+                                        dir => AccountLayouts.Claude(home!, dir).Projects);
+        var codexRoots  = DistinctRoots(harnesses.Of<CodexHarness>().Paths.Sessions, accounts, home, HarnessId.Codex,
+                                        dir => AccountLayouts.Codex(home!, dir).Sessions);
+
         IReadOnlyList<IImportSource> all = [
-            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
-            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
+            .. claudeRoots.Select(r => (IImportSource)new ClaudeImportSource(config, r, router, time)),
+            .. codexRoots.Select(r => (IImportSource)new CodexImportSource(config, r, router, time)),
             new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time, titlePaths: cursor),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
@@ -1783,6 +1792,20 @@ sealed class SetupCommand(
         var wanted = vendors.ToHashSet();
 
         return [.. all.Where(s => wanted.Contains(s.Vendor))];
+    }
+
+    /// <summary>The environment layout's root first, then each registered account's root that is not
+    /// the same directory.</summary>
+    static List<string> DistinctRoots(
+            string environmentRoot, AccountRegistry? accounts, UserHome? home, HarnessId vendor, Func<string, string> rootOf) {
+        var roots = new List<string> { environmentRoot };
+
+        if (accounts is null || home is null) return roots;
+
+        foreach (var root in accounts.Accounts.Where(a => a.Vendor == vendor).Select(a => rootOf(a.Directory)))
+            if (!roots.Any(r => AccountDirectory.Same(r, root))) roots.Add(root);
+
+        return roots;
     }
 
     /// <summary>
@@ -2003,7 +2026,7 @@ sealed class SetupCommand(
 
                 importing = new SetupImportLane(
                     config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time,
-                    spawner, serverUrl, profileName, defaultVisibility, workdir.Path, paths);
+                    spawner, serverUrl, profileName, defaultVisibility, workdir.Path, paths, accounts: accounts);
 
                 using var progress = new SpectreFirstRunFlowProgress(time);
 
@@ -2662,63 +2685,11 @@ sealed class SetupCommand(
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
-    static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
-
     /// <summary>
     /// Registers the kcap plugin in a Claude Code settings.json file by merging
     /// the marketplace source and enabling the plugin. Preserves all existing settings.
     /// </summary>
-    internal static bool InstallPlugin(string settingsPath, string marketplacePath) {
-        try {
-            JsonObject root = [];
+    internal static bool InstallPlugin(string settingsPath, string marketplacePath) =>
+        ClaudePluginWriter.Install(settingsPath, marketplacePath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
 
-            if (File.Exists(settingsPath)) {
-                try {
-                    if (JsonNode.Parse(File.ReadAllText(settingsPath)) is JsonObject obj)
-                        root = obj;
-                } catch {
-                    // Malformed JSON — start fresh
-                }
-            }
-
-            // Ensure extraKnownMarketplaces.kcap exists with the correct path
-            if (root["extraKnownMarketplaces"] is not JsonObject marketplaces) {
-                marketplaces                   = [];
-                root["extraKnownMarketplaces"] = marketplaces;
-            }
-
-            marketplaces["kcap"] = new JsonObject {
-                ["source"] = new JsonObject {
-                    ["source"] = "directory",
-                    ["path"]   = marketplacePath
-                }
-            };
-
-            // Remove stale marketplace entries from earlier shapes
-            marketplaces.Remove("kurrent");
-            marketplaces.Remove("kapacitor");
-
-            // Ensure enabledPlugins.kcap@kcap is true
-            if (root["enabledPlugins"] is not JsonObject enabled) {
-                enabled                = [];
-                root["enabledPlugins"] = enabled;
-            }
-
-            enabled["kcap@kcap"] = true;
-
-            // Remove stale plugin entries from earlier shapes
-            enabled.Remove("kcap@kurrent");
-            enabled.Remove("kapacitor@kapacitor");
-            enabled.Remove("kapacitor@kurrent");
-
-            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-            File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
-
-            ClaudePluginInstaller.WriteMarker(settingsPath);
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
 }

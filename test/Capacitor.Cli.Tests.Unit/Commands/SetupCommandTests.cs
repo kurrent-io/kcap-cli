@@ -49,7 +49,7 @@ public class SetupCommandTests {
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None) {
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin"))) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 
@@ -623,21 +623,16 @@ public class SetupCommandTests {
     }
 
     [Test]
-    public async Task InstallPlugin_MalformedJson_StartsFromScratch() {
-        using var    tmp          = new TempDir();
-        var          settingsPath = tmp.PathTo("settings.json");
-        const string marketplace  = "/opt/kcap";
+    public async Task InstallPlugin_MalformedJson_LeavesFileUntouched() {
+        using var    tmp                    = new TempDir();
+        var          settingsPath           = tmp.PathTo("settings.json");
+        const string marketplace            = "/opt/kcap";
+        const string originalMalformedText = "not json {{{";
 
-        await File.WriteAllTextAsync(settingsPath, "not json {{{");
+        await File.WriteAllTextAsync(settingsPath, originalMalformedText);
 
-        var result = SetupCommand.InstallPlugin(settingsPath, marketplace);
-
-        await Assert.That(result).IsTrue();
-
-        var root = JsonNode.Parse(await File.ReadAllTextAsync(settingsPath))!.AsObject();
-
-        await Assert.That(root["enabledPlugins"]?["kcap@kcap"]?.GetValue<bool>() ?? false)
-            .IsTrue();
+        await Assert.That(SetupCommand.InstallPlugin(settingsPath, marketplace)).IsFalse();
+        await Assert.That(File.ReadAllText(settingsPath)).IsEqualTo(originalMalformedText);
     }
 
     [Test]

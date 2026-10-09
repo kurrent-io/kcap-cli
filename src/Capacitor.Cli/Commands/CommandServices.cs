@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
@@ -49,11 +50,13 @@ public static class CommandServices {
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
+        services.AddSingleton(sp => AccountStore.Beside(sp.GetRequiredService<DaemonStore>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
                 sp.GetRequiredService<HarnessRegistry>(),
-                sp.GetRequiredService<BinaryProbe>()));
+                sp.GetRequiredService<BinaryProbe>(),
+                sp.GetRequiredService<AccountStore>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
         services.AddCapacitorHttp(env, machine);
@@ -87,6 +90,7 @@ public static class CommandServices {
         // Shared by every hook lane and carrying no per-run state, unlike the commands below.
         services.AddSingleton<WatcherManager>();
 
+        services.AddTransient<AccountsCommand>();
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
@@ -25,7 +26,8 @@ sealed class DetachedImportPlanRunner(
         ChosenServerHttp http,
         GitProviderRouter router,
         TimeProvider time,
-        Func<ImportPlanLevel, ProfileContext, Task<SetupImportRun>>? passRunner = null) {
+        Func<ImportPlanLevel, ProfileContext, Task<SetupImportRun>>? passRunner = null,
+        AccountStore? accounts = null) {
     /// <returns>0 when every level finished with nothing failed; 1 otherwise.</returns>
     public async Task<int> RunAsync(string planPath) {
         if (!ImportPlan.IsSetupPlanPath(config, planPath)) {
@@ -51,7 +53,8 @@ sealed class DetachedImportPlanRunner(
                     ? await passRunner(level, context)
                     : await SetupImportLane.RunPassAsync(
                         config, context, home, scoped!.GetRequiredService<ICapacitorHttpClient>(), harnesses, router, time,
-                        new SetupImportLane.Pass(level.Level, level.Repos, level.Since, level.SkipTitle, level.Vendors, MaxSessions: null));
+                        new SetupImportLane.Pass(level.Level, level.Repos, level.Since, level.SkipTitle, level.Vendors, MaxSessions: null),
+                        accounts);
 
                 if (run.Fault is { } fault)
                     Console.Error.WriteLine($"The {Label(level)} import failed: {fault.Message}");
