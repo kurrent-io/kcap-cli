@@ -1552,7 +1552,8 @@ class ImportCommand(
         if (forcePrivate) {
             var existing = classifications
                 .Where(c => c.Status is ClassificationStatus.Partial
-                                     or ClassificationStatus.AlreadyLoaded)
+                                     or ClassificationStatus.AlreadyLoaded
+                         && (selectedIds is null || selectedIds.Contains(c.SessionId)))
                 .Select(c => c.SessionId)
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
@@ -1599,7 +1600,8 @@ class ImportCommand(
             foreach (var c in classifications) {
                 if (c.Status is ClassificationStatus.New
                              or ClassificationStatus.Partial
-                             or ClassificationStatus.AlreadyLoaded) {
+                             or ClassificationStatus.AlreadyLoaded
+                 && (selectedIds is null || selectedIds.Contains(c.SessionId))) {
                     scopedSessionIds.Add(c.SessionId);
                 }
             }
