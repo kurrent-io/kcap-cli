@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
@@ -13,19 +14,26 @@ static partial class ClaudeSessionEnv {
 
     /// <summary>Bash sources the file, so the id is checked rather than quoted, and the line ends in a
     /// bare LF on every platform: a CR would become part of the value.</summary>
-    public static void Persist(string body, string? envFile) {
+    public static void Persist(string body, string? envFile, TextWriter stderr) {
         if (string.IsNullOrEmpty(envFile)) return;
 
+        JsonObject? hook;
         try {
-            if (JsonNode.Parse(body) is not JsonObject hook) return;
-            if (Text(hook["hook_event_name"]) != "SessionStart") return;
+            hook = JsonNode.Parse(body) as JsonObject;
+        } catch (JsonException) {
+            return;
+        }
+        if (hook is null || Text(hook["hook_event_name"]) != "SessionStart") return;
 
-            var sessionId = Text(hook["session_id"])?.Replace("-", "");
-            if (sessionId is null || !SafeId().IsMatch(sessionId)) return;
+        var sessionId = Text(hook["session_id"])?.Replace("-", "");
+        if (sessionId is null || !SafeId().IsMatch(sessionId)) return;
 
+        try {
             using var file = new FileStream(envFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
             file.Write(Encoding.UTF8.GetBytes($"export KCAP_SESSION_ID={sessionId}\n"));
-        } catch { }
+        } catch (Exception e) {
+            stderr.WriteLine($"kcap: KCAP_SESSION_ID not exported to {envFile}: {e.Message}");
+        }
     }
 
     static string? Text(JsonNode? node) =>

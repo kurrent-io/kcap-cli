@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
@@ -19,10 +20,16 @@ static partial class ClaudeTitlePrompt {
       + "The title should describe WHAT the user wants done, not HOW. Use imperative form (e.g. \"Fix authentication timeout in login flow\"). No period at the end.\n"
       + "</system-instructions>";
 
-    public static int Handle(string body, ConfigRoot config, WatcherPaths watchers, TextWriter stdout) {
+    public static int Handle(string body, ConfigRoot config, WatcherPaths watchers, TextWriter stdout, TextWriter stderr) {
+        string? sessionId;
         try {
-            var sessionId = JsonNode.Parse(body)?["session_id"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
-            if (sessionId is null || !SafeId().IsMatch(sessionId)) return 0;
+            sessionId = JsonNode.Parse(body)?["session_id"] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+        } catch (JsonException) {
+            return 0;
+        }
+        if (sessionId is null || !SafeId().IsMatch(sessionId)) return 0;
+
+        try {
             if (DisabledSessions.IsDisabled(sessionId.Replace("-", ""), config)) return 0;
 
             // The marker goes down before the output: a marker that cannot be written must not turn
@@ -38,7 +45,9 @@ static partial class ClaudeTitlePrompt {
                     ["additionalContext"] = Instruction
                 }
             }.ToJsonString());
-        } catch { }
+        } catch (Exception e) {
+            stderr.WriteLine($"kcap: title prompt for session {sessionId} skipped: {e.Message}");
+        }
 
         return 0;
     }

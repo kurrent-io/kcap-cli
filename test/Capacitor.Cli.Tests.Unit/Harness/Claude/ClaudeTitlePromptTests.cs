@@ -14,9 +14,9 @@ public class ClaudeTitlePromptTests {
     static string Prompt(string sessionId) =>
         new JsonObject { ["hook_event_name"] = "UserPromptSubmit", ["session_id"] = sessionId, ["prompt"] = "hi" }.ToJsonString();
 
-    string Run(string body) {
-        var stdout = new StringWriter();
-        var exit   = ClaudeTitlePrompt.Handle(body, Config.Root, Watchers, stdout);
+    string Run(string body, TextWriter? stderr = null) {
+        using var stdout = new StringWriter();
+        var exit = ClaudeTitlePrompt.Handle(body, Config.Root, Watchers, stdout, stderr ?? TextWriter.Null);
         if (exit != 0) throw new InvalidOperationException($"exit {exit}");
         return stdout.ToString();
     }
@@ -32,12 +32,22 @@ public class ClaudeTitlePromptTests {
         await Assert.That(second).IsEqualTo("");
     }
 
-    /// <summary>Same marker name the shell hook wrote, so a session that spans the upgrade is not asked twice.</summary>
+    /// <summary>The plugin's shell hook wrote this same marker, and a session it already prompted can
+    /// still be running: honouring the name keeps that session from being asked twice.</summary>
     [Test]
     public async Task Leaves_the_marker_in_the_watcher_directory() {
         Run(Prompt(Sid));
 
-        await Assert.That(File.Exists(Path.Combine(Watchers.Directory, $"{Sid}.title-requested"))).IsTrue();
+        await Assert.That(File.Exists(Tmp.PathTo("watchers", $"{Sid}.title-requested"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Reports_a_marker_it_cannot_write_and_asks_nothing() {
+        Tmp.CreateFile("watchers");
+        using var stderr = new StringWriter();
+
+        await Assert.That(Run(Prompt(Sid), stderr)).IsEqualTo("");
+        await Assert.That(stderr.ToString()).Contains(Sid);
     }
 
     [Test]
@@ -57,6 +67,9 @@ public class ClaudeTitlePromptTests {
 
     [Test]
     public async Task Survives_a_payload_that_is_not_json() {
-        await Assert.That(Run("not json")).IsEqualTo("");
+        using var stderr = new StringWriter();
+
+        await Assert.That(Run("not json", stderr)).IsEqualTo("");
+        await Assert.That(stderr.ToString()).IsEqualTo("");
     }
 }
