@@ -21,7 +21,7 @@ static class PageResultKeys {
 
     static readonly Dictionary<string, string> Ids = new(StringComparer.Ordinal) { ["artefact_id"] = "page_id" };
 
-    /// <summary>The body with its keys renamed, or the body unchanged when it is not a JSON object.</summary>
+    /// <summary>The body with its keys renamed, or the body byte-for-byte when there is nothing to rename.</summary>
     public static string Rename(string body) {
         JsonNode? root;
 
@@ -33,33 +33,37 @@ static class PageResultKeys {
 
         if (root is not JsonObject obj) return body;
 
-        RenameKeys(obj, Roots);
+        var renamed = RenameKeys(obj, Roots);
 
         foreach (var name in Roots.Values) {
             switch (obj[name]) {
                 case JsonObject page:
-                    RenameKeys(page, Ids);
+                    renamed |= RenameKeys(page, Ids);
 
                     break;
                 case JsonArray pages:
                     foreach (var item in pages)
-                        if (item is JsonObject listed) RenameKeys(listed, Ids);
+                        if (item is JsonObject listed) renamed |= RenameKeys(listed, Ids);
 
                     break;
             }
         }
 
-        return obj.ToJsonString(Output);
+        return renamed ? obj.ToJsonString(Output) : body;
     }
 
     /// <summary>A key whose new name is already taken keeps its old one, so nothing is overwritten.</summary>
-    static void RenameKeys(JsonObject obj, Dictionary<string, string> renames) {
+    static bool RenameKeys(JsonObject obj, Dictionary<string, string> renames) {
         var properties = obj.ToList();
-        obj.Clear();
+        var targets = properties.Select(p => renames.TryGetValue(p.Key, out var target) && !properties.Exists(q => q.Key == target)
+            ? target
+            : p.Key).ToList();
 
-        foreach (var (key, value) in properties) {
-            var target = renames.GetValueOrDefault(key, key);
-            obj[target != key && properties.Exists(p => p.Key == target) ? key : target] = value;
-        }
+        if (targets.SequenceEqual(properties.Select(p => p.Key))) return false;
+
+        obj.Clear();
+        for (var i = 0; i < properties.Count; i++) obj[targets[i]] = properties[i].Value;
+
+        return true;
     }
 }

@@ -45,6 +45,12 @@ public class PageResultKeysTests {
     }
 
     [Test]
+    public async Task A_body_with_nothing_to_rename_comes_back_byte_for_byte() {
+        const string body = """{"version":1, "mean":1.50,"responses":[{"payload":{"note":"<b>"}}]}""";
+        await Assert.That(PageResultKeys.Rename(body)).IsEqualTo(body);
+    }
+
+    [Test]
     public async Task A_body_that_is_not_json_comes_back_unchanged() =>
         await Assert.That(PageResultKeys.Rename("upstream exploded")).IsEqualTo("upstream exploded");
 }
