@@ -208,7 +208,10 @@
                     </Panel>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:ToolGroupItem">
-                    <views:ChatCardRow>
+                    <!-- The floor keeps a group hidden behind a question card off zero height: the
+                         virtualizing panel re-estimates a zero-height row on every pass, and as the
+                         last row that grows the extent each pass until layout loops. -->
+                    <views:ChatCardRow MinHeight="1">
                         <Border Classes="toolGroup chatSystemCard" Classes.packsWithCard="{Binding PacksWithCard}"
                                 Classes.folded="{Binding !IsExpanded}"
                                 IsVisible="{Binding !SuppressedForPendingQuestion}"
