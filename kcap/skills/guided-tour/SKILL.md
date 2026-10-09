@@ -41,7 +41,7 @@ nothing before or after it: no preamble, no commentary, no summary of what the c
 |---|---|---|
 | `{{AGENT}}` | the product name of the harness running this tour: Claude Code, Codex, Cursor, Copilot, Gemini CLI, Kiro, OpenCode, Pi or Antigravity | — |
 | `{{OTHER_AGENT}}` on card 4 | Codex | Claude Code when `{{AGENT}}` is Codex |
-| `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding `{{AGENT}}`: `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
+| `{{OTHER_AGENT}}` on card 5 | from `list_reviewer_vendors`, excluding its `driver_vendor` (the harness running the tour): `codex` if listed, else `claude`, else the first one listed, by product name (`codex` → Codex, `claude` → Claude Code) | as card 4 |
 | `{{T1}}`, `{{T2}}`, `{{T3}}` | the first names of up to three distinct teammates, most recent first (TEAMMATES below) | `my teammate` for each one missing; capitalise it when it opens the question |
 | `{{CAPTURE}}` | the team table, or the one-line variant (CAPTURE below) | — |
 
@@ -55,31 +55,34 @@ call below in ONE message, in parallel, then print card 2. If the host defers MC
 load all of them in one lookup in that same message.
 
 1. `kcap whoami --no-update-check` — the `Username:` line is `<user>`. If it fails, go to WHEN
-   SOMETHING IS MISSING instead of card 2.
+   SOMETHING IS MISSING instead of card 2. If it succeeds without a `Username:` line, `<user>`
+   is unknown: every lookup below that needs it takes its fallback.
 2. **Q-CAPTURE** (`query_analytics`, `scope: "global"`), verbatim:
 
    ```sql
    WITH per_session AS (
-     SELECT c.repo_hash, c.session_id, SUM(c.cost_usd) AS cost_usd
+     SELECT c.session_id, SUM(c.cost_usd) AS cost_usd
      FROM v_an_cost c
      WHERE c.cost_usd IS NOT NULL
-     GROUP BY c.repo_hash, c.session_id
+     GROUP BY c.session_id
    )
    SELECT r.owner || '/' || r.repo_name AS repo,
           COUNT(*) AS sessions,
-          ROUND(SUM(p.cost_usd)::numeric, 2) AS cost_usd
-   FROM per_session p
-   JOIN v_an_repositories r ON r.repo_hash = p.repo_hash
+          ROUND(COALESCE(SUM(p.cost_usd), 0)::numeric, 2) AS cost_usd
+   FROM v_an_sessions s
+   JOIN v_an_repositories r ON r.repo_hash  = s.repo_hash
+   LEFT JOIN per_session p  ON p.session_id = s.session_id
    GROUP BY r.owner || '/' || r.repo_name
-   ORDER BY SUM(p.cost_usd) DESC
+   ORDER BY COUNT(*) DESC
    LIMIT 3
    ```
 
-   `v_an_cost` holds one row per session per model, so it is collapsed per session before the
-   join. Never call `get_analytics_schema`.
+   Sessions are counted from `v_an_sessions`, so one without cost data still counts. `v_an_cost`
+   holds one row per session per model, so it is collapsed per session before the join. Never
+   call `get_analytics_schema`.
 3. **TEAMMATES** — `list_repo_sessions` with `repo: "all"`, `since: "14d"`, `limit: 30`.
-   Collect distinct owners in row order, skip the one whose name matches `<user>`, take the
-   first name of each display name, keep three.
+   Collect distinct owners in row order, skip any whose username or display name equals
+   `<user>`, take the first name of each display name, keep three.
 4. `list_reviewer_vendors` — for card 5's `{{OTHER_AGENT}}`.
 
 **Degrade, never stall.** No retries and no alternative queries. A lookup that fails or has not
@@ -101,14 +104,15 @@ refused with `analytics_not_in_plan`. Pick the variant from what Q-CAPTURE retur
   ```
 
   Sessions with thousands separators; cost with `$` and thousands separators, two decimals.
-- **Refused, failed or timed out** — one line. Run `search_sessions` with `author: "<user>"`,
-  `limit: 1`, empty `query`, and read `resolved_author.session_count` as `<N>`:
+- **Refused, failed, timed out or no rows** — one line. Run `search_sessions` with
+  `author: "<user>"`,
+  `repo: "all"`, `limit: 1`, empty `query`, and read `resolved_author.session_count` as `<N>`:
 
   `Kcap has **<N>** of your sessions`
 
-  If that lookup fails too, or `no_author_match` is set, print
-  `Kcap is recording your sessions from here on` instead.
-- **Zero rows** — the user has nothing recorded: print
+  If `<user>` is unknown, or that lookup fails too, print
+  `Kcap is recording your sessions from here on` instead. If `<N>` is zero or `no_author_match`
+  is set, the user has nothing recorded: print
   `Nothing recorded yet. Want me to import your history? It takes one command` and follow
   WHEN SOMETHING IS MISSING if they say yes.
 
@@ -244,7 +248,7 @@ to set kcap up now. On yes, fetch https://www.kurrent.io/docs/capacitor/getting-
 and walk them through it one instruction at a time, verify with `kcap whoami`, then restart the
 tour at card 1. On no, give them that link.
 
-**Nothing recorded** (Q-CAPTURE returned zero rows, or the user's own session count is zero):
+**Nothing recorded** (the user's own session count is zero):
 offer to import their history. On yes, fetch
 https://www.kurrent.io/docs/capacitor/getting-started/import-your-history/ , lay out the options
 it describes, and run the import they choose. Then resume the tour at card 2.
@@ -257,12 +261,12 @@ the card implied should be there.
 
 | card | questions | tools |
 |---|---|---|
-| 1 | loose ends / plan coverage; finished, checked, remaining | `list_loose_ends`, the session's declared plan (`get_declared_plans`), `get_session_summary` |
+| 1 | loose ends / plan coverage; finished, checked, remaining | `list_loose_ends`, the session's declared plan (`get_declared_plans`), `get_session_summary`. A server without next-work answers `list_loose_ends` with "not enabled": answer from the summary's Unfinished section instead |
 | 1, 5 | decisions behind a PR; review a teammate's PR | `kcap-review`: `get_pr_summary`, then `search_context` / `get_transcript` for the reasoning |
 | 3, 4, 6 | past sessions, team activity, who solved what, unfinished work | `search_sessions`, `list_repo_sessions`, `get_session_summary` |
 | 4, 6 | continue another session (a teammate's, or one from another agent) | `continue_session`; if it refuses because that session may still be running, ask before retrying with `force: true` |
 | 5 | spec and code review flows | the agent-flows skill: `get_flow_definition` first, the reviewer is `{{OTHER_AGENT}}`. A flow needs a connected kcap daemon with that reviewer installed — if the start is refused, say exactly which part is missing |
-| 6 | what to do next; what is blocking | `get_next_work`, citing its because-clauses |
+| 6 | what to do next; what is blocking | `get_next_work`, citing its because-clauses. If it reports next-work is not enabled, answer from the latest session summaries' Unfinished sections and say the ranked list is off on this server |
 | 7 | evaluate a session | `kcap eval`: LLM judges, 1–3 minutes and real spend. Say both and get a go before starting; run it in the background where the harness allows |
 | 7 | promote lessons | `kcap curate apply --dry-run` first and show what would be written; write only on an explicit yes. On a young record there is nothing to promote yet — say so plainly |
 | 7 | remember a fix; recurring lessons | `kcap-memory` `save_memory`; the eval facts (`search_facts`, `list_facts`) |
