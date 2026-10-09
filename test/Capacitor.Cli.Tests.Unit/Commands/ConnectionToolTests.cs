@@ -38,6 +38,15 @@ public class ConnectionToolTests {
     }
 
     [Test]
+    public async Task A_call_whose_params_is_not_an_object_is_answered_rather_than_thrown() {
+        var call = new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1, ["method"] = "tools/call", ["params"] = new JsonArray(1, 2) };
+
+        var response = await Server("https://work.kcap.ai", "work").DispatchToolCallAsync(JsonValue.Create(1)!, call);
+
+        await Assert.That(JsonNode.Parse(response)!["result"]!["isError"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
     public async Task Returns_the_resolved_server_and_profile() {
         var response = await Server("https://work.kcap.ai/", "work").DispatchToolCallAsync(JsonValue.Create(1)!, Call(ConnectionTool.Name));
 

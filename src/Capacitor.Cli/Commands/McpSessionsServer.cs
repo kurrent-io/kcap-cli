@@ -113,7 +113,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     /// serial, so no locking.
     /// </summary>
     internal async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
-        if (callRequest["params"]?["name"] is JsonValue name && name.TryGetValue(out string? toolName) && toolName == ConnectionTool.Name)
+        if (callRequest["params"] is JsonObject callParams && callParams["name"] is JsonValue name
+         && name.TryGetValue(out string? toolName) && toolName == ConnectionTool.Name)
             return BuildToolResult(callId, ConnectionTool.Result(profiles.Resolution.ServerUrl, profiles.Name).ToJsonString());
 
         if (!HttpClientExtensions.IsAcceptableUrl(BaseUrl))
