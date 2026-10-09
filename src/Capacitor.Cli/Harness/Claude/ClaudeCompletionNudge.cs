@@ -12,7 +12,7 @@ static class ClaudeCompletionNudge {
     internal const int LastMessageCap = 4000;
 
     internal const string BlockDecision =
-        """{"decision":"block","reason":"kcap: If the piece of work the user framed has reached a terminal state — a PR merged, an issue closed, a question answered with nothing pending, or the user done with it — (1) declare any remaining loose ends with declare_loose_end, one call per item; (2) call get_next_work and, unless it says this session's attached work is still open and the user has not said they are done with or parking it, tell the user, in a few lines, what to consider working on next and why. If the work is still open, say nothing about next work and stop again."}""";
+        """{"decision":"block","reason":"kcap: If the piece of work the user framed has reached a terminal state — a PR merged, an issue closed, a question answered with nothing pending, or the user done with it — (1) declare any remaining loose ends with declare_loose_end, one call per item; (2) call get_next_work and, unless it says this session's attached work is still open and the user has neither asked for next work nor said they are done with or parking it, tell the user, in a few lines, what to consider working on next and why. Otherwise say nothing about next work and stop again."}""";
 
     /// <summary>A server that predates the field answers with an empty body, and a current one omits
     /// the field rather than sending false; neither nudges.</summary>
