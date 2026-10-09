@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -1208,26 +1207,6 @@ public class SetupCommandTests {
         await Assert.That(Directory.GetFiles(Config.Directory, "import-handoff-*.json")).IsEmpty();
     }
 
-    /// <summary>Captures what a step writes through Spectre. <c>AnsiConsole</c> caches its writer at
-    /// first use, so redirecting <c>Console.Out</c> (as <c>ConsoleOutput</c> does) never reaches it —
-    /// the singleton itself has to be swapped, as <c>SetupFacadeParityTests.SpectreCapture</c> does.</summary>
-    sealed class SpectreCapture : IDisposable {
-        readonly IAnsiConsole  _original = AnsiConsole.Console;
-        readonly StringBuilder _text     = new();
-
-        public SpectreCapture() {
-            AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings {
-                Ansi        = AnsiSupport.No,
-                ColorSystem = ColorSystemSupport.NoColors,
-                Out         = new AnsiConsoleOutput(new StringWriter(_text)),
-            });
-        }
-
-        public string Text => _text.ToString();
-
-        public void Dispose() => AnsiConsole.Console = _original;
-    }
-
     [Test]
     public async Task Browser_summary_hands_back_the_prompt_as_a_paste_block() {
         var prompt = SetupCommand.HandoffPromptText("0123456789abcdef0123456789abcdef");
@@ -1247,9 +1226,7 @@ public class SetupCommandTests {
         await Command(runner, FakeBackgroundImportSpawner.Failing(), FakeHandoffAgentLauncher.Ran(), Config.Directory)
             .RunImportStepAsync(Inputs());
 
-        // Spectre wraps at the console width, so a command can straddle a line break.
-        await Assert.That(string.Join(' ', console.Text.Split((char[])[' ', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries)))
-                    .Contains("kcap import --all --yes");
+        await Assert.That(console.Flat).Contains("kcap import --all --yes");
     }
 
     [Test, NotInParallel]

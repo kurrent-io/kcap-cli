@@ -325,6 +325,9 @@ sealed class SetupImportLane(
     /// <summary>The eval-watch prompt the last import offered, or null.</summary>
     internal string? HandoffPrompt { get; private set; }
 
+    /// <summary>The child the last import spawned for the remainder, or null when no level was chosen.</summary>
+    internal BackgroundImportLaunch? Background { get; private set; }
+
     /// <summary>Every pass this lane ran, in run order — a pass that threw included, carrying its
     /// fault.</summary>
     internal IReadOnlyList<(FirstRunImportLevel Level, SetupImportRun Run)> Runs => _runs;
@@ -396,9 +399,7 @@ sealed class SetupImportLane(
                 Failed  = true;
                 counted = false;
 
-                AnsiConsole.MarkupLine(
-                    $"  [yellow]![/] That history did not import: {Markup.Escape(fault.Message)}. "
-                  + "Run [cyan]kcap setup[/] again and choose the same repositories to retry it.");
+                AnsiConsole.MarkupLine($"  [yellow]![/] That history did not import: {Markup.Escape(fault.Message)}.");
 
                 continue;
             }
@@ -411,9 +412,7 @@ sealed class SetupImportLane(
             if (outcome is null || outcome.AnythingFailed) {
                 Failed = true;
 
-                AnsiConsole.MarkupLine(
-                    "  [yellow]![/] Some of that history did not import. "
-                  + "Run [cyan]kcap setup[/] again and choose the same repositories to retry it.");
+                AnsiConsole.MarkupLine("  [yellow]![/] Some of that history did not import.");
             }
 
             if (outcome is null) {
@@ -445,8 +444,11 @@ sealed class SetupImportLane(
             [.. _runs.Select(r => ForegroundImportOutcome.From(r.Run))]);
 
         var launch = Spawn(runId, answer, since);
+        Background = launch;
 
         SetupCommand.PrintBackground(launch, browser: true);
+
+        if (Failed) AnsiConsole.MarkupLine(RetryLine(launch));
 
         var decision = HandoffDecision.Decide(
             merged, launch.Status,
@@ -472,6 +474,13 @@ sealed class SetupImportLane(
             ? new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffPrompt)
             : new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: decision.Reason!.Value.Wire());
     }
+
+    /// <summary>The child re-imports every chosen level, so while it runs it is the retry; only a child
+    /// that is not running leaves re-running setup as the remedy.</summary>
+    internal static string RetryLine(BackgroundImportLaunch launch) =>
+        launch.Status is BackgroundImportStatus.Running
+            ? $"  [dim]The background import retries what did not import · log: {Markup.Escape(launch.LogPath ?? "")}[/]"
+            : "  Run [cyan]kcap setup[/] again and choose the same repositories to retry what did not import.";
 
     BackgroundImportLaunch Spawn(string runId, FirstRunImportAnswer answer, DateOnly? since) {
         var plan = new ImportPlan(serverUrl, [

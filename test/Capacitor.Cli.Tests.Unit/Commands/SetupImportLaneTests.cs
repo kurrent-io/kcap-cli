@@ -565,6 +565,51 @@ public class SetupImportLaneTests {
         await Assert.That(result.Background).IsEqualTo("running");
     }
 
+    [Test, NotInParallel]
+    public async Task A_failed_pass_points_at_the_running_child_rather_than_at_setup() {
+        using var console = new SpectreCapture();
+
+        await Lane(p => p.Level is FirstRunImportLevel.OnlyMe ? Reported(new(Counts(errored: 1), 0)) : Task.FromException<SetupImportRun>(new IOException("disk")),
+                FakeBackgroundImportSpawner.Running())
+            .ImportAsync(Answer(repos: BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(console.Flat).Contains("The background import retries what did not import");
+        await Assert.That(console.Flat).Contains("/tmp/import-x.log");
+        await Assert.That(console.Flat).DoesNotContain("kcap setup");
+    }
+
+    [Test, NotInParallel]
+    public async Task A_failed_pass_names_setup_when_the_child_is_not_running() {
+        foreach (var spawner in new[] { FakeBackgroundImportSpawner.Failing(), FakeBackgroundImportSpawner.ExitedZero() }) {
+            using var console = new SpectreCapture();
+
+            await Lane(_ => Reported(new(Counts(errored: 1), 0)), spawner)
+                .ImportAsync(Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+            await Assert.That(console.Flat).Contains("Run kcap setup again and choose the same repositories to retry");
+        }
+    }
+
+    [Test, NotInParallel]
+    public async Task A_clean_run_prints_no_retry_line() {
+        using var console = new SpectreCapture();
+
+        await Lane(_ => Clean(), FakeBackgroundImportSpawner.Failing())
+            .ImportAsync(Answer(repos: ("ours", FirstRunImportLevel.Shared)), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(console.Flat).DoesNotContain("retry");
+    }
+
+    [Test]
+    public async Task The_lane_keeps_the_launch_it_spawned() {
+        var lane = Lane(_ => Clean(), FakeBackgroundImportSpawner.Running());
+
+        await lane.ImportAsync(Answer(repos: BothLevels), new DateOnly(2026, 6, 15), CancellationToken.None);
+
+        await Assert.That(lane.Background!.Status).IsEqualTo(BackgroundImportStatus.Running);
+        await Assert.That(lane.Background.LogPath).IsEqualTo("/tmp/import-x.log");
+    }
+
     [Test]
     public async Task A_decline_spawns_nothing() {
         var spawner = FakeBackgroundImportSpawner.Running();
