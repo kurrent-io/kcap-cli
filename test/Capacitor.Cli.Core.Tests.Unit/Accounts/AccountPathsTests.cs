@@ -73,4 +73,47 @@ public class AccountPathsTests {
 
         await Assert.That(AccountPaths.ClaudeForTranscript("projects/x.jsonl", registry, Home)).IsNull();
     }
+
+    [Test]
+    public async Task A_transcript_under_a_symlinked_account_directory_resolves_to_the_account() {
+        var real       = Home.CreateDir("data", "cw");
+        var link       = Home.PathTo(".claude-work");
+        Directory.CreateSymbolicLink(link, real);
+        var transcript = Home.CreateFile("data/cw/projects/-repo/abc.jsonl", "");
+
+        var paths = AccountPaths.ClaudeForTranscript(
+            Path.Combine(link, "projects", "-repo", "abc.jsonl"), Registry((HarnessId.Claude, link)), Home);
+
+        await Assert.That(File.Exists(transcript)).IsTrue();
+        await Assert.That(paths).IsNotNull();
+        await Assert.That(paths!.Plans).IsEqualTo(Path.Combine(AccountDirectory.Normalize(link), "plans"));
+    }
+
+    [Test]
+    public async Task A_codex_rollout_under_a_symlinked_home_resolves_to_the_home() {
+        var real = Home.CreateDir("data", "cb");
+        var link = Home.PathTo(".codex-b");
+        Directory.CreateSymbolicLink(link, real);
+        Home.CreateFile("data/cb/sessions/2026/10/08/rollout-x.jsonl", "");
+
+        var paths = AccountPaths.CodexForRollout(
+            Path.Combine(link, "sessions", "2026", "10", "08", "rollout-x.jsonl"), Registry((HarnessId.Codex, link)), Home);
+
+        await Assert.That(paths).IsNotNull();
+        await Assert.That(paths!.Home).IsEqualTo(AccountDirectory.Normalize(link));
+    }
+
+    [Test]
+    public async Task An_account_registered_through_a_symlinked_ancestor_claims_transcripts_under_the_real_path() {
+        var realParent = Home.CreateDir("real-parent");
+        Directory.CreateDirectory(Path.Combine(realParent, ".claude-work"));
+        var linkParent = Home.PathTo("link-parent");
+        Directory.CreateSymbolicLink(linkParent, realParent);
+        var transcript = Home.CreateFile("real-parent/.claude-work/projects/-repo/abc.jsonl", "");
+
+        var paths = AccountPaths.ClaudeForTranscript(
+            transcript, Registry((HarnessId.Claude, Path.Combine(linkParent, ".claude-work"))), Home);
+
+        await Assert.That(paths).IsNotNull();
+    }
 }

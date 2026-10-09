@@ -19,9 +19,10 @@ public static class AccountPaths {
             .Select(a => AccountLayouts.Codex(home, a.Directory))
             .FirstOrDefault(p => Contains(p.Sessions, rolloutPath));
 
-    // The trailing separator keeps /h/.claude from claiming /h/.claude-work. The second test covers
-    // a path whose parent directory is reached through a symlink. A malformed payload path is simply
-    // outside every account: a hook must never throw on it.
+    // The trailing separator keeps /h/.claude from claiming /h/.claude-work. The second test resolves
+    // the transcript's directory the way the stored account directory was resolved, so a symlink
+    // anywhere on either spelling still matches. A malformed payload path is simply outside every
+    // account: a hook must never throw on it.
     static bool Contains(string root, string path) {
         try {
             var r   = AccountDirectory.Normalize(root) + Path.DirectorySeparatorChar;

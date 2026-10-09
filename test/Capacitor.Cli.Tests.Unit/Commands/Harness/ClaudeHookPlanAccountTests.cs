@@ -61,6 +61,20 @@ public class ClaudeHookPlanAccountTests {
     }
 
     [Test]
+    public async Task Plan_is_read_from_a_symlinked_account_when_the_transcript_names_the_link() {
+        var real = Home.CreateDir("data", "cw");
+        var link = Home.PathTo(".claude-work");
+        Directory.CreateSymbolicLink(link, real);
+        Home.CreateFile(["data", "cw", "plans", "my-plan.md"], "# Plan Linked");
+        Home.CreateFile(["data", "cw", "projects", "-repo", "s1.jsonl"]);
+        var store = StoreWith(new VendorAccount("work", HarnessId.Claude, AccountDirectory.Normalize(link), "work", DateTimeOffset.UnixEpoch));
+
+        var body = await SessionStartBodyAsync(store, Path.Combine(link, "projects", "-repo", "s1.jsonl"));
+
+        await Assert.That(body).Contains("\"plan_content\":\"# Plan Linked\"");
+    }
+
+    [Test]
     public async Task Plan_falls_back_to_the_environment_layout_when_the_registry_is_corrupt() {
         Home.CreateFile([".claude", "plans", "my-plan.md"], "# Plan Default");
         var transcript = Home.CreateFile([".claude-work", "projects", "-repo", "s1.jsonl"]);
