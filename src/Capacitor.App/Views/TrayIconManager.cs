@@ -4,10 +4,11 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu: the icon updates on every model
-/// change; menu items rebuild ONLY inside NativeMenu.NeedsUpdate, via TrayMenuSync. macOS
-/// status-item menus never raise NativeMenu.Opening, so NeedsUpdate also kicks the pause-state
-/// refresh, which only starts async socket work and never touches menu structure itself.
+/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu. Only Avalonia's macOS backend
+/// raises NativeMenu.NeedsUpdate before a menu opens; the Windows and Linux backends never do, and
+/// Windows shows nothing at all for a menu with no items. So macOS rebuilds lazily inside
+/// NeedsUpdate, while everywhere else the menu is rebuilt on every model change and a left-click
+/// opens the main window.
 public sealed class TrayIconManager : IDisposable {
     readonly Application _app;
     readonly TrayIcon _trayIcon;
@@ -16,25 +17,31 @@ public sealed class TrayIconManager : IDisposable {
     readonly TrayMenuSync _sync = new();
     readonly IDisposable _subscription;
 
-    public TrayIconManager(Application app, TrayViewModel vm) {
+    public TrayIconManager(Application app, TrayViewModel vm)
+        : this(app, vm, backendRaisesNeedsUpdate: OperatingSystem.IsMacOS()) { }
+
+    public TrayIconManager(Application app, TrayViewModel vm, bool backendRaisesNeedsUpdate) {
         _app = app;
         _builder = new TrayMenuBuilder(vm);
 
         _trayIcon = new TrayIcon { Menu = _menu, ToolTipText = "Kurrent Capacitor" };
         TrayIcon.SetIcons(app, new TrayIcons { _trayIcon });
 
-        _menu.NeedsUpdate += (_, _) => {
-            vm.RequestPauseRefresh();
-            _sync.OnNeedsUpdate(model => _builder.Rebuild(_menu, model));
-        };
+        if (backendRaisesNeedsUpdate) {
+            // macOS status-item menus never raise NativeMenu.Opening, so this is also the pause refresh kick.
+            _menu.NeedsUpdate += (_, _) => {
+                vm.RequestPauseRefresh();
+                _sync.OnNeedsUpdate(model => _builder.Rebuild(_menu, model));
+            };
+        } else {
+            _trayIcon.Command = vm.OpenMainWindowCommand;
+            _trayIcon.Clicked += (_, _) => vm.RequestPauseRefresh();
+        }
 
-        // WhenAnyValue replays the current value synchronously on subscribe, so both the icon and
-        // the sync's dirty flag are seeded from the live model immediately — menu ITEMS still wait
-        // for the first NeedsUpdate (native menus raise it before every display, per Avalonia's own
-        // doc comment on the event), never populated eagerly here.
         _subscription = vm.WhenAnyValue(x => x.MenuModel).Subscribe(model => {
             _trayIcon.Icon = TrayIconRenderer.Get(model.State, model.RunningCount);
-            _sync.OnModelChanged(model);
+            if (backendRaisesNeedsUpdate) _sync.OnModelChanged(model);
+            else _builder.Rebuild(_menu, model);
         });
     }
 
