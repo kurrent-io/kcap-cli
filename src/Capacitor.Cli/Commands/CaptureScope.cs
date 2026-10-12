@@ -100,7 +100,11 @@ sealed class CaptureScope {
         var cwd     = CwdOf(c);
         var repoKey = RepoKeyAt(ImportCommand.ResolveCwd(c, resolvedCwds));
 
-        var excludedRepoKey = ExcludesRepos ? ExcludedRepo(repoKey) ?? ExcludedRepo(RepoKeyAt(cwd)) : null;
+        string[] excludedRepoKeys = ExcludesRepos
+            ? [.. new[] { ExcludedRepo(repoKey), ExcludedRepo(RepoKeyAt(cwd)) }
+                    .OfType<string>()
+                    .Distinct(StringComparer.OrdinalIgnoreCase)]
+            : [];
 
         string? excludedPathKey = null;
 
@@ -119,7 +123,7 @@ sealed class CaptureScope {
                             || RepoExclusion.IsOutsideAllowlist(repoKey, _allowedRepos);
 
         return c with {
-            ExcludedRepoKey  = excludedRepoKey,
+            ExcludedRepoKeys = excludedRepoKeys,
             ExcludedPathKey  = excludedPathKey,
             OutsideAllowlist = outsideAllowlist,
         };

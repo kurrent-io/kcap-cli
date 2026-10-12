@@ -52,7 +52,7 @@ public class CaptureScopeTests {
         var result = await Scope(excludedRepos: ["acme/secret"], repoDetector: Detects("acme", "secret"))
             .ApplyAsync([Session("s1", "/tmp/anywhere")], NoResolved);
 
-        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/secret");
+        await Assert.That(result[0].ExcludedRepoKeys).IsEquivalentTo(["acme/secret"]);
         await Assert.That(result[0].OutsideAllowlist).IsFalse();
     }
 
@@ -64,7 +64,7 @@ public class CaptureScopeTests {
         var result = await Scope(excludedRepos: ["acme/secret"], repoDetector: Detects("acme", "secret"))
             .ApplyAsync([Session("s1", "/tmp/anywhere", ImportCommand.ClassificationStatus.AlreadyLoaded)], NoResolved);
 
-        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/secret");
+        await Assert.That(result[0].ExcludedRepoKeys).IsEquivalentTo(["acme/secret"]);
     }
 
     [Test]
@@ -222,7 +222,7 @@ public class CaptureScopeTests {
         var result = await Scope(excludedRepos: ["acme/widgets"], repoDetector: DetectsAt(repo))
             .ApplyAsync([Session("s1", cwd)], resolved);
 
-        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/widgets");
+        await Assert.That(result[0].ExcludedRepoKeys).IsEquivalentTo(["acme/widgets"]);
     }
 
     [Test]
@@ -242,7 +242,7 @@ public class CaptureScopeTests {
         var result = await Scope(excludedRepos: ["acme/widgets"], repoDetector: DetectsAt(repo))
             .ApplyAsync([Session("s1", cwd)], resolved);
 
-        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/widgets");
+        await Assert.That(result[0].ExcludedRepoKeys).IsEquivalentTo(["acme/widgets"]);
     }
 
     // The transcript still carries the recorded path, so a remap that lands outside an excluded
@@ -268,7 +268,19 @@ public class CaptureScopeTests {
         var result = await scope.ApplyAsync(
             [Session("s1", "/tmp/old")], new Dictionary<string, string> { ["s1"] = "/tmp/new" });
 
-        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/secret");
+        await Assert.That(result[0].ExcludedRepoKeys).IsEquivalentTo(["acme/secret"]);
+    }
+
+    // Opting into one excluded repo must not admit a session that also maps to another.
+    [Test]
+    public async Task A_remap_between_two_excluded_repos_keeps_both() {
+        var scope = Scope(excludedRepos: ["acme/secret", "acme/public"], repoDetector: cwd => Task.FromResult<RepositoryPayload?>(
+            new RepositoryPayload { Owner = "acme", RepoName = cwd == "/tmp/old" ? "secret" : "public" }));
+
+        var result = await scope.ApplyAsync(
+            [Session("s1", "/tmp/old")], new Dictionary<string, string> { ["s1"] = "/tmp/new" });
+
+        await Assert.That(result[0].ExcludedRepoKeys).IsEquivalentTo(["acme/public", "acme/secret"]);
     }
 
     // The allow-side twin of the path exclusion above, kept conservative: a remap into an allowed

@@ -364,10 +364,11 @@ class ImportCommand(
 
         /// <summary>
         /// Populated when Status == Excluded OR when the session would otherwise be New/Partial
-        /// but its cwd maps to an excluded repo and the user has not yet been consulted.
-        /// Format: "{Owner}/{RepoName}".
+        /// but its cwd maps to an excluded repo and the user has not yet been consulted. The
+        /// recorded and the resolved cwd can name two different excluded repos, and each needs
+        /// its own opt-in. Format: "{Owner}/{RepoName}".
         /// </summary>
-        public string? ExcludedRepoKey { get; init; }
+        public IReadOnlyList<string> ExcludedRepoKeys { get; init; } = [];
 
         /// <summary>
         /// Populated when the session's cwd lies within a path configured via
@@ -1235,9 +1236,9 @@ class ImportCommand(
         var actionable = classifications.Where(CaptureScope.Actionable).ToList();
 
         var excludedByRepo = actionable
-            .Where(c => c.ExcludedRepoKey is not null)
-            .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+            .SelectMany(c => c.ExcludedRepoKeys.Select(key => (Key: key, Session: c)))
+            .GroupBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(p => p.Session).ToList(), StringComparer.OrdinalIgnoreCase);
 
         var excludedByPath = actionable
             .Where(c => c.ExcludedPathKey is not null)
@@ -3582,7 +3583,7 @@ class ImportCommand(
             HashSet<string>       includedPathKeys,
             bool                  includeOutsideAllowlist = false
         ) {
-        if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
+        if (c.ExcludedRepoKeys.Any(key => !includedRepoKeys.Contains(key))) return true;
         if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
         if (c.OutsideAllowlist && !includeOutsideAllowlist) return true;
 
