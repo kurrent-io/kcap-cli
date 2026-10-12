@@ -237,6 +237,10 @@ public partial class App : Application {
             var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => windowLifecycle.Dispose();
+            if (OperatingSystem.IsWindows())
+                Program.Instance?.OnShowRequested(() => Dispatcher.UIThread.Post(() => {
+                    if (!_shutdownStarted) MainWindowAction(_coordinator)?.Invoke();
+                }));
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
             _menuBar.Install();
@@ -748,6 +752,7 @@ public partial class App : Application {
             if (Path.GetFileNameWithoutExtension(executable) == "dotnet")
                 start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
             start.ArgumentList.Add("--setup");
+            if (OperatingSystem.IsWindows()) start.ArgumentList.Add(SingleInstanceGuard.RelaunchArg);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}"); }
@@ -855,7 +860,7 @@ public partial class App : Application {
         if (OperatingSystem.IsWindows()) {
             if (Environment.ProcessPath is not { } exe) return false;
             try {
-                using var next = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
+                using var next = Process.Start(new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false });
             } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
                 return false;
             }

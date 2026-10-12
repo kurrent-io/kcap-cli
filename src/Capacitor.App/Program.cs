@@ -13,6 +13,13 @@ internal static class Program
     /// OnRestarted hook, which fires on a failed apply too, so it means "relaunched", not "updated".
     public static bool UpdateRelaunch { get; private set; }
 
+    /// Held for the life of the process on Windows; null elsewhere.
+    public static SingleInstanceGuard? Instance { get; private set; }
+
+    // Long enough for the old copy to finish shutting down; past it, that copy is taken to have
+    // cancelled its exit and is asked to show itself instead.
+    static readonly TimeSpan RelaunchWait = TimeSpan.FromSeconds(30);
+
     [STAThread]
     public static void Main(string[] args) {
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
@@ -22,6 +29,12 @@ internal static class Program
             .SetAutoApplyOnStartup(false)
             .OnRestarted(_ => UpdateRelaunch = true)
             .Run();
+
+        if (OperatingSystem.IsWindows() && Environment.ProcessPath is { } exe) {
+            var relaunch = UpdateRelaunch || args.Contains(SingleInstanceGuard.RelaunchArg, StringComparer.Ordinal);
+            Instance = SingleInstanceGuard.TryAcquire(SingleInstanceGuard.NameFor(exe), relaunch ? RelaunchWait : TimeSpan.Zero);
+            if (Instance is null) return;
+        }
 
         var crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => {
