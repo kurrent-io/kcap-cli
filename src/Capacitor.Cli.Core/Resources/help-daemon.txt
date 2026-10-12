@@ -113,15 +113,16 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           refresh_outcome=<token> on stderr; launchd only.
 
 Subcommands for shim (the command-line tool — kcap on your terminal PATH):
-  ensure [--json]         Probe the login shell. If kcap already resolves
-                          from the terminal, report already_on_path and exit
-                          0. If it is absent, link /usr/local/bin/kcap to this
-                          CLI (macOS only; prompts once for your admin
-                          password, then re-probes so success is never
-                          reported on the symlink alone). Every ambiguous row
-                          fails closed with a coded reason: an unknown probe
-                          (probe_unknown), a different filesystem entry at the
-                          destination (conflict), or an unsupported platform
+  ensure [--json]         Probe a new terminal's PATH. If kcap already
+                          resolves, report already_on_path and exit 0. If it
+                          is absent, link /usr/local/bin/kcap to this CLI
+                          (macOS; prompts once for your admin password) or
+                          add its folder to your user PATH (Windows), then
+                          re-probe so success is never reported on the change
+                          alone. Every ambiguous row fails closed with a coded
+                          reason: an unknown probe (probe_unknown), a
+                          different filesystem entry at the destination
+                          (conflict), or a platform with no installer
                           (unsupported_platform) — nothing is ever guessed or
                           overwritten. --json emits the outcome + coded reason
                           the flow keys off (e.g. installed, refused).
