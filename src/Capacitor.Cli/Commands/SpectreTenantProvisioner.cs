@@ -206,8 +206,9 @@ public sealed class SpectreTenantProvisioner(
         // request rather than a resume. The user has already approved a sign-in to get this far.
         if (tier == WorkspaceTier.Team && TeamRefusal(outcome) is { } why) {
             Retry($"{why} Creating the workspace on the Free plan instead.");
+            tier    = WorkspaceTier.Free;
             outcome = await client.ProvisionAsync(
-                baseUrl, await tokens.GetAsync(ct), orgName, slug, WorkspaceTier.Free, telemetry.Join.Current, ct);
+                baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, ct);
         }
 
         switch (outcome.StatusCode) {
@@ -215,7 +216,7 @@ public sealed class SpectreTenantProvisioner(
                 telemetry.Funnel.WorkspaceProvisioned();
                 return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
             case 202 or 200:
-                return await PollAsync(tokens, slug, orgName, origin, ct);
+                return await PollAsync(tokens, slug, orgName, origin, tier, ct);
             case 400:
                 Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
                 return ProvisionOffer.Failed;
@@ -259,7 +260,8 @@ public sealed class SpectreTenantProvisioner(
         }
     }
 
-    async Task<ProvisionOffer> PollAsync(WorkOSTokenSource tokens, string slug, string orgName, string origin, CancellationToken ct) {
+    async Task<ProvisionOffer> PollAsync(
+            WorkOSTokenSource tokens, string slug, string orgName, string origin, WorkspaceTier tier, CancellationToken ct) {
         // Two different re-runs. A workspace still being built will exist, so naming it is right; one
         // that failed does not, and `kcap setup <slug>` treats a positional as an existing server and
         // never reaches creation at all. The scripted forms name --no-prompt, without which the first
@@ -270,10 +272,10 @@ public sealed class SpectreTenantProvisioner(
         // arbitrary text, and a quote or a backtick in one turns a command meant for copying into a
         // different command. The reader knows their own name; the shape is what they need.
         var createPlain  = Scripted
-            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --no-prompt"
+            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --tier {tier.Wire()} --no-prompt"
             : "Re-run kcap setup";
         var createMarkup = Scripted
-            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --no-prompt[/]"
+            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --tier {tier.Wire()} --no-prompt[/]"
             : "Re-run [cyan]kcap setup[/]";
         // The live display is a terminal affordance; on a scripted run its fallback renderer would put
         // a hundred-odd progress lines on stdout, which is the stream that run's failures avoid.

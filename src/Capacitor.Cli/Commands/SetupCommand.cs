@@ -2309,7 +2309,7 @@ sealed class SetupCommand(
         if (!orgGiven && !slugGiven)
             return tierGiven ? (null, $"--tier picks the plan for a workspace to create, so it needs --org and --slug: {Usage}") : (null, null);
 
-        var tier = tierGiven ? WorkspaceTiers.Parse(tierText) : WorkspaceTier.Free;
+        var tier = tierGiven ? WorkspaceTierExtensions.Parse(tierText) : WorkspaceTier.Free;
 
         if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 

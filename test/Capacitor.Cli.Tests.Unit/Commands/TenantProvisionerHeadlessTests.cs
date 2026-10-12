@@ -195,8 +195,20 @@ public class TenantProvisionerHeadlessTests {
         var written = capture.GetCapturedError();
 
         await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
-        await Assert.That(written).Contains("--slug acme --no-prompt");
+        await Assert.That(written).Contains("--slug acme --tier free --no-prompt");
         await Assert.That(written).DoesNotContain("kcap setup acme");
+    }
+
+    // Without the tier, following the printed command would quietly ask for a different plan.
+    [Test]
+    public async Task A_failed_build_retries_on_the_plan_that_was_asked_for() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new StubHandler { ProvisionStatus = HttpStatusCode.Accepted, StatusState = "failed" };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(capture.GetCapturedError()).Contains("--slug acme --tier team --no-prompt");
     }
 
     // An organization name is arbitrary text; a quote or a backtick in one rewrites the command it is
