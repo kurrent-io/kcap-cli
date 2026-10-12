@@ -154,7 +154,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     string? _selectedEffort;
     /// null = vendor default. Survives vendor changes — the effort vocabulary is shared enough
-    /// (low/medium/high/xhigh) that the choice usually still means what the user meant.
+    /// (low/medium/high/xhigh/max) that the choice usually still means what the user meant.
     public string? SelectedEffort {
         get => _selectedEffort;
         set => this.RaiseAndSetIfChanged(ref _selectedEffort, value);

@@ -97,7 +97,7 @@ public static class HostedHarnessCatalog {
     /// The effort ladder the daemon passes through verbatim (codex maps max→xhigh itself); the
     /// picker's Default entry (null on the wire) hands the choice back to the harness. Lives here
     /// beside the model catalog so the launch vocabularies have one authority.
-    public static readonly IReadOnlyList<string> EffortLadder = ["low", "medium", "high", "xhigh"];
+    public static readonly IReadOnlyList<string> EffortLadder = ["low", "medium", "high", "xhigh", "max"];
 
     /// Shared chip/flyout word for "omit from the wire — let the harness decide". Not "Auto":
     /// that label is Claude's permission mode, a different control.
@@ -109,7 +109,8 @@ public static class HostedHarnessCatalog {
         "low"      => "Low",
         "medium"   => "Medium",
         "high"     => "High",
-        "xhigh"    => "Max",
+        "xhigh"    => "Extra high",
+        "max"      => "Max",
         _          => token,
     };
 

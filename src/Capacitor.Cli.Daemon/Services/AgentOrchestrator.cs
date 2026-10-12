@@ -5171,7 +5171,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             ? reason
             : AcpHostedAgentRuntimeFactory.FormatFallbackLaunchReason(fallbackSource); // finding 5: single owner of the format
 
-    static readonly HashSet<string> ValidEffortLevels = ["low", "medium", "high", "max"];
+    static readonly HashSet<string> ValidEffortLevels = ["low", "medium", "high", "xhigh", "max"];
 
     /// <summary>When an unlinked launch stops being ordinary slowness and starts being worth saying
     /// out loud. A healthy codex links in about five seconds, so a minute is far past normal while
