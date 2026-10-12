@@ -520,6 +520,10 @@ public partial class App : Application {
         _modelCatalog = modelCatalog;
         _ = modelCatalog.LoadAsync(_shutdown.Token);
 
+        var reportCliSetup = ServerCliSetupReport.Sender(
+            sessionHttp, profiles, typeof(CapacitorVersion).Assembly.GetName().Version?.ToString());
+        _ = reportCliSetup(_shutdown.Token);
+
         // After the directory, which feeds it the session→agent map: a server-lane item names a
         // session, and only that map turns it into the agent whose card it belongs on.
         var readDetail = ServerSessionHttp.DetailReader(sessionHttp, profiles);
@@ -570,6 +574,7 @@ public partial class App : Application {
         serverClients.SignInCompleted.Subscribe(signedIn => {
             _ = serverLane.RestartAsync();
             _ = modelCatalog.LoadAsync(_shutdown.Token);
+            _ = reportCliSetup(_shutdown.Token);
         });
 
         // One attach client per attempt, dialed at the daemon's own control socket; 80x24 is a
