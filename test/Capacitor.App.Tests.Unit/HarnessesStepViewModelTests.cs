@@ -369,6 +369,51 @@ public class HarnessesStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Tools_only_harnesses_also_enable_the_daemon() {
+        var enables = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
+            foreach (var row in h.Vm.Rows) row.Record = false;
+            h.Row("Cursor").Tools = true;
+
+            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            return h.DaemonEnables;
+        });
+
+        await Assert.That(enables).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retried_harness_enables_the_daemon_on_continue() {
+        var (afterFailure, afterRetry, afterAgain) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
+            var fail = true;
+            h.Cli.PluginInstallBehavior = (_, _) => Task.FromResult(
+                fail ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
+            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var afterFailure = h.DaemonEnables;
+
+            fail = false;
+            await h.Row("Cursor").RetryCommand.Execute().ToTask();
+            Dispatcher.UIThread.RunJobs();
+            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            var afterRetry = h.DaemonEnables;
+
+            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            return (afterFailure, afterRetry, h.DaemonEnables);
+        });
+
+        await Assert.That(afterFailure).IsEqualTo(0);
+        await Assert.That(afterRetry).IsEqualTo(1);
+        await Assert.That(afterAgain).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Not_now_leaves_the_daemon_to_its_own_step() {
         var enables = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root);

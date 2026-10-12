@@ -7,11 +7,12 @@ public enum ShimOutcome { Installed, InstalledButNotOnPath, Cancelled, Failed }
 public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? SudoFallback);
 
 /// Installs a `kcap` symlink to a resolved CLI so a terminal PATH that omits the CLI's own location
-/// still finds it: in the first login-PATH folder this user can already write to, else in
+/// still finds it: in the first stable login-PATH folder this user can already write to, else in
 /// `/usr/local/bin` behind an admin prompt. Mechanics only — the once-ever offer and tray-menu wiring
 /// live in the desktop app's ShimOfferCoordinator. `destination` is a parameter so tests drive the
 /// real filesystem taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
-public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination)
+public sealed class PathShimInstaller(
+        IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination, UserHome? home = null)
     : ICliPathInstaller {
     public const string Destination = "/usr/local/bin/kcap";
 
@@ -63,21 +64,51 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
         var path = await probe.TerminalPathAsync(ct).ConfigureAwait(false);
         if (path is null) return null;
 
-        foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries)) {
-            if (!Path.IsPathFullyQualified(dir)) continue;
+        var stable = StableFolders();
+        foreach (var entry in path.Split(':', StringSplitOptions.RemoveEmptyEntries)) {
+            var dir = Path.TrimEndingDirectorySeparator(entry);
+            if (!Path.IsPathFullyQualified(dir) || !stable.Contains(dir)) continue;
+
             var link = Path.Combine(dir, "kcap");
+            var created = false;
             switch (Preflight(link, target)) {
-                case ShimPreflight.AlreadyInstalled: return await ProbeOutcomeAsync(link, ct).ConfigureAwait(false);
-                case ShimPreflight.Conflict:         continue;
+                case ShimPreflight.Conflict: continue;
+                case ShimPreflight.Installable:
+                    try {
+                        File.CreateSymbolicLink(link, target);
+                        created = true;
+                    } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                        continue;
+                    }
+                    break;
             }
-            try {
-                File.CreateSymbolicLink(link, target);
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                continue;
-            }
-            return await ProbeOutcomeAsync(link, ct).ConfigureAwait(false);
+
+            if (await ResolvesToAsync(link, ct).ConfigureAwait(false)) return new ShimResult(ShimOutcome.Installed, null, null);
+            if (created) TryDelete(link);
         }
         return null;
+    }
+
+    // A version manager's per-version or per-shell folder sits early on PATH and is replaced on the
+    // next switch, taking the link with it; only folders that outlive that are candidates.
+    HashSet<string> StableFolders() {
+        var folders = new HashSet<string>(StringComparer.Ordinal) { "/opt/homebrew/bin", Path.GetDirectoryName(destination)! };
+        if (home is not null) {
+            folders.Add(Path.Combine(home.Path, ".local", "bin"));
+            folders.Add(Path.Combine(home.Path, "bin"));
+        }
+        return folders;
+    }
+
+    // Another kcap earlier on PATH would still win, so presence alone is not success.
+    async Task<bool> ResolvesToAsync(string link, CancellationToken ct) {
+        if (await probe.KcapOnPathAsync(ct, forceRefresh: true).ConfigureAwait(false) != true) return false;
+        var resolved = await probe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+        return resolved is not null && string.Equals(Path.GetFullPath(resolved), Path.GetFullPath(link), StringComparison.Ordinal);
+    }
+
+    static void TryDelete(string link) {
+        try { File.Delete(link); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     /// Shared post-install/AlreadyInstalled mapping (spec §5: "never report success on the symlink

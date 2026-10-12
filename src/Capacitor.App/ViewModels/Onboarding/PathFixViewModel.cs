@@ -37,7 +37,7 @@ public sealed class PathFixViewModel : ReactiveObject {
     }
 
     /// Installs the terminal command and reports whether the login shell can now run it.
-    public async Task<bool> InstallAsync() {
+    public async Task<bool> InstallAsync(CancellationToken ct = default) {
         if (Fixed) return true;
         if (_target is null) {
             Message = "This machine could not find its own kcap, so nothing changed.";
@@ -47,7 +47,9 @@ public sealed class PathFixViewModel : ReactiveObject {
         Message = null;
         try {
             await ClaimOfferedOnceAsync().ConfigureAwait(true);
-            Apply(await _installer.InstallAsync(_target, CancellationToken.None).ConfigureAwait(true));
+            Apply(await _installer.InstallAsync(_target, ct).ConfigureAwait(true));
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return false;
         } catch (Exception ex) {
             Message = $"Could not install the terminal command: {ex.Message}. Try again.";
         }

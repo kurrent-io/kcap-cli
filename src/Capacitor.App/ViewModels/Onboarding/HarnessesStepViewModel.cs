@@ -45,6 +45,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     string? _message;
     Task? _inFlight;
     readonly Func<CancellationToken, Task>? _enableDaemon;
+    bool _daemonAttempted;
 
     public HarnessesStepViewModel(
             IKcapCli cli,
@@ -235,26 +236,31 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             return false;
         }
 
+        if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
+
         // Hooks store the bare command, so turning a harness on first puts kcap on the login
         // shell. Not now installs nothing, so it does not wait.
         if (direction != WizardNavigation.Skip && PathFix is { Fixed: false } pathFix && Rows.Any(r => r.Selected)) {
             Message = null;
             Busy    = true;
             bool installed;
-            try { installed = await pathFix.InstallAsync().ConfigureAwait(true); } finally { Busy = false; }
+            try { installed = await pathFix.InstallAsync(ct).ConfigureAwait(true); } finally { Busy = false; }
             if (!installed) {
                 Message = pathFix.Message;
                 return false;
             }
         }
 
-        if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
         _stampOffered(Rows.Select(r => r.Id));
         if (direction == WizardNavigation.Skip) return true;
-        if (_installed || !CliAvailable) return true;
+        if (_installed || !CliAvailable) {
+            // A row retried into success after the first pass still owes the daemon.
+            if (_installed) await EnableDaemonOnceAsync(ct).ConfigureAwait(true);
+            return true;
+        }
 
         await (_inFlight = InstallSelectedAsync()).ConfigureAwait(true);
-        if (Recording.Count > 0) await EnableDaemonAsync(ct).ConfigureAwait(true);
+        await EnableDaemonOnceAsync(ct).ConfigureAwait(true);
         _installed = true;
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(ChoicesEditable));
@@ -265,8 +271,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     }
 
     // Best effort: whatever the daemon could not do quietly, its own step still offers.
-    async Task EnableDaemonAsync(CancellationToken ct) {
-        if (_enableDaemon is null) return;
+    async Task EnableDaemonOnceAsync(CancellationToken ct) {
+        if (_enableDaemon is null || _daemonAttempted || !Rows.Any(r => r is { Selected: true, Succeeded: true })) return;
+        _daemonAttempted = true;
         Busy = true;
         try {
             await _enableDaemon(ct).ConfigureAwait(true);

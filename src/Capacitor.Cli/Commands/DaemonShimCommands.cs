@@ -70,9 +70,8 @@ public static class DaemonShimCommands {
     /// real <c>$SHELL</c>).</param>
     /// <param name="install">Test seam for the shim install (the production installer prompts via
     /// osascript).</param>
-    /// <param name="preflight">Test seam for the destination preflight — the production default
-    /// refuses on any non-target filesystem entry at <see cref="PathShimInstaller.Destination"/>.
-    /// Injected independently of <paramref name="install"/> so the conflict row is stubbable.</param>
+    /// <param name="preflight">Test seam for the destination preflight that turns a failed install
+    /// into the conflict row when a non-target entry sits at <see cref="PathShimInstaller.Destination"/>.</param>
     /// <param name="isMacOs">Test seam — the shim is osascript-based, so the classifier refuses
     /// off-macOS. A bool cannot distinguish "unspecified" from "explicitly false" on a macOS host,
     /// so this is nullable: null resolves to the real OS, false forces the off-macOS arm.</param>
@@ -162,23 +161,16 @@ public static class DaemonShimCommands {
     static async Task<ShimEnsureJson> Install(string target, ILoginShellProbe probe, TimeProvider time,
             Func<string, CancellationToken, Task<ShimResult>>? install, Func<string, ShimPreflight>? preflight,
             CancellationToken ct) {
-        // Preflight is checked here (before the admin prompt) so a conflict is a coded refusal
-        // with what was found, not a prompt that then fails. AlreadyInstalled and Installable
-        // both flow into InstallAsync, which re-probes fresh and maps the same way. The preflight
-        // seam is independent of the install seam so the conflict row is stubbable in tests.
+        // The installer tries a writable PATH folder first, so an entry at /usr/local/bin is not a
+        // refusal until that fails. It refuses a conflicting entry without prompting, and a foreign
+        // entry there after a failed install is the coded conflict row the flow was promised.
         preflight ??= target => PathShimInstaller.Preflight(PathShimInstaller.Destination, target);
-        if (preflight(target) == ShimPreflight.Conflict)
-            return ConflictRefusal(target);
 
         var result = install is not null
             ? await install(target, ct).ConfigureAwait(false)
-            : await new PathShimInstaller(new ProcessRunner(time), probe)
+            : await new PathShimInstaller(new ProcessRunner(time), probe, home: UserHome.FromEnvironment())
                 .InstallAsync(target, ct).ConfigureAwait(false);
 
-        // The outer preflight and the installer's own checks are not atomic: an entry can appear
-        // between them, or the non-forcing `ln -s` can lose the race against one. Re-preflight
-        // now — a foreign entry present after a failed install is the coded conflict row the flow
-        // was promised, not a generic failure.
         if (result.Outcome == ShimOutcome.Failed && preflight(target) == ShimPreflight.Conflict)
             return ConflictRefusal(target);
 
