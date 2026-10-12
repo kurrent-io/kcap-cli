@@ -1,5 +1,7 @@
 using Capacitor.Cli.Commands;
+using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.PrDetection;
 
@@ -11,6 +13,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class CaptureScopeTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome] public required TempHome Home { get; init; }
+    [TempDir] public required TempDir Tmp { get; init; }
 
     static ImportCommand.SessionClassification Session(
             string sessionId, string? cwd,
@@ -195,6 +198,97 @@ public class CaptureScopeTests {
         await scope.ApplyAsync([Session("s1", "/tmp/anywhere")]);
 
         await Assert.That(calls).IsEqualTo(0);
+    }
+
+    // A deleted worktree's recorded cwd resolves to no repo. The scope reaches the repo through
+    // cwd_remap or the dot-worktree strip, and the repo lists have to judge that same cwd.
+    [Test]
+    public async Task A_session_remapped_into_an_allowed_repo_is_admitted() {
+        var (repo, cwd, resolved) = await ResolveDeletedWorktree("worktrees", "ai-1");
+
+        var result = await Scope(allowedRepos: ["acme/widgets"], repoDetector: DetectsAt(repo))
+            .ApplyAsync([Session("s1", cwd)], resolved);
+
+        await Assert.That(result[0].OutsideAllowlist).IsFalse();
+    }
+
+    [Test]
+    public async Task A_session_remapped_into_an_excluded_repo_is_excluded() {
+        var (repo, cwd, resolved) = await ResolveDeletedWorktree("worktrees", "ai-1");
+
+        var result = await Scope(excludedRepos: ["acme/widgets"], repoDetector: DetectsAt(repo))
+            .ApplyAsync([Session("s1", cwd)], resolved);
+
+        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/widgets");
+    }
+
+    [Test]
+    public async Task A_session_from_a_stripped_dot_worktree_is_admitted_to_its_repo() {
+        var (repo, cwd, resolved) = await ResolveDeletedWorktree(".capacitor", "worktrees", "agent-1");
+
+        var result = await Scope(allowedRepos: ["acme/widgets"], repoDetector: DetectsAt(repo))
+            .ApplyAsync([Session("s1", cwd)], resolved);
+
+        await Assert.That(result[0].OutsideAllowlist).IsFalse();
+    }
+
+    [Test]
+    public async Task A_session_from_a_stripped_dot_worktree_of_an_excluded_repo_is_excluded() {
+        var (repo, cwd, resolved) = await ResolveDeletedWorktree(".capacitor", "worktrees", "agent-1");
+
+        var result = await Scope(excludedRepos: ["acme/widgets"], repoDetector: DetectsAt(repo))
+            .ApplyAsync([Session("s1", cwd)], resolved);
+
+        await Assert.That(result[0].ExcludedRepoKey).IsEqualTo("acme/widgets");
+    }
+
+    // The transcript still carries the recorded path, so a remap that lands outside an excluded
+    // path must not lift the exclusion.
+    [Test]
+    public async Task A_remap_out_of_an_excluded_path_does_not_lift_the_exclusion() {
+        var (repo, cwd, resolved) = await ResolveDeletedWorktree("worktrees", "ai-1");
+        var excluded              = Path.Combine(repo, "worktrees");
+
+        var result = await Scope(excludedPaths: [excluded])
+            .ApplyAsync([Session("s1", cwd)], resolved);
+
+        await Assert.That(result[0].ExcludedPathKey).IsEqualTo(PathExclusion.Normalize(excluded, Home));
+    }
+
+    static Func<string, Task<RepositoryPayload?>> DetectsAt(string repo) =>
+        cwd => Task.FromResult<RepositoryPayload?>(
+            cwd == repo ? new RepositoryPayload { Owner = "acme", RepoName = "widgets" } : null);
+
+    /// <summary>
+    /// A repo that exists and a session recorded in <paramref name="worktree"/> under it, which does
+    /// not. A wildcard remap folds <c>worktrees/*</c> back onto the repo; a dot-worktree is
+    /// stripped without one.
+    /// </summary>
+    async Task<(string Repo, string Cwd, IReadOnlyDictionary<string, string> Resolved)> ResolveDeletedWorktree(
+            params string[] worktree) {
+        var repo = Path.Combine(Path.GetFullPath(Tmp.Path), "widgets");
+        Directory.CreateDirectory(repo);
+
+        var transcript = Path.Combine(Tmp.Path, "s1.jsonl");
+        var cwd        = Path.Combine([repo, .. worktree]);
+        await File.WriteAllLinesAsync(
+            transcript,
+            [$$$"""{"type":"user","timestamp":"2026-03-15T10:00:00Z","cwd":{{{JsonSerializer.Serialize(cwd)}}},"message":{"content":"hello"}}"""]
+        );
+
+        var resolved = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home),
+                                new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+            .ResolveTranscriptReposAsync(
+                [("s1", transcript, "")],
+                codex: false,
+                new ImportCommand.ImportDisplay { Tty = false },
+                cwdRemap: [new CwdRemap { From = Path.Combine(repo, "worktrees", "*"), To = repo }],
+                sessionCwds: resolved
+            );
+
+        return (repo, cwd, resolved);
     }
 
     [Test]

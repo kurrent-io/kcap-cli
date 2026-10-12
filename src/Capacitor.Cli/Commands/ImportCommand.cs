@@ -1222,7 +1222,7 @@ class ImportCommand(
         var captureScope = new CaptureScope(router, config, home,
                                             allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
 
-        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
+        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications, sessionCwds);
 
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
         // Repo and path exclusions are independent gates: a session is included only when

@@ -47,12 +47,19 @@ sealed class CaptureScope {
     /// the scope has to carry the verdict that keeps it out. A session that is too short, errored
     /// or internal reaches nothing, and stamping it would relabel it <c>Excluded</c> in the plan —
     /// hiding a probe failure behind a scope decision that never applied to it.
+    ///
+    /// <para><paramref name="resolvedCwds"/> holds the remapped, worktree-stripped cwd that
+    /// <c>--repo</c> / <c>--org</c> matched each session on. The repo lists judge that one, since
+    /// the raw cwd of a deleted worktree resolves to no repo at all. The path lists keep the raw
+    /// cwd: it is the path the transcript carries to the server, so a remap must not move a
+    /// session out from under a path exclusion.</para>
     /// </summary>
     public async Task<List<ImportCommand.SessionClassification>> ApplyAsync(
-            IReadOnlyList<ImportCommand.SessionClassification> classifications) {
-        if (NeedsRepo) await WarmRepoCacheAsync(classifications);
+            IReadOnlyList<ImportCommand.SessionClassification> classifications,
+            IReadOnlyDictionary<string, string>? resolvedCwds = null) {
+        if (NeedsRepo) await WarmRepoCacheAsync(classifications, resolvedCwds);
 
-        return [.. classifications.Select(c => Actionable(c) ? Stamp(c) : c)];
+        return [.. classifications.Select(c => Actionable(c) ? Stamp(c, RepoCwdOf(c, resolvedCwds)) : c)];
     }
 
     /// <summary>
@@ -69,9 +76,11 @@ sealed class CaptureScope {
     /// wall of <c>git</c> invocations between the probe bar clearing and the plan appearing. Each
     /// miss can spawn several processes under a 5s cap, and one unreachable path costs that alone.
     /// </summary>
-    async Task WarmRepoCacheAsync(IReadOnlyList<ImportCommand.SessionClassification> classifications) {
+    async Task WarmRepoCacheAsync(
+            IReadOnlyList<ImportCommand.SessionClassification> classifications,
+            IReadOnlyDictionary<string, string>? resolvedCwds) {
         var cwds = classifications.Where(Actionable)
-            .Select(CwdOf)
+            .Select(c => RepoCwdOf(c, resolvedCwds))
             .OfType<string>()
             .Distinct(StringComparer.Ordinal)
             .Where(cwd => !_repoCache.ContainsKey(cwd))
@@ -83,9 +92,9 @@ sealed class CaptureScope {
             async (cwd, _) => _repoCache[cwd] = await DetectAsync(cwd));
     }
 
-    ImportCommand.SessionClassification Stamp(ImportCommand.SessionClassification c) {
+    ImportCommand.SessionClassification Stamp(ImportCommand.SessionClassification c, string? repoCwd) {
         var cwd     = CwdOf(c);
-        var repoKey = NeedsRepo && cwd is not null && _repoCache.TryGetValue(cwd, out var k) ? k : null;
+        var repoKey = NeedsRepo && repoCwd is not null && _repoCache.TryGetValue(repoCwd, out var k) ? k : null;
 
         string? excludedRepoKey = null;
 
@@ -125,6 +134,9 @@ sealed class CaptureScope {
     /// </summary>
     static string? CwdOf(ImportCommand.SessionClassification c) =>
         c.Meta.Cwd ?? (string.IsNullOrEmpty(c.EncodedCwd) ? null : SessionImporter.DecodeCwdFromDirName(c.EncodedCwd));
+
+    static string? RepoCwdOf(ImportCommand.SessionClassification c, IReadOnlyDictionary<string, string>? resolvedCwds) =>
+        resolvedCwds is not null && resolvedCwds.TryGetValue(c.SessionId, out var resolved) ? resolved : CwdOf(c);
 
     async Task<string?> DetectAsync(string cwd) {
         try {
