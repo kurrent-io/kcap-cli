@@ -1,4 +1,3 @@
-using System.Reactive;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.Setup;
 using ReactiveUI.Reactive;
@@ -11,17 +10,13 @@ public sealed class PathFixViewModel : ReactiveObject {
     readonly string?           _target;
 
     bool    _offerClaimed;
-    bool    _busy;
     bool    _fixed;
-    bool    _attempted;
     string? _message;
 
     public PathFixViewModel(ICliPathInstaller installer, IAppStateStore store, string? target) {
-        _installer   = installer;
-        _store       = store;
-        _target      = target;
-
-        InstallCommand = ReactiveCommand.CreateFromTask(RunInstallAsync, this.WhenAnyValue(x => x.Idle));
+        _installer = installer;
+        _store     = store;
+        _target    = target;
     }
 
     // An inconclusive PATH probe never offers an install.
@@ -35,43 +30,30 @@ public sealed class PathFixViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _fixed, value);
     }
 
-    public bool Busy {
-        get => _busy;
-        private set {
-            this.RaiseAndSetIfChanged(ref _busy, value);
-            this.RaisePropertyChanged(nameof(Idle));
-        }
-    }
-
-    public bool Idle => !Busy;
-
-    public string ActionLabel => _attempted ? "Try again" : "Fix it on this machine";
-
+    /// Why the last install did not finish, or null.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
-    public ReactiveCommand<Unit, Unit> InstallCommand { get; }
-
-    async Task RunInstallAsync() {
+    /// Installs the terminal command and reports whether the login shell can now run it.
+    public async Task<bool> InstallAsync(CancellationToken ct = default) {
+        if (Fixed) return true;
         if (_target is null) {
             Message = "This machine could not find its own kcap, so nothing changed.";
-            return;
+            return false;
         }
 
-        Busy    = true;
-        Message = Disclosure;
+        Message = null;
         try {
             await ClaimOfferedOnceAsync().ConfigureAwait(true);
-            Apply(await _installer.InstallAsync(_target, CancellationToken.None).ConfigureAwait(true));
+            Apply(await _installer.InstallAsync(_target, ct).ConfigureAwait(true));
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return false;
         } catch (Exception ex) {
             Message = $"Could not install the terminal command: {ex.Message}. Try again.";
-        } finally {
-            _attempted = true;
-            this.RaisePropertyChanged(nameof(ActionLabel));
-            Busy = false;
         }
+        return Fixed;
     }
 
     // Claim before installing so a retry cannot trigger another startup offer.

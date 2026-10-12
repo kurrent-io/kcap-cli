@@ -1,4 +1,3 @@
-using System.Reactive.Threading.Tasks;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using Avalonia.Controls;
@@ -46,8 +45,7 @@ public class WizardSimpleStepsTests {
 
         var (fixedPath, disclosure, message) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new PathFixViewModel(windows, store, target);
-            await vm.InstallCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs();
+            await vm.InstallAsync();
             return (vm.Fixed, vm.Disclosure, vm.Message);
         });
 
@@ -112,13 +110,7 @@ public class WizardSimpleStepsTests {
             Vm          = new PathFixViewModel(Installer, Store, Target);
         }
 
-        // InstallCommand's IsExecuting/CanExecute/End notifications ride the dispatcher scheduler;
-        // drain them on the session thread before returning so this shared-session test leaves no
-        // dispatcher-queued work a sibling's frame could later surface off the UI thread.
-        public async Task Install() {
-            await Vm.InstallCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs();
-        }
+        public Task Install() => Vm.InstallAsync();
 
         public void Dispose() => _tmp.Dispose();
     }
@@ -228,8 +220,7 @@ public class WizardSimpleStepsTests {
             using var h = new ShimHarness();
             var vm = new PathFixViewModel(h.Installer, h.Store, null);
 
-            await vm.InstallCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs(); // drain the command's dispatcher-scheduled notifications, as ShimHarness.Install does
+            await vm.InstallAsync();
 
             return (vm.Fixed, vm.Message, h.Store.Updates);
         });
