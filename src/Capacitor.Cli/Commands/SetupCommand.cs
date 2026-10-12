@@ -2302,10 +2302,16 @@ sealed class SetupCommand(
             string[] args, bool haveServerUrl) {
         const string Usage = "kcap setup --org \"<name>\" --slug <slug> --no-prompt";
 
-        var (orgGiven, orgName) = ValuedFlag(args, "--org");
-        var (slugGiven, slug)   = ValuedFlag(args, "--slug");
+        var (orgGiven, orgName)   = ValuedFlag(args, "--org");
+        var (slugGiven, slug)     = ValuedFlag(args, "--slug");
+        var (tierGiven, tierText) = ValuedFlag(args, "--tier");
 
-        if (!orgGiven && !slugGiven) return (null, null);
+        if (!orgGiven && !slugGiven)
+            return tierGiven ? (null, $"--tier picks the plan for a workspace to create, so it needs --org and --slug: {Usage}") : (null, null);
+
+        var tier = tierGiven ? WorkspaceTiers.Parse(tierText) : WorkspaceTier.Free;
+
+        if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 
         // Present-but-empty is rejected rather than read as absent: a script whose $ORG expanded to
         // nothing still asked for a workspace.
@@ -2332,7 +2338,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value), null);
     }
 
     static readonly string[] DiscoverFlags =

@@ -1615,6 +1615,38 @@ public class SetupCommandTests {
         await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
     }
 
+    // A run that never mentions a plan must not start a time-limited trial nobody chose.
+    [Test]
+    public async Task ParseRequestedWorkspace_defaults_to_the_free_plan() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsEqualTo(WorkspaceTier.Free);
+    }
+
+    [Test]
+    [Arguments("team", WorkspaceTier.Team)]
+    [Arguments("TEAM", WorkspaceTier.Team)]
+    [Arguments("free", WorkspaceTier.Free)]
+    public async Task ParseRequestedWorkspace_carries_the_tier_through(string value, WorkspaceTier expected) {
+        var (workspace, error) = Parse("setup", "--org", "Acme", "--slug", "acme", "--tier", value);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(workspace!.Tier).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_tier_it_does_not_know() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--tier", "enterprise").Error!).Contains("team");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--tier").Error!).Contains("team");
+    }
+
+    // A tier with nothing to create would otherwise be dropped in silence on a run that joins a workspace.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_a_tier_with_no_workspace_to_create() {
+        var (workspace, error) = Parse("setup", "--tier", "team");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--org and --slug");
+    }
+
     [Test]
     public async Task ParseRequestedWorkspace_refuses_half_a_pair() {
         await Assert.That(Parse("setup", "--org", "Acme").Error).Contains("--slug");

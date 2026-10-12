@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
 
@@ -219,6 +220,64 @@ public class TenantProvisionerHeadlessTests {
     }
 
     [Test]
+    public async Task The_requested_tier_reaches_the_provision_call() {
+        using var handler = new StubHandler();
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Created);
+        await Assert.That(handler.ProvisionTiers).IsEquivalentTo(["team"]);
+    }
+
+    // The sign-in is already approved by the time the server refuses, so ending the run here would
+    // make the user start over for a plan choice that has a perfectly good second answer.
+    [Test]
+    [Arguments(HttpStatusCode.BadRequest, "work_email_required", "work email")]
+    [Arguments(HttpStatusCode.Conflict,   "trial_exists",        "already has a Team trial")]
+    public async Task A_refused_trial_falls_back_to_the_free_plan_and_says_why(
+            HttpStatusCode status, string reason, string expected) {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new StubHandler { ProvisionReplies = [(status, reason)] };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Created);
+        await Assert.That(handler.ProvisionTiers).IsEquivalentTo(["team", "free"]);
+        await Assert.That(capture.GetCapturedError()).Contains(expected);
+        await Assert.That(capture.GetCapturedError()).Contains("Free plan instead");
+    }
+
+    // Only the two trial refusals have a Free answer; a taken slug is taken whatever the plan.
+    [Test]
+    public async Task Any_other_refusal_of_a_trial_ends_the_run_without_retrying() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new StubHandler { ProvisionReplies = [(HttpStatusCode.Conflict, "taken")] };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(handler.ProvisionTiers).IsEquivalentTo(["team"]);
+    }
+
+    // The fallback can land on an account that already owns a Free workspace, which is not a taken slug.
+    [Test]
+    public async Task A_free_limit_says_the_account_already_has_a_workspace() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new StubHandler {
+            ProvisionReplies = [(HttpStatusCode.Conflict, "trial_exists"), (HttpStatusCode.Conflict, "free_limit")]
+        };
+        var provisioner = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(capture.GetCapturedError()).Contains("already owns a Free workspace");
+    }
+
+    [Test]
     public async Task A_slug_already_reserved_to_this_account_still_provisions() {
         using var handler = new StubHandler { AvailabilityAvailable = false, AvailabilityReason = "yours" };
         var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme"));
@@ -239,26 +298,39 @@ public class TenantProvisionerHeadlessTests {
         public HttpStatusCode  AvailabilityStatus    { get; init; } = HttpStatusCode.OK;
         public HttpStatusCode  ProvisionStatus       { get; init; } = HttpStatusCode.OK;
         public string?         StatusState           { get; init; }
+        public List<string>    ProvisionTiers        { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+        /// <summary>Answers for successive provision calls; once used up, <see cref="ProvisionStatus"/> answers.</summary>
+        public List<(HttpStatusCode Status, string Reason)> ProvisionReplies { get; init; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var path = request.RequestUri!.AbsolutePath;
             Paths.Add(path);
 
             if (path == "/api/signup/availability") {
                 var available = AvailabilityAvailable && AvailabilityReason is null;
 
-                return Task.FromResult(Json(AvailabilityStatus,
-                    $$"""{"available":{{(available ? "true" : "false")}},"reason":{{Quote(AvailabilityReason)}}}"""));
+                return Json(AvailabilityStatus,
+                    $$"""{"available":{{(available ? "true" : "false")}},"reason":{{Quote(AvailabilityReason)}}}""");
             }
 
             if (path == "/api/signup/status")
-                return Task.FromResult(Json(HttpStatusCode.OK,
-                    $$"""{"state":{{Quote(StatusState)}},"workosOrgId":"org_123","url":"https://acme.kcap.ai"}"""));
+                return Json(HttpStatusCode.OK,
+                    $$"""{"state":{{Quote(StatusState)}},"workosOrgId":"org_123","url":"https://acme.kcap.ai"}""");
+
+            var sent = JsonNode.Parse(await request.Content!.ReadAsStringAsync(ct))!;
+            ProvisionTiers.Add(sent["tier"]!.GetValue<string>());
+
+            if (ProvisionTiers.Count <= ProvisionReplies.Count) {
+                var (status, reason) = ProvisionReplies[ProvisionTiers.Count - 1];
+
+                return Json(status, $$"""{"reason":"{{reason}}"}""");
+            }
 
             // 202 means "accepted, come back" and carries no org id, which is what sends the run into the poll.
-            return Task.FromResult(ProvisionStatus == HttpStatusCode.Accepted
+            return ProvisionStatus == HttpStatusCode.Accepted
                 ? Json(ProvisionStatus, """{"slug":"acme","state":"provisioning"}""")
-                : Json(ProvisionStatus, """{"workosOrgId":"org_123","url":"https://acme.kcap.ai"}"""));
+                : Json(ProvisionStatus, """{"workosOrgId":"org_123","url":"https://acme.kcap.ai"}""");
         }
 
         static string Quote(string? value) => value is null ? "null" : $"\"{value}\"";
