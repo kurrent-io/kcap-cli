@@ -265,8 +265,9 @@ public static class DaemonShimCommands {
         Console.Error.WriteLine("Usage: kcap daemon shim <ensure> [--json]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  ensure [--json]   Probe the login shell; if kcap is absent from the");
-        Console.Error.WriteLine("                    terminal PATH, link /usr/local/bin/kcap to this CLI");
-        Console.Error.WriteLine("                    (macOS; prompts once for your admin password).");
+        Console.Error.WriteLine("                    terminal PATH, link kcap to this CLI in a writable");
+        Console.Error.WriteLine("                    PATH folder, else /usr/local/bin (macOS; prompts");
+        Console.Error.WriteLine("                    once for your admin password).");
         return 1;
     }
 }

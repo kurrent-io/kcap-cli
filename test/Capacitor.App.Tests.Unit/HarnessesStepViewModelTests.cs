@@ -24,6 +24,7 @@ public class HarnessesStepViewModelTests {
         public readonly List<HarnessId> Stamped = [];
         public IReadOnlySet<string>? ProviderKeys = new HashSet<string>();
         public int DetectCalls;
+        public int DaemonEnables;
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
@@ -40,7 +41,8 @@ public class HarnessesStepViewModelTests {
                 Stamped.AddRange,
                 config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
-                "test-mac");
+                "test-mac",
+                enableDaemon: _ => { DaemonEnables++; return Task.CompletedTask; });
         }
 
         public HarnessRowViewModel Row(string label) => Vm.Rows.First(r => r.Label == label);
@@ -304,41 +306,80 @@ public class HarnessesStepViewModelTests {
         await Assert.That(codexKeyOnly).IsNull(); // Codex was not detected
     }
 
-    /// Hooks store the bare command, so a selected harness cannot leave until the login shell finds it.
+    /// Hooks store the bare command, so Next puts kcap on the login shell before turning anything on.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Next_waits_for_the_terminal_command_and_installs_nothing_until_it_resolves() {
-        var (held, callsWhileHeld, message, left, again, label, callsAfter) = await AvaloniaSession.DispatchAsync(async () => {
-            var dir = Path.GetDirectoryName(ConfigPath)!;
-            var destination = Path.Combine(dir, "shim-kcap");
-            var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
-            var runner = new SucceedingProcessRunner();
-            var fix = new PathFixViewModel(
-                new PathShimInstaller(runner, probe, destination), new WizardFixtures.NoopAppStateStore(),
-                Path.Combine(dir, "bundled-kcap"));
-            var h = new Harness(Config.Root, pathFix: fix);
+    public async Task Next_installs_the_terminal_command_then_turns_harnesses_on() {
+        var (left, installed, label, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var (h, fix) = await HarnessWithPathFix(new ProcessResult(0, "", "", false));
+
+            var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+            return (leave, fix.Fixed, h.Vm.NextLabel, h.Cli.PluginInstallCallCount);
+        });
+
+        await Assert.That(left).IsTrue();
+        await Assert.That(installed).IsTrue();
+        await Assert.That(label).IsEqualTo("Continue");
+        await Assert.That(calls).IsEqualTo(3);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_cancelled_terminal_install_stays_and_turns_nothing_on() {
+        var (left, message, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var (h, _) = await HarnessWithPathFix(new ProcessResult(1, "", "User canceled. (-128)", false));
+
+            var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+
+            return (leave, h.Vm.Message, h.Cli.PluginInstallCallCount);
+        });
+
+        await Assert.That(left).IsFalse();
+        await Assert.That(message).IsEqualTo("Cancelled. Nothing changed.");
+        await Assert.That(calls).IsEqualTo(0);
+    }
+
+    async Task<(Harness, PathFixViewModel)> HarnessWithPathFix(ProcessResult installResult) {
+        var dir = Path.GetDirectoryName(ConfigPath)!;
+        var probe = new FakeLoginShellProbe { KcapOnPathBehavior = _ => Task.FromResult<bool?>(true) };
+        var fix = new PathFixViewModel(
+            new PathShimInstaller(new ScriptedProcessRunner(installResult), probe, Path.Combine(dir, "shim-kcap")),
+            new WizardFixtures.NoopAppStateStore(), Path.Combine(dir, "bundled-kcap"));
+        var h = new Harness(Config.Root, pathFix: fix);
+        await h.Vm.OnEnterAsync(CancellationToken.None);
+        h.Vm.Visibility = "private";
+        return (h, fix);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Turning_harnesses_on_also_enables_the_daemon() {
+        var enables = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
             await h.Vm.OnEnterAsync(CancellationToken.None);
             h.Vm.Visibility = "private";
 
-            var heldLeave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            var heldCalls = h.Cli.PluginInstallCallCount;
-            var heldMessage = h.Vm.Message;
-
-            await fix.InstallCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs();
-            var leave = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            var again = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-
-            return (heldLeave, heldCalls, heldMessage, leave, again, h.Vm.NextLabel, h.Cli.PluginInstallCallCount);
+            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            return h.DaemonEnables;
         });
 
-        await Assert.That(held).IsFalse();
-        await Assert.That(callsWhileHeld).IsEqualTo(0);
-        await Assert.That(message).IsEqualTo(HarnessesStepViewModel.PathRequiredMessage);
-        await Assert.That(left).IsTrue();
-        await Assert.That(again).IsTrue();
-        await Assert.That(label).IsEqualTo("Continue");
-        await Assert.That(callsAfter).IsEqualTo(3);
+        await Assert.That(enables).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Not_now_leaves_the_daemon_to_its_own_step() {
+        var enables = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "private";
+
+            await h.Vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None);
+            return h.DaemonEnables;
+        });
+
+        await Assert.That(enables).IsEqualTo(0);
     }
 
     [Test]
@@ -359,9 +400,9 @@ public class HarnessesStepViewModelTests {
         await Assert.That(calls).IsEqualTo(0);
     }
 
-    sealed class SucceedingProcessRunner : IProcessRunner {
+    sealed class ScriptedProcessRunner(ProcessResult result) : IProcessRunner {
         public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) =>
-            Task.FromResult(new ProcessResult(0, "", "", false));
+            Task.FromResult(result);
 
         public Task<StreamingResult> RunStreamingAsync(
                 string fileName, string[] args, RunOptions options, Action<StreamedLine> onLine, CancellationToken ct) =>

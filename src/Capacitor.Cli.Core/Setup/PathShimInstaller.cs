@@ -6,8 +6,9 @@ public enum ShimOutcome { Installed, InstalledButNotOnPath, Cancelled, Failed }
 
 public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? SudoFallback);
 
-/// Installs a `/usr/local/bin/kcap` symlink to a resolved CLI so a terminal PATH that omits the
-/// CLI's own location still finds `kcap`. Mechanics only — the once-ever offer and tray-menu wiring
+/// Installs a `kcap` symlink to a resolved CLI so a terminal PATH that omits the CLI's own location
+/// still finds it: in the first login-PATH folder this user can already write to, else in
+/// `/usr/local/bin` behind an admin prompt. Mechanics only — the once-ever offer and tray-menu wiring
 /// live in the desktop app's ShimOfferCoordinator. `destination` is a parameter so tests drive the
 /// real filesystem taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
 public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe probe, string destination = PathShimInstaller.Destination)
@@ -17,8 +18,8 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
     const string OsascriptPath = "/usr/bin/osascript";
 
     public string Disclosure =>
-        "This links /usr/local/bin/kcap to this app's CLI, so kcap works from any terminal. " +
-        "Installing it prompts once for your admin password.";
+        "This links kcap into a folder on your terminal's PATH, so kcap works from any terminal. " +
+        "If none of those folders is writable, macOS asks once for your admin password.";
 
     public ShimPreflight Preflight(string target) => Preflight(destination, target);
 
@@ -28,6 +29,8 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
     public async Task<ShimResult> InstallAsync(string target, string destination, CancellationToken ct) {
         if (!LooksLikeTarget(target))
             return new ShimResult(ShimOutcome.Failed, "CLI path contains a newline or carriage return and cannot be used.", null);
+
+        if (await TryLinkOnTerminalPathAsync(target, ct).ConfigureAwait(false) is { } linked) return linked;
 
         switch (Preflight(destination, target)) {
             case ShimPreflight.AlreadyInstalled:
@@ -56,6 +59,27 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
         return new ShimResult(ShimOutcome.Failed, detail, sudoFallback);
     }
 
+    async Task<ShimResult?> TryLinkOnTerminalPathAsync(string target, CancellationToken ct) {
+        var path = await probe.TerminalPathAsync(ct).ConfigureAwait(false);
+        if (path is null) return null;
+
+        foreach (var dir in path.Split(':', StringSplitOptions.RemoveEmptyEntries)) {
+            if (!Path.IsPathFullyQualified(dir)) continue;
+            var link = Path.Combine(dir, "kcap");
+            switch (Preflight(link, target)) {
+                case ShimPreflight.AlreadyInstalled: return await ProbeOutcomeAsync(link, ct).ConfigureAwait(false);
+                case ShimPreflight.Conflict:         continue;
+            }
+            try {
+                File.CreateSymbolicLink(link, target);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                continue;
+            }
+            return await ProbeOutcomeAsync(link, ct).ConfigureAwait(false);
+        }
+        return null;
+    }
+
     /// Shared post-install/AlreadyInstalled mapping (spec §5: "never report success on the symlink
     /// alone"): re-run the login-shell PATH probe and only call it Installed when `kcap` actually
     /// resolves — otherwise InstalledButNotOnPath with the same actionable Detail. Forces a FRESH
@@ -69,7 +93,7 @@ public sealed class PathShimInstaller(IProcessRunner runner, ILoginShellProbe pr
         return onPath switch {
             true  => new ShimResult(ShimOutcome.Installed, null, null),
             false => new ShimResult(ShimOutcome.InstalledButNotOnPath,
-                $"kcap was linked at {destination}, but your login shell's PATH doesn't include /usr/local/bin. Add: export PATH=\"/usr/local/bin:$PATH\"",
+                $"kcap was linked at {destination}, but your login shell's PATH doesn't include {Path.GetDirectoryName(destination)}. Add: export PATH=\"{Path.GetDirectoryName(destination)}:$PATH\"",
                 null),
             _     => new ShimResult(ShimOutcome.Failed,
                 $"kcap was linked at {destination}, but the login-shell probe could not re-verify whether it is on your terminal PATH.",

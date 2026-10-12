@@ -202,6 +202,17 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
     public Task OnEnterAsync(CancellationToken ct) => RefreshAsync(ct);
 
+    /// Already running, so forward navigation steps over this page.
+    public bool PassThrough => Satisfied;
+
+    /// Installs or starts the daemon when neither needs consent. A row that would replace or
+    /// repair a service is left for this page to ask about.
+    public async Task EnableQuietlyAsync(CancellationToken ct) {
+        await RefreshAsync(ct).ConfigureAwait(true);
+        if (Satisfied || Affordance is not (DaemonAffordance.Install or DaemonAffordance.Start)) return;
+        await RunActionAsync().ConfigureAwait(true);
+    }
+
     /// Vetoes only moving forward without a running daemon. Back cancels, and a running mutation
     /// belongs to the LANE, so cancelling detaches this waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {

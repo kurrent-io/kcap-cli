@@ -125,6 +125,7 @@ internal static class WizardComposition {
         // same answer, and the two steps' vendor lists could then disagree.
         var detect = options.DetectionFeed(options.Probe);
         var offers = new HarnessOfferStore(options.Root, options.Time);
+        DaemonStepViewModel? daemon = null;
         var harnesses = new HarnessesStepViewModel(
             cli, detect,
             declined: () => AgentVendors.All.Where(v => offers.Load().Entry(v.Id)?.Declined == true).Select(v => v.Id).ToHashSet(),
@@ -132,10 +133,11 @@ internal static class WizardComposition {
             options.Root, pathFix,
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
             machine,
-            () => options.ResolveIdentity()?.Profile, options.ShutdownToken);
+            () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
+            enableDaemon: ct => daemon!.EnableQuietlyAsync(ct));
         var history = new HistoryStepViewModel(
             cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time);
-        var daemon = new DaemonStepViewModel(
+        daemon = new DaemonStepViewModel(
             cli, options.RunMutation,
             // Gated on a committed sign-in and resolved fresh per call, never the startup-cached profile.
             () => signIn.Satisfied ? options.ResolveIdentity() : null,

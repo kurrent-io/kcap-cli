@@ -115,10 +115,11 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
 Subcommands for shim (the command-line tool — kcap on your terminal PATH):
   ensure [--json]         Probe the login shell. If kcap already resolves
                           from the terminal, report already_on_path and exit
-                          0. If it is absent, link /usr/local/bin/kcap to this
-                          CLI (macOS only; prompts once for your admin
-                          password, then re-probes so success is never
-                          reported on the symlink alone). Every ambiguous row
+                          0. If it is absent, link kcap to this CLI in the
+                          first PATH folder you can write to, else in
+                          /usr/local/bin (macOS only; that prompts once for
+                          your admin password), then re-probe so success is
+                          never reported on the symlink alone. Every ambiguous row
                           fails closed with a coded reason: an unknown probe
                           (probe_unknown), a different filesystem entry at the
                           destination (conflict), or an unsupported platform

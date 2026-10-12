@@ -44,6 +44,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     string? _providerKeyNotice;
     string? _message;
     Task? _inFlight;
+    readonly Func<CancellationToken, Task>? _enableDaemon;
 
     public HarnessesStepViewModel(
             IKcapCli cli,
@@ -54,7 +55,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             PathFixViewModel? pathFix,
             Func<CancellationToken, Task<IReadOnlySet<string>?>> providerKeys,
             string machineName,
-            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default) {
+            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default,
+            Func<CancellationToken, Task>? enableDaemon = null) {
+        _enableDaemon = enableDaemon;
         _cli = cli;
         _detect = detect;
         _declined = declined;
@@ -67,17 +70,12 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         MachineName = machineName;
 
         if (pathFix is not null)
-            pathFix.WhenAnyValue(x => x.Fixed).Subscribe(resolved => {
+            pathFix.WhenAnyValue(x => x.Fixed).Subscribe(_ => {
                 this.RaisePropertyChanged(nameof(PathHazard));
                 this.RaisePropertyChanged(nameof(PathResolved));
-                this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
-                if (resolved && Message == PathRequiredMessage) Message = null;
             });
     }
 
-    /// Shown when Next is refused because hooks would be written for a command the login shell cannot run.
-    internal const string PathRequiredMessage =
-        "Fix the terminal command on this step before turning harnesses on.";
     const string PrivacyRequiredMessage = "Choose who can read new sessions before continuing.";
 
     public WizardStepId Id => WizardStepId.Harnesses;
@@ -103,9 +101,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     /// The login shell cannot find kcap, and nothing has fixed that yet.
     public bool PathHazard => PathFix is { Fixed: false };
-
-    /// The terminal fix is the filled action until the login shell can run kcap.
-    public bool ShowsOwnPrimary => PathHazard;
 
     public bool PathResolved => PathFix is { Fixed: true };
 
@@ -240,11 +235,17 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             return false;
         }
 
-        // Hooks store the bare command. A selected harness stays on this page until the login
-        // shell can run it. Not now installs nothing, so it does not wait.
-        if (direction != WizardNavigation.Skip && PathHazard && Rows.Any(r => r.Selected)) {
-            Message = PathRequiredMessage;
-            return false;
+        // Hooks store the bare command, so turning a harness on first puts kcap on the login
+        // shell. Not now installs nothing, so it does not wait.
+        if (direction != WizardNavigation.Skip && PathFix is { Fixed: false } pathFix && Rows.Any(r => r.Selected)) {
+            Message = null;
+            Busy    = true;
+            bool installed;
+            try { installed = await pathFix.InstallAsync().ConfigureAwait(true); } finally { Busy = false; }
+            if (!installed) {
+                Message = pathFix.Message;
+                return false;
+            }
         }
 
         if (!await PersistAsync(ct).ConfigureAwait(true)) return false;
@@ -253,6 +254,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         if (_installed || !CliAvailable) return true;
 
         await (_inFlight = InstallSelectedAsync()).ConfigureAwait(true);
+        if (Recording.Count > 0) await EnableDaemonAsync(ct).ConfigureAwait(true);
         _installed = true;
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(ChoicesEditable));
@@ -260,6 +262,19 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         // Stay only when a selected row failed, so its Retry is on screen. A clean install leaves.
         return Rows.All(r => !r.Selected || !r.Failed);
+    }
+
+    // Best effort: whatever the daemon could not do quietly, its own step still offers.
+    async Task EnableDaemonAsync(CancellationToken ct) {
+        if (_enableDaemon is null) return;
+        Busy = true;
+        try {
+            await _enableDaemon(ct).ConfigureAwait(true);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: wizard quiet daemon enable failed unexpectedly: {ex.Message}");
+        } finally {
+            Busy = false;
+        }
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {

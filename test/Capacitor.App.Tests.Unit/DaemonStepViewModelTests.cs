@@ -464,6 +464,43 @@ public class DaemonStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_quiet_enable_installs_a_missing_daemon_and_passes_the_step() {
+        var (requests, passThrough) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Status(Snap());
+
+            await h.Vm.EnableQuietlyAsync(CancellationToken.None);
+
+            return (h.Lane.Requests.ToList(), h.Vm.PassThrough);
+        });
+
+        await Assert.That(requests.Count).IsEqualTo(1);
+        await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(passThrough).IsTrue();
+    }
+
+    /// Replacing a service needs consent, so a quiet enable must neither prompt nor mutate.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_quiet_enable_leaves_a_takeover_row_for_the_step_to_ask_about() {
+        var (row, prompts, mutations, passThrough) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Status(Snap(state: "running", unitPresent: true, jobPid: 100, daemonPid: 100));
+            h.Observation.Default = Evidence(server: "https://other.test");
+
+            await h.Vm.EnableQuietlyAsync(CancellationToken.None);
+
+            return (h.Vm.Row, h.Surface.Prompts.Count, h.Lane.Requests.Count, h.Vm.PassThrough);
+        });
+
+        await Assert.That(row).IsEqualTo(DaemonRow.OwnedIdentityMismatch);
+        await Assert.That(prompts).IsEqualTo(0);
+        await Assert.That(mutations).IsEqualTo(0);
+        await Assert.That(passThrough).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Ownership_without_an_identity_match_offers_only_the_takeover_and_never_the_claim() {
         var (row, affordance, satisfied, mutations, gets, puts, pending) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
