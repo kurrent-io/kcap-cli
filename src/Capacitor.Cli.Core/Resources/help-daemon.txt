@@ -70,6 +70,9 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
   uninstall [--name N]    Stop and remove the service unit.
+  uninstall --under DIR   Stop and remove every unit whose daemon binary is
+                          inside DIR, and no other. The desktop app's
+                          uninstaller runs this for its own folder.
   start [--name N] [--verify]
                           Start the installed service now. --verify (macOS/
                           launchd and Windows; rejected on Linux) polls readiness

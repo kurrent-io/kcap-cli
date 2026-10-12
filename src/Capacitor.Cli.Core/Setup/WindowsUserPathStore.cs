@@ -28,6 +28,15 @@ public sealed partial class WindowsUserPathStore(string keyPath = WindowsUserPat
         BroadcastEnvironmentChange();
     }
 
+    public void Replace(string path) {
+        using (var key = Registry.CurrentUser.CreateSubKey(keyPath, writable: true)) {
+            var kind = key.GetValue(ValueName) is null ? RegistryValueKind.ExpandString : key.GetValueKind(ValueName);
+            key.SetValue(ValueName, path, kind == RegistryValueKind.String ? RegistryValueKind.String : RegistryValueKind.ExpandString);
+        }
+
+        BroadcastEnvironmentChange();
+    }
+
     // Explorer rebuilds the environment it hands new processes only on this broadcast; without it
     // a terminal opened from the Start menu keeps the old PATH until the next sign-in.
     static void BroadcastEnvironmentChange() {

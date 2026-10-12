@@ -25,10 +25,14 @@ internal static class Program
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
         // during those operations. Auto-apply stays off: pending packages are applied by
         // UpdateCoordinator after the install-location guard and the prerelease rule.
-        VelopackApp.Build()
+        var velopack = VelopackApp.Build()
             .SetAutoApplyOnStartup(false)
-            .OnRestarted(_ => UpdateRelaunch = true)
-            .Run();
+            .OnRestarted(_ => UpdateRelaunch = true);
+        if (OperatingSystem.IsWindows())
+            velopack = velopack.OnBeforeUninstallFastCallback(_ => {
+                if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory);
+            });
+        velopack.Run();
 
         if (OperatingSystem.IsWindows() && Environment.ProcessPath is { } exe) {
             var relaunch = UpdateRelaunch || args.Contains(SingleInstanceGuard.RelaunchArg, StringComparer.Ordinal);

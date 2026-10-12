@@ -38,7 +38,9 @@ sealed class DaemonServiceCommands(
 
         return action switch {
             "install"   => await verbs.Install(rest, startNow: !noStart),
-            "uninstall" => await verbs.Uninstall(),
+            "uninstall" => Array.IndexOf(rest, "--under") is var at and >= 0
+                ? at + 1 < rest.Length ? await verbs.UninstallUnder(rest[at + 1]) : Usage()
+                : await verbs.Uninstall(),
             "start"     => await verbs.Start(rest),
             "stop"      => await verbs.Stop(),
             "ensure"    => await verbs.Ensure(rest),
@@ -420,6 +422,37 @@ sealed class DaemonServiceCommands(
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
+    }
+
+    /// <summary>
+    /// Removes every installed unit whose daemon binary lies under <paramref name="dir"/>, and no
+    /// other: a desktop app's uninstaller owns only the services that run its own copy, never one an
+    /// npm or standalone install wrote.
+    /// </summary>
+    internal async Task<int> UninstallUnder(string dir) {
+        var failed = false;
+
+        foreach (var unit in manager.ListInstalled()) {
+            if (manager.Status(unit).BinaryPath is not { } binary || !IsUnder(binary, dir, OperatingSystem.IsWindows())) continue;
+
+            using var txn = await ServiceTxnLock.TryAcquireAsync(store, unit, TimeSpan.FromSeconds(5), time);
+            if (txn is null) {
+                await Console.Error.WriteLineAsync($"Another service operation is in progress for '{unit}'. Try again shortly.");
+                failed = true;
+            } else if (!manager.Uninstall(unit, out var error)) {
+                await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
+                failed = true;
+            } else {
+                await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
+            }
+        }
+
+        return failed ? 1 : 0;
+    }
+
+    internal static bool IsUnder(string path, string dir, bool ignoreCase) {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir)) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(root, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -844,6 +877,7 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("                          --retire ID (requires --replace --verify) also removes unit ID in the same transaction");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
+        Console.Error.WriteLine("  uninstall --under DIR  Remove every unit whose daemon binary is inside DIR");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
         Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/ownership and rolls back on failure");
         Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
