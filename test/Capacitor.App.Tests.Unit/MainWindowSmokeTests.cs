@@ -829,6 +829,27 @@ public class MainWindowSmokeTests {
             text ?? block.Text ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             new Typeface(block.FontFamily, block.FontStyle, block.FontWeight), block.FontSize, null).Width;
 
+    /// Off macOS no native app menu carries ⌘,, so the window itself binds Ctrl+, to Settings.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Settings_shortcut_is_bound_to_the_settings_command_off_macOS() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (bound, isSettings) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+                var window = new MainWindow { DataContext = vm };
+                var binding = window.KeyBindings.SingleOrDefault(
+                    k => k.Gesture is { Key: Key.OemComma, KeyModifiers: KeyModifiers.Control });
+                var result = (binding is not null, ReferenceEquals(binding?.Command, vm.OpenSettingsCommand));
+                window.Close();
+                return result;
+            });
+
+            await Assert.That(bound).IsEqualTo(!OperatingSystem.IsMacOS());
+            if (bound) await Assert.That(isSettings).IsTrue();
+        });
+    }
+
     /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
     /// which drops an open workspace back to the launcher (the new-session empty state).
     [Test]

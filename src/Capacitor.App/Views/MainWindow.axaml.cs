@@ -59,6 +59,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     public MainWindow() {
         InitializeComponent();
         BindRefreshShortcuts();
+        BindSettingsShortcut();
         Closing += (_, e) => {
             if (CloseInterceptor?.Invoke() == true) e.Cancel = true;
         };
@@ -121,6 +122,19 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             bindings.Add(binding);
             KeyBindings.Add(binding);
         }
+    }
+
+    // macOS takes ⌘, from the native app menu; nothing draws that menu elsewhere.
+    void BindSettingsShortcut() {
+        if (OperatingSystem.IsMacOS()) return;
+        var binding = new KeyBinding { Gesture = new KeyGesture(Key.OemComma, KeyModifiers.Control) };
+        KeyBindings.Add(binding);
+
+        void Apply() {
+            if ((DataContext as MainWindowViewModel)?.OpenSettingsCommand is { } command) binding.Command = command;
+        }
+        Apply();
+        DataContextChanged += (_, _) => Apply();
     }
 
     // A toast fired before Loaded, or while the window is hidden (Hide() suspends rendering
