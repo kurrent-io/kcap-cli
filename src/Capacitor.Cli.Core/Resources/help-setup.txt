@@ -41,6 +41,12 @@ Options:
                               create, instead of being prompted for it. Requires
                               --org. A slug that is taken or malformed ends the run
                               naming it, rather than asking for another.
+  --tier <team|free>          Plan for a workspace created with --org and --slug:
+                              team starts a 30-day Team trial, free is the Free
+                              plan (the default). An account that cannot have the
+                              trial (a personal email, or a domain that already
+                              has one) gets a Free workspace instead, and setup
+                              says why.
   --no-prompt                 Non-interactive mode (requires <tenant> or
                               --server-url, or --org + --slug to create a
                               workspace as part of the run)
@@ -183,12 +189,13 @@ screen ran the daemon as a service, setup says so instead of suggesting
 the import prompt and names `kcap import --all` for later.
 
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
-asks how to continue: create one for you (organization name + workspace slug) and
-wait for it to go live, point at a workspace you already belong to (enter its slug
-or URL — same as `kcap setup <tenant>`), or cancel. Pass --org and --slug to answer
-the creation questions up front and skip that fork entirely, which is what a script
-or a session with redirected input needs, alongside --no-prompt for the steps after
-it. The two flags go together: the slug becomes a permanent public hostname, so kcap
+asks how to continue: create one for you (organization name, workspace slug and
+plan, with the Team trial offered first) and wait for it to go live, point at a
+workspace you already belong to (enter its slug or URL — same as
+`kcap setup <tenant>`), or cancel. Pass --org and --slug, plus --tier for the
+plan, to answer the creation questions up front and skip that fork entirely,
+which is what a script or a session with redirected input needs, alongside
+--no-prompt for the steps after it. The two flags go together: the slug becomes a permanent public hostname, so kcap
 will not derive one from the name. They also need --no-prompt on a session that
 cannot be prompted, since only the creation questions are answered by flags. Only
 an account with no workspace yet can create one: if yours already has a different

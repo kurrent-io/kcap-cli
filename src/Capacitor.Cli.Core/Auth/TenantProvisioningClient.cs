@@ -41,9 +41,9 @@ public sealed class TenantProvisioningClient(HttpClient http) {
     /// only the two that provision a workspace have a telemetry facade to take one from.
     /// </param>
     public async Task<ProvisionOutcome> ProvisionAsync(
-            string baseUrl, string token, string orgName, string slug, string? joinId, CancellationToken ct) {
+            string baseUrl, string token, string orgName, string slug, WorkspaceTier tier, string? joinId, CancellationToken ct) {
         var payload = JsonSerializer.Serialize(
-            new ProvisionRequest { OrgName = orgName, Slug = slug, Tier = "free", JoinId = joinId },
+            new ProvisionRequest { OrgName = orgName, Slug = slug, Tier = tier.Wire(), JoinId = joinId },
             CapacitorJsonContext.Default.ProvisionRequest);
 
         try {
