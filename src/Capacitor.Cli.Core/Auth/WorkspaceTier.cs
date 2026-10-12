@@ -5,10 +5,4 @@ public enum WorkspaceTier { Team, Free }
 
 public static class WorkspaceTierExtensions {
     public static string Wire(this WorkspaceTier tier) => tier == WorkspaceTier.Team ? "team" : "free";
-
-    public static WorkspaceTier? Parse(string? value) => value?.Trim().ToLowerInvariant() switch {
-        "team" => WorkspaceTier.Team,
-        "free" => WorkspaceTier.Free,
-        _      => null
-    };
 }
