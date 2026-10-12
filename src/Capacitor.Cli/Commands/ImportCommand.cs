@@ -3240,9 +3240,10 @@ class ImportCommand(
     /// workspace_root discovery and repo detection agree with what the missing-cwd report
     /// showed the user — falling back to the raw transcript cwd when this session has no
     /// entry (e.g. a non-file source, or resolution failed to produce one). Shared by both
-    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/>.
+    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/> and by
+    /// <see cref="CaptureScope"/>, so the scope judges the cwd the hooks send.
     /// </summary>
-    static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
+    internal static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
         sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
             ? resolvedCwd
             : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
