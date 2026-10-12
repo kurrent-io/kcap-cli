@@ -131,10 +131,11 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("low")).IsEqualTo("Low");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("medium")).IsEqualTo("Medium");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("high")).IsEqualTo("High");
-        await Assert.That(HostedHarnessCatalog.EffortLabelFor("xhigh")).IsEqualTo("Max");
+        await Assert.That(HostedHarnessCatalog.EffortLabelFor("xhigh")).IsEqualTo("Extra high");
+        await Assert.That(HostedHarnessCatalog.EffortLabelFor("max")).IsEqualTo("Max");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("weird")).IsEqualTo("weird");
         await Assert.That(HostedHarnessCatalog.EffortLadder)
-            .IsEquivalentTo(["low", "medium", "high", "xhigh"], CollectionOrdering.Matching);
+            .IsEquivalentTo(["low", "medium", "high", "xhigh", "max"], CollectionOrdering.Matching);
     }
 
     /// The tokens are the Claude CLI's own `--permission-mode` choices, listed from most to least
