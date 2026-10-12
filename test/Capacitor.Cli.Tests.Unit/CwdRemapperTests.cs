@@ -226,11 +226,24 @@ public class CwdRemapperTests {
 
     [Test]
     public async Task Apply_matches_a_wildcard_head_written_with_the_other_separator() {
-        // A transcript recorded on Windows against a rule typed with '/': the
-        // head has to fail cleanly rather than half-match into the segment scan.
+        // A transcript recorded on Windows against a rule typed with '/'.
         var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
         var result = CwdRemapper.Apply(@"\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.Ordinal);
-        await Assert.That(result).IsEqualTo(@"\dev\repo\worktrees\ai-1");
+        await Assert.That(result).IsEqualTo("/dev/repo");
+    }
+
+    [Test]
+    public async Task Apply_matches_a_literal_rule_written_with_the_other_separator() {
+        var rules  = new[] { R("~/dev/foo", "~/dev/bar") };
+        var result = CwdRemapper.Apply(@"C:\Users\u\dev\foo\src", rules, @"C:\Users\u", StringComparison.OrdinalIgnoreCase);
+        await Assert.That(result).IsEqualTo(@"C:\Users\u/dev/bar\src");
+    }
+
+    [Test]
+    public async Task Apply_does_not_cross_a_boundary_written_with_the_other_separator() {
+        var rules  = new[] { R("/dev/foo", "/dev/bar") };
+        var result = CwdRemapper.Apply(@"\dev\foobar\x", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"\dev\foobar\x");
     }
 
     [Test]

@@ -17,6 +17,8 @@ namespace Capacitor.Cli;
 /// - Path-boundary prefix: <c>cwd == from</c> or <c>cwd starts with from + sep</c>
 ///   where <c>sep</c> is either <c>/</c> or <c>\</c>; so <c>/dev/kapacitor</c>
 ///   does NOT spuriously match <c>/dev/kapacitor-cli</c>.
+/// - <c>/</c> and <c>\</c> compare equal everywhere in <c>from</c>, so a rule typed
+///   as <c>~/dev/repo</c> on Windows still matches a backslashed cwd.
 /// - <c>from</c> may carry one <c>*</c> standing as a whole segment, which
 ///   matches exactly one segment of the cwd — <c>~/dev/repo/worktrees/*</c>
 ///   covers every worktree under that directory.
@@ -85,7 +87,7 @@ static class CwdRemapper {
         /// </summary>
         public int Match(string cwd, StringComparison comparison) {
             if (Tail is null) return IsPrefixMatch(cwd, Head, comparison) ? Head.Length : -1;
-            if (!cwd.StartsWith(Head, comparison)) return -1;
+            if (!StartsWithPath(cwd, Head, comparison)) return -1;
 
             var segEnd = Head.Length;
             while (segEnd < cwd.Length && !IsSeparator(cwd[segEnd])) segEnd++;
@@ -96,7 +98,7 @@ static class CwdRemapper {
             var end = segEnd + Tail.Length;
 
             if (end > cwd.Length) return -1;
-            if (!cwd.AsSpan(segEnd, Tail.Length).Equals(Tail, comparison)) return -1;
+            if (!PathEquals(cwd.AsSpan(segEnd, Tail.Length), Tail, comparison)) return -1;
 
             return end == cwd.Length || IsSeparator(cwd[end]) ? end : -1;
         }
@@ -143,9 +145,23 @@ static class CwdRemapper {
     }
 
     static bool IsPrefixMatch(string cwd, string from, StringComparison comparison) {
-        if (!cwd.StartsWith(from, comparison)) return false;
+        if (!StartsWithPath(cwd, from, comparison)) return false;
         if (cwd.Length == from.Length) return true;
         return IsSeparator(cwd[from.Length]);
+    }
+
+    static bool StartsWithPath(string cwd, string prefix, StringComparison comparison) =>
+        cwd.Length >= prefix.Length && PathEquals(cwd.AsSpan(0, prefix.Length), prefix, comparison);
+
+    static bool PathEquals(ReadOnlySpan<char> a, ReadOnlySpan<char> b, StringComparison comparison) {
+        if (a.Length != b.Length) return false;
+
+        for (var i = 0; i < a.Length; i++) {
+            if (IsSeparator(a[i]) && IsSeparator(b[i])) continue;
+            if (!a.Slice(i, 1).Equals(b.Slice(i, 1), comparison)) return false;
+        }
+
+        return true;
     }
 
     internal static bool IsSeparator(char c) => c == '/' || c == '\\';
