@@ -229,14 +229,22 @@ public class CwdRemapperTests {
         // A transcript recorded on Windows against a rule typed with '/'.
         var rules  = new[] { R("/dev/repo/worktrees/*", "/dev/repo") };
         var result = CwdRemapper.Apply(@"\dev\repo\worktrees\ai-1", rules, "/home/u", StringComparison.Ordinal);
-        await Assert.That(result).IsEqualTo("/dev/repo");
+        await Assert.That(result).IsEqualTo(@"\dev\repo");
     }
 
     [Test]
     public async Task Apply_matches_a_literal_rule_written_with_the_other_separator() {
         var rules  = new[] { R("~/dev/foo", "~/dev/bar") };
         var result = CwdRemapper.Apply(@"C:\Users\u\dev\foo\src", rules, @"C:\Users\u", StringComparison.OrdinalIgnoreCase);
-        await Assert.That(result).IsEqualTo(@"C:\Users\u/dev/bar\src");
+        await Assert.That(result).IsEqualTo(@"C:\Users\u\dev\bar\src");
+    }
+
+    [Test]
+    public async Task Apply_leaves_a_backslash_in_to_alone_on_a_forward_slashed_cwd() {
+        // Off Windows '\' is a filename character, not a separator to rewrite.
+        var rules  = new[] { R("/dev/foo", @"/dev/odd\name") };
+        var result = CwdRemapper.Apply("/dev/foo/x", rules, "/home/u", StringComparison.Ordinal);
+        await Assert.That(result).IsEqualTo(@"/dev/odd\name/x");
     }
 
     [Test]

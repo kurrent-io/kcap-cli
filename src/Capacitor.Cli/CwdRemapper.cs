@@ -70,6 +70,11 @@ static class CwdRemapper {
 
         if (bestTo is null) return cwd;
 
+        // A '/'-typed `to` on a backslashed cwd would otherwise yield a mixed path, which the
+        // ordinal repo cache counts as a second cwd. Never the other way: '\' is a legal
+        // filename character off Windows.
+        if (cwd.IndexOfAny(['/', '\\']) is var sep and >= 0 && cwd[sep] == '\\') bestTo = bestTo.Replace('/', '\\');
+
         return bestLen == cwd.Length ? bestTo : bestTo + cwd[bestLen..];
     }
 
