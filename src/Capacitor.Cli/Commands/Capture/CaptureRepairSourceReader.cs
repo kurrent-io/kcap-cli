@@ -23,7 +23,7 @@ internal static class CaptureRepairSourceReader {
         while (await reader.ReadLineAsync(ct) is { } raw) {
             snapshot.AssertUnchanged(verifyContent: false);
             if (number == 0 && raw.StartsWith('\uFEFF')) raw = raw[1..];
-            var safe = TranscriptCapture.Encode(raw);
+            var safe = TranscriptCapture.EncodeRecorded(raw);
             if (safe.Loss is { } reason) reportLoss?.Invoke(reason);
             await consume(new(number++, safe.Line, raw.Length), ct);
         }
