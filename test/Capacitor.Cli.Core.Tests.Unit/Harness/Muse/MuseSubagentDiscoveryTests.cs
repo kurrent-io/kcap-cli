@@ -18,6 +18,9 @@ public class MuseSubagentDiscoveryTests {
     const string BoundLine =
         """{"schema_version":1,"id":"ed976e63-54a5-4471-a351-03225dc9a492","stream":{"kind":"session","id":"01a13563-ad7b-7b51-b12f-b2f4b78b6a1e"},"sequence":288,"recorded_at":1791897216551211,"record_type":"event","durability":"durable","causation_id":null,"payload_type":"subagent.control.child_session_bound","payload_schema_version":1,"payload":{"kind":"subagent_control","record":{"kind":"child_session_bound","schema_version":1,"subagent_id":"01a13565-a5b7-7071-874a-8c22f461fc24","child_session_id":"01a13565-a626-7f70-bda0-1c19ba4deadf","storage_layout":"nested_session_v1"}}}""";
 
+    const string ReadyLine =
+        """{"schema_version":1,"id":"9f4c7516-2542-48bd-80ac-d2ae8378ba16","stream":{"kind":"session","id":"01a13563-ad7b-7b51-b12f-b2f4b78b6a1e"},"sequence":409,"record_type":"event","payload_type":"subagent.control.result_ready","payload_schema_version":2,"payload":{"kind":"subagent_control","record":{"kind":"result_ready","subagent_id":"01a13565-a5b7-7071-874a-8c22f461fc24","summary":"done","evidence_refs":[]}}}""";
+
     const string FrameLine =
         """{"retained_frame":"session_permission_transaction","frame_schema_version":1,"outer_log_ordinal":1,"transaction_id":"ebef68e5-70e2-5d1c-9e0b-4760eb780bc6","children":[],"content_sha256":"00"}""";
 
@@ -200,5 +203,21 @@ public class MuseSubagentDiscoveryTests {
     [Arguments("01a13565-a5b7-7071-874a-8c22f461fc24", false)]
     public async Task A_subagent_id_that_is_not_a_guid_names_a_reminder(string id, bool reminder) {
         await Assert.That(MuseSubagentDiscovery.IsReminderAgentId(id)).IsEqualTo(reminder);
+    }
+
+    [Test]
+    public async Task A_worker_whose_result_is_ready_is_finished() {
+        var parent = WriteParent(SpawnLine, BoundLine, ReadyLine);
+
+        var finished = MuseSubagentDiscovery.ResolveFinishedChildren(parent);
+
+        await Assert.That(finished).IsEquivalentTo(new[] { WorkerId });
+    }
+
+    [Test]
+    public async Task A_worker_without_a_ready_result_or_a_binding_is_not_finished() {
+        await Assert.That(MuseSubagentDiscovery.ResolveFinishedChildren(WriteParent(SpawnLine, BoundLine))).IsEmpty();
+        await Assert.That(MuseSubagentDiscovery.ResolveFinishedChildren(WriteParent(ReadyLine))).IsEmpty();
+        await Assert.That(MuseSubagentDiscovery.ResolveFinishedChildren(Path.Combine(Tmp.Path, "missing", "session.jsonl"))).IsEmpty();
     }
 }

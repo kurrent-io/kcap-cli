@@ -15,6 +15,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Harness.Titles;
@@ -794,6 +795,9 @@ partial class WatchCommand(
         // process that knows they exist, so its teardown must stop them.
         var spawnedChildWatcherKeys = new HashSet<string>(StringComparer.Ordinal);
 
+        // Muse: scans an unannounced child has been held back for.
+        var museHoldbacks = new Dictionary<string, int>(StringComparer.Ordinal);
+
         try {
             while (!cts.Token.IsCancellationRequested) {
                 // Task 9: touch every iteration — including no-content drains and
@@ -893,6 +897,9 @@ partial class WatchCommand(
                     await ScanAntigravitySubagentLinks(sessionId, drained, state.PostedSubagentLinks, cts.Token);
                 } else if (agentId is null && vendor == "mistral-vibe") {
                     await ScanMistralVibeSubagents(sessionId, transcriptPath, vibeSubagents, seenSubagents, spawnedChildWatcherKeys, cts.Token);
+                } else if (agentId is null && vendor == "muse") {
+                    await ScanMuseSubagents(sessionId, transcriptPath, seenSubagents, museHoldbacks, spawnedChildWatcherKeys, cts.Token);
+                    await StopFinishedMuseChildren(sessionId, transcriptPath, drained, spawnedChildWatcherKeys);
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -1220,6 +1227,90 @@ partial class WatchCommand(
         }
     }
 
+    /// <summary>
+    /// A Muse child writes its own <c>subagent/&lt;id&gt;/session.jsonl</c> beside the parent's log; the
+    /// scan is the authority on which children exist. A child the parent log has not announced yet is
+    /// held back for <see cref="MuseAnnouncementGraceScans"/> scans, so its label is not frozen as the
+    /// placeholder when the announcement is merely flushed late.
+    /// </summary>
+    async Task ScanMuseSubagents(
+            string                  sessionId,
+            string                  transcriptPath,
+            HashSet<string>         seen,
+            Dictionary<string, int> holdbacks,
+            ICollection<string>     spawnedChildKeys,
+            CancellationToken       ct
+        ) {
+        IReadOnlyList<string> childLogs;
+        try {
+            childLogs = MuseSubagentDiscovery.EnumerateChildLogs(transcriptPath);
+        } catch {
+            return; // discovery is best-effort — never break the main drain loop
+        }
+
+        if (childLogs.Count == 0) return;
+
+        IReadOnlyDictionary<string, MuseChildLabel>? labels = null;
+
+        foreach (var childLog in childLogs) {
+            if (ct.IsCancellationRequested) return;
+            if (seen.Contains(childLog)) continue;
+
+            var childSessionId = Path.GetFileName(Path.GetDirectoryName(childLog)!);
+            if (!Guid.TryParse(childSessionId, out var childGuid)) continue;
+
+            labels ??= MuseSubagentDiscovery.ResolveChildLabels(transcriptPath);
+
+            if (!labels.ContainsKey(childGuid.ToString("D"))) {
+                var held = holdbacks.GetValueOrDefault(childLog);
+                if (held < MuseAnnouncementGraceScans) {
+                    holdbacks[childLog] = held + 1;
+                    continue;
+                }
+            }
+
+            var label = MuseSubagentDiscovery.LabelFor(childSessionId, labels);
+
+            // Fail-closed: register before streaming; a refused registration is retried next tick.
+            if (!await PostSubagentStartAsync(sessionId, label.AgentId, label.AgentType, childLog, ct)) continue;
+
+            seen.Add(childLog);
+            holdbacks.Remove(childLog);
+
+            var key = $"{sessionId}-{label.AgentId}";
+            await watchers.EnsureWatcherRunning(key: key, transcriptPath: childLog, agentId: label.AgentId,
+                sessionIdOverride: sessionId, vendor: "muse");
+            spawnedChildKeys.Add(key);
+
+            Log(time, $"Muse subagent {label.AgentId} ({label.AgentType}) registered + child watcher spawned");
+        }
+    }
+
+    /// <summary>
+    /// Stops the child watcher of a Muse worker whose <c>result_ready</c> the parent log just recorded.
+    /// The stop is a SIGTERM, so the child runs its final drain first. Reminder children have no such
+    /// record and run until the parent ends.
+    /// </summary>
+    async Task StopFinishedMuseChildren(
+            string                    sessionId,
+            string                    transcriptPath,
+            IReadOnlyList<string>     drained,
+            ICollection<string>       spawnedChildKeys
+        ) {
+        if (spawnedChildKeys.Count == 0 || !drained.Any(l => l.Contains("subagent.control.result_ready", StringComparison.Ordinal))) return;
+
+        try {
+            foreach (var childId in MuseSubagentDiscovery.ResolveFinishedChildren(transcriptPath)) {
+                var key = $"{sessionId}-{Guid.Parse(childId):N}";
+                if (!spawnedChildKeys.Contains(key)) continue;
+
+                if (await watchers.KillWatcher(key)) Log(time, $"Muse subagent {key} finished; child watcher stopped");
+            }
+        } catch {
+            // best-effort — the parent's teardown still stops every spawned child
+        }
+    }
+
     async Task<bool> PostSubagentStartAsync(
         string sessionId, string agentId, string agentType, string subFile, CancellationToken ct
     ) {
@@ -1488,7 +1579,9 @@ partial class WatchCommand(
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe" };
+    const int MuseAnnouncementGraceScans = 3;
+
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe", "muse" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -1684,7 +1777,7 @@ partial class WatchCommand(
     /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
     /// <see cref="RunWatch"/>'s call site.
     /// </summary>
-    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe";
+    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe" or "muse";
 
     /// <summary>
     /// the idle clock <see cref="ShouldEndOnIdle"/> measures against for

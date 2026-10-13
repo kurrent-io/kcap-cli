@@ -204,6 +204,16 @@ public class CodingAgentPidResolverTests {
     }
 
     [Test]
+    public async Task Resolves_muse_by_its_binary_name() {
+        // hook(100) -> sh(90) -> muse(50) -> zsh(20)
+        var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, "muse"), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "muse", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
     public async Task Resolves_mistral_vibe_by_its_vibe_script_name() {
         // The vendor token is `mistral-vibe`; the agent is a python console script whose comm is
         // `vibe` while its argv[0] and exe are the interpreter.

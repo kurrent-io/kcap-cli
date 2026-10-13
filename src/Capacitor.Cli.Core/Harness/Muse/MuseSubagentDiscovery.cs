@@ -86,6 +86,38 @@ public static class MuseSubagentDiscovery {
         return labels.Count == 0 ? FrozenDictionary<string, MuseChildLabel>.Empty : labels;
     }
 
+    /// <summary>Dashed ids of the children whose worker the parent log reports finished
+    /// (<c>result_ready</c>, joined to its child through <c>child_session_bound</c>).</summary>
+    public static IReadOnlySet<string> ResolveFinishedChildren(string parentLogPath) {
+        var ready = new HashSet<string>(StringComparer.Ordinal);
+        var bound = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try {
+            using var stream = new FileStream(parentLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            while (reader.ReadLine() is { } line) {
+                var isReady = line.Contains("\"result_ready\"", StringComparison.Ordinal);
+                if (!isReady && !line.Contains("\"child_session_bound\"", StringComparison.Ordinal)) continue;
+
+                try {
+                    using var doc = JsonDocument.Parse(line);
+                    if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+                    if (!doc.RootElement.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object) continue;
+                    if (Inner(payload, "record") is not { } rec || Text(rec, "subagent_id") is not { Length: > 0 } sid) continue;
+
+                    switch (Text(rec, "kind")) {
+                        case "result_ready": ready.Add(sid); break;
+                        case "child_session_bound" when Canonical(Text(rec, "child_session_id")) is { } childId: bound[sid] = childId; break;
+                    }
+                } catch (JsonException) { }
+            }
+        } catch (IOException) { } catch (UnauthorizedAccessException) { }
+
+        var finished = ready.Where(bound.ContainsKey).Select(sid => bound[sid]).ToHashSet(StringComparer.Ordinal);
+        return finished.Count == 0 ? FrozenSet<string>.Empty : finished;
+    }
+
     /// <summary>The label for a child found on disk; one the parent log never announced is a plain
     /// <c>subagent</c>. A non-Guid id is reduced to its letters and digits so nothing path-shaped is registered.</summary>
     public static MuseChildLabel LabelFor(string childSessionId, IReadOnlyDictionary<string, MuseChildLabel> labels) {

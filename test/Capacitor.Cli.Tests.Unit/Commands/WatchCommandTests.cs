@@ -781,6 +781,7 @@ public class WatchCommandTests {
     [Arguments("antigravity", true)]
     [Arguments("cursor",      true)]
     [Arguments("mistral-vibe", true)]
+    [Arguments("muse",        true)]
     [Arguments("codex",       false)]
     [Arguments("claude",      false)]
     [Arguments("gemini",      false)]
