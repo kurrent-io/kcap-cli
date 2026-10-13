@@ -18,6 +18,7 @@ namespace Capacitor.Cli.Harness.Muse;
 internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IImportSource {
     const string LogPathKey  = "LogPath";
     const string LastLineKey = "LastLine";
+    const string EndedAtKey  = "EndedAt";
 
     // runtime.session.metadata is the log's second record; this bounds the head scan on a log that has none.
     const int HeadScanLines = 64;
@@ -130,12 +131,14 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         return (workspaceRoot, opened ?? first);
     }
 
-    /// <summary>The newest <c>session.end</c> (a resumed session carries one per run) and the last
-    /// non-blank line index, in one pass over the log.</summary>
+    /// <summary>The last non-blank line index and the newest <c>session.end</c>, in one pass. A log whose
+    /// last <c>session.opened.observed</c> follows its last end (a resume still running) or that has no
+    /// end is unfinished: <c>EndedAt</c> is null, since a historical end must not close a live session.</summary>
     static (int NonBlank, int LastNonBlankIndex, DateTimeOffset? EndedAt) ReadTail(string log) {
         var nonBlank = 0;
         var lastIdx  = 0;
         DateTimeOffset? endedAt = null;
+        var open  = false;
         var index = 0;
 
         foreach (var line in File.ReadLinesShared(log)) {
@@ -143,11 +146,22 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
                 nonBlank++;
                 lastIdx = index;
 
-                if (line.Contains("\"session.end\"", StringComparison.Ordinal)) {
+                var mentionsEnd    = line.Contains("\"session.end\"", StringComparison.Ordinal);
+                var mentionsOpened = line.Contains("\"session.opened.observed\"", StringComparison.Ordinal);
+
+                if (mentionsEnd || mentionsOpened) {
                     try {
                         using var doc = JsonDocument.Parse(line);
-                        if (doc.RootElement.Str("payload_type") == "session.end")
-                            endedAt = RecordedAt(doc.RootElement) ?? endedAt;
+
+                        switch (doc.RootElement.Str("payload_type")) {
+                            case "session.end":
+                                endedAt = RecordedAt(doc.RootElement) ?? endedAt;
+                                open    = false;
+                                break;
+                            case "session.opened.observed":
+                                open = true;
+                                break;
+                        }
                     } catch (JsonException) { }
                 }
             }
@@ -155,7 +169,7 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             index++;
         }
 
-        return (nonBlank, lastIdx, endedAt);
+        return (nonBlank, lastIdx, open ? null : endedAt);
     }
 
     static DateTimeOffset? RecordedAt(JsonElement record) {
@@ -224,7 +238,7 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             results.Add(new ImportCommand.SessionClassification {
                 SessionId = s.SessionId, FilePath = "", EncodedCwd = "", Meta = meta,
                 Status = status, Vendor = Vendor, ResumeFromLine = resumeFromLn, TotalLines = nonBlank,
-                SourceMeta = SourceMetaFor(log, lastIdx),
+                SourceMeta = SourceMetaFor(log, lastIdx, endedAt),
             });
         }
 
@@ -257,11 +271,13 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             return ImportOutcome.Failed;
         }
 
-        // Children land before session-end so their lifecycle sits inside the parent's.
+        // Children land before session-end so their lifecycle sits inside the parent's. An unfinished
+        // log posts no end; the server's stale-session closers own an abandoned one.
         var sentChildContent = await ImportChildrenAsync(ctx, classification.SessionId, log, ct);
 
-        if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/muse",
-                BuildSessionEndPayload(classification.SessionId, classification.Meta.Cwd, classification.Meta.LastTimestamp), ct))
+        if (classification.SourceMeta![EndedAtKey] is DateTimeOffset endedAt
+         && !await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/muse",
+                BuildSessionEndPayload(classification.SessionId, classification.Meta.Cwd, endedAt), ct))
             return ImportOutcome.Failed;
 
         var outcome = startLine > 0 ? ImportOutcome.Resumed : sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded;
@@ -318,14 +334,14 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         return payload;
     }
 
-    static JsonObject BuildSessionEndPayload(string sessionId, string? cwd, DateTimeOffset? endedAt) {
+    static JsonObject BuildSessionEndPayload(string sessionId, string? cwd, DateTimeOffset endedAt) {
         var payload = new JsonObject {
             ["hook_event_name"] = "SessionEnd",
             ["session_id"]      = sessionId,
             ["cwd"]             = cwd ?? "",
             ["reason"]          = "Other",
         };
-        if (endedAt is { } ts) payload["ended_at"] = ts.ToString("O");
+        payload["ended_at"] = endedAt.ToString("O");
         payload["origin"] = ImportOrigins.Historical;
         return payload;
     }
@@ -350,8 +366,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         return doc.RootElement.Num("last_line_number") is { } ln ? (int)ln : null;
     }
 
-    static Dictionary<string, object?> SourceMetaFor(string log, int lastLine) =>
-        new() { [LogPathKey] = log, [LastLineKey] = lastLine };
+    static Dictionary<string, object?> SourceMetaFor(string log, int lastLine, DateTimeOffset? endedAt = null) =>
+        new() { [LogPathKey] = log, [LastLineKey] = lastLine, [EndedAtKey] = endedAt };
 
     ImportCommand.SessionClassification Classify(
             DiscoveredSession s, SessionMetadata meta, ImportCommand.ClassificationStatus status, int totalLines, int lastLine,
