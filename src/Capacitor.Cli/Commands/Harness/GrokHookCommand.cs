@@ -53,22 +53,20 @@ sealed class GrokHookCommand(
 
         if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths, activeProfile?.ExcludedPaths, home)) return;
 
-        // Session start carries no transcript path; every later event names the file.
-        var transcriptPath = Str(node, "transcriptPath")
-                          ?? (cwd is null ? null : harnesses.Of<GrokHarness>().Paths.UpdatesJsonl(cwd, dashedSessionId));
-        if (transcriptPath is null) return;
-
         switch (Str(node, "hookEventName")) {
+            // Session start carries no transcript path, and a cwd too long to encode resolves only once
+            // Grok writes its .cwd file, so the start is posted whether or not the file can be found yet.
             case "session_start":
-                await StartRecording(node, sessionId, cwd, activeProfile, transcriptPath);
+                var derived = cwd is null ? null : harnesses.Of<GrokHarness>().Paths.UpdatesJsonl(cwd, dashedSessionId);
+                await StartRecording(node, sessionId, cwd, activeProfile, derived);
                 break;
-            case "stop" when !watchers.IsWatcherAlive(sessionId):
-                await EnsureWatcher(sessionId, transcriptPath, cwd, skipTitle: true);
+            case "stop" when Str(node, "transcriptPath") is { } named && !watchers.IsWatcherAlive(sessionId):
+                await EnsureWatcher(sessionId, named, cwd, skipTitle: true);
                 break;
         }
     }
 
-    async Task StartRecording(JsonNode node, string sessionId, string? cwd, Profile? activeProfile, string transcriptPath) {
+    async Task StartRecording(JsonNode node, string sessionId, string? cwd, Profile? activeProfile, string? transcriptPath) {
         var forwarded = new JsonObject {
             ["hook_event_name"] = "SessionStart",
             ["session_id"]      = sessionId,
@@ -91,7 +89,9 @@ sealed class GrokHookCommand(
         var outcome = await _poster.PostOrSpoolAsync("session-start/grok", enriched, "grok-hook",
             new HookSpool(config, clock.Time), sessionId, route: "session-start/grok");
 
-        if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return;
+        // A refused start leaves the session unrecorded, so a later Stop must not start capturing it.
+        if (outcome == HookPostOutcome.Failed) DisabledSessions.Mark(sessionId, config);
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url) || transcriptPath is null) return;
 
         // A resumed session already has its title.
         await EnsureWatcher(sessionId, transcriptPath, cwd, skipTitle: Str(node, "source") == "load");

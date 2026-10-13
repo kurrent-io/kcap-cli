@@ -93,6 +93,33 @@ public class GrokHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned).IsEmpty();
     }
 
+    /// <summary>A Stop after a refused start must not record the session the server refused.</summary>
+    [Test, NotInParallel]
+    public async Task A_stop_after_a_rejected_session_start_starts_no_watcher() {
+        _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400));
+        await RunAsync(Payload("session_start", "/repo/demo"));
+
+        await RunAsync(Payload("stop", "/repo/demo", Path.Combine(Home.Path, "elsewhere", "updates.jsonl")));
+
+        await Assert.That(_spawner.Spawned).IsEmpty();
+    }
+
+    /// <summary>A cwd too long to encode resolves only once Grok has written its <c>.cwd</c> file, which
+    /// may be after session start; the start must still be recorded, and a later Stop names the file.</summary>
+    [Test, NotInParallel]
+    public async Task A_session_start_whose_transcript_cannot_be_located_is_still_posted() {
+        _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        var longCwd = "/" + string.Join("/", Enumerable.Repeat("a-very-long-directory-name", 12));
+
+        var exit = await RunAsync(Payload("session_start", longCwd));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())).Count().IsEqualTo(1);
+        await Assert.That(_spawner.Spawned).IsEmpty();
+    }
+
     [Test, NotInParallel]
     public async Task Stop_restarts_a_missing_watcher_on_the_named_transcript_without_posting() {
         var transcript = Path.Combine(Home.Path, "elsewhere", "updates.jsonl");
