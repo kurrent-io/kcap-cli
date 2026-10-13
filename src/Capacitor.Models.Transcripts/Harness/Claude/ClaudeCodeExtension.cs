@@ -10,18 +10,21 @@ public static class ClaudeCodeExtension {
     public const string IsSidechain   = "is_sidechain";
     public const string OriginKind    = "origin_kind";
     public const string IsError       = "is_error";
+    public const string IsCompactSummary = "is_compact_summary";
     /// A tool-result line's root `toolUseResult` object, verbatim; the key the server writes.
     public const string ToolUseResult = "tool_use_result";
 
     /// The block for one event, or null when nothing is set so the slug stays absent.
-    public static Struct? Flags(bool isSidechain, bool isMeta = false, string? originKind = null, bool isError = false, Struct? toolUseResult = null) {
-        if (!isSidechain && !isMeta && originKind is null && !isError && toolUseResult is null) return null;
+    public static Struct? Flags(bool isSidechain, bool isMeta = false, string? originKind = null, bool isError = false, Struct? toolUseResult = null,
+            bool isCompactSummary = false) {
+        if (!isSidechain && !isMeta && originKind is null && !isError && toolUseResult is null && !isCompactSummary) return null;
         var s = new Struct();
         if (isSidechain) s.Fields[IsSidechain] = Value.ForBool(true);
         if (isMeta) s.Fields[IsMeta]           = Value.ForBool(true);
         if (originKind is not null) s.Fields[OriginKind] = Value.ForString(originKind);
         if (isError) s.Fields[IsError]         = Value.ForBool(true);
         if (toolUseResult is not null) s.Fields[ToolUseResult] = Value.ForStruct(toolUseResult);
+        if (isCompactSummary) s.Fields[IsCompactSummary] = Value.ForBool(true);
         return s;
     }
 }

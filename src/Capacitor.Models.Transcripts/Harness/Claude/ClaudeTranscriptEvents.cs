@@ -87,10 +87,11 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         var emitter    = new Emitter(record);
         var isMeta     = root.Bool("isMeta") == true;
         var originKind = root.Obj("origin")?.Str("kind");
+        var isCompactSummary = root.Bool("isCompactSummary") == true;
 
         if (message.Str("content") is { } text) {
             if (!IsDeferredToolsInjection(text))
-                emitter.Add(0, UserMessage(text, record), ClaudeCodeExtension.Flags(record.IsSidechain, isMeta, originKind));
+                emitter.Add(0, UserMessage(text, record), ClaudeCodeExtension.Flags(record.IsSidechain, isMeta, originKind, isCompactSummary: isCompactSummary));
             return emitter.Events;
         }
         if (message.Arr("content") is not { } blocks) return [];
@@ -120,7 +121,7 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
 
         var joined = string.Join("\n", texts);
         if (IsDeferredToolsInjection(joined)) return [];
-        emitter.Add(0, UserMessage(joined, record), ClaudeCodeExtension.Flags(record.IsSidechain, isMeta, originKind));
+        emitter.Add(0, UserMessage(joined, record), ClaudeCodeExtension.Flags(record.IsSidechain, isMeta, originKind, isCompactSummary: isCompactSummary));
         return emitter.Events;
     }
 
