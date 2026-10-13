@@ -196,7 +196,7 @@ public sealed class WizardTenantProvisioner(
                     var requestUrl   = outcome.Body.RequestUrl;
                     var codeRejected = code is not null || reason != "invite_required";
 
-                    // A server that keeps asking for a code it was just given must not re-prompt forever.
+                    // Three rejected codes end the offer; a 403 to a supplied code counts as one.
                     if (codeRejected && ++wrongCodes >= MaxInviteCodeAttempts)
                         return Failed(InviteRefusal(reason, requestUrl, codeRejected), reason);
 

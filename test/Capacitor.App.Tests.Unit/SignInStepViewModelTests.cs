@@ -773,6 +773,54 @@ public class SignInStepViewModelTests {
         await Assert.That(sent).IsEquivalentTo([(string?)null]);
     }
 
+    /// The request URL is server-supplied and the opener launches whatever it is handed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_request_url_that_is_not_a_web_url_is_never_offered_or_opened() {
+        var (shown, opened) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            GateProvisioning(h, (HttpStatusCode.Forbidden, """{"reason":"invite_required","requestUrl":"file:///Applications/Calculator.app"}"""));
+
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            var url = h.Vm.InviteRequestUrl;
+            await h.Vm.OpenInviteRequestUrlCommand.Execute().ToTask();
+            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
+            await exec;
+
+            return (url, h.Opener.Opened.ToList());
+        });
+
+        await Assert.That(shown).IsNull();
+        await Assert.That(opened).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Leaving_while_the_invite_prompt_is_parked_releases_it_and_cancels() {
+        var (canLeave, promptVisible, provisioning, status, code) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            GateProvisioning(h, InviteRequired);
+
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            h.Vm.InviteCode = "AB12";
+
+            var allowed = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
+            await exec;
+
+            return (allowed, h.Vm.InviteCodePromptVisible, h.Vm.ProvisioningVisible, h.Vm.Status, h.Vm.InviteCode);
+        });
+
+        await Assert.That(canLeave).IsTrue();
+        await Assert.That(promptVisible).IsFalse();
+        await Assert.That(provisioning).IsFalse();
+        await Assert.That(status).IsEqualTo("Sign-in cancelled.");
+        await Assert.That(code).IsEmpty();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_empty_create_prompt_cannot_be_submitted_at_all() {

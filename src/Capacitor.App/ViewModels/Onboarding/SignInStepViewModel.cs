@@ -177,7 +177,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         provisioner.PromptInviteCode = (requestUrl, error, ct) => _inviteCode.AskAsync(_post, () => {
             // A complaint keeps the refused code in the box so a typo can be fixed in place.
             if (error is null) InviteCode = "";
-            InviteRequestUrl        = requestUrl;
+            // The URL comes from whichever signup server the client was pointed at; only a web URL is offered.
+            InviteRequestUrl        = LinkPolicy.IsOpenable(requestUrl) ? requestUrl : null;
             InviteCodeError         = error;
             InviteCodePromptVisible = true;
         }, () => InviteCodePromptVisible = false, ct);
@@ -231,7 +232,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         SubmitInviteCodeCommand = ReactiveCommand.Create(() => _inviteCode.Answer(InviteCode),
             this.WhenAnyValue(x => x.InviteCode, code => !string.IsNullOrWhiteSpace(code)));
         CancelInviteCodeCommand     = ReactiveCommand.Create(() => _inviteCode.Answer(null));
-        OpenInviteRequestUrlCommand = ReactiveCommand.Create(() => Open(InviteRequestUrl));
+        OpenInviteRequestUrlCommand = ReactiveCommand.Create(() => LinkPolicy.Open(_urlOpener, InviteRequestUrl));
 
         AcknowledgeQuarantineCommand = ReactiveCommand.CreateFromTask(AcknowledgeQuarantineAsync);
     }
@@ -814,6 +815,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         BrowserUrl           = null;
         WaitingText          = null;
         ProvisioningProgress = null;
+        InviteCode           = "";
     }
 
     void CommitTenant(DiscoveredTenant? tenant) {

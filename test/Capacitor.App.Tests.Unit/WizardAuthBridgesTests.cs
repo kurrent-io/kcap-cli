@@ -44,13 +44,14 @@ public class WizardAuthBridgesTests {
         new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), time: TimeProvider.System);
 
     static (WizardTenantProvisioner Provisioner, ScriptedSignupHandler Handler, RecordingAuthProgress Progress, FakeTimeProvider Time)
-            NewProvisioner() {
+            NewProvisioner(CliTelemetry? telemetry = null) {
         var handler  = new ScriptedSignupHandler();
         var progress = new RecordingAuthProgress();
         var time     = new FakeTimeProvider();
         var client   = new TenantProvisioningClient(new HttpClient(handler));
 
-        return (new WizardTenantProvisioner(client, BaseUrl, progress, CliTelemetry.Disabled(TimeProvider.System), time), handler, progress, time);
+        return (new WizardTenantProvisioner(client, BaseUrl, progress, telemetry ?? CliTelemetry.Disabled(TimeProvider.System), time),
+            handler, progress, time);
     }
 
     /// The poll's only suspension is Task.Delay(interval, time, ct), whose continuation resumes
@@ -348,8 +349,12 @@ public class WizardAuthBridgesTests {
     /// A provisioner past the create prompts whose provision POSTs answer from <paramref name="replies"/>
     /// in order (the last one repeats), recording the code each POST carried.
     static (WizardTenantProvisioner Provisioner, RecordingAuthProgress Progress, FakeTimeProvider Time, List<string?> SentCodes)
-            GatedProvisioner(params (HttpStatusCode Status, string Body)[] replies) {
-        var (provisioner, handler, progress, time) = NewProvisioner();
+            GatedProvisioner(params (HttpStatusCode Status, string Body)[] replies) =>
+        GatedProvisioner(CliTelemetry.Disabled(TimeProvider.System), replies);
+
+    static (WizardTenantProvisioner Provisioner, RecordingAuthProgress Progress, FakeTimeProvider Time, List<string?> SentCodes)
+            GatedProvisioner(CliTelemetry telemetry, params (HttpStatusCode Status, string Body)[] replies) {
+        var (provisioner, handler, progress, time) = NewProvisioner(telemetry);
         var sent = new List<string?>();
 
         handler.Respond = (request, _) => {
@@ -427,7 +432,9 @@ public class WizardAuthBridgesTests {
 
     [Test]
     public async Task The_third_wrong_code_fails_the_offer() {
-        var (provisioner, progress, time, sent) = GatedProvisioner(
+        using var config = new TempConfigRoot();
+        var probe = TelemetryProbe.Live("setup", config.Root);
+        var (provisioner, progress, time, sent) = GatedProvisioner(probe.Telemetry,
             (HttpStatusCode.Forbidden, Gate("invite_required")), (HttpStatusCode.BadRequest, Gate("invalid_code")));
         var prompts = 0;
         provisioner.PromptInviteCode = (_, _, _) => Task.FromResult<string?>($"C{++prompts}");
@@ -439,12 +446,15 @@ public class WizardAuthBridgesTests {
         await Assert.That(sent).IsEquivalentTo([null, "C1", "C2", "C3"]);
         await Assert.That(string.Join("\n", progress.Errors))
             .IsEqualTo($"That invite code isn't valid. Request an invite at {RequestUrl}.");
+        await Assert.That(FailedReason(probe)).IsEqualTo("invalid_code");
     }
 
     /// A server that answers a supplied code by asking for one again must not loop forever.
     [Test]
     public async Task An_invite_required_answer_to_a_supplied_code_counts_toward_the_cap() {
-        var (provisioner, progress, time, sent) = GatedProvisioner((HttpStatusCode.Forbidden, Gate("invite_required")));
+        using var config = new TempConfigRoot();
+        var probe = TelemetryProbe.Live("setup", config.Root);
+        var (provisioner, progress, time, sent) = GatedProvisioner(probe.Telemetry, (HttpStatusCode.Forbidden, Gate("invite_required")));
         var errors = new List<string?>();
         provisioner.PromptInviteCode = (_, error, _) => {
             errors.Add(error);
@@ -459,7 +469,11 @@ public class WizardAuthBridgesTests {
         await Assert.That(errors).IsEquivalentTo([null, "That invite code wasn't accepted.", "That invite code wasn't accepted."]);
         await Assert.That(string.Join("\n", progress.Errors))
             .IsEqualTo($"That invite code wasn't accepted. Request an invite at {RequestUrl}.");
+        await Assert.That(FailedReason(probe)).IsEqualTo("invite_required");
     }
+
+    static string? FailedReason(TelemetryProbe probe) =>
+        probe.Only("cli_setup_workspace_failed").Properties["reason"]?.GetValue<string>();
 
     [Test]
     public async Task Choosing_an_existing_workspace_hands_the_input_back_unresolved() {
