@@ -20,6 +20,9 @@ public sealed class CliTelemetry {
     const string Endpoint = "https://phog.kurrent.io";
     const string Token    = "phc_DeHBgHGersY4LmDlADnPrsCPOAmMO7QFOH8f4DVEVmD";
 
+    /// <summary>The host telemetry posts to, for callers that must name every host a run contacts.</summary>
+    public static string EndpointHost => new Uri(Endpoint).Host;
+
     static readonly TimeSpan FlushBudget = TimeSpan.FromSeconds(1.5);
 
     readonly ITelemetrySink _sink;
