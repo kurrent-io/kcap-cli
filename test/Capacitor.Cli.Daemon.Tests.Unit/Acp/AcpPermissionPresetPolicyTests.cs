@@ -28,6 +28,7 @@ public class AcpPermissionPresetPolicyTests {
     [Arguments("kiro")]
     [Arguments("opencode")]
     [Arguments("gemini")]
+    [Arguments("grok")]
     public async Task Both_presets_accepted_on_interactive_launches_for_acp_vendors(string vendor) {
         await Assert.That(AcpPermissionPresetPolicy.RejectionReason(Cmd(vendor, preset: AcpPermissionPresets.Explore))).IsNull();
         await Assert.That(AcpPermissionPresetPolicy.RejectionReason(Cmd(vendor, preset: AcpPermissionPresets.Edit))).IsNull();

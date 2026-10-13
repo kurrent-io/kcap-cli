@@ -41,7 +41,7 @@ public static class HostedHarnessCatalog {
 
     /// Harnesses kcap records but no daemon hosts: listed only when a daemon advertises one, since
     /// the server refuses their launch and an older daemon's silence must not offer them.
-    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe", "grok" };
+    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe" };
 
     public static IReadOnlyList<HarnessOption> Build(string[]? supportedVendors) {
         // null = an older daemon that never sent the field: unknown, not empty.

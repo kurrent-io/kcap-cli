@@ -365,6 +365,7 @@ public class AcpVendorDescriptorTests {
         await Assert.That(AcpVendorDescriptors.Copilot.SupportsReconnectResume).IsTrue();
         await Assert.That(AcpVendorDescriptors.Kiro.SupportsReconnectResume).IsFalse();
         await Assert.That(AcpVendorDescriptors.Gemini.SupportsReconnectResume).IsFalse();
+        await Assert.That(AcpVendorDescriptors.Grok.SupportsReconnectResume).IsFalse();
     }
 
     /// <summary>

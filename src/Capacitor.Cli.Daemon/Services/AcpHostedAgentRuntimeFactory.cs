@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
@@ -282,7 +283,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 // slips past every path rule.
                 policyCwd: ctx.Worktree.Path,
                 policyJudge: policyJudge,
-                journal: ctx.Journal
+                journal: ctx.Journal,
+                sessionNewMeta: descriptor.SessionNewMeta
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against
@@ -954,6 +956,10 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // none of the global flags), so its whole posture lives here. Unlike Kiro's branch above this
         // is NOT review-only: the plugin suppression it applies is what keeps an INTERACTIVE hosted
         // session from being captured twice.
+        // kcap's own Grok hook loads inside this child; the daemon already records the session from
+        // its ACP stream, so the hook stands down rather than recording it a second time.
+        if (descriptor.Harness is HarnessId.Grok) psi.Environment[GrokHookEnvironment.HostedVar] = "1";
+
         if (descriptor.Harness is HarnessId.OpenCode) {
             OpenCodeLaunchEnvironment.Apply(psi.Environment);
 

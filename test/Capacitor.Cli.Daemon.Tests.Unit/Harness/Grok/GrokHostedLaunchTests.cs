@@ -1,0 +1,128 @@
+using Capacitor.Cli.Core.Harness.Grok;
+using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Daemon.Acp;
+using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Acp;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Grok;
+
+/// <summary>
+/// The hosted Grok launch shape: the argv and environment the child gets, and the <c>session/new</c>
+/// it is sent, against the surface probed in <c>docs/probes/2026-10-13-grok-acp/</c>.
+/// </summary>
+public class GrokHostedLaunchTests {
+    static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(10);
+
+    static RuntimeStartContext Ctx() =>
+        new(AgentId: "agent-1", Vendor: "grok", SourceRepoPath: "/repo",
+            Worktree: new WorktreeInfo(Path: "/abs/wt", Branch: "b", SourceRepo: "/repo"), Prompt: "",
+            Model: null, Effort: null, Tools: null,
+            IsReview: false, IsReviewFlow: false, Review: null,
+            Cols: 80, Rows: 24, ServerUrl: null, DaemonBridgeUrl: null, CapacitorPath: "/usr/local/bin/kcap");
+
+    [Test]
+    public async Task Descriptor_MatchesTheProbedSurface() {
+        var descriptor = AcpVendorDescriptors.Grok;
+
+        await Assert.That(descriptor.Vendor).IsEqualTo("grok");
+        // A configured leader would hand the session to a shared process the daemon does not own.
+        await Assert.That(descriptor.Argv.SequenceEqual(["agent", "--no-leader", "stdio"])).IsTrue();
+        await Assert.That(descriptor.SupportsMcpServers).IsTrue();
+        await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
+        await Assert.That(descriptor.SupportsUnattended).IsFalse();
+        await Assert.That(descriptor.SupportsReconnectResume).IsFalse();
+    }
+
+    [Test]
+    public async Task ZeroConfiguration_ResolvesTheShippedBinaryName() {
+        await Assert.That(new DaemonConfig().PathSlot(AcpVendorDescriptors.Grok.Harness).Read()).IsEqualTo("grok");
+    }
+
+    /// <summary>The user's own <c>permission_mode = "always-approve"</c> applies to an ACP session unless
+    /// <c>session/new</c> overrides it, and then Grok never asks — so the daemon's broker and launch
+    /// presets would decide nothing.</summary>
+    [Test]
+    public async Task SessionNew_turns_off_always_approve_so_the_daemon_decides_permissions() {
+        var fake = new FakeAcpAgent();
+        using var cts = new CancellationTokenSource();
+        var run = fake.RunAsync(cts.Token);
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Grok,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new StubServerConnection(),
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()),
+            timeProvider: TimeProvider.System);
+
+        var start = await factory.StartAsync(Ctx(), cts.Token).WaitAsync(HangGuard);
+
+        var sessionNew = fake.ReceivedCalls.Single(c => c.Method == "session/new").Params!.Value;
+        await Assert.That(sessionNew.GetProperty("_meta").GetProperty("yoloMode").GetBoolean()).IsFalse();
+
+        await start.Runtime.DisposeAsync();
+        await cts.CancelAsync();
+        await fake.DisposeAsync();
+        try { await run; } catch (OperationCanceledException) { }
+    }
+
+    [Test]
+    public async Task Other_vendors_send_no_session_new_meta() {
+        await Assert.That(AcpVendorDescriptors.OpenCode.SessionNewMeta is null).IsTrue();
+        await Assert.That(AcpVendorDescriptors.Cursor.SessionNewMeta is null).IsTrue();
+    }
+
+    /// <summary>kcap's own Grok hook loads inside the hosted child and would record the session a
+    /// second time; the variable makes it stand down for a session the daemon already records.</summary>
+    [Test]
+    public async Task Every_launch_marks_the_child_as_daemon_hosted() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(AcpVendorDescriptors.Grok, new DaemonConfig(), Ctx());
+
+        await Assert.That(psi.Environment[GrokHookEnvironment.HostedVar]).IsEqualTo("1");
+    }
+
+    [Test]
+    public async Task Other_vendors_are_not_marked_as_hosted_grok() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.OpenCode, new DaemonConfig(), Ctx() with { Vendor = "opencode" });
+
+        await Assert.That(psi.Environment.ContainsKey(GrokHookEnvironment.HostedVar)
+                       && psi.Environment[GrokHookEnvironment.HostedVar] == "1").IsFalse();
+    }
+
+    [Test]
+    public async Task Availability_TracksTheConfiguredBinary() {
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Grok,
+            config: new DaemonConfig { GrokPath = "kcap-grok-that-does-not-exist", Binaries = BinaryProbe.FromEnvironment() },
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new StubServerConnection(),
+            connectionSource: _ => throw new InvalidOperationException("IsAvailable must not spawn a process."),
+            timeProvider: TimeProvider.System);
+
+        await Assert.That(factory.Vendor).IsEqualTo("grok");
+        await Assert.That(factory.IsAvailable()).IsFalse();
+    }
+
+    [Test]
+    public async Task Launch_presets_route_through_the_permission_bridge() {
+        await Assert.That(AcpPermissionPresets.RoutedVendors).Contains("grok");
+    }
+
+    sealed class FakeAcpProcess : IAcpProcess {
+        readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int  Pid       { get; init; } = 4242;
+        public bool HasExited { get; private set; }
+        public int? ExitCode  { get; private set; }
+        public Task WaitForExitAsync(TimeSpan? timeout = null) => _exited.Task;
+        public Task TerminateAsync(TimeSpan? timeout = null) { HasExited = true; ExitCode = 0; _exited.TrySetResult(); return Task.CompletedTask; }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    sealed class StubServerConnection() : ServerConnection(
+        new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
+        UnusedTokenStore.Create(),
+        NullLoggerFactory.Instance,
+        NullLogger<ServerConnection>.Instance, TimeProvider.System);
+}

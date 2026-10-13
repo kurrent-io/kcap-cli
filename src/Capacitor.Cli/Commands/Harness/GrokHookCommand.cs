@@ -42,6 +42,8 @@ sealed class GrokHookCommand(
     }
 
     async Task DispatchAsync(JsonNode node) {
+        if (GrokHookEnvironment.IsDaemonHosted(Environment.GetEnvironmentVariable)) return;
+
         var dashedSessionId = Str(node, "sessionId");
         if (string.IsNullOrEmpty(dashedSessionId) || !Guid.TryParse(dashedSessionId, out _)) return;
 

@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.PrDetection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -77,6 +78,23 @@ public class GrokHookCommandTests : IDisposable {
         await Assert.That(spawned.Vendor).IsEqualTo("grok");
         await Assert.That(spawned.TranscriptPath).IsEqualTo(
             Path.Combine(Home.Path, ".grok", "sessions", "%2Frepo%2Fdemo", DashedSessionId, "updates.jsonl"));
+    }
+
+    /// <summary>A session the daemon hosts is recorded from its ACP stream; the hook loaded inside that
+    /// child must not record it a second time.</summary>
+    [Test, NotInParallel]
+    public async Task A_daemon_hosted_session_is_left_to_the_daemon() {
+        _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, "1");
+
+        var start = await RunAsync(Payload("session_start", "/repo/demo"));
+        var stop  = await RunAsync(Payload("stop", "/repo/demo", transcriptPath: "/tmp/updates.jsonl"));
+
+        await Assert.That(start).IsEqualTo(0);
+        await Assert.That(stop).IsEqualTo(0);
+        await Assert.That(_server.LogEntries).IsEmpty();
+        await Assert.That(_spawner.Spawned).IsEmpty();
     }
 
     /// <summary>A permanent rejection must not leave a watcher shipping lines for a session the server

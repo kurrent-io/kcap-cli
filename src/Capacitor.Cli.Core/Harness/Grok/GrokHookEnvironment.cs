@@ -11,6 +11,12 @@ namespace Capacitor.Cli.Core.Harness.Grok;
 public static class GrokHookEnvironment {
     public const string HookEventVar = "GROK_HOOK_EVENT";
 
+    /// <summary>Set by the daemon on a Grok it hosts. The daemon records that session from its ACP
+    /// stream, so kcap's own Grok hook, which loads inside the child too, must not record it again.</summary>
+    public const string HostedVar = "KCAP_HOSTED_GROK";
+
+    public static bool IsDaemonHosted(Func<string, string?> getEnv) => getEnv(HostedVar) == "1";
+
     public static bool IsGrokHook(Func<string, string?> getEnv) => !string.IsNullOrEmpty(getEnv(HookEventVar));
 
     public static bool IsGrokPayload(string body, Func<string, string?> getEnv) {

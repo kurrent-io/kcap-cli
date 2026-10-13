@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Capacitor.Cli.Daemon.Harness.OpenCode;
@@ -153,6 +154,10 @@ internal sealed record AcpVendorDescriptor {
     /// </summary>
     public bool                        SupportsReconnectResume { get; }
 
+    /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c>, fresh per launch so no launch can
+    /// alter another's. Null sends none.</summary>
+    public Func<JsonObject>?            SessionNewMeta { get; }
+
     public AcpVendorDescriptor(
             HarnessId                   Harness,
             ImmutableArray<string>      Argv,
@@ -166,7 +171,8 @@ internal sealed record AcpVendorDescriptor {
             AcpBorrowedReviewContainment BorrowedReviewContainment = AcpBorrowedReviewContainment.None,
             bool                        SupportsReconnectResume = false,
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
-                                        UnattendedTrustArgvBuilder = null
+                                        UnattendedTrustArgvBuilder = null,
+            Func<JsonObject>?           SessionNewMeta = null
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -222,6 +228,7 @@ internal sealed record AcpVendorDescriptor {
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
         this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.SupportsReconnectResume = SupportsReconnectResume;
+        this.SessionNewMeta = SessionNewMeta;
         this.ReviewFlowMcpTransport = ReviewFlowMcpTransport switch {
             AcpReviewFlowMcpTransport.Default when SupportsMcpServers => AcpReviewFlowMcpTransport.SessionNew,
             AcpReviewFlowMcpTransport.Default                         => AcpReviewFlowMcpTransport.Unsupported,
@@ -478,6 +485,29 @@ internal static class AcpVendorDescriptors {
     /// reason unrelated to MCP and reports nothing loaded.</para>
     /// </summary>
     internal const string UnmatchableMcpNamePlaceholder = "__kcap_unmatchable_mcp_name__";
+
+    /// <summary>Grok Build over <c>grok agent stdio</c> (<c>docs/probes/2026-10-13-grok-acp/</c>). Its
+    /// MCP servers go through <c>session/new</c> and its model through <c>configOptions</c>, both
+    /// verified at effect level.
+    ///
+    /// <para><c>yoloMode: false</c> is not optional: Grok applies the user's own
+    /// <c>permission_mode = "always-approve"</c> to an ACP session unless <c>session/new</c> overrides
+    /// it, and then never sends <c>session/request_permission</c>, so neither the permission broker nor
+    /// a launch preset would decide anything.</para>
+    ///
+    /// <para>Reconnect stays off: <c>session/load</c> worked from a fresh process after a SIGKILL, with
+    /// stable tool-call ids, but the reconnect probe has not passed against Grok.</para></summary>
+    public static readonly AcpVendorDescriptor Grok = new(
+        Harness:             HarnessId.Grok,
+        // A configured leader would hand the session to a shared process the daemon does not own.
+        Argv:                ["agent", "--no-leader", "stdio"],
+        UnattendedTrustArgv: [],
+        SupportsUnattended:  false,
+        ModelSelector:       ConfigOptionModelSelector.Instance,
+        SupportsMcpServers:  true,
+        SupportsReconnectResume: false,
+        SessionNewMeta:      () => new JsonObject { ["yoloMode"] = false }
+    );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).
     /// Hosted interactively and as an unattended review-flow reviewer.

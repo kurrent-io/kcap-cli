@@ -531,6 +531,17 @@ public static partial class DaemonRunner {
                 policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.Grok,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
+            )
+        );
 
         // Not an ACP factory: agy speaks NDJSON over one child process PER TURN, so it carries its own
         // runtime rather than AcpHostedAgentRuntimeFactory's persistent-child shape. Takes the logger
