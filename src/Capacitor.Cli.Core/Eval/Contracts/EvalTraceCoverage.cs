@@ -32,6 +32,8 @@ public record EvalTraceCoverage {
     [JsonPropertyName("prescreen_candidates")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int?  PrescreenCandidates { get; init; }
     [JsonPropertyName("evidence_incomplete")]  [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? EvidenceIncomplete  { get; init; }
 
+    const string ExtractFieldsMisplaced = "the evidence_extract fields belong to evidence_extract";
+
     bool HasExtractFields => ChunkCount is not null || ChunksExtracted is not null || RecordsTotal is not null || RecordsDelivered is not null
                           || SliceCount is not null || SlicesJudged is not null || PrescreenCandidates is not null || EvidenceIncomplete is not null;
 
@@ -71,7 +73,7 @@ public record EvalTraceCoverage {
         if (DeliveredBytes < 0 || DeliveredBytes > BudgetBytes)   return "delivered_bytes out of range";
         if (IterationsUsed < 0 || IterationsUsed > MaxIterations) return "iterations_used out of range";
         if (ToolCalls < 0 || ToolCalls > MaxToolCalls)            return "tool_calls out of range";
-        if (HasExtractFields) return "the evidence_extract fields belong to evidence_extract";
+        if (HasExtractFields) return ExtractFieldsMisplaced;
         return null;
     }
 
@@ -80,7 +82,7 @@ public record EvalTraceCoverage {
         if (BudgetTripped is not null || DeliveredBytes is not null || BudgetBytes is not null || TurnsFetched is not null || TurnsTotal is not null || IterationsUsed is not null || MaxIterations is not null)
             return "one_shot must not carry turn_navigating fields";
         if (ToolCalls is not null || MaxToolCalls is not null) return "tool_calls and max_tool_calls belong to evidence_retrieval";
-        if (HasExtractFields) return "the evidence_extract fields belong to evidence_extract";
+        if (HasExtractFields) return ExtractFieldsMisplaced;
         return null;
     }
 

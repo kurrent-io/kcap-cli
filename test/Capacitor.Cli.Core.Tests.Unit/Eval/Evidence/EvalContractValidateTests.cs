@@ -90,6 +90,20 @@ public class EvalContractValidateTests {
     static readonly EvalEvidenceOmission Elided = new() { Kind = EvalOmissionKinds.FieldElided, Count = 1, Detail = "result_excerpt" };
 
     [Test]
+    public async Task An_unknown_newer_policy_admits_the_v3_omission_kinds() {
+        var chunks    = new EvalEvidenceOmission { Kind = EvalOmissionKinds.ChunksNotExtracted, Count = 1 };
+        var delivered = new EvalEvidenceOmission { Kind = EvalOmissionKinds.RecordsNotDelivered, Count = 1 };
+        var newer     = V3(chunks, delivered) with { PolicyVersion = "coverage-v4" };
+        await Assert.That(newer.Validate()).IsNull();
+    }
+
+    [Test]
+    public async Task An_extract_trace_without_an_evidence_coverage_record_is_refused() {
+        var bare = Assessed(null, EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1));
+        await Assert.That(bare.Validate()).IsNotNull();
+    }
+
+    [Test]
     public async Task The_extract_mode_validates_its_eight_fields_and_refuses_other_modes_fields() {
         var extract = EvalTraceCoverage.ForEvidenceExtract(4, 3, 10, 7, sliceCount: 3, slicesJudged: 2, prescreenCandidates: 5, evidenceIncomplete: true);
         await Assert.That(extract.Validate()).IsNull();
