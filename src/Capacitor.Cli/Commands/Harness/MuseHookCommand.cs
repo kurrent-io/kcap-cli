@@ -27,9 +27,10 @@ sealed class MuseHookCommand(
 
     const string Vendor = "muse";
 
-    // Muse kills a hook after 5 s (15 s on SessionEnd).
-    static readonly TimeSpan Ceiling         = TimeSpan.FromSeconds(4);
-    static readonly TimeSpan PreHookDrainCap = TimeSpan.FromSeconds(6);
+    // Muse kills a hook after 5 s, or 15 s on SessionEnd.
+    static readonly TimeSpan Ceiling           = TimeSpan.FromSeconds(5);
+    static readonly TimeSpan SessionEndCeiling = TimeSpan.FromSeconds(15);
+    static readonly TimeSpan PreHookDrainCap   = TimeSpan.FromSeconds(6);
 
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
@@ -83,7 +84,7 @@ sealed class MuseHookCommand(
 
     async Task DispatchAsync(JsonNode node, TextWriter stdout, Func<string, string?> env, DateOnly today) {
         var eventName = TryGetString(node, "hook_event_name");
-        if (eventName is not ("SessionStart" or "SessionEnd" or "SubagentStart" or "SubagentStop")) return;
+        if (eventName is not ("SessionStart" or "SessionEnd" or "Stop" or "SubagentStart" or "SubagentStop")) return;
 
         if (!Guid.TryParse(TryGetString(node, "session_id"), out var hookSession)) return;
 
@@ -92,37 +93,48 @@ sealed class MuseHookCommand(
 
         if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths, activeProfile?.ExcludedPaths, home)) return;
 
-        var parent = ParentSessionId(env);
+        var parent   = ParentSessionId(env);
+        var topLevel = parent is null || parent == hookSession.ToString("N");
 
         switch (eventName) {
             // A child's own lifecycle hooks are not a second top-level session.
-            case "SessionStart" when parent is null || parent == hookSession.ToString("N"):
+            case "SessionStart" when topLevel:
                 await HandleSessionStart(node, hookSession, cwd, activeProfile, stdout, today);
                 break;
-            case "SessionEnd" when parent is null || parent == hookSession.ToString("N"):
+            case "Stop" when topLevel:
+                await Rearm(hookSession, cwd, activeProfile, clock.Budget(Ceiling), today);
+                break;
+            case "SessionEnd" when topLevel:
                 await HandleSessionEnd(node, hookSession, cwd, today);
                 break;
             case "SubagentStart" or "SubagentStop" when parent is not null:
-                await HandleSubagent(node, Guid.Parse(parent), eventName == "SubagentStart", today);
+                await HandleSubagent(node, Guid.Parse(parent), eventName == "SubagentStart", clock.Budget(Ceiling), today);
                 break;
         }
     }
 
     async Task HandleSessionStart(JsonNode node, Guid session, string? cwd, Profile? activeProfile, TextWriter stdout, DateOnly today) {
-        var sessionId = session.ToString("N");
-        if (DisabledSessions.IsDisabled(sessionId, config)) return;
-
         var source = TryGetString(node, "source") is { Length: > 0 } s ? s : "startup";
-        var log    = Paths.ResolveSessionLog(session.ToString("D"), today);
+        var budget = clock.Budget(Ceiling);
 
         if (source is not ("startup" or "fork")) {
-            if (log is not null && HookHttp.IsPostable(Url))
-                await watchers.EnsureWatcherRunning(sessionId, log,
-                    agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
+            await Rearm(session, cwd, activeProfile, budget, today);
             return;
         }
 
-        var budget = clock.Budget(Ceiling);
+        var sessionId = session.ToString("N");
+        if (DisabledSessions.IsDisabled(sessionId, config)) return;
+
+        // Each session needs its own repository event, even in a cwd another session already reported.
+        if (cwd is not null) RepositoryDetection.ClearLastEmitted(config, cwd);
+
+        if (await IsRepoExcludedAsync(sessionId, cwd, activeProfile, budget)) return;
+
+        // Spawn before the POST, as Claude does: a hook Muse kills mid-POST must not take capture with it.
+        var log = Paths.ResolveSessionLog(session.ToString("D"), today);
+        if (log is not null && HookHttp.IsPostable(Url))
+            await watchers.EnsureWatcherRunning(sessionId, log,
+                agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: Vendor);
 
         var forwarded = new JsonObject {
             ["hook_event_name"] = "SessionStart",
@@ -138,13 +150,8 @@ sealed class MuseHookCommand(
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
-        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
-
-        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
-                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
-            DisabledSessions.Mark(sessionId, config);
-            return;
-        }
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(
+            router, config, forwarded.ToJsonString(), clock.Time, budget.Remaining, detectPullRequest: false);
 
         var memoryTask = StartMemoryIndexTask(sessionId, ScopeRootFrom(enriched, cwd),
             disabled: activeProfile?.DisableMemoryIndex is true,
@@ -152,10 +159,8 @@ sealed class MuseHookCommand(
             flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses),
             source, budget.Remaining);
 
-        // The SessionStart record requires a transcript path; without a log the start waits for a later hook.
-        var outcome = log is null
-            ? (HookPostOutcome?)null
-            : await PostInOrderAsync("session-start/muse", enriched, sessionId);
+        // The SessionStart record requires a transcript path; without a log, Stop re-arms capture later.
+        if (log is not null) await PostInOrderAsync("session-start/muse", enriched, sessionId, budget);
 
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var nudge = HarnessNudgeEmitter.Combine(
@@ -163,15 +168,36 @@ sealed class MuseHookCommand(
             HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
             FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Muse, harnesses));
         await WriteFragment(stdout, fragment, nudge);
+    }
 
-        if (log is null || outcome is not { } posted || !AgentHookPoster.ShouldSpawnAfter(posted, Url)) return;
+    /// <summary>Starts the session's watcher when none is running, without posting: a resume, or a
+    /// turn ending after a SessionStart that was killed or found no log.</summary>
+    async Task Rearm(Guid session, string? cwd, Profile? activeProfile, HookBudget budget, DateOnly today) {
+        var sessionId = session.ToString("N");
+        if (DisabledSessions.IsDisabled(sessionId, config) || !HookHttp.IsPostable(Url) || watchers.IsWatcherAlive(sessionId)) return;
+
+        if (Paths.ResolveSessionLog(session.ToString("D"), today) is not { } log) return;
+        if (await IsRepoExcludedAsync(sessionId, cwd, activeProfile, budget)) return;
 
         await watchers.EnsureWatcherRunning(sessionId, log,
-            agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: Vendor);
+            agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
+    }
+
+    /// <summary>An out-of-scope repository disables the session, so its later hooks stop at the
+    /// disabled check.</summary>
+    async Task<bool> IsRepoExcludedAsync(string sessionId, string? cwd, Profile? activeProfile, HookBudget budget) {
+        var body = new JsonObject { ["cwd"] = cwd }.ToJsonString();
+        if (!await RepoExclusion.IsOutOfScopeAsync(router, config, body,
+                activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time, budget.Remaining))
+            return false;
+
+        DisabledSessions.Mark(sessionId, config);
+        return true;
     }
 
     async Task HandleSessionEnd(JsonNode node, Guid session, string? cwd, DateOnly today) {
         var sessionId = session.ToString("N");
+        var budget    = clock.Budget(SessionEndCeiling);
 
         if (DisabledSessions.IsDisabled(sessionId, config)) {
             DisabledSessions.RemoveMarker(sessionId, config);
@@ -179,17 +205,19 @@ sealed class MuseHookCommand(
         }
 
         if (Paths.ResolveSessionLog(session.ToString("D"), today) is { } log) {
+            var cap = budget.Remaining < PreHookDrainCap ? budget.Remaining : PreHookDrainCap;
+
             try {
-                var drained = await TimeBudget.RunCappedAsync(
+                var drained = cap > TimeSpan.Zero && await TimeBudget.RunCappedAsync(
                     async () => {
                         await watchers.KillWatcher(sessionId);
                         await watchers.InlineDrainAsync(sessionId, log, agentId: null, vendor: Vendor);
                     },
-                    PreHookDrainCap, clock.Time);
+                    cap, clock.Time);
 
                 if (!drained)
                     await Console.Error.WriteLineAsync(
-                        $"[kcap] muse session-end pre-drain cap ({PreHookDrainCap.TotalSeconds:0}s) elapsed; proceeding to POST.");
+                        $"[kcap] muse session-end pre-drain cap ({cap.TotalSeconds:0.#}s) elapsed; proceeding to POST.");
             } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
                 await Console.Error.WriteLineAsync($"[kcap] muse session-end pre-hook failed: {ex.Message}");
             }
@@ -206,23 +234,24 @@ sealed class MuseHookCommand(
         if (cwd is not null) forwarded["cwd"] = cwd;
         if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
-        await PostInOrderAsync("session-end/muse", forwarded.ToJsonString(), sessionId);
+        await PostInOrderAsync("session-end/muse", forwarded.ToJsonString(), sessionId, budget);
     }
 
-    /// <summary>No child watcher starts here: the parent watcher's scan tails a child once its log exists.</summary>
-    async Task HandleSubagent(JsonNode node, Guid parent, bool isStart, DateOnly today) {
+    /// <summary>No child watcher starts here: the parent watcher's scan tails a child once its log
+    /// exists. A worker takes the label the parent log gives it, so the hook and the scan agree.</summary>
+    async Task HandleSubagent(JsonNode node, Guid parent, bool isStart, HookBudget budget, DateOnly today) {
         var parentId = parent.ToString("N");
         if (DisabledSessions.IsDisabled(parentId, config)) return;
 
         if (!Guid.TryParse(TryGetString(node, "child_session_id"), out var child) || child == parent) return;
         if (Paths.ResolveSessionLog(parent.ToString("D"), today) is not { } parentLog) return;
 
+        var childId    = child.ToString("D");
         var subagentId = TryGetString(node, "subagent_id");
-        var agentType = string.IsNullOrWhiteSpace(subagentId) ? "subagent"
+        var agentType  = string.IsNullOrWhiteSpace(subagentId) ? "subagent"
             : MuseSubagentDiscovery.IsReminderAgentId(subagentId) ? subagentId.Trim()
-            : "worker";
+            : WorkerLabel(parentLog, childId);
 
-        var childId  = child.ToString("D");
         var agentId  = child.ToString("N");
         var childLog = MusePaths.ChildSessionLogPath(parentLog, childId);
 
@@ -230,18 +259,29 @@ sealed class MuseHookCommand(
             ? MuseSubagentDiscovery.BuildStartPayload(parentId, agentId, agentType, childLog)
             : MuseSubagentDiscovery.BuildStopPayload(parentId, agentId, agentType, childLog);
 
-        await PostInOrderAsync(isStart ? "subagent-start" : "subagent-stop", payload.ToJsonString(), parentId);
+        await PostInOrderAsync(isStart ? "subagent-start" : "subagent-stop", payload.ToJsonString(), parentId, budget);
+    }
+
+    // The scan's "subagent" means unannounced; a Guid subagent_id already says it is a worker.
+    static string WorkerLabel(string parentLog, string childId) {
+        var type = MuseSubagentDiscovery.LabelFor(childId, MuseSubagentDiscovery.ResolveChildLabels(parentLog)).AgentType;
+        return type == "subagent" ? "worker" : type;
     }
 
     /// <summary>Spools behind an undelivered backlog for the session rather than overtaking it, so a
-    /// stranded session-start still reaches the server first.</summary>
-    async Task<HookPostOutcome> PostInOrderAsync(string route, string body, string sessionId) {
+    /// stranded session-start still reaches the server first; a spent budget spools too.</summary>
+    async Task<HookPostOutcome> PostInOrderAsync(string route, string body, string sessionId, HookBudget budget) {
         var spool = new HookSpool(config, clock.Time);
 
-        if (spool.HasBacklog(sessionId))
+        if (spool.HasBacklog(sessionId) || budget.Remaining <= TimeSpan.Zero)
             return spool.Append(sessionId, route, body) ? HookPostOutcome.Spooled : HookPostOutcome.Skipped;
 
-        return await _poster.PostOrSpoolAsync(route, body, "muse-hook", spool, sessionId, route);
+        if (!HookHttp.IsPostable(Url))
+            return await _poster.PostOrSpoolAsync(route, body, "muse-hook", spool, sessionId, route);
+
+        // Only client creation takes a cap; the POST itself runs on the poster's own retry timeout.
+        var authCap = budget.Remaining < AgentHookPoster.AuthCap ? budget.Remaining : AgentHookPoster.AuthCap;
+        return await _poster.PostOrSpoolAsync(() => http.ForHookAsync(), route, body, "muse-hook", spool, sessionId, route, authCap);
     }
 
     static async Task WriteFragment(TextWriter stdout, string? fragment, string? nudge) {

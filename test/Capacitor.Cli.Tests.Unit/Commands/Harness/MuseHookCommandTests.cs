@@ -23,6 +23,16 @@ public class MuseHookCommandTests : IDisposable {
     const string ReminderChild  = "5673a002-a310-4979-b885-acbf0991e990";
     const string WorkerChild    = "66d6cfba-1cf6-45b3-a2a8-e5c60f4fafc9";
 
+    const string AnnouncedSubagentId = "01a13565-a5b7-7071-874a-8c22f461fc24";
+    const string AnnouncedChild      = "01a13565-a626-7f70-bda0-1c19ba4deadf";
+
+    // Verbatim from a real Muse parent log, admission blobs dropped.
+    const string WorkerSpawnLine =
+        """{"schema_version":1,"id":"533c1cc9-29e6-586c-a278-1752d20fcc59","stream":{"kind":"session","id":"01a13563-ad7b-7b51-b12f-b2f4b78b6a1e"},"sequence":280,"recorded_at":1791897216448194,"record_type":"event","durability":"durable","causation_id":null,"payload_type":"subagent.control.spawn_accepted","payload_schema_version":4,"payload":{"kind":"subagent_control","record":{"kind":"spawn_accepted","command_id":"test-coverage-integrations-01a13563-1","parent_session_id":"01a13563-ad7b-7b51-b12f-b2f4b78b6a1e","parent_run_id":"01a13565-88d0-72c0-ab37-cea217cfd40e","subagent_id":"01a13565-a5b7-7071-874a-8c22f461fc24","agent_path":"main/Test coverage auditor — Integrations group/1","depth":1,"role":"Test coverage auditor — Integrations group","task_id":"01a13565-a5a9-7330-a03b-3febeab2f755","task_stream":"task/01a13565-a5a9-7330-a03b-3febeab2f755","objective":"audit"}}}""";
+
+    const string WorkerBoundLine =
+        """{"schema_version":1,"id":"ed976e63-54a5-4471-a351-03225dc9a492","stream":{"kind":"session","id":"01a13563-ad7b-7b51-b12f-b2f4b78b6a1e"},"sequence":288,"recorded_at":1791897216551211,"record_type":"event","durability":"durable","causation_id":null,"payload_type":"subagent.control.child_session_bound","payload_schema_version":1,"payload":{"kind":"subagent_control","record":{"kind":"child_session_bound","schema_version":1,"subagent_id":"01a13565-a5b7-7071-874a-8c22f461fc24","child_session_id":"01a13565-a626-7f70-bda0-1c19ba4deadf","storage_layout":"nested_session_v1"}}}""";
+
     static readonly DateOnly Today = new(2026, 10, 13);
 
     readonly WireMockServer     _server  = WireMockServer.Start();
@@ -100,10 +110,10 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
     }
 
-    /// <summary>Muse fires SessionStart before it creates the log; the hook must not record a path
-    /// Muse has not written, and leaves the start to a later hook.</summary>
+    /// <summary>When no log is found the hook must not record a path Muse has not written, and leaves
+    /// the start to a later hook.</summary>
     [Test]
-    public async Task SessionStart_before_the_log_exists_posts_nothing_and_exits_zero() {
+    public async Task SessionStart_when_no_log_is_found_posts_nothing_and_exits_zero() {
         StubHooks();
 
         var exit = await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
@@ -111,6 +121,51 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(HookPosts("/hooks/").Count).IsEqualTo(0);
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(0);
+    }
+
+    /// <summary>The watcher starts before the session-start POST is attempted, so a server that
+    /// refuses or stalls the POST, or a hook Muse kills mid-POST, still leaves capture running.</summary>
+    [Test]
+    [Arguments(500)]
+    [Arguments(400)]
+    public async Task SessionStart_starts_the_watcher_before_the_post_whatever_the_server_answers(int status) {
+        _server.Given(Request.Create().WithPath("/hooks/*").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(status));
+        var log         = StageParentLog();
+        var postsAtSpawn = -1;
+        var spawner     = new FakeWatcherSpawner(_ => {
+            postsAtSpawn = HookPosts("/hooks/").Count;
+            return Task.CompletedTask;
+        });
+
+        var exit = await Command(spawner).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(spawner.Spawned.Count).IsEqualTo(1);
+        await Assert.That(spawner.Spawned[0].TranscriptPath).IsEqualTo(log);
+        await Assert.That(postsAtSpawn).IsEqualTo(0);
+        await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>A SessionStart that was killed or found no log leaves no watcher; the end of the next
+    /// turn starts one, without posting.</summary>
+    [Test]
+    public async Task Stop_rearms_a_missing_watcher_without_posting() {
+        StubHooks();
+        var log    = StageParentLog();
+        var stdout = new StringWriter();
+
+        var exit = await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"done","session_id":"{{ParentId}}","turn_id":"3a75e7fd-2b07-401b-9446-6af740e7933d","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            stdout, ParentEnv, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        await Assert.That(stdout.ToString()).IsEmpty();
+        await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
+        await Assert.That(_spawner.Spawned[0].Key).IsEqualTo(ParentDashless);
+        await Assert.That(_spawner.Spawned[0].TranscriptPath).IsEqualTo(log);
+        await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
     }
 
     [Test]
@@ -196,6 +251,48 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(0);
     }
 
+    /// <summary>The server keeps the first label a subagent is registered with, and the hook fires
+    /// before the watcher's scan, so a worker the parent log already announced carries its role.</summary>
+    [Test]
+    public async Task SubagentStart_for_an_announced_worker_takes_its_role_from_the_parent_log() {
+        StubHooks();
+        var parentLog = StageParentLog(WorkerSpawnLine, WorkerBoundLine);
+
+        var exit = await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"SubagentStart","subagent_id":"{{AnnouncedSubagentId}}","child_session_id":"{{AnnouncedChild}}","session_id":"{{AnnouncedChild}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var posts = HookPosts("/hooks/subagent-start");
+        await Assert.That(posts.Count).IsEqualTo(1);
+
+        var body = JsonDocument.Parse(posts[0]).RootElement;
+        await Assert.That(body.GetProperty("agent_type").GetString()).IsEqualTo("Test coverage auditor — Integrations group");
+        await Assert.That(body.GetProperty("agent_id").GetString()).IsEqualTo("01a13565a6267f70bda01c19ba4deadf");
+        await Assert.That(body.GetProperty("transcript_path").GetString())
+            .IsEqualTo(MusePaths.ChildSessionLogPath(parentLog, AnnouncedChild));
+    }
+
+    /// <summary>The fragment is the only thing SessionStart writes, held under Muse's stdout cap with
+    /// the marker first; an index well past the cap proves the cap, not the emitter, bounds it.</summary>
+    [Test, NotInParallel("AuthProviderDiscoveryCache")]
+    public async Task SessionStart_writes_only_the_capped_memory_fragment() {
+        StubHooks();
+        StubMemoryIndex(200);
+        StageParentLog();
+        var stdout = new StringWriter();
+
+        var exit = await Command().Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var written = stdout.ToString();
+        await Assert.That(written.StartsWith("<!-- kcap-memory-index:v1 -->\n", StringComparison.Ordinal)).IsTrue();
+        await Assert.That(written).Contains("## Team memory");
+        await Assert.That(written.EndsWith('\n')).IsTrue();
+        await Assert.That(Encoding.UTF8.GetByteCount(written)).IsLessThanOrEqualTo(MuseHookCommand.StdoutCapBytes);
+        await Assert.That(Encoding.UTF8.GetByteCount(written)).IsGreaterThan(MuseHookCommand.StdoutCapBytes - 1024);
+    }
+
     [Test]
     public async Task SubagentStop_for_a_worker_posts_subagent_stop() {
         StubHooks();
@@ -218,12 +315,14 @@ public class MuseHookCommandTests : IDisposable {
     public async Task SessionEnd_posts_session_end_with_the_reason() {
         StubHooks();
         StageParentLog();
+        var stdout = new StringWriter();
 
         var exit = await Command().Handle(new StringReader(
             $$"""{"hook_event_name":"SessionEnd","reason":"other","session_id":"{{ParentId}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
-            new StringWriter(), ParentEnv, Today);
+            stdout, ParentEnv, Today);
 
         await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(stdout.ToString()).IsEmpty();
         var posts = HookPosts("/hooks/session-end/muse");
         await Assert.That(posts.Count).IsEqualTo(1);
 
@@ -261,20 +360,31 @@ public class MuseHookCommandTests : IDisposable {
 
     static string? ParentEnv(string key) => key == "MUSE_SESSION_ID" ? ParentId : null;
 
-    MuseHookCommand Command() {
+    MuseHookCommand Command(FakeWatcherSpawner? spawner = null) {
         var profiles = Resolutions.At(_server.Url!, Config.Root);
         var http     = new FixedCapacitorHttpClient();
 
         return new MuseHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
-            HostedAgent.Terminal, http, TestWatchers.For(Config.Root, profiles, http, _spawner), new GitProviderRouter(),
+            HostedAgent.Terminal, http, TestWatchers.For(Config.Root, profiles, http, spawner ?? _spawner), new GitProviderRouter(),
             new WorkingDirectory(AppContext.BaseDirectory));
     }
 
-    string StageParentLog() {
-        var paths = new MusePaths(Home, null, null);
-        var log   = paths.SessionLogPath(ParentId, Today)!;
+    string StageParentLog(params string[] lines) {
+        var log = new MusePaths(Home, null, null).SessionLogPath(ParentId, Today)!;
 
-        return Home.CreateFile(Path.GetRelativePath(Home.Path, log), "{}\n");
+        return Home.CreateFile(Path.GetRelativePath(Home.Path, log), lines.Length == 0 ? "{}\n" : string.Join("\n", lines) + "\n");
+    }
+
+    void StubMemoryIndex(int entries) {
+        _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json").WithBody("""{"provider":"None"}"""));
+
+        var rows = string.Join(",", Enumerable.Range(0, entries).Select(i =>
+            $$"""{"memory_id":"m{{i}}","slug":"memory-{{i}}","audience":"org","description":"{{new string('d', 400)}}","kind":"preference"}"""));
+        _server.Given(Request.Create().WithPath("/api/memories/index").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json").WithBody("[" + rows + "]"));
     }
 
     // A cwd that does not exist keeps repository detection from spawning git.
