@@ -164,6 +164,12 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
                     output.WriteLine($"        coverage: {string.Join("; ", parts)}");
                 }
 
+                if (q.TraceCoverage is { Mode: EvalTraceCoverage.EvidenceExtractMode, IsPartial: true } extract) {
+                    var counts = $"chunks {extract.ChunksExtracted}/{extract.ChunkCount}, records {extract.RecordsDelivered}/{extract.RecordsTotal}";
+                    if (extract.SliceCount is not null) counts += $", slices {extract.SlicesJudged}/{extract.SliceCount}";
+                    output.WriteLine($"        partial: {counts}");
+                }
+
                 if (q.EvidenceCoverage is { Citations.Count: > 0 } cited) {
                     output.WriteLine($"        cites: {string.Join(", ", cited.Citations.Select(c => c.Ref))}");
                 }

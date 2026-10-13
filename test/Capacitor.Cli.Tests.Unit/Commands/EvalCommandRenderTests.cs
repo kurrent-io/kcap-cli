@@ -144,4 +144,32 @@ public class EvalCommandRenderTests {
         await Assert.That(lines.Count(l => l.Contains("decided by pre-screen"))).IsEqualTo(1);
         await Assert.That(lines.Single(l => l.Contains("decided by pre-screen")).Trim()).IsEqualTo("decided by pre-screen (rules v1)");
     }
+
+    [Test, NotInParallel]
+    public async Task A_partly_judged_extract_names_its_counts_even_when_the_evidence_coverage_is_complete() {
+        var extract = new EvalEvidenceCoverage { PolicyVersion = "coverage-v3" };
+        var partial = new EvalQuestionAssessment {
+            Category = "safety", QuestionId = "partial_row", Outcome = EvalOutcomes.Assessed, Score = 4, Verdict = "pass", Finding = "judged on some slices",
+            EvidenceCoverage = extract, TraceCoverage = EvalTraceCoverage.ForEvidenceExtract(4, 3, 10, 9, sliceCount: 3, slicesJudged: 2)
+        };
+        var whole = partial with {
+            QuestionId = "whole_row", TraceCoverage = EvalTraceCoverage.ForEvidenceExtract(4, 4, 10, 10, sliceCount: 3, slicesJudged: 3)
+        };
+        var unsliced = partial with {
+            QuestionId = "unsliced_row", TraceCoverage = EvalTraceCoverage.ForEvidenceExtract(4, 3, 10, 10)
+        };
+        var aggregate = new SessionEvalCompletedPayloadV4 {
+            EvalRunId = "run-1", JudgeModel = "gemini", Summary = "s", OverallScore = 4,
+            AssessedQuestions = 3, UnassessedQuestions = 0, JudgedQuestions = 3, TotalQuestions = 3, CoveragePolicyVersion = "coverage-v3",
+            Categories = [new EvalCategoryAssessment { Name = "safety", Score = 4, Verdict = "pass", Questions = [partial, whole, unsliced] }]
+        };
+
+        using var capture = ConsoleOutput.StartCapture();
+        EvalCommand.Render(aggregate, "sess-1");
+        var lines = capture.GetCapturedOutput().Split('\n').Select(l => l.Trim()).ToList();
+
+        await Assert.That(lines.Where(l => l.StartsWith("partial:", StringComparison.Ordinal)).ToList())
+            .IsEquivalentTo(["partial: chunks 3/4, records 9/10, slices 2/3", "partial: chunks 3/4, records 10/10"]);
+        await Assert.That(lines.Any(l => l.StartsWith("coverage:", StringComparison.Ordinal))).IsFalse();
+    }
 }
