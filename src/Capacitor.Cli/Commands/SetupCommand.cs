@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
@@ -28,6 +29,7 @@ using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
 using Capacitor.Cli.Harness.MistralVibe;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Spectre.Console;
@@ -1811,7 +1813,8 @@ sealed class SetupCommand(
                     Path.Combine(opencode.DataDir, "opencode.db"),
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
-            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time)
+            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
+            new MuseImportSource(harnesses.Of<MuseHarness>().Paths, time)
         ];
 
         if (vendors is null) return all;
