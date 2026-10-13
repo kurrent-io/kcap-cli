@@ -86,6 +86,7 @@
             <Setter Property="Height" Value="24" />
             <Setter Property="CornerRadius" Value="999" />
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="ClipToBounds" Value="True" />
         </Style>
         <!-- A Border is outside the accessibility tree unless it asks in, so the folded initial
              asks and carries the name; the letter stays out, or each person is read twice. -->
@@ -100,6 +101,9 @@
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="TextAlignment" Value="Center" />
+            <Setter Property="AutomationProperties.AccessibilityView" Value="Raw" />
+        </Style>
+        <Style Selector="Border.avatar > Panel > views|RemoteAvatar">
             <Setter Property="AutomationProperties.AccessibilityView" Value="Raw" />
         </Style>
         <!-- Stretch wrapper around a card: the card is the chrome, so the wrapper paints nothing in
@@ -506,6 +510,7 @@
                                             <Border Classes="avatar folded" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
                                                 <Panel>
                                                     <TextBlock Text="{Binding Initial}" />
+                                                    <views:RemoteAvatar Url="{Binding AvatarUrl}" />
                                                 </Panel>
                                             </Border>
                                         </DataTemplate>
@@ -523,6 +528,7 @@
                                                 <Border Classes="avatar" VerticalAlignment="Center">
                                                     <Panel>
                                                         <TextBlock Text="{Binding Initial}" />
+                                                        <views:RemoteAvatar Url="{Binding AvatarUrl}" />
                                                     </Panel>
                                                 </Border>
                                                 <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
@@ -544,6 +550,7 @@
                                         ToolTip.Tip="{Binding Requester}" AutomationProperties.Name="{Binding Requester}">
                                     <Panel>
                                         <TextBlock Text="{Binding RequesterInitial}" />
+                                        <views:RemoteAvatar Url="{Binding RequesterAvatarUrl}" />
                                     </Panel>
                                 </Border>
                                 <Button x:Name="RequesterName" Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"

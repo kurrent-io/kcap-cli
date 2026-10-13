@@ -214,6 +214,37 @@ public class WorkContextViewSmokeTests {
                 .IsEquivalentTo(new[] { "Ada", "Bob", "Cyd", "Dee", "Eve" }, CollectionOrdering.Matching);
             await Assert.That(chips.All(IsAnnounced)).IsTrue();
             await Assert.That(chips.Select(c => c.GetVisualDescendants().OfType<TextBlock>().Single()).Any(IsAnnounced)).IsFalse();
+            await Assert.That(chips.Select(c => c.GetVisualDescendants().OfType<RemoteAvatar>().Single()).Any(IsAnnounced)).IsFalse();
+        });
+    }
+
+    /// The picture sits over the initial, so a missing or failed load leaves the letter showing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Every_avatar_binds_its_picture_over_the_initial() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            var crowded = CrowdedWhoRead();
+            // http is never fetched, so the binding is checked without a network load.
+            await host.ShowAsync(crowded with { Item = crowded.Item! with {
+                Contributors = [.. crowded.Item.Contributors.Select(c => c with { AvatarUrl = $"http://avatars.invalid/{c.UserId}.png" })] } });
+
+            var chips = Avatars(host.Find<ItemsControl>("ContributorStack"));
+            await Assert.That(chips.Select(c => c.GetVisualDescendants().OfType<RemoteAvatar>().Single().Url))
+                .IsEquivalentTo(new[] { "u1", "u2", "u3", "u4", "u5" }.Select(string? (id) => $"http://avatars.invalid/{id}.png"), CollectionOrdering.Matching);
+            await Assert.That(chips.All(c => c.ClipToBounds)).IsTrue();
+
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            var rows = Avatars(host.Find<ItemsControl>("ContributorList"));
+            await Assert.That(rows.Select(c => c.GetVisualDescendants().OfType<RemoteAvatar>().Single().Url))
+                .IsEquivalentTo(host.Vm.Contributors.Select(c => c.AvatarUrl), CollectionOrdering.Matching);
+
+            var read = KeyOnlyRead();
+            await host.ShowAsync(read with { Item = read.Item! with { Contributors = [] } });
+            var requester = Avatars(host.Find<Grid>("RequesterRow")).Single();
+            await Assert.That(requester.GetVisualDescendants().OfType<RemoteAvatar>().Single().Url).IsEqualTo(host.Vm.RequesterAvatarUrl);
         });
     }
 
