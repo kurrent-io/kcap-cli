@@ -317,4 +317,20 @@ public class ClaudeTranscriptEventsTests {
         const string fallback = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":{"status":"async_launched","agentId":"x"}}""";
         await Assert.That(E(fallback, 9)[0].EventId).IsEqualTo(TranscriptIds.ClaudeFallback(9, fallback));
     }
+
+    [Test]
+    public async Task A_compaction_summary_carries_is_compact_summary_in_both_content_shapes() {
+        const string lead = "This session is being continued from a previous conversation that ran out of context.";
+        var text   = E($$$"""{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"{{{lead}}}"}}""");
+        var blocks = E($$$"""{"type":"user","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"{{{lead}}}"}]}}""");
+
+        foreach (var e in new[] { text, blocks }) {
+            await Assert.That(e).Count().IsEqualTo(1);
+            await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_compact_summary")).IsTrue();
+            await Assert.That(SchemaExtensions.Flag(SchemaExtensions.Slug(e[0].Payload, "claude_code"), "is_meta")).IsFalse();
+        }
+
+        var plain = E("""{"type":"user","message":{"content":"x"}}""");
+        await Assert.That(SchemaExtensions.Slug(plain[0].Payload, "claude_code")).IsNull();
+    }
 }

@@ -82,4 +82,140 @@ public class EvalContractValidateTests {
         var notApplicable = new EvalQuestionAssessment { Category = "c", QuestionId = "q", Outcome = EvalOutcomes.NotApplicable, Finding = "f", Obligations = [ok] };
         await Assert.That(notApplicable.Validate()).IsNotNull();
     }
+
+    static EvalEvidenceCoverage V3(params EvalEvidenceOmission[] omissions) => new() {
+        PolicyVersion = EvalService.ExtractCoveragePolicyVersion, SourcesConsulted = ["AgentSession-r"], Omissions = [.. omissions]
+    };
+
+    static readonly EvalEvidenceOmission Elided = new() { Kind = EvalOmissionKinds.FieldElided, Count = 1, Detail = "result_excerpt" };
+
+    [Test]
+    public async Task An_unknown_newer_policy_admits_the_v3_omission_kinds() {
+        var chunks    = new EvalEvidenceOmission { Kind = EvalOmissionKinds.ChunksNotExtracted, Count = 1 };
+        var delivered = new EvalEvidenceOmission { Kind = EvalOmissionKinds.RecordsNotDelivered, Count = 1 };
+        var newer     = V3(chunks, delivered) with { PolicyVersion = "coverage-v4" };
+        await Assert.That(newer.Validate()).IsNull();
+    }
+
+    [Test]
+    public async Task An_extract_trace_without_an_evidence_coverage_record_is_refused() {
+        var bare = Assessed(null, EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1));
+        await Assert.That(bare.Validate()).IsNotNull();
+    }
+
+    [Test]
+    public async Task The_extract_mode_validates_its_eight_fields_and_refuses_other_modes_fields() {
+        var extract = EvalTraceCoverage.ForEvidenceExtract(4, 3, 10, 7, sliceCount: 3, slicesJudged: 2, prescreenCandidates: 5, evidenceIncomplete: true);
+        await Assert.That(extract.Validate()).IsNull();
+        await Assert.That((extract with { ChunksExtracted = 5 }).Validate()).IsNotNull();
+        await Assert.That((extract with { RecordsDelivered = 11 }).Validate()).IsNotNull();
+        await Assert.That((extract with { ChunkCount = null }).Validate()).IsNotNull();
+        await Assert.That((extract with { ToolCalls = 1 }).Validate()).IsNotNull();
+        await Assert.That((extract with { SliceCount = 1, SlicesJudged = 1 }).Validate()).IsNotNull();
+        await Assert.That((extract with { SlicesJudged = null }).Validate()).IsNotNull();
+        await Assert.That((extract with { SlicesJudged = 4 }).Validate()).IsNotNull();
+        await Assert.That((extract with { PrescreenCandidates = -1 }).Validate()).IsNotNull();
+        await Assert.That((EvalTraceCoverage.ForOneShot(false, 1, 1, 400_000) with { ChunkCount = 1 }).Validate()).IsNotNull();
+        await Assert.That((EvalTraceCoverage.ForOneShot(false, 1, 1, 400_000) with { EvidenceIncomplete = false }).Validate()).IsNotNull();
+    }
+
+    [Test]
+    public async Task Extract_is_partial_on_an_unextracted_chunk_an_undelivered_record_an_unjudged_slice_or_incomplete_evidence() {
+        await Assert.That(EvalTraceCoverage.ForEvidenceExtract(4, 4, 10, 10).IsPartial).IsFalse();
+        await Assert.That(EvalTraceCoverage.ForEvidenceExtract(4, 3, 10, 10).IsPartial).IsTrue();
+        await Assert.That(EvalTraceCoverage.ForEvidenceExtract(4, 4, 10, 9).IsPartial).IsTrue();
+        await Assert.That(EvalTraceCoverage.ForEvidenceExtract(4, 4, 10, 10, sliceCount: 3, slicesJudged: 2).IsPartial).IsTrue();
+        await Assert.That(EvalTraceCoverage.ForEvidenceExtract(4, 4, 10, 10, evidenceIncomplete: true).IsPartial).IsTrue();
+    }
+
+    [Test]
+    public async Task The_two_extract_kinds_belong_to_coverage_v3_and_mode_and_policy_pair_both_ways() {
+        var chunks = new EvalEvidenceOmission { Kind = EvalOmissionKinds.ChunksNotExtracted, Count = 2, Detail = "chunks 2-3" };
+        await Assert.That(V3(chunks).Validate()).IsNull();
+        await Assert.That(V2(null, chunks).Validate()).IsNotNull();
+
+        var extract = EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1);
+        await Assert.That(Assessed(V3(), extract).Validate()).IsNull();
+        await Assert.That(Assessed(V2(), extract).Validate()).IsNotNull();
+        await Assert.That(Assessed(V3(), EvalTraceCoverage.ForOneShot(false, 1, 1, 400_000)).Validate()).IsNotNull();
+        var abstained = Assessed(V3(), extract) with { Outcome = EvalOutcomes.InsufficientEvidence, Score = null, Verdict = null };
+        await Assert.That(abstained.Validate()).IsNull();
+    }
+
+    [Test]
+    public async Task Evidence_incomplete_agrees_with_the_record_and_no_judged_slice_needs_insufficient_evidence() {
+        await Assert.That(Assessed(V3(), EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1, evidenceIncomplete: true)).Validate()).IsNotNull();
+        await Assert.That(Assessed(V3(Elided), EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1, evidenceIncomplete: true)).Validate()).IsNull();
+
+        var none = EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1, sliceCount: 2, slicesJudged: 0, evidenceIncomplete: true);
+        await Assert.That(Assessed(V3(Elided), none).Validate()).IsNotNull();
+        await Assert.That((Assessed(V3(Elided), none) with { Outcome = EvalOutcomes.InsufficientEvidence, Score = null, Verdict = null }).Validate()).IsNull();
+    }
+
+    [Test]
+    public async Task Decided_by_follows_the_servers_rules() {
+        var trace = EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1, prescreenCandidates: 0, evidenceIncomplete: false);
+        var pass  = Assessed(V3(), trace) with { Score = 5, Verdict = "pass", DecidedBy = EvalQuestionAssessment.DecidedByPrescreen, PrescreenRulesVersion = 1 };
+        await Assert.That(pass.Validate()).IsNull();
+        await Assert.That((pass with { Outcome = EvalOutcomes.NotApplicable, Score = null, Verdict = null }).Validate()).IsNull();
+
+        await Assert.That((pass with { PrescreenRulesVersion = null }).Validate()).IsNotNull();
+        await Assert.That((pass with { DecidedBy = "judge" }).Validate()).IsNotNull();
+        await Assert.That((pass with { Score = 4 }).Validate()).IsNotNull();
+        await Assert.That((pass with { TraceCoverage = trace with { PrescreenCandidates = 2 } }).Validate()).IsNotNull();
+        await Assert.That((pass with { TraceCoverage = trace with { SliceCount = 2, SlicesJudged = 2 } }).Validate()).IsNotNull();
+        await Assert.That((pass with { EvidenceCoverage = V3(Elided), TraceCoverage = trace with { EvidenceIncomplete = true } }).Validate()).IsNotNull();
+        await Assert.That((pass with { EvidenceCoverage = V2(), TraceCoverage = EvalTraceCoverage.ForOneShot(false, 1, 1, 400_000) }).Validate()).IsNotNull();
+    }
+
+    [Test]
+    public async Task The_omission_sets_nest_and_all_is_the_full_vocabulary_an_unknown_version_gets() {
+        await Assert.That(EvalOmissionKinds.V1.Contains(EvalOmissionKinds.ScopeIncomplete)).IsFalse();
+        await Assert.That(EvalOmissionKinds.V2.Contains(EvalOmissionKinds.ScopeIncomplete)).IsTrue();
+        await Assert.That(EvalOmissionKinds.V2.Contains(EvalOmissionKinds.ChunksNotExtracted)).IsFalse();
+        await Assert.That(EvalOmissionKinds.V2.Contains(EvalOmissionKinds.RecordsNotDelivered)).IsFalse();
+        await Assert.That(EvalOmissionKinds.All.IsSupersetOf(EvalOmissionKinds.V2)).IsTrue();
+        await Assert.That(EvalOmissionKinds.All.Contains(EvalOmissionKinds.ChunksNotExtracted)).IsTrue();
+        await Assert.That(EvalOmissionKinds.All.Contains(EvalOmissionKinds.RecordsNotDelivered)).IsTrue();
+        await Assert.That(EvalOmissionKinds.All.Count).IsEqualTo(15);
+    }
+
+    [Test]
+    public async Task A_sliced_extract_may_stop_on_a_time_or_token_budget_and_no_other_stop_than_the_known_ones() {
+        var notJudged = new EvalEvidenceOmission { Kind = EvalOmissionKinds.RecordsNotDelivered, Count = 4, Detail = "not_judged" };
+        var trace     = EvalTraceCoverage.ForEvidenceExtract(2, 2, 9, 9, sliceCount: 3, slicesJudged: 1, prescreenCandidates: 2, evidenceIncomplete: true);
+
+        foreach (var stop in new[] { EvalStopReasons.TimeBudget, EvalStopReasons.TokenBudget }) {
+            var sliced = Assessed(V3(notJudged) with { StopReason = stop }, trace);
+            await Assert.That(sliced.Validate()).IsNull();
+            await Assert.That((sliced with { Outcome = EvalOutcomes.InsufficientEvidence, Score = null, Verdict = null }).Validate()).IsNull();
+        }
+
+        await Assert.That(Assessed(V3(notJudged) with { StopReason = "wall_clock" }, trace).Validate()).IsNotNull();
+        await Assert.That(Assessed(V3(notJudged) with { StopReason = EvalStopReasons.TimeBudget }, trace with { EvidenceIncomplete = false }).Validate()).IsNotNull();
+    }
+
+    [Test]
+    public async Task A_prescreen_decision_is_valid_under_any_rules_version_from_one() {
+        var trace = EvalTraceCoverage.ForEvidenceExtract(1, 1, 1, 1, prescreenCandidates: 0, evidenceIncomplete: false);
+        var pass  = Assessed(V3(), trace) with { Score = 5, Verdict = "pass", DecidedBy = EvalQuestionAssessment.DecidedByPrescreen, PrescreenRulesVersion = 2 };
+        await Assert.That(pass.Validate()).IsNull();
+        await Assert.That((pass with { PrescreenRulesVersion = 7 }).Validate()).IsNull();
+        await Assert.That((pass with { PrescreenRulesVersion = 0 }).Validate()).IsNotNull();
+    }
+
+    [Test]
+    public async Task A_null_citation_or_omission_is_refused_not_thrown_on() {
+        await Assert.That((V2() with { Citations = [null!] }).Validate()).IsNotNull();
+        await Assert.That((V2() with { Omissions = [null!] }).Validate()).IsNotNull();
+    }
+
+    [Test]
+    public async Task One_shot_trace_coverage_refuses_a_negative_count_and_a_non_positive_limit() {
+        var ok = EvalTraceCoverage.ForOneShot(false, 0, 0, 1);
+        await Assert.That(ok.Validate()).IsNull();
+        await Assert.That((ok with { TraceChars = -1 }).Validate()).IsNotNull();
+        await Assert.That((ok with { TraceTotalChars = -1 }).Validate()).IsNotNull();
+        await Assert.That((ok with { TraceLimitChars = 0 }).Validate()).IsNotNull();
+    }
 }
