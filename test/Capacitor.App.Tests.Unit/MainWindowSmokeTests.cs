@@ -1153,6 +1153,38 @@ public class MainWindowSmokeTests {
         }
     });
 
+    /// Windows has no native About panel, so the rail's help flyout opens the app's own, and a
+    /// second click brings that one forward rather than stacking another.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_help_opens_one_About_window_on_Windows() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            appMenuInWindow: true);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var about = rail.FindControl<Button>("RailHelpAboutButton")!;
+            await Assert.That(about.IsVisible).IsEqualTo(OperatingSystem.IsWindows());
+            if (!OperatingSystem.IsWindows()) return;
+
+            about.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            about.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+
+            var opened = window.OwnedWindows.OfType<AboutWindow>().ToArray();
+            await Assert.That(opened.Length).IsEqualTo(1);
+            await Assert.That(opened[0].FindControl<TextBlock>("AboutVersionText")!.Text).StartsWith("Version ");
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// Hover copy names what each footer fragment is. Extra info the compact row dropped (URL,
     /// lane diagnostic, pending-update copy) sits on the lighter line; the fragment's name is
     /// the darker caption under it, or the whole tip when there is nothing extra. Visible

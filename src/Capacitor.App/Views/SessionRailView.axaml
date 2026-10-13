@@ -222,6 +222,10 @@
                                                 Padding="10,8" FontSize="13.5" />
                                         <StackPanel x:Name="RailAppMenuItems" Spacing="2" IsVisible="{Binding AppMenuInWindow}">
                                             <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
+                                            <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About Kurrent Capacitor"
+                                                    Click="OnAboutClick" IsVisible="{Binding ShowsAbout}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
                                             <Button x:Name="RailHelpSettingsButton" Classes="kcapGhost" Content="Settings…"
                                                     Command="{Binding OpenSettingsCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"

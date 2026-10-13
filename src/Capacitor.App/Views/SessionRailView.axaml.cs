@@ -13,4 +13,18 @@ public partial class SessionRailView : UserControl {
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
 
     void OnHelpFlyoutItemClick(object? sender, RoutedEventArgs e) => RailHelpButton.Flyout?.Hide();
+
+    AboutWindow? _about;
+
+    void OnAboutClick(object? sender, RoutedEventArgs e) {
+        RailHelpButton.Flyout?.Hide();
+        if (_about is { } open) {
+            open.Activate();
+            return;
+        }
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        _about = new AboutWindow { DataContext = DataContext };
+        _about.Closed += (_, _) => _about = null;
+        _about.Show(owner);
+    }
 }
