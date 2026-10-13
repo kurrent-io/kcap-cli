@@ -83,6 +83,9 @@ public record EvalTraceCoverage {
             return "one_shot must not carry turn_navigating fields";
         if (ToolCalls is not null || MaxToolCalls is not null) return "tool_calls and max_tool_calls belong to evidence_retrieval";
         if (HasExtractFields) return ExtractFieldsMisplaced;
+        if (TraceChars < 0)       return "trace_chars must be non-negative";
+        if (TraceTotalChars < 0)  return "trace_total_chars must be non-negative";
+        if (TraceLimitChars <= 0) return "trace_limit_chars must be positive";
         return null;
     }
 
