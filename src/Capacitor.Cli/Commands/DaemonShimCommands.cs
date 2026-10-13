@@ -68,8 +68,8 @@ public static class DaemonShimCommands {
     /// install, else the running binary. The server never supplies one.</param>
     /// <param name="probe">Test seam for the terminal PATH probe.</param>
     /// <param name="install">Test seam for the install.</param>
-    /// <param name="preflight">Test seam for the installer's preflight, injected independently of
-    /// <paramref name="install"/> so the conflict row is stubbable.</param>
+    /// <param name="preflight">Test seam for the installer's preflight that turns a failed install
+    /// into the conflict row when a non-target entry sits at the destination.</param>
     /// <param name="installable">Test seam for whether this OS has an installer; null resolves to
     /// the real OS.</param>
     internal static async Task<int> Ensure(string[] args, TimeProvider time, Func<string?>? resolveTarget = null,
@@ -110,7 +110,7 @@ public static class DaemonShimCommands {
 
         var runner = new ProcessRunner(time);
         probe ??= TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
-        var installer = CliPathInstallers.Create(runner, probe);
+        var installer = CliPathInstallers.Create(runner, probe, UserHome.FromEnvironment());
         var onPath = await probe.KcapOnPathAsync(ct).ConfigureAwait(false);
 
         var decision = ShimEnsureClassifier.Classify(onPath, installable ?? installer is not null);
@@ -174,22 +174,15 @@ public static class DaemonShimCommands {
     static async Task<ShimEnsureJson> Install(string target, ICliPathInstaller? installer,
             Func<string, CancellationToken, Task<ShimResult>>? install, Func<string, ShimPreflight>? preflight,
             CancellationToken ct) {
-        // Preflight is checked here (before the admin prompt) so a conflict is a coded refusal
-        // with what was found, not a prompt that then fails. AlreadyInstalled and Installable
-        // both flow into InstallAsync, which re-probes fresh and maps the same way. The preflight
-        // seam is independent of the install seam so the conflict row is stubbable in tests.
+        // The macOS installer tries a writable PATH folder first, so an entry at /usr/local/bin is
+        // not a refusal until that fails. It refuses a conflicting entry without prompting, and a
+        // foreign entry there after a failed install is the coded conflict row the flow was promised.
         preflight ??= installer!.Preflight;
-        if (preflight(target) == ShimPreflight.Conflict)
-            return ConflictRefusal(target);
 
         var result = install is not null
             ? await install(target, ct).ConfigureAwait(false)
             : await installer!.InstallAsync(target, ct).ConfigureAwait(false);
 
-        // The outer preflight and the installer's own checks are not atomic: an entry can appear
-        // between them, or the non-forcing `ln -s` can lose the race against one. Re-preflight
-        // now — a foreign entry present after a failed install is the coded conflict row the flow
-        // was promised, not a generic failure.
         if (result.Outcome == ShimOutcome.Failed && preflight(target) == ShimPreflight.Conflict)
             return ConflictRefusal(target);
 
@@ -275,10 +268,10 @@ public static class DaemonShimCommands {
     static int Usage() {
         Console.Error.WriteLine("Usage: kcap daemon shim <ensure> [--json]");
         Console.Error.WriteLine();
-        Console.Error.WriteLine("  ensure [--json]   Probe the terminal PATH; if kcap is absent, link");
-        Console.Error.WriteLine("                    /usr/local/bin/kcap to this CLI (macOS; prompts once");
-        Console.Error.WriteLine("                    for your admin password) or add its folder to your");
-        Console.Error.WriteLine("                    user PATH (Windows).");
+        Console.Error.WriteLine("  ensure [--json]   Probe the terminal PATH; if kcap is absent, link kcap");
+        Console.Error.WriteLine("                    to this CLI in a writable PATH folder, else");
+        Console.Error.WriteLine("                    /usr/local/bin (macOS; prompts once for your admin");
+        Console.Error.WriteLine("                    password), or add its folder to your user PATH (Windows).");
         return 1;
     }
 }

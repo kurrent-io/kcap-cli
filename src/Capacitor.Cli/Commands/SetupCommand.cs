@@ -2302,10 +2302,20 @@ sealed class SetupCommand(
             string[] args, bool haveServerUrl) {
         const string Usage = "kcap setup --org \"<name>\" --slug <slug> --no-prompt";
 
-        var (orgGiven, orgName) = ValuedFlag(args, "--org");
-        var (slugGiven, slug)   = ValuedFlag(args, "--slug");
+        var (orgGiven, orgName)   = ValuedFlag(args, "--org");
+        var (slugGiven, slug)     = ValuedFlag(args, "--slug");
+        var (tierGiven, tierText) = ValuedFlag(args, "--tier");
 
-        if (!orgGiven && !slugGiven) return (null, null);
+        if (!orgGiven && !slugGiven)
+            return tierGiven ? (null, $"--tier picks the plan for a workspace to create, so it needs --org and --slug: {Usage}") : (null, null);
+
+        var tier = !tierGiven ? WorkspaceTier.Free : tierText?.Trim().ToLowerInvariant() switch {
+            "team" => WorkspaceTier.Team,
+            "free" => WorkspaceTier.Free,
+            _      => (WorkspaceTier?)null
+        };
+
+        if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 
         // Present-but-empty is rejected rather than read as absent: a script whose $ORG expanded to
         // nothing still asked for a workspace.
@@ -2332,7 +2342,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value), null);
     }
 
     static readonly string[] DiscoverFlags =
@@ -2570,22 +2580,6 @@ sealed class SetupCommand(
     //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)), so the wall-clock bound holds
     //     independently of what HttpClient does internally. If the delay wins, disposal on
     //     method-exit cancels the in-flight POST.
-    /// <summary>
-    /// The cli-setup ping body, hand-built on purpose. A typed DTO here would inherit
-    /// CapacitorJsonContext's global SnakeCaseLower policy and serialise <c>cli_version</c>,
-    /// silently breaking an endpoint that works today — the mirror image of why
-    /// <c>ProvisionRequest.JoinId</c> needs an explicit attribute. So both names stay literal
-    /// camelCase, and <c>joinId</c> is omitted entirely rather than sent as null when telemetry is
-    /// off. Both inputs are ours — an assembly version and 32 hex chars — so neither can carry a
-    /// quote that would break the literal.
-    /// </summary>
-    internal static string CliSetupPingBody(string? version, string? joinId) {
-        var versionJson = version is null ? "null" : $"\"{version}\"";
-        var joinJson    = joinId is null ? "" : $",\"joinId\":\"{joinId}\"";
-
-        return $$"""{"cliVersion":{{versionJson}}{{joinJson}}}""";
-    }
-
     async Task PingCliSetupAsync(string serverUrl, string profile, string provider) {
         // The ping is intentionally silent (see method-doc), which also hides why the
         // dashboard welcome modal never flips when it fails — e.g. a token the server
@@ -2627,11 +2621,11 @@ sealed class SetupCommand(
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
-                CliSetupPingBody(version, telemetry.Join.Current),
+                CliSetupReport.Body(version, telemetry.Join.Current),
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            var pingTask = client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
+            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload);
             var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
 
             if (winner == pingTask) {

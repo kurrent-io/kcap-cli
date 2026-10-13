@@ -559,6 +559,10 @@ public partial class App : Application {
         _modelCatalog = modelCatalog;
         _ = modelCatalog.LoadAsync(_shutdown.Token);
 
+        var reportCliSetup = ServerCliSetupReport.Sender(
+            sessionHttp, profiles, typeof(CapacitorVersion).Assembly.GetName().Version?.ToString());
+        _ = reportCliSetup(_shutdown.Token);
+
         // After the directory, which feeds it the session→agent map: a server-lane item names a
         // session, and only that map turns it into the agent whose card it belongs on.
         var readDetail = ServerSessionHttp.DetailReader(sessionHttp, profiles);
@@ -609,6 +613,7 @@ public partial class App : Application {
         serverClients.SignInCompleted.Subscribe(signedIn => {
             _ = serverLane.RestartAsync();
             _ = modelCatalog.LoadAsync(_shutdown.Token);
+            _ = reportCliSetup(_shutdown.Token);
         });
 
         // One attach client per attempt, dialed at the daemon's own control socket; 80x24 is a
@@ -968,7 +973,7 @@ public partial class App : Application {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
-        var shimInstaller = CliPathInstallers.Create(runner, probe);
+        var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
         var bridges = WizardComposition.BuildBridges(
@@ -1375,7 +1380,7 @@ public partial class App : Application {
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
-            lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe), _appState, surface, shimTarget,
+            lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
             _shutdown.Token, autoActionsPermanentlyClosed);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config

@@ -49,6 +49,18 @@ public record EvalQuestionAssessment {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ObligationsNotReported { get; init; }
 
+    public const string DecidedByPrescreen = "prescreen";
+
+    [JsonPropertyName("decided_by")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DecidedBy { get; init; }
+
+    [JsonPropertyName("prescreen_rules_version")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PrescreenRulesVersion { get; init; }
+
+    const int TopScore = 5;
+
     static readonly IReadOnlySet<string> ObligationLossReasons = new HashSet<string>(StringComparer.Ordinal) { "truncated", "unparseable", "refused", "budget_stop", "uncertified" };
 
     /// <summary>The server's per-question rules the CLI can break; null when the V4 route would accept the record.</summary>
@@ -74,9 +86,21 @@ public record EvalQuestionAssessment {
         if (ValidateStrategy() is { } strategyError) return strategyError;
         if (ValidateObligations(outcome) is { } obligationError) return $"{obligationError} for '{QuestionId}'";
 
+        if (TraceCoverage?.SlicesJudged == 0 && outcome != EvalOutcomes.InsufficientEvidence)
+            return $"trace_coverage.slices_judged = 0 needs outcome insufficient_evidence for '{QuestionId}'";
+        if (ValidateDecision(outcome) is { } decisionError) return $"{decisionError} for '{QuestionId}'";
+
+        var extractMode   = TraceCoverage?.Mode == EvalTraceCoverage.EvidenceExtractMode;
+        var extractPolicy = EvidenceCoverage?.PolicyVersion == EvalService.ExtractCoveragePolicyVersion;
+        if (extractMode && !extractPolicy) return $"trace_coverage.mode evidence_extract requires a coverage-v3 record for '{QuestionId}'";
+        if (extractPolicy && !extractMode) return $"a coverage-v3 record belongs to trace_coverage.mode evidence_extract for '{QuestionId}'";
+
         if (EvidenceCoverage is not { } ec) return null;
-        if (outcome == EvalOutcomes.InsufficientEvidence && ec.IsComplete)
+        // The extract route measures coverage before the judge answers, so a judge may abstain over a complete extract.
+        if (outcome == EvalOutcomes.InsufficientEvidence && ec.IsComplete && !extractPolicy)
             return $"evidence_coverage cannot be complete when outcome is insufficient_evidence for '{QuestionId}'";
+        if (TraceCoverage?.EvidenceIncomplete is { } incomplete && incomplete == ec.IsComplete)
+            return $"trace_coverage.evidence_incomplete must equal !evidence_coverage.IsComplete for '{QuestionId}'";
         if (TraceCoverage is not { } tc) return null;
         if (tc.Mode == EvalTraceCoverage.EvidenceRetrievalMode) {
             if (ec.PolicyVersion == EvalService.CoveragePolicyVersion)
@@ -93,6 +117,20 @@ public record EvalQuestionAssessment {
         if ((Strategy is null) != (StrategyVersion is null)) return $"strategy and strategy_version must be set together for '{QuestionId}'";
         if (Strategy is not null && !IsStrategyForm(Strategy))               return $"strategy must be 1-64 characters of a-z 0-9 _ - for '{QuestionId}'";
         if (StrategyVersion is not null && !IsStrategyForm(StrategyVersion)) return $"strategy_version must be 1-64 characters of a-z 0-9 _ - for '{QuestionId}'";
+        return null;
+    }
+
+    string? ValidateDecision(string outcome) {
+        if (DecidedBy is null && PrescreenRulesVersion is null) return null;
+        if (DecidedBy is null || PrescreenRulesVersion is null) return "decided_by and prescreen_rules_version must be set together";
+        if (DecidedBy != DecidedByPrescreen)                    return $"decided_by '{DecidedBy}' is unknown";
+        if (PrescreenRulesVersion < 1)                          return "prescreen_rules_version must be at least 1";
+        if (EvidenceCoverage is not { } ec || ec.PolicyVersion != EvalService.ExtractCoveragePolicyVersion) return "decided_by requires a coverage-v3 record";
+        if (TraceCoverage is not { PrescreenCandidates: 0 } tc) return "decided_by requires trace_coverage.prescreen_candidates = 0";
+        if (tc.SliceCount is not null || tc.SlicesJudged is not null) return "decided_by cannot sit beside a sliced judgement";
+        if (!ec.IsComplete)                                     return "decided_by requires complete evidence_coverage";
+        if (!(outcome == EvalOutcomes.Assessed && Score == TopScore) && outcome != EvalOutcomes.NotApplicable)
+            return "decided_by admits only an assessed pass at the top score or not_applicable";
         return null;
     }
 

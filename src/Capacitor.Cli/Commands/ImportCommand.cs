@@ -364,10 +364,11 @@ class ImportCommand(
 
         /// <summary>
         /// Populated when Status == Excluded OR when the session would otherwise be New/Partial
-        /// but its cwd maps to an excluded repo and the user has not yet been consulted.
-        /// Format: "{Owner}/{RepoName}".
+        /// but its cwd maps to an excluded repo and the user has not yet been consulted. The
+        /// recorded and the resolved cwd can name two different excluded repos, and each needs
+        /// its own opt-in. Format: "{Owner}/{RepoName}".
         /// </summary>
-        public string? ExcludedRepoKey { get; init; }
+        public IReadOnlyList<string> ExcludedRepoKeys { get; init; } = [];
 
         /// <summary>
         /// Populated when the session's cwd lies within a path configured via
@@ -1222,7 +1223,7 @@ class ImportCommand(
         var captureScope = new CaptureScope(router, config, home,
                                             allowedPaths, excludedPaths, allowedRepos, excludedRepos, time);
 
-        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications);
+        if (captureScope.Configured) classifications = await captureScope.ApplyAsync(classifications, sessionCwds);
 
         // --- Resolve excluded-repo / excluded-path prompts (TTY only; non-TTY auto-skips) ---
         // Repo and path exclusions are independent gates: a session is included only when
@@ -1235,9 +1236,9 @@ class ImportCommand(
         var actionable = classifications.Where(CaptureScope.Actionable).ToList();
 
         var excludedByRepo = actionable
-            .Where(c => c.ExcludedRepoKey is not null)
-            .GroupBy(c => c.ExcludedRepoKey!, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+            .SelectMany(c => c.ExcludedRepoKeys.Select(key => (Key: key, Session: c)))
+            .GroupBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(p => p.Session).ToList(), StringComparer.OrdinalIgnoreCase);
 
         var excludedByPath = actionable
             .Where(c => c.ExcludedPathKey is not null)
@@ -3240,9 +3241,10 @@ class ImportCommand(
     /// workspace_root discovery and repo detection agree with what the missing-cwd report
     /// showed the user — falling back to the raw transcript cwd when this session has no
     /// entry (e.g. a non-file source, or resolution failed to produce one). Shared by both
-    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/>.
+    /// the New and Partial branches of <see cref="ImportSingleSessionAsync"/> and by
+    /// <see cref="CaptureScope"/>, so the scope judges the cwd the hooks send.
     /// </summary>
-    static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
+    internal static string? ResolveCwd(SessionClassification session, IReadOnlyDictionary<string, string>? sessionCwds) =>
         sessionCwds is not null && sessionCwds.TryGetValue(session.SessionId, out var resolvedCwd)
             ? resolvedCwd
             : session.Meta.Cwd ?? SessionImporter.DecodeCwdFromDirName(session.EncodedCwd);
@@ -3581,7 +3583,7 @@ class ImportCommand(
             HashSet<string>       includedPathKeys,
             bool                  includeOutsideAllowlist = false
         ) {
-        if (c.ExcludedRepoKey is { } repoKey && !includedRepoKeys.Contains(repoKey)) return true;
+        if (c.ExcludedRepoKeys.Any(key => !includedRepoKeys.Contains(key))) return true;
         if (c.ExcludedPathKey is { } pathKey && !includedPathKeys.Contains(pathKey)) return true;
         if (c.OutsideAllowlist && !includeOutsideAllowlist) return true;
 

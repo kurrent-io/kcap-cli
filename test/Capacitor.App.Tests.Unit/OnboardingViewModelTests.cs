@@ -16,6 +16,7 @@ sealed class FakeWizardStep(WizardStepId id, string? title = null) : IWizardStep
     public string Title { get; } = title ?? id.ToString();
     public bool Applicable { get; init; } = true;
     public bool Satisfied { get; set; }
+    public bool PassThrough { get; set; }
     public int EnterCount { get; private set; }
     public bool ThrowOnEnter { get; init; }
     public Func<WizardNavigation, CancellationToken, Task<bool>>? CanLeave { get; init; }
@@ -87,6 +88,42 @@ public class OnboardingViewModelTests {
         await Assert.That(afterSkip).IsEqualTo(WizardStepId.Done);
         await Assert.That(afterBack1).IsEqualTo(WizardStepId.SignIn);
         await Assert.That(afterBack2).IsEqualTo(WizardStepId.Welcome);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Next_steps_over_a_pass_through_step_and_back_still_lands_on_it() {
+        var (afterNext, entered, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
+            var daemon = new FakeWizardStep(WizardStepId.Daemon) { PassThrough = true };
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Import), daemon, new FakeWizardStep(WizardStepId.Done)]);
+            await vm.PendingEnterForTesting;
+
+            await vm.NextCommand.Execute().ToTask();
+            var afterNext = vm.Current.Id;
+            var entered = daemon.EnterCount;
+
+            await vm.BackCommand.Execute().ToTask();
+            return (afterNext, entered, vm.Current.Id);
+        });
+
+        await Assert.That(afterNext).IsEqualTo(WizardStepId.Done);
+        await Assert.That(entered).IsEqualTo(0);
+        await Assert.That(afterBack).IsEqualTo(WizardStepId.Daemon);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_last_step_is_shown_even_when_it_could_pass_through() {
+        var current = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Daemon), new FakeWizardStep(WizardStepId.Done) { PassThrough = true }]);
+            await vm.PendingEnterForTesting;
+
+            await vm.NextCommand.Execute().ToTask();
+            return vm.Current.Id;
+        });
+
+        await Assert.That(current).IsEqualTo(WizardStepId.Done);
     }
 
     [Test]

@@ -1435,6 +1435,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Requester).IsEqualTo("Ada Lovelace");
             await Assert.That(h.Vm.RequesterInitial).IsEqualTo("A");
             await Assert.That(h.Vm.RequesterRole).IsEqualTo("This session · Claude Code");
+            await Assert.That(h.Vm.RequesterAvatarUrl).IsEqualTo("https://avatars.githubusercontent.com/u/1?v=4&s=64");
 
             await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "   ", Requester = "github:1" });
             await Assert.That(h.Vm.Requester).IsEqualTo("github:1");
@@ -1443,7 +1444,27 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = null, Requester = "" });
             await Assert.That(h.Vm.Requester).IsEqualTo("You");
             await Assert.That(h.Vm.RequesterInitial).IsEqualTo("Y");
+            await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("user_01HZZZZZZZZZZZZZZZZZZZZZZZ")]
+    [Arguments("github:")]
+    [Arguments("github:-5")]
+    [Arguments("github:12x")]
+    [Arguments("12345")]
+    public async Task Only_a_github_requester_id_gets_an_avatar(string requester) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "Ada", Requester = requester });
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
         });
     }
 

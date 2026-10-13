@@ -35,6 +35,9 @@ public interface IWizardStep {
     /// The page is showing its own filled action. The footer Next stays secondary until that action is done.
     bool ShowsOwnPrimary => false;
 
+    /// Already done with nothing left to ask: forward navigation steps over it.
+    bool PassThrough => false;
+
     bool CanContinue => true;
     bool CanSkip => true;
 

@@ -168,6 +168,8 @@ public sealed partial class WorkContextViewModel {
     public string RequesterRole { get => _requesterRole; private set => this.RaiseAndSetIfChanged(ref _requesterRole, value); }
     string _requesterInitial = "Y";
     public string RequesterInitial { get => _requesterInitial; private set => this.RaiseAndSetIfChanged(ref _requesterInitial, value); }
+    string? _requesterAvatarUrl;
+    public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
     bool _partsExpanded = true;
     public bool PartsExpanded { get => _partsExpanded; private set => this.RaiseAndSetIfChanged(ref _partsExpanded, value); }
@@ -214,7 +216,14 @@ public sealed partial class WorkContextViewModel {
         Requester = FirstNonBlank(dto.RequesterDisplay, dto.Requester) ?? "You";
         RequesterRole = $"This session · {vendorLabel}";
         RequesterInitial = WorkContextPersonViewModel.InitialOf(Requester);
+        RequesterAvatarUrl = GitHubAvatarUrl(dto.Requester);
     }
+
+    /// Only a `github:` id names an avatar; a WorkOS-only user keeps the initial.
+    static string? GitHubAvatarUrl(string? userId) =>
+        userId is not null && userId.StartsWith("github:", StringComparison.Ordinal)
+        && long.TryParse(userId.AsSpan(7), NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id > 0
+            ? $"https://avatars.githubusercontent.com/u/{id}?v=4&s=64" : null;
 
     static string? FirstNonBlank(params string?[] values) {
         foreach (var value in values)

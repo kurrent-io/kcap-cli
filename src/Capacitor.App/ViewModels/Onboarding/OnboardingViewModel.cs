@@ -200,11 +200,18 @@ public sealed class OnboardingViewModel : ReactiveObject {
                 return;
             }
 
+            var target = direction == WizardNavigation.Back ? _index - 1 : FirstShownFrom(_index + 1);
             // Clamp, don't trust the arithmetic — a corrupted _index must never throw here.
-            await MoveToAsync(Math.Clamp(_index + (direction == WizardNavigation.Back ? -1 : 1), 0, Steps.Count - 1));
+            await MoveToAsync(Math.Clamp(target, 0, Steps.Count - 1));
         } finally {
             Navigating = false;
         }
+    }
+
+    // The last step is always shown, so the wizard has somewhere to finish.
+    int FirstShownFrom(int index) {
+        while (index < Steps.Count - 1 && Steps[index].PassThrough) index++;
+        return index;
     }
 
     // The gate is already held by TryGoTo; direction is reported to the leaving step as the move it

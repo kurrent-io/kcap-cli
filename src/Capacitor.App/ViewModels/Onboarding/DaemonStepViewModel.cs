@@ -74,6 +74,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     bool _satisfied;
     string? _message;
     string? _status;
+    string? _quietFailure;
 
     public DaemonStepViewModel(
             IKcapCli cli,
@@ -101,7 +102,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
 
         var idle = this.WhenAnyValue(x => x.Busy, busy => !busy)
             .ObserveOn(RxSchedulers.MainThreadScheduler);
-        ActionCommand  = ReactiveCommand.CreateFromTask(RunActionAsync,
+        ActionCommand  = ReactiveCommand.CreateFromTask(() => RunActionAsync(),
             this.WhenAnyValue(x => x.Busy, x => x.Affordance, (busy, affordance) => !busy && affordance != DaemonAffordance.None)
                 .ObserveOn(RxSchedulers.MainThreadScheduler));
         RefreshCommand = ReactiveCommand.CreateFromTask(() => RefreshAsync(CancellationToken.None), idle);
@@ -200,7 +201,28 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     public ReactiveCommand<Unit, Unit> ActionCommand  { get; }
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
 
-    public Task OnEnterAsync(CancellationToken ct) => RefreshAsync(ct);
+    public async Task OnEnterAsync(CancellationToken ct) {
+        await RefreshAsync(ct).ConfigureAwait(true);
+        if (_quietFailure is { } failure && !Satisfied && Status is null) Status = failure;
+        _quietFailure = null;
+    }
+
+    /// Already running, so forward navigation steps over this page.
+    public bool PassThrough => Satisfied;
+
+    /// Installs or starts the daemon when neither needs consent. A row that would replace or
+    /// repair a service is left for this page to ask about.
+    public async Task EnableQuietlyAsync(CancellationToken ct) {
+        await RefreshAsync(ct).ConfigureAwait(true);
+        if (Satisfied || !IsQuiet(Affordance)) return;
+        await RunActionAsync(quiet: true).ConfigureAwait(true);
+        if (Satisfied || Status is not { } status) return;
+
+        _quietFailure = status;
+        Console.Error.WriteLine($"kcap: wizard quiet daemon enable did not finish: {status}");
+    }
+
+    static bool IsQuiet(DaemonAffordance affordance) => affordance is DaemonAffordance.Install or DaemonAffordance.Start;
 
     /// Vetoes only moving forward without a running daemon. Back cancels, and a running mutation
     /// belongs to the LANE, so cancelling detaches this waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
@@ -399,15 +421,15 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         Affordance = affordance;
     }
 
-    internal Task RunActionAsync() {
+    internal Task RunActionAsync(bool quiet = false) {
         if (Busy) return Task.CompletedTask;
 
         _actionCts?.Dispose();
         _actionCts = new CancellationTokenSource();
-        return _actionRun = RunActionCoreAsync(_actionCts.Token);
+        return _actionRun = RunActionCoreAsync(quiet, _actionCts.Token);
     }
 
-    async Task RunActionCoreAsync(CancellationToken ct) {
+    async Task RunActionCoreAsync(bool quiet, CancellationToken ct) {
         Busy = true;
         try {
             if (Machine is { } machine && machine.DaemonName != _savedName) {
@@ -420,6 +442,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
                 _savedName = name;
                 await ClassifyAsync(ct).ConfigureAwait(true);
                 if (Satisfied || Affordance == DaemonAffordance.None) return;
+                // Saving the name re-reads the service; a row that now needs consent stays for this page.
+                if (quiet && !IsQuiet(Affordance)) return;
                 Busy = true;
             }
             switch (Affordance) {

@@ -58,4 +58,49 @@ public class TranscriptCaptureTests {
         await Assert.That(tail.Lines.Count).IsEqualTo(0);
         await Assert.That(losses.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task A_recorded_line_redacts_where_the_watcher_budget_runs_out() {
+        const string raw = "{\"token\":\"ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}";
+
+        var watcher  = TranscriptCapture.Encode(raw, new SteppingRedactionClock(TimeSpan.FromSeconds(2)));
+        var recorded = TranscriptCapture.EncodeRecorded(raw, new SteppingRedactionClock(TimeSpan.FromSeconds(2)));
+
+        await Assert.That(watcher.Loss).IsEqualTo(RedactionLossReason.RecordBudget);
+        await Assert.That(recorded.Loss).IsNull();
+        await Assert.That(recorded.Line).Contains("[REDACTED]");
+        await Assert.That(recorded.Line).DoesNotContain("ghp_");
+    }
+
+    [Test]
+    public async Task Encoding_until_held_stops_at_a_line_its_budget_cannot_redact() {
+        var losses = new List<RedactionLossReason>();
+
+        var captured = TranscriptCapture.EncodeUntilHeld(["{\"token\":\"x\"}", "{\"a\":1}"], () => false, new SwitchableRedactionClock(),
+            (reason, _) => losses.Add(reason));
+
+        await Assert.That(captured.Consumed).IsEqualTo(0);
+        await Assert.That(captured.Lines.Count).IsEqualTo(0);
+        await Assert.That(losses.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Encoding_until_held_marks_a_line_lost_for_what_it_is() {
+        var losses = new List<RedactionLossReason>();
+
+        var captured = TranscriptCapture.EncodeUntilHeld(["not json", "{\"a\":1}"], () => false, Clock, (reason, _) => losses.Add(reason));
+
+        await Assert.That(captured.Consumed).IsEqualTo(2);
+        await Assert.That(captured.Lines[0]).Contains("kcap_capture_loss");
+        await Assert.That(captured.Lines[1]).IsEqualTo("{\"a\":1}");
+        await Assert.That(losses).IsEquivalentTo([RedactionLossReason.MalformedInput]);
+    }
+
+    [Test]
+    public async Task Encoding_until_held_stops_when_the_callers_time_is_up_after_one_line() {
+        var captured = TranscriptCapture.EncodeUntilHeld(["{\"a\":1}", "{\"b\":2}"], () => true, Clock, (_, _) => { });
+
+        await Assert.That(captured.Consumed).IsEqualTo(1);
+        await Assert.That(captured.Lines[0]).IsEqualTo("{\"a\":1}");
+    }
 }

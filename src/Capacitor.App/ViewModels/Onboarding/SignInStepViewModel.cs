@@ -251,7 +251,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             "Your account isn't in a Capacitor workspace. Create one now, or point this machine at one you already have.",
         SignInPhase.CreateWorkspace or SignInPhase.ConfirmCreate =>
             "Your team's sessions live here. You can invite people from it once it's ready.",
-        SignInPhase.Provisioning => "This usually takes under a minute. Keep this window open.",
+        SignInPhase.Provisioning => "This usually takes about five minutes, sometimes longer. Keep this window open.",
         _                        => null,
     };
 

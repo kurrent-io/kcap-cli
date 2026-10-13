@@ -104,7 +104,7 @@ static class SessionImporter {
             }
 
             if (!string.IsNullOrWhiteSpace(line)) {
-                var captured = TranscriptCapture.Encode(line);
+                var captured = TranscriptCapture.EncodeRecorded(line);
                 if (captured.Loss is { } loss) progress?.Report(new CaptureLineLost(sessionId, null, lineIndex, loss));
                 var bytes = TranscriptBatchBuffer.SizeOf(captured.Line);
                 if (!batch.Fits(bytes)) await FlushAsync();
@@ -553,7 +553,7 @@ static class SessionImporter {
             }
 
             if (!string.IsNullOrWhiteSpace(line)) {
-                var captured   = TranscriptCapture.Encode(line);
+                var captured   = TranscriptCapture.EncodeRecorded(line);
                 var bytes      = TranscriptBatchBuffer.SizeOf(captured.Line);
                 var lineNumber = checked(lineIndex + lineNumberOffset);
 

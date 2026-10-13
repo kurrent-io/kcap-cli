@@ -8,8 +8,8 @@ namespace Capacitor.Cli.Commands;
 // answers up front), provisions via kcap-web, polls until live. OWNS all user-facing messaging for
 // its non-Created outcomes.
 /// <param name="requested">
-/// Supplied by <c>--org</c>/<c>--slug</c>. Present means no prompt is raised at all, so this is the
-/// only route through the fork that a session with no terminal can take.
+/// Supplied by <c>--org</c>/<c>--slug</c>/<c>--tier</c>. Present means no prompt is raised at all, so
+/// this is the only route through the fork that a session with no terminal can take.
 /// </param>
 /// <param name="isInteractive">
 /// Test seam. The ambient value is a property of the host the suite runs under, so a test that read it
@@ -28,6 +28,9 @@ public sealed class SpectreTenantProvisioner(
     const string CreateChoice   = "Create a new workspace";
     const string ExistingChoice = "I already have a workspace";
     const string CancelChoice   = "Cancel";
+
+    const string TeamChoice = "Team trial (30 days, no credit card)";
+    const string FreeChoice = "Free";
 
     public async Task<ProvisionOffer> OfferCreateAsync(WorkOSTokenSource tokens, CancellationToken ct = default) {
         // Says what was actually established, not more: single sign-on returned nothing. Claiming
@@ -92,16 +95,22 @@ public sealed class SpectreTenantProvisioner(
             return ProvisionOffer.Declined;
         }
 
+        // Team first, and safe to pick: an account that cannot have the trial falls back to Free.
+        var tier = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("  Plan:")
+                .AddChoices(TeamChoice, FreeChoice)) == TeamChoice ? WorkspaceTier.Team : WorkspaceTier.Free;
+
         var origin = $"https://{slug}.kcap.ai";
         var confirm = AnsiConsole.Prompt(
-            new ConfirmationPrompt($"  Create tenant [cyan]{Markup.Escape(orgName)}[/] at [cyan]{origin}[/]?") { DefaultValue = true });
+            new ConfirmationPrompt($"  Create tenant [cyan]{Markup.Escape(orgName)}[/] at [cyan]{origin}[/] on {PlanName(tier)}?") { DefaultValue = true });
         if (!confirm) {
             AnsiConsole.MarkupLine("  [dim]No tenant created.[/]");
             telemetry.Funnel.WorkspaceDeclined();
             return ProvisionOffer.Declined;
         }
 
-        return await ProvisionAsync(orgName, slug, origin, tokens, ct);
+        return await ProvisionAsync(orgName, slug, origin, tier, tokens, ct);
     }
 
     /// <summary>
@@ -138,9 +147,9 @@ public sealed class SpectreTenantProvisioner(
 
         // The interactive path confirms the name and hostname before committing to them. Nothing can
         // be confirmed here, so the same two values are at least stated before the workspace exists.
-        Note($"Creating {want.OrgName} at {want.Origin}…");
+        Note($"Creating {want.OrgName} at {want.Origin} on {PlanName(want.Tier)}…");
 
-        return await ProvisionAsync(want.OrgName, slug, want.Origin, tokens, ct);
+        return await ProvisionAsync(want.OrgName, slug, want.Origin, want.Tier, tokens, ct);
     }
 
     /// <summary>
@@ -185,17 +194,29 @@ public sealed class SpectreTenantProvisioner(
         else          AnsiConsole.MarkupLine($"  [yellow]![/] {markup ?? Markup.Escape(plain)}");
     }
 
+    static string PlanName(WorkspaceTier tier) => tier == WorkspaceTier.Team ? "the Team trial" : "the Free plan";
+
     async Task<ProvisionOffer> ProvisionAsync(
-            string orgName, string slug, string origin, WorkOSTokenSource tokens, CancellationToken ct) {
+            string orgName, string slug, string origin, WorkspaceTier tier, WorkOSTokenSource tokens, CancellationToken ct) {
         telemetry.Funnel.WorkspaceRequested();
         var outcome = await client.ProvisionAsync(
-            baseUrl, await tokens.GetAsync(ct), orgName, slug, telemetry.Join.Current, ct);
+            baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, ct);
+
+        // Both refusals land before kcap-web reserves anything, so asking again for Free is a fresh
+        // request rather than a resume. The user has already approved a sign-in to get this far.
+        if (tier == WorkspaceTier.Team && TeamRefusal(outcome) is { } why) {
+            Retry($"{why} Creating the workspace on the Free plan instead.");
+            tier    = WorkspaceTier.Free;
+            outcome = await client.ProvisionAsync(
+                baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, ct);
+        }
+
         switch (outcome.StatusCode) {
             case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
                 telemetry.Funnel.WorkspaceProvisioned();
                 return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
             case 202 or 200:
-                return await PollAsync(tokens, slug, orgName, origin, ct);
+                return await PollAsync(tokens, slug, orgName, origin, tier, ct);
             case 400:
                 Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
                 return ProvisionOffer.Failed;
@@ -239,7 +260,8 @@ public sealed class SpectreTenantProvisioner(
         }
     }
 
-    async Task<ProvisionOffer> PollAsync(WorkOSTokenSource tokens, string slug, string orgName, string origin, CancellationToken ct) {
+    async Task<ProvisionOffer> PollAsync(
+            WorkOSTokenSource tokens, string slug, string orgName, string origin, WorkspaceTier tier, CancellationToken ct) {
         // Two different re-runs. A workspace still being built will exist, so naming it is right; one
         // that failed does not, and `kcap setup <slug>` treats a positional as an existing server and
         // never reaches creation at all. The scripted forms name --no-prompt, without which the first
@@ -250,10 +272,10 @@ public sealed class SpectreTenantProvisioner(
         // arbitrary text, and a quote or a backtick in one turns a command meant for copying into a
         // different command. The reader knows their own name; the shape is what they need.
         var createPlain  = Scripted
-            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --no-prompt"
+            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --tier {tier.Wire()} --no-prompt"
             : "Re-run kcap setup";
         var createMarkup = Scripted
-            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --no-prompt[/]"
+            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --tier {tier.Wire()} --no-prompt[/]"
             : "Re-run [cyan]kcap setup[/]";
         // The live display is a terminal affordance; on a scripted run its fallback renderer would put
         // a hundred-odd progress lines on stdout, which is the stream that run's failures avoid.
@@ -300,16 +322,24 @@ public sealed class SpectreTenantProvisioner(
         }
     }
 
+    static string? TeamRefusal(ProvisionOutcome outcome) => (outcome.StatusCode, outcome.Body?.Reason) switch {
+        (400, "work_email_required") => "The Team trial needs a work email, and this account uses a personal address.",
+        (409, "trial_exists")        => "Your organization already has a Team trial.",
+        _                            => null
+    };
+
     // The availability check and the provision call refuse a slug for the same reasons in different
     // vocabularies; both reach one reader in one run, so both speak through SlugRejection.
     static string Reason400(string? reason, string slug, string tail) => reason switch {
         "disposable_email" => "Provisioning requires a non-disposable email address.",
+        "flagged"          => "We couldn't create this workspace. Email team@kcap.ai if you think this is a mistake.",
         "blocked"          => SlugRejection(slug, "blocked", tail),
         _                  => "Invalid organization name or slug."
     };
 
     static string Reason409(string? reason, string slug, string tail) => reason switch {
         "owned_by_other" => SlugRejection(slug, "reserved", tail),
+        "free_limit"     => "This account already owns a Free workspace. Email team@kcap.ai if you need another.",
         _                => SlugRejection(slug, "taken", tail)
     };
 }

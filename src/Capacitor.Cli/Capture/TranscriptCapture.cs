@@ -5,16 +5,31 @@ namespace Capacitor.Cli.Capture;
 internal static class TranscriptCapture {
     internal static readonly int ReasonCount = Enum.GetValues<RedactionLossReason>().Length;
 
-    public static List<string> EncodeLines(IEnumerable<string> rawLines, Action<RedactionLossReason, int> reportLoss) {
-        var lines = new List<string>();
+    /// <summary>
+    /// Encodes lines another capture may also be sending, inside a hook's time. Stops at a line
+    /// that cannot redact in time instead of marking it, since a marker sent under its number makes
+    /// the server drop the redacted line a later pass sends; and before the next line once
+    /// <paramref name="stop"/> says the caller's time is up, after at least one line.
+    /// </summary>
+    public static CapturedLines EncodeUntilHeld(
+            IReadOnlyList<string> rawLines, Func<bool> stop, Action<RedactionLossReason, int> reportLoss) =>
+        EncodeUntilHeld(rawLines, stop, TimeProvider.System, reportLoss);
+
+    internal static CapturedLines EncodeUntilHeld(
+            IReadOnlyList<string> rawLines, Func<bool> stop, TimeProvider time, Action<RedactionLossReason, int> reportLoss) {
+        var lines = new List<string>(rawLines.Count);
         var losses = new int[ReasonCount];
         foreach (var raw in rawLines) {
-            var captured = Encode(raw);
-            lines.Add(captured.Line);
-            if (captured.Loss is { } reason) losses[(int)reason]++;
+            if (lines.Count > 0 && stop()) break;
+            var captured = SecretRedactor.RedactLineWithOutcome(raw, time);
+            if (captured.Loss is { } reason) {
+                if (reason.IsTransient()) break;
+                losses[(int)reason]++;
+            }
+            lines.Add(Mark(captured).Line);
         }
         ReportLosses(losses, reportLoss);
-        return lines;
+        return new(lines, lines.Count);
     }
 
     /// <summary>
@@ -40,10 +55,20 @@ internal static class TranscriptCapture {
         return new(lines, lines.Count);
     }
 
-    public static RedactionOutcome Encode(string rawLine) => Encode(rawLine, TimeProvider.System);
-
     internal static RedactionOutcome Encode(string rawLine, TimeProvider time) =>
         Mark(SecretRedactor.RedactLineWithOutcome(rawLine, time));
+
+    /// <summary>Encodes a line of a recording read once, end to end, under the recording budget.</summary>
+    public static RedactionOutcome EncodeRecorded(string rawLine) => EncodeRecorded(rawLine, TimeProvider.System);
+
+    internal static RedactionOutcome EncodeRecorded(string rawLine, TimeProvider time) => Mark(RedactRecorded(rawLine, time));
+
+    // A pass over a whole recording has no watcher loop to keep responsive: it gets the
+    // out-of-process regex deadline and the record budget a held line's retries end at.
+    internal static readonly TimeSpan RecordingBudget = TimeSpan.FromSeconds(60);
+
+    static RedactionOutcome RedactRecorded(string rawLine, TimeProvider time) =>
+        SecretRedactor.RedactLineWithOutcome(rawLine, new RedactionBudget(time, RecordingBudget), SecretRedactor.OutOfProcessPatterns.Value);
 
     internal static RedactionOutcome Mark(RedactionOutcome outcome) {
         if (outcome.Loss is not { } reason) return outcome;

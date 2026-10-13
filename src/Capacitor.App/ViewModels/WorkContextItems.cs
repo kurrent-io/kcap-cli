@@ -46,8 +46,8 @@ public sealed class WorkContextLinkViewModel {
     }
 }
 
-/// One person with a session attached to the work item. <see cref="AvatarUrl"/> is carried but not
-/// loaded: the pane draws the initial.
+/// One person with a session attached to the work item. The pane draws <see cref="Initial"/> beneath
+/// <see cref="AvatarUrl"/>, so a missing or failed picture shows the letter.
 public sealed class WorkContextPersonViewModel {
     public string  Name             { get; }
     public string  NameDisplay      { get; }
