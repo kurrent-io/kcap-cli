@@ -922,6 +922,7 @@ kcap import --kiro --all                     # only Kiro — every session log u
 kcap import --pi --all                       # only Pi — every discovered session
 kcap import --opencode --all                 # only OpenCode — every session in opencode.db
 kcap import --antigravity --all              # only Antigravity — GUI and agy CLI brains
+kcap import --grok --all                     # only Grok Build — sessions and their subagents
 ```
 
 Sessions import most-recent-first, so your latest work reaches the dashboard first. Every form is idempotent — safe to run multiple times. Each run ends with `N imported · N skipped · N failed`, then a breakdown of why each session was skipped. Failures never abort the run or change the exit code: everything that could be imported still is, and because the run is idempotent, re-running retries the failures without re-sending anything already on the server.
@@ -1682,7 +1683,7 @@ kcap plugin install --grok                  # write ~/.grok/hooks/kcap.json + ag
 kcap plugin remove --grok                   # delete ~/.grok/hooks/kcap.json
 ```
 
-kcap hooks Grok's `SessionStart` and `Stop`. Session start posts the session and starts the watcher (`vendor=grok`) on the session's `~/.grok/sessions/<percent-encoded cwd>/<session-id>/updates.jsonl`; `Stop` restarts a watcher that has gone. The session ends when the `grok` process exits, after the watcher's final drain. The hook always exits 0 with empty stdout. Grok also runs the hooks Claude Code's and Cursor's configs declare; a `kcap hook --claude` or `--cursor` that Grok runs with its own payload does nothing, so a machine set up for those agents records Grok sessions once, as Grok. Grok has no tools of its own from kcap: it loads the MCP servers set up for Claude Code.
+kcap hooks Grok's `SessionStart` and `Stop`. Session start posts the session and starts the watcher (`vendor=grok`) on the session's `~/.grok/sessions/<percent-encoded cwd>/<session-id>/updates.jsonl`; `Stop` restarts a watcher that has gone. The session ends when the `grok` process exits, after the watcher's final drain. Historical `kcap import --grok` reads `~/.grok/sessions/` and imports each subagent through its parent. The hook always exits 0 with empty stdout. Grok also runs the hooks Claude Code's and Cursor's configs declare; a `kcap hook --claude` or `--cursor` that Grok runs with its own payload does nothing, so a machine set up for those agents records Grok sessions once, as Grok. Grok has no tools of its own from kcap: it loads the MCP servers set up for Claude Code.
 
 Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 

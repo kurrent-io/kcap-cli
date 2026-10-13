@@ -28,6 +28,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
@@ -1819,7 +1820,8 @@ sealed class SetupCommand(
                     Path.Combine(opencode.DataDir, "opencode.db"),
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
-            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time)
+            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
+            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time)
         ];
 
         if (vendors is null) return all;
