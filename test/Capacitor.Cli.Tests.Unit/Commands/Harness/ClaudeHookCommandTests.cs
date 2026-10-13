@@ -777,6 +777,82 @@ public class ClaudeHookCommandTests {
         await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
     }
 
+    static string TaskListPayload(string sid, string tool, JsonObject? input = null) =>
+        new JsonObject {
+            ["hook_event_name"] = "PostToolUse", ["session_id"] = sid, ["cwd"] = "/repo", ["tool_name"] = tool,
+            ["tool_input"]      = input ?? new JsonObject(),
+        }.ToJsonString();
+
+    static JsonObject CompletedUpdate => new() { ["taskId"] = "1", ["status"] = "completed" };
+
+    static async Task<string> TaskListOnce(Fixture fx, string payload) {
+        var stdout = new StringWriter();
+        await fx.TaskListAsync(payload, stdout);
+        return stdout.ToString();
+    }
+
+    [Test]
+    public async Task task_list_reminds_once_on_start_and_once_on_first_completion() {
+        using var fx = new Fixture(Config.Root);
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+
+        var created       = await TaskListOnce(fx, TaskListPayload(sid, "TaskCreate"));
+        var createdAgain  = await TaskListOnce(fx, TaskListPayload(sid, "TaskCreate"));
+        var completed     = await TaskListOnce(fx, TaskListPayload(sid, "TaskUpdate", CompletedUpdate));
+        var completedNext = await TaskListOnce(fx, TaskListPayload(sid, "TaskUpdate", CompletedUpdate));
+
+        var output = JsonNode.Parse(created)!["hookSpecificOutput"]!;
+        await Assert.That(output["hookEventName"]!.GetValue<string>()).IsEqualTo("PostToolUse");
+        await Assert.That(output["additionalContext"]!.GetValue<string>()).Contains("`set_plan_tasks`");
+        await Assert.That(createdAgain).IsEqualTo("");
+        await Assert.That(JsonNode.Parse(completed)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>()).Contains("complete");
+        await Assert.That(completedNext).IsEqualTo("");
+        await Assert.That(fx.Sent).IsEmpty();
+    }
+
+    [Test]
+    public async Task task_list_stays_silent_once_the_session_writes_a_kcap_plan() {
+        using var fx = new Fixture(Config.Root);
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+
+        await TaskListOnce(fx, TaskListPayload(sid, "mcp__plugin_kcap_kcap-plans__set_plan_tasks"));
+
+        await Assert.That(await TaskListOnce(fx, TaskListPayload(sid, "TaskCreate"))).IsEqualTo("");
+        await Assert.That(await TaskListOnce(fx, TaskListPayload(sid, "TaskUpdate", CompletedUpdate))).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task task_list_reminds_on_a_ledger_append_even_after_a_declared_spec() {
+        using var fx = new Fixture(Config.Root);
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+        await TaskListOnce(fx, TaskListPayload(sid, "mcp__plugin_kcap_kcap-plans__declare_plan_document"));
+        var append = TaskListPayload(sid, "Bash", new JsonObject { ["command"] = "echo \"Task 1: complete\" >> \"$S/progress.md\"" });
+
+        var first  = await TaskListOnce(fx, append);
+        var second = await TaskListOnce(fx, append);
+
+        await Assert.That(JsonNode.Parse(first)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>()).Contains("ledger");
+        await Assert.That(second).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task task_list_stays_silent_when_kcap_plans_is_not_registered() {
+        using var fx = new Fixture(Config.Root);
+
+        await Assert.That(await TaskListOnce(fx, TaskListPayload(Guid.NewGuid().ToString(), "TaskCreate"))).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task task_list_honours_the_plans_nudge_opt_out() {
+        using var fx = new Fixture(Config.Root, profile: new Profile { DisablePlansNudge = true });
+        fx.RegisterClaudeMcpServer("kcap-plans");
+
+        await Assert.That(await TaskListOnce(fx, TaskListPayload(Guid.NewGuid().ToString(), "TaskCreate"))).IsEqualTo("");
+    }
+
     const string NextWorkAck =
         """{"next_work":{"rows":[{"label":"Review PR #42","because":"Priya is waiting","tier":1}],"as_of":"2026-09-25T10:00:00.0000000Z","arms_not_current":[]}}""";
 
@@ -1755,6 +1831,11 @@ public class ClaudeHookCommandTests {
             return new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
                 .HandlePlanReadCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client), stdout);
         }
+
+        /// <summary>One task-list hook invocation.</summary>
+        public Task<int> TaskListAsync(string stdin, TextWriter stdout) =>
+            new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
+                .HandleTaskList(new StringReader(stdin), stdout);
 
         /// <summary>Registered per call, not in the constructor, so a test can set the body, status
         /// or delay after building the fixture. "None" auth keeps the real client construction off

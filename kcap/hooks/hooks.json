@@ -80,6 +80,37 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "TaskCreate|TaskUpdate|TodoWrite|mcp__.*kcap-plans__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(*progress.md*)",
+            "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
