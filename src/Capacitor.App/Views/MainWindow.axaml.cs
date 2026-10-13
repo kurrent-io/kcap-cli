@@ -60,6 +60,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         InitializeComponent();
         BindRefreshShortcuts();
         BindSettingsShortcut();
+        KeepContentClearOfCaptionButtons();
         Closing += (_, e) => {
             if (CloseInterceptor?.Invoke() == true) e.Cancel = true;
         };
@@ -122,6 +123,14 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             bindings.Add(binding);
             KeyBindings.Add(binding);
         }
+    }
+
+    // Windows draws its caption buttons over the top-right of the extended client area, so the
+    // content pane starts below the title bar there. macOS keeps its buttons on the left, over the rail.
+    void KeepContentClearOfCaptionButtons() {
+        if (OperatingSystem.IsMacOS()) return;
+        this.GetObservable(WindowDecorationMarginProperty)
+            .Subscribe(margin => ContentPane.Margin = new Thickness(0, margin.Top, 0, 0));
     }
 
     // macOS takes ⌘, from the native app menu; nothing draws that menu elsewhere.
