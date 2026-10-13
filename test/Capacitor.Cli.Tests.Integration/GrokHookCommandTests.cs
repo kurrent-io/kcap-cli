@@ -80,30 +80,10 @@ public class GrokHookCommandTests : IDisposable {
             Path.Combine(Home.Path, ".grok", "sessions", "%2Frepo%2Fdemo", DashedSessionId, "updates.jsonl"));
     }
 
-    /// <summary>A session the daemon hosts is recorded from its ACP stream; the hook loaded inside that
-    /// child must not record it a second time.</summary>
+    /// <summary>The marker alone does not stand the hook down: every process a hosted Grok starts inherits
+    /// it, and this hook has no daemon-spawned grok above it.</summary>
     [Test, NotInParallel]
-    public async Task A_daemon_hosted_session_is_left_to_the_daemon() {
-        _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200));
-        // The hook runs in this process, so the "grok" it sees is this process's parent, and the daemon
-        // that grok's parent.
-        var daemonPid = ProcessHelpers.GetProcessInfo(ProcessHelpers.GetParentPid()!.Value)!.Value.ppid;
-        using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, daemonPid.ToString(System.Globalization.CultureInfo.InvariantCulture));
-
-        var start = await RunAsync(Payload("session_start", "/repo/demo"));
-        var stop  = await RunAsync(Payload("stop", "/repo/demo", transcriptPath: "/tmp/updates.jsonl"));
-
-        await Assert.That(start).IsEqualTo(0);
-        await Assert.That(stop).IsEqualTo(0);
-        await Assert.That(_server.LogEntries).IsEmpty();
-        await Assert.That(_spawner.Spawned).IsEmpty();
-    }
-
-    /// <summary>A grok the hosted agent starts from its own shell inherits the marker, but is not the
-    /// daemon's child, so its session is still recorded.</summary>
-    [Test, NotInParallel]
-    public async Task A_grok_started_inside_a_hosted_session_still_records() {
+    public async Task A_hosted_marker_without_the_daemons_grok_above_it_still_records() {
         _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
         using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
