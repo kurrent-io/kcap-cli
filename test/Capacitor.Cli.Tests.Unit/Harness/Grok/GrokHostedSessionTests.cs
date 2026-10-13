@@ -41,6 +41,21 @@ public class GrokHostedSessionTests {
         await Assert.That(GrokHostedSession.IsDaemonHosted(Daemon, hookParentPid: 200, table)).IsFalse();
     }
 
+    /// <summary><c>KCAP_GROK_PATH</c> may name a build with another process name.</summary>
+    [Test]
+    public async Task A_hosted_grok_under_another_process_name_is_daemon_hosted() {
+        var table = Table((90, 100, "sh"), (100, 700, "xai-grok-pager"), (700, 1, "kcap-daemon"));
+
+        await Assert.That(GrokHostedSession.IsDaemonHosted(Daemon, hookParentPid: 90, table)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_differently_named_grok_the_hosted_agent_execs_is_not_daemon_hosted() {
+        var table = Table((90, 200, "sh"), (200, 100, "xai-grok-pager"), (100, 700, "grok"), (700, 1, "kcap-daemon"));
+
+        await Assert.That(GrokHostedSession.IsDaemonHosted(Daemon, hookParentPid: 90, table)).IsFalse();
+    }
+
     [Test]
     [Arguments(null)]
     [Arguments("")]
@@ -53,10 +68,10 @@ public class GrokHostedSessionTests {
     }
 
     [Test]
-    public async Task No_grok_on_the_chain_means_not_hosted() {
-        var table = Table((90, 700, "sh"), (700, 1, "kcap-daemon"));
+    public async Task A_hook_far_below_the_daemons_child_is_not_daemon_hosted() {
+        var table = Table((80, 90, "node"), (90, 100, "sh"), (100, 700, "grok"), (700, 1, "kcap-daemon"));
 
-        await Assert.That(GrokHostedSession.IsDaemonHosted(Daemon, hookParentPid: 90, table)).IsFalse();
+        await Assert.That(GrokHostedSession.IsDaemonHosted(Daemon, hookParentPid: 80, table)).IsFalse();
     }
 
     [Test]
