@@ -14,6 +14,7 @@ using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
@@ -23,6 +24,7 @@ using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Titles;
@@ -596,6 +598,7 @@ partial class WatchCommand(
         // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
         // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
         var vibeSubagents = new List<MistralVibeSubagent>();
+        var grokSubagents = new GrokSubagentTracker();
 
         Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
             // Vibe replaces journal segments as it publishes, so a refresh can race a file away;
@@ -893,6 +896,8 @@ partial class WatchCommand(
                     await ScanAntigravitySubagentLinks(sessionId, drained, state.PostedSubagentLinks, cts.Token);
                 } else if (agentId is null && vendor == "mistral-vibe") {
                     await ScanMistralVibeSubagents(sessionId, transcriptPath, vibeSubagents, seenSubagents, spawnedChildWatcherKeys, cts.Token);
+                } else if (agentId is null && vendor == "grok") {
+                    await ScanGrokSubagents(sessionId, transcriptPath, drained, grokSubagents, spawnedChildWatcherKeys, cts.Token);
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -1217,6 +1222,63 @@ partial class WatchCommand(
             spawnedChildKeys.Add(key);
 
             Log(time, $"Mistral Vibe subagent {agentId} registered + child watcher spawned");
+        }
+    }
+
+    /// <summary>
+    /// Grok fires no hook for a subagent: it runs as a sibling session the parent's transcript names when
+    /// it is spawned and when it finishes. A spawned child is registered (<c>subagent-start</c>,
+    /// fail-closed) and streamed by a child watcher once its transcript exists, retried each tick until
+    /// then; a finished one is drained and stopped.
+    /// </summary>
+    async Task ScanGrokSubagents(
+            string                sessionId,
+            string                transcriptPath,
+            IReadOnlyList<string> drained,
+            GrokSubagentTracker   tracker,
+            ICollection<string>   spawnedChildKeys,
+            CancellationToken     ct
+        ) {
+        if (tracker.Seeded) tracker.Observe(GrokSubagents.Read(drained));
+        else {
+            try { tracker.Seed(GrokSubagents.Read(File.ReadLinesShared(transcriptPath))); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { tracker.Observe(GrokSubagents.Read(drained)); }
+        }
+
+        foreach (var (child, type) in tracker.AwaitingStart()) {
+            if (ct.IsCancellationRequested) return;
+
+            var transcript = GrokSubagents.ChildTranscript(transcriptPath, child);
+            if (!File.Exists(transcript)) continue;
+
+            var agentId = GrokSubagents.AgentId(child);
+            if (!await PostSubagentStartAsync(sessionId, agentId, type ?? "subagent", transcript, ct)) continue;
+
+            tracker.Started(child);
+            Log(time, $"Grok subagent {agentId} ({type}) registered");
+        }
+
+        // Every tick, not only at registration: a child watcher that failed to spawn or exited early is
+        // restarted, and a failed launch leaves the parent watcher running.
+        foreach (var (child, _) in tracker.Active()) {
+            if (ct.IsCancellationRequested) return;
+
+            var agentId = GrokSubagents.AgentId(child);
+            var key     = $"{sessionId}-{agentId}";
+            try {
+                await watchers.EnsureWatcherRunning(key: key, transcriptPath: GrokSubagents.ChildTranscript(transcriptPath, child),
+                    agentId: agentId, sessionIdOverride: sessionId, vendor: "grok");
+                spawnedChildKeys.Add(key);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                Log(time, $"Grok subagent {agentId} child watcher failed to start: {ex.Message}");
+            }
+        }
+
+        foreach (var (child, type) in tracker.AwaitingStop()) {
+            if (ct.IsCancellationRequested) return;
+
+            if (await new GrokSubagentTeardown(profiles, http, watchers, time).FinishAsync(sessionId, transcriptPath, child, type))
+                tracker.Stopped(child);
         }
     }
 
@@ -1897,6 +1959,18 @@ partial class WatchCommand(
         // child watchers), so the parent exit is the only place that finalizes them. Same
         // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
         // lands ahead of SessionEnded. No-op when none were spawned.
+        if (vendor == "grok") {
+            try {
+                var finalized = await TimeBudget.RunCappedAsync(
+                    () => new GrokSubagentTeardown(profiles, http, watchers, time).DrainAsync(sessionId, transcriptPath),
+                    GrokSubagentTeardown.DrainCap, time);
+
+                if (!finalized) Log(time, "Parent-exit Grok subagent teardown cap elapsed; unfinalized subagents recover via: kcap import --grok");
+            } catch (Exception ex) {
+                Log(time, $"Parent-exit Grok subagent teardown failed: {ex.Message}");
+            }
+        }
+
         if (vendor == "opencode") {
             // DrainAsync is self-bounding (per-step caps + a shared cleanup deadline + a hard
             // overall ceiling), so it needs no outer time cap here — wrapping it in one risked
