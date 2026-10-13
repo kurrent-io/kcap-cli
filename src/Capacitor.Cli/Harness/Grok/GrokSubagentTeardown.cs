@@ -39,9 +39,11 @@ sealed class GrokSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient 
         string[] lines;
         try { lines = File.ReadAllTextShared(parentTranscript).Split('\n'); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
 
+        // A child whose transcript is gone may still have been registered live, so it is stopped without
+        // registering; one whose transcript exists is registered first in case the live scan never was.
         foreach (var spawned in GrokSubagents.Read(lines).Where(e => !e.Finished).DistinctBy(e => e.ChildSessionId)) {
-            if (!File.Exists(GrokSubagents.ChildTranscript(parentTranscript, spawned.ChildSessionId))) continue;
-            await FinishAsync(sessionId, parentTranscript, spawned.ChildSessionId, spawned.SubagentType, register: true);
+            var register = File.Exists(GrokSubagents.ChildTranscript(parentTranscript, spawned.ChildSessionId));
+            await FinishAsync(sessionId, parentTranscript, spawned.ChildSessionId, spawned.SubagentType, register);
         }
     }
 
