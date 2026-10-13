@@ -458,7 +458,7 @@ public sealed partial class WatcherManager(
                 }
 
                 if (!string.IsNullOrWhiteSpace(line)) {
-                    var captured = TranscriptCapture.EncodeUntilHeld([line], (loss, _) =>
+                    var captured = TranscriptCapture.EncodeUntilHeld([line], static () => false, (loss, _) =>
                         Console.Error.WriteLine($"Inline capture loss at line {lineIndex}: {CaptureLossMarker.ReasonName(loss)}"));
                     if (captured.Consumed == 0) {
                         await Console.Error.WriteLineAsync(
