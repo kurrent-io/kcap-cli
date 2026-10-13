@@ -211,6 +211,32 @@
             </StackPanel>
         </Border>
 
+        <Border Classes="frCard" IsVisible="{Binding InviteCodePromptVisible}">
+            <StackPanel Spacing="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="frMicro" Text="INVITE CODE" />
+                    <TextBox x:Name="InviteCodeBox" Classes="frField" Width="160" HorizontalAlignment="Left"
+                             PlaceholderText="ABCD" FontFamily="{StaticResource FrMonoFont}"
+                             AutomationProperties.Name="Invite code"
+                             Text="{Binding InviteCode, Mode=TwoWay}" />
+                    <TextBlock x:Name="InviteCodeErrorText" Classes="frError" Text="{Binding InviteCodeError}"
+                               IsVisible="{Binding InviteCodeError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+                <StackPanel Spacing="4"
+                            IsVisible="{Binding InviteRequestUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Classes="frDetail" Text="Don't have one? Request an invite:" />
+                    <Button x:Name="InviteRequestUrlButton" Classes="frLink" HorizontalAlignment="Left"
+                            Content="{Binding InviteRequestUrl}" Command="{Binding OpenInviteRequestUrlCommand}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="SubmitInviteCodeButton" Classes="frPrimary" Content="Continue"
+                            Command="{Binding SubmitInviteCodeCommand}" />
+                    <Button x:Name="CancelInviteCodeButton" Classes="frSecondary" Content="Cancel"
+                            Command="{Binding CancelInviteCodeCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <Border Classes="frCard" IsVisible="{Binding ProvisioningVisible}">
             <StackPanel Spacing="14">
                 <StackPanel Orientation="Horizontal" Spacing="14">
