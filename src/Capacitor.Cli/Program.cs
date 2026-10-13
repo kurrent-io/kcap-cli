@@ -99,7 +99,12 @@ if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
 
 // Another vendor's kcap hook run by Grok would record Grok's payload as that vendor's session.
 if (command == "hook" && !args.Contains("--grok") && GrokHookEnvironment.IsGrokHook(Environment.GetEnvironmentVariable)) {
-    return 0;
+    string body;
+    try { body = await Console.In.ReadToEndAsync(); } catch { body = ""; }
+
+    if (GrokHookEnvironment.IsGrokPayload(body, Environment.GetEnvironmentVariable)) return 0;
+
+    Console.SetIn(new StringReader(body));
 }
 
 // Anchored here, before dispatch: every hook ceiling is relative to it, and anchoring inside a

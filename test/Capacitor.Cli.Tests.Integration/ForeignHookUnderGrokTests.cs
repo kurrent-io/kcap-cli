@@ -56,6 +56,37 @@ public class ForeignHookUnderGrokTests : IDisposable {
         await Assert.That(File.Exists(ActivityStamp(vendor))).IsTrue();
     }
 
+    /// <summary>A Claude session started beneath a Grok hook inherits <c>GROK_HOOK_EVENT</c>; its
+    /// own hooks carry Claude's payload and must still run.</summary>
+    [Test]
+    public async Task A_claude_hook_with_an_inherited_grok_variable_still_runs() {
+        var claudePayload = new JsonObject {
+            ["hook_event_name"] = "PreToolUse",
+            ["session_id"]      = Guid.NewGuid().ToString(),
+            ["cwd"]             = Config.Directory,
+            ["tool_name"]       = "Bash",
+            ["tool_input"]      = new JsonObject { ["command"] = "ls" },
+        }.ToJsonString();
+
+        await RunAsync("claude", claudePayload, grokHookEvent: "pre_tool_use");
+
+        await Assert.That(File.Exists(ActivityStamp("claude"))).IsTrue();
+    }
+
+    /// <summary>Codex rejects a hook that prints nothing, so a nested Codex session's hook must still
+    /// answer with its handshake.</summary>
+    [Test]
+    public async Task A_codex_hook_with_an_inherited_grok_variable_still_answers() {
+        var codexPayload = new JsonObject {
+            ["hook_event_name"] = "Stop",
+            ["session_id"]      = Guid.NewGuid().ToString(),
+        }.ToJsonString();
+
+        var r = await RunAsync("codex", codexPayload, grokHookEvent: "stop");
+
+        await Assert.That(r.Stdout).Contains("\"continue\":true");
+    }
+
     async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(string vendor, string stdin, string? grokHookEvent) {
         var psi = KcapProcess.StartInfo(Daemons.Store, Config.Root, "hook", $"--{vendor}", "--no-update-check");
         psi.WorkingDirectory = Config.Directory;
@@ -75,7 +106,7 @@ public class ForeignHookUnderGrokTests : IDisposable {
         var process = Process.Start(psi) ?? throw new InvalidOperationException("failed to start kcap");
         _spawned.Add(process);
 
-        // The guarded path returns before reading stdin, so the child may already have closed the pipe.
+        // A hook that exits early can close the pipe before the payload is written.
         try {
             await process.StandardInput.WriteAsync(stdin);
         } catch (IOException) {
