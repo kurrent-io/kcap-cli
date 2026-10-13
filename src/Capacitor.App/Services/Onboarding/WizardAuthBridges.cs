@@ -326,7 +326,7 @@ public sealed class WizardTenantProvisioner(
     static string InviteRefusal(string reason, string? requestUrl, bool codeRejected) {
         var why = codeRejected ? CodeComplaint(reason) : "Capacitor is invite-only right now.";
 
-        return requestUrl is { Length: > 0 } ? $"{why} Request an invite at {requestUrl}." : why;
+        return LinkPolicy.IsOpenable(requestUrl) ? $"{why} Request an invite at {requestUrl}." : why;
     }
 
     static string Reason400(string? reason) => reason switch {

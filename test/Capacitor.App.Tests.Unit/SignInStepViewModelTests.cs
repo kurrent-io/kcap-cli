@@ -777,7 +777,7 @@ public class SignInStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_request_url_that_is_not_a_web_url_is_never_offered_or_opened() {
-        var (shown, opened) = await AvaloniaSession.DispatchAsync(async () => {
+        var (shown, opened, detail) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             GateProvisioning(h, (HttpStatusCode.Forbidden, """{"reason":"invite_required","requestUrl":"file:///Applications/Calculator.app"}"""));
 
@@ -789,11 +789,12 @@ public class SignInStepViewModelTests {
             await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
             await exec;
 
-            return (url, h.Opener.Opened.ToList());
+            return (url, h.Opener.Opened.ToList(), h.Vm.StatusDetail);
         });
 
         await Assert.That(shown).IsNull();
         await Assert.That(opened).IsEmpty();
+        await Assert.That(detail).IsEqualTo("Capacitor is invite-only right now.");
     }
 
     [Test]
