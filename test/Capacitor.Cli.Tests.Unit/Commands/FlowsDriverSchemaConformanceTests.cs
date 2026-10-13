@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Mcp;
@@ -338,6 +339,10 @@ public class FlowsDriverSchemaConformanceTests {
             env => MistralVibeHooksInstaller.Install(env.Harnesses.Of<MistralVibeHarness>().Paths.HooksToml),
             env => env.Harnesses.Of<MistralVibeHarness>().Paths.ConfigToml, FromVibeToml,
             JsonProjected: false),
+
+        new("Muse Code", "--muse",
+            env => MuseHooksInstaller.Install(env.Harnesses.Of<MuseHarness>().Paths.SettingsJson),
+            env => env.Harnesses.Of<MuseHarness>().Paths.SettingsJson, Json("Muse Code", "mcp_servers")),
 
         // Codex installs unconditionally rather than through the `--if-installed` refresh branch, so
         // it takes the bare-install path and needs a planted plugin root. Flagged here rather than

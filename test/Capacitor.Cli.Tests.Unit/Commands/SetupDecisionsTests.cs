@@ -71,6 +71,14 @@ public class SetupDecisionsTests {
         await Assert.That(SetupDecisions.DecideInstallAgents(detected, noPrompt: true, promptYesNo: _ => false)).IsTrue();
     }
 
+    [Test]
+    public async Task DecideInstallAgents_OnlyMuseDetected_Installs() {
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Muse: true);
+
+        await Assert.That(SetupDecisions.DetectedAgentsSummary(detected)).IsEqualTo("Muse Code");
+        await Assert.That(SetupDecisions.DecideInstallAgents(detected, noPrompt: true, promptYesNo: _ => false)).IsTrue();
+    }
+
     // --- DecideImport (Step 6 — import past sessions) ---
 
     [Test]

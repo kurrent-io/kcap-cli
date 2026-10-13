@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Muse;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -101,6 +102,20 @@ public class StatusCommandHooksTests {
 
         // Must not throw; numeric command is not a kcap entry.
         await Assert.That(CodexHooksInstaller.ReferencesKcapHook(path)).IsFalse();
+    }
+
+    [Test]
+    public async Task MuseHookGapLine_is_silent_when_every_event_is_installed() {
+        await Assert.That(StatusCommand.MuseHookGapLine(MuseHooksParser.MuseHookEvents.ToHashSet())).IsNull();
+    }
+
+    [Test]
+    public async Task MuseHookGapLine_names_each_missing_event() {
+        var line = StatusCommand.MuseHookGapLine(new HashSet<string> { "SessionStart", "Stop" });
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("UserPromptSubmit, SubagentStart, SubagentStop, SessionEnd");
+        await Assert.That(line).DoesNotContain("SessionStart,");
     }
 
     /// Every harness the build knows appears on the line — a tenth would too, since the line is

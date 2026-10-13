@@ -592,6 +592,8 @@ sealed class SetupCommand(
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
         var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
         var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
+        var skipMuseFlag     = args.Contains("--skip-muse-hooks");
+        var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
         var skipImport       = args.Contains("--skip-import");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -724,6 +726,7 @@ sealed class SetupCommand(
         var gemini   = harnesses.Of<GeminiHarness>().Paths;
         var agy      = harnesses.Of<AntigravityHarness>().Paths;
         var vibe     = harnesses.Of<MistralVibeHarness>().Paths;
+        var muse     = harnesses.Of<MuseHarness>().Paths;
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath:   claudeSettingsPath,
@@ -756,7 +759,8 @@ sealed class SetupCommand(
             PiMcpExtensionPath:   pi.KcapMcpExtension,
             PiAgentsMdPath:       pi.AgentsMd,
             VibeHooksPath:        vibe.HooksToml,
-            VibeConfigPath:       vibe.ConfigToml);
+            VibeConfigPath:       vibe.ConfigToml,
+            MuseSettingsPath:     muse.SettingsJson);
 
         // The browser leg, where the tenant serves one. Unnumbered because it is not a step: the
         // steps below run either way, and on every tenant that has not turned the flow on this
@@ -832,7 +836,8 @@ sealed class SetupCommand(
             Pi:          harnesses.Detected(HarnessId.Pi),
             OpenCode:    harnesses.Detected(HarnessId.OpenCode),
             Antigravity: harnesses.Detected(HarnessId.Antigravity),
-            Vibe:        harnesses.Detected(HarnessId.MistralVibe));
+            Vibe:        harnesses.Detected(HarnessId.MistralVibe),
+            Muse:        harnesses.Detected(HarnessId.Muse));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -890,7 +895,9 @@ sealed class SetupCommand(
             SkipPiInstructions: skipPiInstructionsFlag,
             InstallAgents: installAgents,
             SkipMistralVibe: skipVibeFlag,
-            SkipMistralVibeMcp: skipVibeMcpFlag);
+            SkipMistralVibeMcp: skipVibeMcpFlag,
+            SkipMuse: skipMuseFlag,
+            SkipMuseMcp: skipMuseMcpFlag);
 
         stepOptions = SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 
@@ -955,7 +962,10 @@ sealed class SetupCommand(
                 pi.AgentsMd, KcapAgentInstructions.Body),
             // Vibe's hooks.toml and MCP config.toml are TOML (not the JSON writer / Codex map).
             InstallVibeHooks:         p => MistralVibeHooksInstaller.Install(p) != TomlConfigFile.Outcome.Failed,
-            RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml));
+            RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml),
+            // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
+            InstallMuseHooks:         p => MuseHooksInstaller.Install(p) is SettingsEdit.Changed or SettingsEdit.Unchanged,
+            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
@@ -997,6 +1007,7 @@ sealed class SetupCommand(
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
         OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
+        OfferedIf(detected.Muse,        skipMuseFlag,        HarnessId.Muse);
         new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
@@ -1321,7 +1332,7 @@ sealed class SetupCommand(
             installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
             installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
-            installResult.VibeHooksInstalled,
+            installResult.VibeHooksInstalled, installResult.MuseHooksInstalled,
         }.Count(installed => installed);
 
         telemetry.Funnel.Succeeded(agentsConfigured);

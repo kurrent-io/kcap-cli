@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Toml;
@@ -47,10 +48,10 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--muse", "--skills"];
 
     const string MutuallyExclusiveMsg =
-        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, and --skills are mutually exclusive.";
+        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --muse, and --skills are mutually exclusive.";
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -97,6 +98,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--opencode")) return InstallOpenCode(args);
         if (args.Contains("--antigravity")) return InstallAntigravity(args);
         if (args.Contains("--mistral-vibe")) return InstallVibe(args);
+        if (args.Contains("--muse")) return InstallMuse(args);
 
         return InstallClaude(args);
     }
@@ -104,7 +106,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     async Task<int> RefuseToolsOnlyAsync(string vendor, string reason) {
         await env.Stderr.WriteLineAsync(
             $"--tools-only is not supported for {vendor}: {reason}. "
-          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity and --mistral-vibe."
+          + "It applies to --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe and --muse."
         );
 
         return 1;
@@ -135,6 +137,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--opencode")) return await RemoveOpenCode(args);
         if (args.Contains("--antigravity")) return await RemoveAntigravity(args);
         if (args.Contains("--mistral-vibe")) return await RemoveVibe(args);
+        if (args.Contains("--muse")) return await RemoveMuse(args);
 
         return await RemoveClaude(args);
     }
@@ -2426,6 +2429,95 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 break;
             // Unchanged: silent.
         }
+    }
+
+    async Task<int> InstallMuse(string[] args) {
+        var settingsPath = GetArg(args, "--muse-settings-path") ?? env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+
+        var refreshOnly    = args.Contains("--if-installed");
+        var hooksInstalled = MuseHooksInstaller.IsInstalled(settingsPath);
+        var toolsOnly      = ToolsOnly(args, refreshOnly, hooksInstalled);
+
+        if (refreshOnly && !hooksInstalled && !MuseSettingsJson.OwnsAnything(settingsPath, env.Home)) return 0;
+
+        // settings.json writes the bare `kcap hook --muse` command, so Muse must find kcap on PATH.
+        if (!refreshOnly && !toolsOnly && !KcapOnPath) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Muse hooks: 'kcap' is not on PATH. "
+              + "Re-install kcap: " + InstallProvenance.ReinstallCommand());
+            return 1;
+        }
+
+        // A lone marker with settings.json gone is not "current": the hooks must be written again.
+        var hooksCurrent = refreshOnly && File.Exists(settingsPath)
+                        && MuseHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
+        var freshHookFailure = false;
+        if (!toolsOnly && !hooksCurrent) {
+            if (MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged) {
+                await env.Stdout.WriteLineAsync(
+                    refreshOnly ? $"Muse hooks refreshed ({settingsPath})" : $"Muse hooks installed ({settingsPath})");
+            } else if (!refreshOnly) {
+                await env.Stderr.WriteLineAsync(
+                    $"Could not install Muse hooks. If {settingsPath} exists, make sure it is valid JSON — "
+                  + "kcap leaves an unparseable settings.json untouched rather than overwrite your settings. "
+                  + "Fix or remove it, then re-run.");
+                freshHookFailure = true;
+            } else {
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not refresh Muse hooks ({settingsPath}); continuing with MCP registration.");
+            }
+        }
+
+        if (!args.Contains("--skip-muse-mcp"))
+            await RegisterMuseMcpServersAsync(settingsPath);
+
+        if (!args.Contains("--skip-muse-skills"))
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        if (toolsOnly && !refreshOnly) await NoteCaptureSkippedAsync("Muse");
+
+        return freshHookFailure ? 1 : 0;
+    }
+
+    async Task RegisterMuseMcpServersAsync(string settingsPath) {
+        switch (MuseSettingsJson.RegisterKcapMcpServers(settingsPath, env.Home, env.ResolveMcpBinaryPath)) {
+            case JsonMcpConfigWriter.Change.Updated:
+                await env.Stdout.WriteLineAsync($"Muse MCP servers registered ({settingsPath}).");
+                break;
+            case JsonMcpConfigWriter.Change.Failed:
+                await env.Stderr.WriteLineAsync(
+                    $"Warning: could not update {settingsPath} to register Muse MCP servers.");
+                break;
+            // Unchanged: silent.
+        }
+    }
+
+    async Task<int> RemoveMuse(string[] args) {
+        var settingsPath = GetArg(args, "--muse-settings-path") ?? env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+
+        var hooksFailed = false;
+        var outcome     = MuseHooksInstaller.Remove(settingsPath);
+        switch (outcome) {
+            case SettingsEdit.Changed:
+                await env.Stdout.WriteLineAsync($"Muse hooks removed ({settingsPath})");
+                break;
+            case SettingsEdit.Unchanged:
+                await env.Stdout.WriteLineAsync("Muse hooks were not installed.");
+                break;
+            default:
+                await env.Stderr.WriteLineAsync($"Could not update Muse hooks at {settingsPath}: the file is not valid JSON or cannot be written.");
+                hooksFailed = true;
+                break;
+        }
+
+        var mcpChange = MuseSettingsJson.UnregisterKcapMcpServers(settingsPath, env.Home);
+        var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;
+        if (mcpChange == JsonMcpConfigWriter.Change.Updated)
+            await env.Stdout.WriteLineAsync($"Muse MCP servers removed ({settingsPath}).");
+        else if (mcpFailed)
+            await env.Stderr.WriteLineAsync($"Could not update {settingsPath} to remove Muse MCP servers.");
+
+        return hooksFailed || mcpFailed ? 1 : 0;
     }
 
     async Task<int> RemoveVibe(string[] args) {

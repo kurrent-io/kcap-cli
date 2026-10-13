@@ -418,8 +418,8 @@ public class DaemonConfig {
     public string MistralVibePath { get; set; } = Core.Harness.MistralVibe.MistralVibeHarness.CliBinary;
 
     /// <summary>Path or bare command for the Muse Code CLI. Overridable via <c>KCAP_MUSE_PATH</c>.
-    /// Muse is a recording-only harness — the daemon never launches it — so this exists only to give
-    /// <c>kcap config</c> a slot for the binary path; it is not read by any launcher.</summary>
+    /// Muse is recording-only, so no launcher reads this; it gives <c>kcap config</c> a slot for the
+    /// binary path.</summary>
     public string MusePath { get; set; } = Core.Harness.Muse.MuseHarness.CliBinary;
 
     /// <summary>
