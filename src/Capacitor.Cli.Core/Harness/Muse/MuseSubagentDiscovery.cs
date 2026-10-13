@@ -86,10 +86,10 @@ public static class MuseSubagentDiscovery {
         return labels.Count == 0 ? FrozenDictionary<string, MuseChildLabel>.Empty : labels;
     }
 
-    /// <summary>Dashed ids of the children whose worker the parent log reports finished
-    /// (<c>result_ready</c>, joined to its child through <c>child_session_bound</c>).</summary>
-    public static IReadOnlySet<string> ResolveFinishedChildren(string parentLogPath) {
-        var ready = new HashSet<string>(StringComparer.Ordinal);
+    /// <summary>How many times the parent log reports each child's worker finished (<c>result_ready</c>,
+    /// joined to its child through <c>child_session_bound</c>), keyed by dashed child session id.</summary>
+    public static IReadOnlyDictionary<string, int> ResolveResultReadyCounts(string parentLogPath) {
+        var ready = new Dictionary<string, int>(StringComparer.Ordinal);
         var bound = new Dictionary<string, string>(StringComparer.Ordinal);
 
         try {
@@ -97,8 +97,8 @@ public static class MuseSubagentDiscovery {
             using var reader = new StreamReader(stream);
 
             while (reader.ReadLine() is { } line) {
-                var isReady = line.Contains("\"result_ready\"", StringComparison.Ordinal);
-                if (!isReady && !line.Contains("\"child_session_bound\"", StringComparison.Ordinal)) continue;
+                if (!line.Contains("\"result_ready\"", StringComparison.Ordinal)
+                 && !line.Contains("\"child_session_bound\"", StringComparison.Ordinal)) continue;
 
                 try {
                     using var doc = JsonDocument.Parse(line);
@@ -107,15 +107,19 @@ public static class MuseSubagentDiscovery {
                     if (Inner(payload, "record") is not { } rec || Text(rec, "subagent_id") is not { Length: > 0 } sid) continue;
 
                     switch (Text(rec, "kind")) {
-                        case "result_ready": ready.Add(sid); break;
+                        case "result_ready": ready[sid] = ready.GetValueOrDefault(sid) + 1; break;
                         case "child_session_bound" when Canonical(Text(rec, "child_session_id")) is { } childId: bound[sid] = childId; break;
                     }
                 } catch (JsonException) { }
             }
         } catch (IOException) { } catch (UnauthorizedAccessException) { }
 
-        var finished = ready.Where(bound.ContainsKey).Select(sid => bound[sid]).ToHashSet(StringComparer.Ordinal);
-        return finished.Count == 0 ? FrozenSet<string>.Empty : finished;
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (sid, count) in ready) {
+            if (bound.TryGetValue(sid, out var childId)) counts[childId] = count;
+        }
+
+        return counts.Count == 0 ? FrozenDictionary<string, int>.Empty : counts;
     }
 
     /// <summary>The label for a child found on disk; one the parent log never announced is a plain

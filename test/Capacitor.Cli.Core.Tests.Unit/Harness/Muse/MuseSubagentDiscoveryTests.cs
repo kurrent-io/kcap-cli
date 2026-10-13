@@ -206,18 +206,18 @@ public class MuseSubagentDiscoveryTests {
     }
 
     [Test]
-    public async Task A_worker_whose_result_is_ready_is_finished() {
-        var parent = WriteParent(SpawnLine, BoundLine, ReadyLine);
+    public async Task A_worker_whose_result_is_ready_is_counted_once_per_result() {
+        var once  = MuseSubagentDiscovery.ResolveResultReadyCounts(WriteParent(SpawnLine, BoundLine, ReadyLine));
+        var twice = MuseSubagentDiscovery.ResolveResultReadyCounts(WriteParent(SpawnLine, BoundLine, ReadyLine, ReadyLine));
 
-        var finished = MuseSubagentDiscovery.ResolveFinishedChildren(parent);
-
-        await Assert.That(finished).IsEquivalentTo(new[] { WorkerId });
+        await Assert.That(once).IsEquivalentTo(new Dictionary<string, int> { [WorkerId] = 1 });
+        await Assert.That(twice[WorkerId]).IsEqualTo(2);
     }
 
     [Test]
-    public async Task A_worker_without_a_ready_result_or_a_binding_is_not_finished() {
-        await Assert.That(MuseSubagentDiscovery.ResolveFinishedChildren(WriteParent(SpawnLine, BoundLine))).IsEmpty();
-        await Assert.That(MuseSubagentDiscovery.ResolveFinishedChildren(WriteParent(ReadyLine))).IsEmpty();
-        await Assert.That(MuseSubagentDiscovery.ResolveFinishedChildren(Path.Combine(Tmp.Path, "missing", "session.jsonl"))).IsEmpty();
+    public async Task A_worker_without_a_ready_result_or_a_binding_has_no_count() {
+        await Assert.That(MuseSubagentDiscovery.ResolveResultReadyCounts(WriteParent(SpawnLine, BoundLine))).IsEmpty();
+        await Assert.That(MuseSubagentDiscovery.ResolveResultReadyCounts(WriteParent(ReadyLine))).IsEmpty();
+        await Assert.That(MuseSubagentDiscovery.ResolveResultReadyCounts(Path.Combine(Tmp.Path, "missing", "session.jsonl"))).IsEmpty();
     }
 }
