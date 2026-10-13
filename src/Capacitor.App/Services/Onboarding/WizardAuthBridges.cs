@@ -172,7 +172,7 @@ public sealed class WizardTenantProvisioner(
         telemetry.Funnel.WorkspaceRequested();
 
         var outcome = await client.ProvisionAsync(
-            baseUrl, await tokens.GetAsync(ct), orgName, slug, WorkspaceTier.Free, telemetry.Join.Current, ct);
+            baseUrl, await tokens.GetAsync(ct), orgName, slug, WorkspaceTier.Free, telemetry.Join.Current, inviteCode: null, ct);
 
         switch (outcome.StatusCode) {
             case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
