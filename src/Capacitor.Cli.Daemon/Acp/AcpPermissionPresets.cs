@@ -51,5 +51,6 @@ internal static class AcpPermissionPresets {
         AcpVendorDescriptors.Kiro.Vendor,
         AcpVendorDescriptors.OpenCode.Vendor,
         AcpVendorDescriptors.Gemini.Vendor,
+        AcpVendorDescriptors.Grok.Vendor,
     };
 }

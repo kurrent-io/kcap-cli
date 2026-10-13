@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -42,6 +43,8 @@ sealed class GrokHookCommand(
     }
 
     async Task DispatchAsync(JsonNode node) {
+        if (GrokHostedSession.IsDaemonHosted()) return;
+
         var dashedSessionId = Str(node, "sessionId");
         if (string.IsNullOrEmpty(dashedSessionId) || !Guid.TryParse(dashedSessionId, out _)) return;
 

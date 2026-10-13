@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.PrDetection;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -77,6 +78,19 @@ public class GrokHookCommandTests : IDisposable {
         await Assert.That(spawned.Vendor).IsEqualTo("grok");
         await Assert.That(spawned.TranscriptPath).IsEqualTo(
             Path.Combine(Home.Path, ".grok", "sessions", "%2Frepo%2Fdemo", DashedSessionId, "updates.jsonl"));
+    }
+
+    /// <summary>The marker alone does not stand the hook down: every process a hosted Grok starts inherits
+    /// it, and this hook has no daemon-spawned grok above it.</summary>
+    [Test, NotInParallel]
+    public async Task A_hosted_marker_without_the_daemons_grok_above_it_still_records() {
+        _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        await RunAsync(Payload("session_start", "/repo/demo"));
+
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/grok").UsingPost()).Count).IsEqualTo(1);
     }
 
     /// <summary>A permanent rejection must not leave a watcher shipping lines for a session the server

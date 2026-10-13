@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -5,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
@@ -282,7 +284,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 // slips past every path rule.
                 policyCwd: ctx.Worktree.Path,
                 policyJudge: policyJudge,
-                journal: ctx.Journal
+                journal: ctx.Journal,
+                sessionNewMeta: descriptor.SessionNewMeta
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against
@@ -949,6 +952,11 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             psi.Environment["KIRO_HOME"] = KiroReviewerHome.Create(
                 ReviewerStateDir(config), config.DaemonEpoch ?? "unpinned", ctx.AgentId);
         }
+
+        // kcap's own Grok hook loads inside this child; the daemon already records the session from
+        // its ACP stream, so the hook stands down rather than recording it a second time.
+        if (descriptor.Harness is HarnessId.Grok)
+            psi.Environment[GrokHookEnvironment.HostedVar] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
 
         // OpenCode's launch controls are env-shaped rather than argv-shaped (`opencode acp` accepts
         // none of the global flags), so its whole posture lives here. Unlike Kiro's branch above this

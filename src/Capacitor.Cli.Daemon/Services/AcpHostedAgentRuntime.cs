@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
@@ -297,6 +298,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>Recorded from <see cref="EmitEnvelope"/>, opened by the factory before construction. Null
     /// for every launch/test that carries no journal.</summary>
     readonly TranscriptJournal? _journal;
+    readonly Func<JsonObject>? _sessionNewMeta;
 
     readonly ReapVerdictGate _gate;
 
@@ -508,8 +510,10 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             Action<PolicyDecisionEventV1>?                                                  notifyPolicyDecision = null,
             string?                                                                         policyCwd = null,
             TranscriptJournal?                                                              journal = null,
-            PolicyJudgeGateway?                                                             policyJudge = null
+            PolicyJudgeGateway?                                                             policyJudge = null,
+            Func<JsonObject>?                                                               sessionNewMeta = null
         ) {
+        _sessionNewMeta = sessionNewMeta;
         _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
@@ -899,7 +903,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
-                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers),
+                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke()),
                 CapacitorJsonContext.Default.SessionNewParams);
 
             sessionNewResult = await RunHandshakeStageAsync(
