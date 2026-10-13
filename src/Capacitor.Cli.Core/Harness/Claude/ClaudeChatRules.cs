@@ -143,12 +143,12 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         if (!span.StartsWith(PeerOpen, StringComparison.Ordinal))
             return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
         var bodyStart = span.IndexOf('\n');
-        if (bodyStart < 0) return ("", ChatDisplayKind.AgentMessage);
+        if (bodyStart < 0) return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
         span = span[(bodyStart + 1)..];
         // Text after the close is Claude Code's guidance to the model. A stored record can end
         // before the close.
         var close = span.LastIndexOf(PeerClose, StringComparison.Ordinal);
-        if (close >= 0 && (close == 0 || span[close - 1] == '\n')) span = span[..close];
+        if (close >= 0) span = span[..close];
         if (!span.StartsWith(HandbackMark, StringComparison.Ordinal))
             return (span.Trim().ToString(), ChatDisplayKind.AgentMessage);
         var report = span.IndexOf(HandbackLead, StringComparison.Ordinal);

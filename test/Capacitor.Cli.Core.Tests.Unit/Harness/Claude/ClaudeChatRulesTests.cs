@@ -467,6 +467,17 @@ public class ClaudeChatRulesTests {
         var typed = R("""{"type":"user","origin":{"kind":"human"},"message":{"content":"<agent-message from=\"x\">\nwhat is this?\n</agent-message>"}}""");
         await Assert.That(typed.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
         await Assert.That(typed.SubmittedInputs.Single()).StartsWith("<agent-message");
+
+        var oneLine = R("""{"type":"user","message":{"content":"<agent-message from=\"x\"> is what?"}}""");
+        await Assert.That(oneLine.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(oneLine.SubmittedInputs).IsEquivalentTo(new[] { "<agent-message from=\"x\"> is what?" });
+    }
+
+    [Test]
+    public async Task A_close_tag_on_the_last_line_of_text_still_ends_the_message() {
+        var note = R("""{"type":"user","message":{"content":"<agent-message from=\"reviewer\">\nDone.</agent-message>\n\nGuidance for the model."}}""").Envelopes.Single();
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentMessage);
+        await Assert.That(note.Text).IsEqualTo("Done.");
     }
 
     /// The notification that follows a hand-back points at the report instead of repeating it; the
