@@ -458,10 +458,14 @@ public sealed partial class WatcherManager(
                 }
 
                 if (!string.IsNullOrWhiteSpace(line)) {
-                    var captured = TranscriptCapture.Encode(line);
-                    if (captured.Loss is { } loss)
-                        await Console.Error.WriteLineAsync($"Inline capture loss at line {lineIndex}: {CaptureLossMarker.ReasonName(loss)}");
-                    newLines.Add(captured.Line);
+                    var captured = TranscriptCapture.EncodeUntilHeld([line], (loss, _) =>
+                        Console.Error.WriteLine($"Inline capture loss at line {lineIndex}: {CaptureLossMarker.ReasonName(loss)}"));
+                    if (captured.Consumed == 0) {
+                        await Console.Error.WriteLineAsync(
+                            $"Inline drain for {sessionId}: line {lineIndex} could not be redacted in time; to send it and the rest, run: kcap import --session {sessionId}");
+                        break;
+                    }
+                    newLines.Add(captured.Lines[0]);
                     newLineNumbers.Add(lineIndex);
                 }
 

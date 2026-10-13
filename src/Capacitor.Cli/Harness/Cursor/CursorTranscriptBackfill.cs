@@ -77,9 +77,12 @@ public static class CursorTranscriptBackfill {
                 : WatchCommand.IncompleteFinalLinePolicy.Hold;
             var read = await WatchCommand.ReadNewCompleteLinesAsync(stream, resumeFrom, policy, ct);
 
-            lines = TranscriptCapture.EncodeLines(read.Lines,
+            var captured = TranscriptCapture.EncodeUntilHeld(read.Lines,
                 (reason, count) => Console.Error.WriteLine($"Cursor capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
-            lineNumbers = read.LineNumbers;
+            if (captured.Consumed < read.Lines.Count)
+                Console.Error.WriteLine($"Cursor backfill stopped at line {read.LineNumbers[captured.Consumed]}: redaction ran out of time");
+            lines       = captured.Lines;
+            lineNumbers = read.LineNumbers.GetRange(0, captured.Consumed);
         } catch { return new(0, Failed: true); }
 
         if (lines.Count == 0 || budget()) return new(0, Failed: false);
