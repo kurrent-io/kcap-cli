@@ -123,7 +123,8 @@ public sealed class WizardTenantProvisioner(
     public Func<string, string, CancellationToken, Task<bool>>?        ConfirmCreate { get; set; }
     public Action<int, int>?                                           PollProgress  { get; set; }
 
-    /// Asked with where to request an invite and the complaint about the last code, if any.
+    /// Asks for the next invite code, given where to request one and why the last code was refused
+    /// (null on the first ask). Null or blank means the user gave up.
     public Func<string?, string?, CancellationToken, Task<string?>>? PromptInviteCode { get; set; }
 
     /// Asks the signup service whether a slug is free, with the token the offer is running under.
@@ -176,6 +177,7 @@ public sealed class WizardTenantProvisioner(
         telemetry.Funnel.WorkspaceRequested();
 
         string? code       = null;
+        string? requestUrl = null;
         var     wrongCodes = 0;
 
         while (true) {
@@ -193,7 +195,7 @@ public sealed class WizardTenantProvisioner(
                 case 400 when outcome.Body?.Reason == "invalid_code":
                 case 409 when outcome.Body?.Reason == "code_exhausted": {
                     var reason       = outcome.Body.Reason;
-                    var requestUrl   = outcome.Body.RequestUrl;
+                    requestUrl       = outcome.Body.RequestUrl is { Length: > 0 } fresh ? fresh : requestUrl;
                     var codeRejected = code is not null || reason != "invite_required";
 
                     // Three rejected codes end the offer; a 403 to a supplied code counts as one.

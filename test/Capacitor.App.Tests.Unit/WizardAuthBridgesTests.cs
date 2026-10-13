@@ -472,6 +472,25 @@ public class WizardAuthBridgesTests {
         await Assert.That(FailedReason(probe)).IsEqualTo("invite_required");
     }
 
+    [Test]
+    public async Task A_refusal_without_a_request_url_keeps_the_one_the_gate_named() {
+        var (provisioner, progress, time, _) = GatedProvisioner(
+            (HttpStatusCode.Forbidden, Gate("invite_required")), (HttpStatusCode.BadRequest, """{"reason":"invalid_code"}"""));
+        var asked = new List<string?>();
+        provisioner.PromptInviteCode = (requestUrl, _, _) => {
+            asked.Add(requestUrl);
+
+            return Task.FromResult<string?>(asked.Count == 1 ? "WRNG" : null);
+        };
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(asked).IsEquivalentTo([(string?)RequestUrl, RequestUrl]);
+        await Assert.That(string.Join("\n", progress.Errors))
+            .IsEqualTo($"That invite code isn't valid. Request an invite at {RequestUrl}.");
+    }
+
     static string? FailedReason(TelemetryProbe probe) =>
         probe.Only("cli_setup_workspace_failed").Properties["reason"]?.GetValue<string>();
 
