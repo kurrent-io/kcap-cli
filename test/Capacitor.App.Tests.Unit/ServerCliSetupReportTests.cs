@@ -1,4 +1,6 @@
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Http;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -51,9 +53,36 @@ public class ServerCliSetupReportTests {
     }
 
     [Test]
+    public async Task A_no_auth_server_gets_the_report_for_its_local_user() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/users/me/cli-setup").UsingPost())
+              .RespondWith(Response.Create().WithStatusCode(204));
+
+        var reported = await ServerCliSetupReport.Sender(
+            new NoAuthLane(), Resolutions.At(server.Url!, Config.Root), "1.2.3")(CancellationToken.None);
+
+        await Assert.That(reported).IsTrue();
+    }
+
+    [Test]
     public async Task Without_a_server_or_client_nothing_is_sent() {
         var reported = await ServerCliSetupReport.Sender(null, null, "1.2.3")(CancellationToken.None);
 
         await Assert.That(reported).IsFalse();
+    }
+
+    sealed class NoAuthLane : ICapacitorHttpClient {
+        public Task<AuthAttempt> ForWaitAsync(CancellationToken ct = default) =>
+            Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired, null, null));
+
+        public Task<HttpClient> ForCommandAsync(CancellationToken ct = default)    => throw new NotSupportedException();
+        public Task<HttpClient> ForBackgroundAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<HttpClient> ForSessionAsync(CancellationToken ct = default)    => throw new NotSupportedException();
+        public Task<AuthAttempt> ForHookAsync(CancellationToken ct = default)      => throw new NotSupportedException();
+        public Task<AuthAttempt> ForProtectedReadAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<HttpClient> ForMemoryAsync(CancellationToken ct = default)     => throw new NotSupportedException();
+        public HttpClient Anonymous() => throw new NotSupportedException();
+        public HttpClient Loopback()  => throw new NotSupportedException();
+        public HttpClient Bearer()    => throw new NotSupportedException();
     }
 }

@@ -21,18 +21,22 @@ public static class ServerCliSetupReport {
         try {
             var (client, status, _, _) = await http.ForWaitAsync(ct).ConfigureAwait(false);
             using (client) {
-                // A server that needs no sign-in has no user to record the install against.
-                if (status is not AuthStatus.Ok) return false;
+                // A no-auth server records the report against its own local user.
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return false;
 
                 using var body = new StringContent(
                     CliSetupReport.Body(version, joinId: null), System.Text.Encoding.UTF8, "application/json");
                 using var response = await client.PostAsync(CliSetupReport.Url(serverUrl), body, ct).ConfigureAwait(false);
 
+                if (!response.IsSuccessStatusCode)
+                    Console.Error.WriteLine($"kcap app: cli-setup report rejected: {(int)response.StatusCode} {response.StatusCode}");
+
                 return response.IsSuccessStatusCode;
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             return false;
-        } catch (Exception) {
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap app: cli-setup report failed: {ex.GetType().Name}: {ex.Message}");
             return false;
         }
     };
