@@ -1160,8 +1160,9 @@ public class MainWindowSmokeTests {
     public Task Rail_help_opens_one_About_window_on_Windows() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
+        var opener = new RecordingOpener();
         var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-            appMenuInWindow: true);
+            appMenuInWindow: true, opener: opener);
         var window = new MainWindow { DataContext = vm };
         try {
             window.Show();
@@ -1179,6 +1180,15 @@ public class MainWindowSmokeTests {
             var opened = window.OwnedWindows.OfType<AboutWindow>().ToArray();
             await Assert.That(opened.Length).IsEqualTo(1);
             await Assert.That(opened[0].FindControl<TextBlock>("AboutVersionText")!.Text).StartsWith("Version ");
+
+            var docs = opened[0].FindControl<Button>("AboutDocsButton")!;
+            var changelog = opened[0].FindControl<Button>("AboutChangelogButton")!;
+            await Assert.That(docs.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(changelog.IsEffectivelyEnabled).IsTrue();
+            docs.Command!.Execute(null);
+            changelog.Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl, AppMenuBar.ChangelogUrl]);
         } finally {
             window.Close();
             Dispatcher.UIThread.RunJobs();
