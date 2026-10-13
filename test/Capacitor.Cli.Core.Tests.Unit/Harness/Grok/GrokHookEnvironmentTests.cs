@@ -42,4 +42,31 @@ public class GrokHookEnvironmentTests {
 
         await Assert.That(GrokHookEnvironment.IsGrokPayload(body, Env(null))).IsFalse();
     }
+
+    static Func<string, string?> Hosted(string? value) => k => k == GrokHookEnvironment.HostedVar ? value : null;
+
+    /// <summary>The marker names the daemon; only the grok the daemon spawned is its direct child, so a
+    /// grok the hosted agent starts from its own shell keeps recording.</summary>
+    [Test]
+    [Arguments(700, true)]
+    [Arguments(555, false)]
+    public async Task Only_the_grok_the_daemon_spawned_is_daemon_hosted(int grokParent, bool expected) {
+        await Assert.That(GrokHookEnvironment.IsDaemonHosted(Hosted("700"), hookParentPid: 42, parentOf: _ => grokParent))
+            .IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("1")]
+    [Arguments("not-a-pid")]
+    public async Task No_daemon_pid_means_not_hosted(string? value) {
+        await Assert.That(GrokHookEnvironment.IsDaemonHosted(Hosted(value), hookParentPid: 42, parentOf: _ => 1)).IsFalse();
+    }
+
+    [Test]
+    public async Task An_unknown_process_tree_means_not_hosted() {
+        await Assert.That(GrokHookEnvironment.IsDaemonHosted(Hosted("700"), hookParentPid: null, parentOf: _ => 700)).IsFalse();
+        await Assert.That(GrokHookEnvironment.IsDaemonHosted(Hosted("700"), hookParentPid: 42, parentOf: _ => null)).IsFalse();
+    }
 }

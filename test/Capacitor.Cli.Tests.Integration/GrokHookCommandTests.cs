@@ -86,7 +86,10 @@ public class GrokHookCommandTests : IDisposable {
     public async Task A_daemon_hosted_session_is_left_to_the_daemon() {
         _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
-        using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, "1");
+        // The hook runs in this process, so the "grok" it sees is this process's parent, and the daemon
+        // that grok's parent.
+        var daemonPid = ProcessHelpers.GetProcessInfo(ProcessHelpers.GetParentPid()!.Value)!.Value.ppid;
+        using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, daemonPid.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         var start = await RunAsync(Payload("session_start", "/repo/demo"));
         var stop  = await RunAsync(Payload("stop", "/repo/demo", transcriptPath: "/tmp/updates.jsonl"));
@@ -95,6 +98,19 @@ public class GrokHookCommandTests : IDisposable {
         await Assert.That(stop).IsEqualTo(0);
         await Assert.That(_server.LogEntries).IsEmpty();
         await Assert.That(_spawner.Spawned).IsEmpty();
+    }
+
+    /// <summary>A grok the hosted agent starts from its own shell inherits the marker, but is not the
+    /// daemon's child, so its session is still recorded.</summary>
+    [Test, NotInParallel]
+    public async Task A_grok_started_inside_a_hosted_session_still_records() {
+        _server.Given(Request.Create().WithPath("/hooks/session-start/grok").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200));
+        using var hosted = EnvScope.Exclusive(GrokHookEnvironment.HostedVar, int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        await RunAsync(Payload("session_start", "/repo/demo"));
+
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/session-start/grok").UsingPost()).Count).IsEqualTo(1);
     }
 
     /// <summary>A permanent rejection must not leave a watcher shipping lines for a session the server

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace Capacitor.Cli.Core.Harness.Grok;
@@ -11,11 +12,19 @@ namespace Capacitor.Cli.Core.Harness.Grok;
 public static class GrokHookEnvironment {
     public const string HookEventVar = "GROK_HOOK_EVENT";
 
-    /// <summary>Set by the daemon on a Grok it hosts. The daemon records that session from its ACP
+    /// <summary>The daemon's pid, set on a Grok it hosts. The daemon records that session from its ACP
     /// stream, so kcap's own Grok hook, which loads inside the child too, must not record it again.</summary>
     public const string HostedVar = "KCAP_HOSTED_GROK";
 
-    public static bool IsDaemonHosted(Func<string, string?> getEnv) => getEnv(HostedVar) == "1";
+    /// <summary>True when the Grok running this hook is the daemon's own child. Every process that Grok
+    /// starts inherits the variable, so a Grok the hosted agent runs from its shell would otherwise
+    /// stop recording too; an unreadable process tree counts as not hosted.</summary>
+    /// <param name="hookParentPid">The Grok process running this hook.</param>
+    public static bool IsDaemonHosted(Func<string, string?> getEnv, int? hookParentPid, Func<int, int?> parentOf) =>
+        int.TryParse(getEnv(HostedVar), NumberStyles.None, CultureInfo.InvariantCulture, out var daemonPid)
+     && daemonPid > 1
+     && hookParentPid is { } grokPid
+     && parentOf(grokPid) == daemonPid;
 
     public static bool IsGrokHook(Func<string, string?> getEnv) => !string.IsNullOrEmpty(getEnv(HookEventVar));
 

@@ -1916,7 +1916,7 @@ The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok
 
 - **A hosted Grok asks before it acts, even if you run Grok with always-approve.** Grok applies `permission_mode = "always-approve"` from `~/.grok/config.toml` to agent sessions too, which would let it run every tool without asking the daemon. The daemon turns that off for the sessions it hosts, so approvals and the launch dialog's permission presets apply.
 - **It runs as its own process,** never through a shared `grok leader`, so stopping the agent stops Grok.
-- **It is recorded once.** kcap's own Grok hook loads inside the hosted child and stands down there, because the daemon already records the session.
+- **It is recorded once.** kcap's own Grok hook loads inside the hosted child and stands down there, because the daemon already records the session. A `grok` the hosted agent starts itself is still recorded.
 - **It carries no cost yet.** Grok reports a hosted turn's token usage in an extension the daemon does not forward, so a hosted Grok session shows no cost; a Grok session you run yourself does.
 
 ### Hosted Pi agents

@@ -74,12 +74,12 @@ public class GrokHostedLaunchTests {
     }
 
     /// <summary>kcap's own Grok hook loads inside the hosted child and would record the session a
-    /// second time; the variable makes it stand down for a session the daemon already records.</summary>
+    /// second time; the variable names the daemon, whose direct child the hook then stands down in.</summary>
     [Test]
     public async Task Every_launch_marks_the_child_as_daemon_hosted() {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(AcpVendorDescriptors.Grok, new DaemonConfig(), Ctx());
 
-        await Assert.That(psi.Environment[GrokHookEnvironment.HostedVar]).IsEqualTo("1");
+        await Assert.That(psi.Environment[GrokHookEnvironment.HostedVar]).IsEqualTo(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     [Test]
@@ -88,7 +88,7 @@ public class GrokHostedLaunchTests {
             AcpVendorDescriptors.OpenCode, new DaemonConfig(), Ctx() with { Vendor = "opencode" });
 
         await Assert.That(psi.Environment.ContainsKey(GrokHookEnvironment.HostedVar)
-                       && psi.Environment[GrokHookEnvironment.HostedVar] == "1").IsFalse();
+                       && psi.Environment[GrokHookEnvironment.HostedVar] == Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)).IsFalse();
     }
 
     [Test]

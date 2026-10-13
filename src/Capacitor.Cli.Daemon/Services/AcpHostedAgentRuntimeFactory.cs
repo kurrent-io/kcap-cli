@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -958,7 +959,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // session from being captured twice.
         // kcap's own Grok hook loads inside this child; the daemon already records the session from
         // its ACP stream, so the hook stands down rather than recording it a second time.
-        if (descriptor.Harness is HarnessId.Grok) psi.Environment[GrokHookEnvironment.HostedVar] = "1";
+        if (descriptor.Harness is HarnessId.Grok)
+            psi.Environment[GrokHookEnvironment.HostedVar] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
 
         if (descriptor.Harness is HarnessId.OpenCode) {
             OpenCodeLaunchEnvironment.Apply(psi.Environment);

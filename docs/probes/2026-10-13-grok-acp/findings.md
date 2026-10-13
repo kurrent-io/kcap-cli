@@ -51,5 +51,5 @@ the daemon.
   reports no token usage.
 - Grok runs Claude Code's and Cursor's MCP servers and hooks by default (`[compat.claude]` / `[compat.cursor]`,
   or `GROK_CLAUDE_MCPS_ENABLED` and its siblings), including kcap's own `~/.grok/hooks/kcap.json`. There is no
-  per-process switch for `~/.grok/hooks`, so the daemon marks a hosted child with `KCAP_HOSTED_GROK=1` and
-  `kcap hook --grok` stands down there.
+  per-process switch for `~/.grok/hooks`, so the daemon sets `KCAP_HOSTED_GROK` to its own pid on a hosted
+  child, and `kcap hook --grok` stands down only when the Grok running it is that daemon's direct child.
