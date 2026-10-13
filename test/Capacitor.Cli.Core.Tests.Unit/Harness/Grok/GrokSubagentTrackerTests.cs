@@ -41,4 +41,18 @@ public class GrokSubagentTrackerTests {
         t.Observe([Finished("c1")]);
         await Assert.That(t.AwaitingStop()).IsEmpty();
     }
+
+    /// <summary>A restarted watcher resumes past the cursor, so its only sight of a child spawned
+    /// earlier is the seed from the whole transcript; that child is registered again.</summary>
+    [Test]
+    public async Task A_seeded_tracker_registers_a_child_spawned_before_the_resumed_cursor() {
+        var t = new GrokSubagentTracker();
+        await Assert.That(t.Seeded).IsFalse();
+
+        t.Seed([Spawned("c1")]);
+        t.Observe([]);
+
+        await Assert.That(t.Seeded).IsTrue();
+        await Assert.That(t.AwaitingStart().Select(c => c.Child)).IsEquivalentTo(new[] { "c1" });
+    }
 }

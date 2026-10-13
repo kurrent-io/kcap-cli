@@ -1239,7 +1239,11 @@ partial class WatchCommand(
             ICollection<string>   spawnedChildKeys,
             CancellationToken     ct
         ) {
-        tracker.Observe(GrokSubagents.Read(drained));
+        if (tracker.Seeded) tracker.Observe(GrokSubagents.Read(drained));
+        else {
+            try { tracker.Seed(GrokSubagents.Read(File.ReadLinesShared(transcriptPath))); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { tracker.Observe(GrokSubagents.Read(drained)); }
+        }
 
         foreach (var (child, type) in tracker.AwaitingStart()) {
             if (ct.IsCancellationRequested) return;

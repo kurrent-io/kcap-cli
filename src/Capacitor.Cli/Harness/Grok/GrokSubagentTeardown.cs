@@ -18,9 +18,14 @@ sealed class GrokSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient 
     /// <summary>The parent-exit budget, so a slow drain cannot hold up the watcher's own exit.</summary>
     internal static readonly TimeSpan DrainCap = TimeSpan.FromSeconds(8);
 
-    internal async Task FinishAsync(string sessionId, string parentTranscript, string childSessionId, string? agentType) {
+    /// <param name="register">Post <c>subagent-start</c> first, for a child the live scan never
+    /// registered; without it the drain has no watermark and sends nothing. Lifecycle ids are
+    /// deterministic, so a repeat start is harmless.</param>
+    internal async Task FinishAsync(string sessionId, string parentTranscript, string childSessionId, string? agentType, bool register = false) {
         var agentId    = GrokSubagents.AgentId(childSessionId);
         var transcript = GrokSubagents.ChildTranscript(parentTranscript, childSessionId);
+
+        if (register && !await StartAsync(sessionId, agentId, agentType ?? "subagent", transcript)) return;
 
         // Independent steps, so the stop is attempted even when the kill or the drain fails.
         await SafeAsync(() => watchers.KillWatcher($"{sessionId}-{agentId}"));
@@ -32,10 +37,24 @@ sealed class GrokSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient 
     /// watcher still finds them.</summary>
     internal async Task DrainAsync(string sessionId, string parentTranscript) {
         string[] lines;
-        try { lines = File.ReadAllTextShared(parentTranscript).Split('\n'); } catch (IOException) { return; }
+        try { lines = File.ReadAllTextShared(parentTranscript).Split('\n'); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
 
-        foreach (var spawned in GrokSubagents.Read(lines).Where(e => !e.Finished).DistinctBy(e => e.ChildSessionId))
-            await FinishAsync(sessionId, parentTranscript, spawned.ChildSessionId, spawned.SubagentType);
+        foreach (var spawned in GrokSubagents.Read(lines).Where(e => !e.Finished).DistinctBy(e => e.ChildSessionId)) {
+            if (!File.Exists(GrokSubagents.ChildTranscript(parentTranscript, spawned.ChildSessionId))) continue;
+            await FinishAsync(sessionId, parentTranscript, spawned.ChildSessionId, spawned.SubagentType, register: true);
+        }
+    }
+
+    async Task<bool> StartAsync(string sessionId, string agentId, string agentType, string transcript) {
+        try {
+            using var client  = await http.ForBackgroundAsync();
+            var       payload = GeminiSubagentDiscovery.BuildStartPayload(sessionId, agentId, agentType, transcript);
+            using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+            using var resp    = await client.PostWithRetryAsync($"{profiles.Resolution.ServerUrl}/hooks/subagent-start", content, time);
+            return resp.IsSuccessStatusCode;
+        } catch {
+            return false;
+        }
     }
 
     async Task PostStopAsync(string sessionId, string agentId, string agentType, string transcript) {

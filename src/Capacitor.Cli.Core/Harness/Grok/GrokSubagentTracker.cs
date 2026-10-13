@@ -8,6 +8,15 @@ public sealed class GrokSubagentTracker {
     readonly HashSet<string>             _finished = new(StringComparer.Ordinal);
     readonly HashSet<string>             _stopped  = new(StringComparer.Ordinal);
 
+    /// <summary>Whether the whole parent transcript has been read. A watcher resumes past the server's
+    /// cursor, so without the seed a restart never sees the children spawned before it.</summary>
+    public bool Seeded { get; private set; }
+
+    public void Seed(IEnumerable<GrokSubagentEvent> events) {
+        Observe(events);
+        Seeded = true;
+    }
+
     public void Observe(IEnumerable<GrokSubagentEvent> events) {
         foreach (var e in events) {
             if (!_types.TryGetValue(e.ChildSessionId, out var known) || known is null) _types[e.ChildSessionId] = e.SubagentType;
