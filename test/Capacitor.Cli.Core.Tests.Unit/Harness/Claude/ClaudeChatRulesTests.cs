@@ -463,6 +463,10 @@ public class ClaudeChatRulesTests {
         var mention = R("""{"type":"user","message":{"content":"why did <agent-message from=\"x\"> show up?"}}""");
         await Assert.That(mention.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
         await Assert.That(mention.SubmittedInputs).IsEquivalentTo(new[] { "why did <agent-message from=\"x\"> show up?" });
+
+        var typed = R("""{"type":"user","origin":{"kind":"human"},"message":{"content":"<agent-message from=\"x\">\nwhat is this?\n</agent-message>"}}""");
+        await Assert.That(typed.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(typed.SubmittedInputs.Single()).StartsWith("<agent-message");
     }
 
     /// The notification that follows a hand-back points at the report instead of repeating it; the
@@ -471,7 +475,7 @@ public class ClaudeChatRulesTests {
     public async Task A_notification_pointing_at_a_handback_shows_only_its_summary() {
         var result = R("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"Post plan\" finished</summary>\n<result>This agent's report was delivered to you as a message from \"a1\" (its SubagentHandback call). Read it there; it is not repeated here.\n</result>\n</task-notification>"}}""");
         await Assert.That(result.Envelopes.Single().Text).IsEqualTo("**Agent \"Post plan\" finished**");
-        await Assert.That(result.Subagents.Single()).IsTypeOf<SubagentSignal.Finished>();
+        await Assert.That(result.Runs.Single()).IsTypeOf<RunSignal.Finished>();
     }
 
     [Test]

@@ -131,17 +131,17 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     const string HandbackLead = "The report follows:\n";
 
     /// The body of a message another agent of this session sent, and which kind it is; null for
-    /// anything else. The server's events carry no origin_kind, so the wrapper is matched too: it
-    /// opens the text, after the one lead line Claude Code puts in front of an idle delivery.
+    /// anything else. The server's events carry no origin_kind, so without one the wrapper is
+    /// matched instead: it opens the text, after the one lead line Claude Code puts in front of an
+    /// idle delivery. Any other origin keeps a prompt that quotes the wrapper the user's own.
     static (string Body, string Kind)? PeerMessage(Struct? slug, string? text) {
-        if (text is null) return null;
+        var origin = SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind);
+        if (text is null || origin is not (null or "peer")) return null;
         var span = text.AsSpan().TrimStart();
         if (span.StartsWith(PeerLead, StringComparison.Ordinal) && span.IndexOf('\n') is var lead and >= 0)
             span = span[(lead + 1)..];
-        if (!span.StartsWith(PeerOpen, StringComparison.Ordinal)) {
-            if (SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) != "peer") return null;
-            return (text.Trim(), ChatDisplayKind.AgentMessage);
-        }
+        if (!span.StartsWith(PeerOpen, StringComparison.Ordinal))
+            return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
         var bodyStart = span.IndexOf('\n');
         if (bodyStart < 0) return ("", ChatDisplayKind.AgentMessage);
         span = span[(bodyStart + 1)..];
