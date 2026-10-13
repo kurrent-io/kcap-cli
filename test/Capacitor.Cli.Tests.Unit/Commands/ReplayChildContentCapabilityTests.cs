@@ -42,13 +42,14 @@ public class ReplayChildContentCapabilityTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     /// <summary>
-    /// The three sources whose child-import pass is reachable when the root is already fully
+    /// The sources whose child-import pass is reachable when the root is already fully
     /// ingested — the shape that can add content to a session that already exists.
     /// </summary>
     [Test]
     [Arguments("cursor")]
     [Arguments("antigravity")]
     [Arguments("gemini")]
+    [Arguments("grok")]
     public async Task sources_whose_replay_can_attach_child_content_declare_the_capability(string vendor) {
         await Assert.That(MakeSource(vendor).AttachesChildContentOnReplay).IsTrue();
     }
@@ -68,7 +69,6 @@ public class ReplayChildContentCapabilityTests {
     [Arguments("pi")]
     [Arguments("opencode")]
     [Arguments("mistralvibe")]
-    [Arguments("grok")]
     public async Task sources_whose_replay_cannot_attach_child_content_do_not_declare_the_capability(string vendor) {
         await Assert.That(MakeSource(vendor).AttachesChildContentOnReplay).IsFalse();
     }

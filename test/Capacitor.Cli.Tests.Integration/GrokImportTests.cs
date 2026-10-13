@@ -81,4 +81,56 @@ public class GrokImportTests : IDisposable {
         await Assert.That(batches.All(b => b.GetProperty("vendor").GetString() == "grok")).IsTrue();
         await Assert.That(batches[1].GetProperty("agent_id").GetString()).IsEqualTo(Child.Replace("-", ""));
     }
+
+    /// <summary>The live watcher records only the parent, so re-importing a fully watched session is
+    /// what attaches its subagents. The parent's last mapped line is its first: the subagent lines
+    /// after it map to nothing, and must not keep the session from reading as already loaded.</summary>
+    [Test]
+    public async Task An_already_loaded_parent_still_imports_its_subagents() {
+        WriteFixture();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").WithParam("agentId").UsingGet()).AtPriority(1)
+               .RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet()).AtPriority(2)
+               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+        foreach (var route in new[] { "/hooks/session-start/grok", "/hooks/transcript", "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/grok" })
+            _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = (await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None)).Single();
+        await Assert.That(classified.Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+
+        var result = await source.ImportSessionAsync(classified, new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Skipped);
+        await Assert.That(result.SentChildContent).IsTrue();
+
+        var batches = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/transcript")
+            .Select(e => JsonDocument.Parse(e.RequestMessage.Body!).RootElement).ToList();
+        await Assert.That(batches.Single().GetProperty("agent_id").GetString()).IsEqualTo(Child.Replace("-", ""));
+    }
+
+    /// <summary>A later batch landing past a refused one would move the server's watermark beyond the
+    /// lines it never took, and a re-run would resume after them.</summary>
+    [Test]
+    public async Task A_refused_parent_batch_fails_the_session() {
+        var dir = Path.Combine(Home.Path, ".grok", "sessions", "%2Frepo%2Fdemo", Parent);
+        Directory.CreateDirectory(dir);
+        File.WriteAllLines(Path.Combine(dir, "updates.jsonl"), [Line(Parent, "user_message_chunk", "\"content\":{\"type\":\"text\",\"text\":\"hi\"}")]);
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet()).RespondWith(Response.Create().WithStatusCode(404));
+        _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost()).RespondWith(Response.Create().WithStatusCode(400));
+        foreach (var route in new[] { "/hooks/session-start/grok", "/hooks/session-end/grok" })
+            _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        using var client = new HttpClient();
+        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+        var result     = await source.ImportSessionAsync(classified.Single(), new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Failed);
+    }
 }

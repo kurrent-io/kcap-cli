@@ -24,8 +24,8 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
     public bool IsAvailable => Directory.Exists(paths.SessionsDir);
     public bool SupportsTitleGeneration => false;
 
-    // An already-loaded session is skipped before anything is posted.
-    public bool AttachesChildContentOnReplay => false;
+    // The live watcher records only the parent, so an already-loaded parent still imports its subagents.
+    public bool AttachesChildContentOnReplay => true;
 
     static StringComparison PathComparison =>
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -99,7 +99,7 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
             var resumeFromLn = 0;
 
             if (serverLastLine is { } srv) {
-                if (srv >= LastNonBlankIndex(lines)) status = ImportCommand.ClassificationStatus.AlreadyLoaded;
+                if (srv >= LastImportableIndex(lines)) status = ImportCommand.ClassificationStatus.AlreadyLoaded;
                 else { status = ImportCommand.ClassificationStatus.Partial; resumeFromLn = srv + 1; }
             }
 
@@ -114,13 +114,12 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
 
     public async Task<ImportSessionResult> ImportSessionAsync(
             ImportCommand.SessionClassification classification, ImportContext ctx, CancellationToken ct) {
-        if (classification.Status == ImportCommand.ClassificationStatus.AlreadyLoaded) return ImportOutcome.Skipped;
-
         var dir        = (string)classification.SourceMeta![DirKey]!;
         var transcript = Path.Combine(dir, "updates.jsonl");
         var sid        = classification.SessionId;
 
         // Lifecycle before content: a transcript past a failed start would strand the session without one.
+        // Both are replayed for an already-loaded session, whose end may be the post a prior run lost.
         var start = new JsonObject {
             ["hook_event_name"] = "SessionStart",
             ["session_id"]      = sid,
@@ -132,15 +131,21 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) start["default_visibility"] = visibility;
         if (!await PostAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/grok", start, ct)) return ImportOutcome.Failed;
 
-        var startLine = classification.Status == ImportCommand.ClassificationStatus.Partial ? classification.ResumeFromLine : 0;
-        int  sent;
+        var alreadyLoaded = classification.Status == ImportCommand.ClassificationStatus.AlreadyLoaded;
+        var startLine     = classification.Status == ImportCommand.ClassificationStatus.Partial ? classification.ResumeFromLine : 0;
+        var sent          = 0;
         bool sentChildContent;
         try {
-            sent = await SessionImporter.SendTranscriptBatches(
-                httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: sid,
-                filePath: transcript, agentId: null, startLine: startLine, time: time, vendor: Vendor, progress: ctx.Progress);
+            // Strict, so a batch landing past a refused one cannot move the watermark beyond lines the server never took.
+            if (!alreadyLoaded)
+                sent = await SessionImporter.SendTranscriptBatches(
+                    httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: sid,
+                    filePath: transcript, agentId: null, startLine: startLine, time: time, vendor: Vendor,
+                    failOnError: true, progress: ctx.Progress);
 
             sentChildContent = await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, sid, transcript, ctx.Progress, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
         } catch {
             return ImportOutcome.Failed;
         }
@@ -155,7 +160,7 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
         if (classification.Meta.LastTimestamp is { } ended) end["ended_at"] = ended.ToString("O");
         if (!await PostAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/grok", end, ct)) return ImportOutcome.Failed;
 
-        var outcome = startLine > 0 ? ImportOutcome.Resumed : sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded;
+        var outcome = alreadyLoaded ? ImportOutcome.Skipped : startLine > 0 ? ImportOutcome.Resumed : sent == 0 ? ImportOutcome.Skipped : ImportOutcome.Loaded;
 
         return new ImportSessionResult(outcome, sentChildContent);
     }
@@ -200,7 +205,7 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
     // cwd in its .cwd file when the encoded form is too long.
     static string? CwdOf(string cwdDir) {
         var marker = Path.Combine(cwdDir, ".cwd");
-        if (File.Exists(marker)) return File.ReadAllTextShared(marker).Trim();
+        if (File.Exists(marker)) return File.ReadAllTextShared(marker).TrimEnd('\r', '\n');
 
         var name = Path.GetFileName(cwdDir);
         return name.Contains('%') ? Uri.UnescapeDataString(name) : null;
@@ -226,10 +231,30 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
     static DateTimeOffset? Time(string? s) =>
         s is not null && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts) ? ts : null;
 
-    static int LastNonBlankIndex(IReadOnlyList<string> lines) {
+    // The server's watermark is the last line it mapped to an event; the lines after it that map to
+    // nothing (subagent bookkeeping, command lists, a tool's progress) must not read as unsent.
+    static int LastImportableIndex(IReadOnlyList<string> lines) {
         for (var i = lines.Count - 1; i >= 0; i--)
-            if (!string.IsNullOrWhiteSpace(lines[i])) return i;
+            if (IsImportable(lines[i])) return i;
         return 0;
+    }
+
+    static bool IsImportable(string line) {
+        if (string.IsNullOrWhiteSpace(line)) return false;
+
+        try {
+            using var doc = JsonDocument.Parse(line);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object || doc.RootElement.Obj("params")?.Obj("update") is not { } update) return false;
+
+            return (doc.RootElement.Str("method"), update.Str("sessionUpdate")) switch {
+                ("session/update", "user_message_chunk" or "agent_message_chunk" or "agent_thought_chunk" or "tool_call") => true,
+                ("session/update", "tool_call_update") => update.Str("status") is "completed" or "failed",
+                ("_x.ai/session/update", "turn_completed") => true,
+                _ => false,
+            };
+        } catch (JsonException) {
+            return false;
+        }
     }
 
     async Task<bool> PostAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {

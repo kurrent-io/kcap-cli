@@ -56,6 +56,19 @@ public class GrokImportSourceTests {
         await Assert.That(found.Single().Cwd).IsEqualTo("/other");
     }
 
+    /// <summary>A long cwd's directory is a slug with the cwd in its <c>.cwd</c> file; a cwd may end in
+    /// a space, so only the line ending is stripped.</summary>
+    [Test]
+    public async Task A_slug_directory_s_cwd_keeps_its_trailing_space() {
+        var dir = Path.Combine(".grok", "sessions", "long-slug", ParentId);
+        Tmp.CreateFile(Path.Combine(dir, "updates.jsonl"), "{}\n");
+        Tmp.CreateFile(Path.Combine(".grok", "sessions", "long-slug", ".cwd"), "/repo/demo \n");
+
+        var found = (await Source().DiscoverAsync(NoFilters, CancellationToken.None)).Single();
+
+        await Assert.That(found.Cwd).IsEqualTo("/repo/demo ");
+    }
+
     [Test]
     public async Task Is_available_only_when_the_sessions_dir_exists() {
         await Assert.That(Source().IsAvailable).IsFalse();
