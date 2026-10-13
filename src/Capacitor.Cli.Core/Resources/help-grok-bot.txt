@@ -1,0 +1,26 @@
+kcap grok-bot — Record Grok Bot chats
+
+Usage: kcap grok-bot watch [options]
+
+Runs on a Grok Bot cloud computer. Polls the computer's local Grok Bot gateway
+and records every chat — each Bot's own thread and every new chat, which Grok
+Bot keeps as a group — as Capacitor sessions: a new session starts after
+the thread has been quiet for the gap, and ends once the gap passes with no new
+message. Records the conversation only — user messages, Bot messages and the
+choices made on Bot questions — not tool calls.
+
+One watcher runs per computer. Delivery state lives under the kcap config
+directory, so a restarted watcher resumes where it stopped. Sessions are private
+unless your profile's default visibility says otherwise.
+
+A failed cycle — the gateway unreachable, the server refusing a call, a
+lapsed sign-in — is retried with a doubling wait up to five minutes, and the
+reason is logged once rather than on every retry. Nothing advances until the
+server accepts the call, so a fixed sign-in catches up without losing entries.
+
+Options:
+  --once                  Run one polling cycle and exit (1 if it failed)
+  --dry-run               Log the calls it would make; send and save nothing
+  --gateway <path>        Gateway descriptor (default: ~/sand-data/gateway.json)
+  --interval <seconds>    Polling interval (default: 5)
+  --gap-minutes <n>       Idle gap that splits sessions (default: 120)

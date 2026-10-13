@@ -100,6 +100,7 @@ public static class CommandServices {
         services.AddTransient<ErrorsCommand>();
         services.AddTransient<EvalCommand>();
         services.AddTransient<FeedbackCommand>();
+        services.AddTransient<GrokBotWatchCommand>();
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();

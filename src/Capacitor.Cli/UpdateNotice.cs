@@ -43,7 +43,7 @@ internal static class UpdateNotice {
     internal static bool IsHumanFacing(string command, string[] args, bool appBundled) {
         if (appBundled) return false;
         if (CrashReporter.FailOpenCommands.Contains(command)) return false;
-        if (command is "mcp" or "watch" or "daemon") return false;
+        if (command is "mcp" or "watch" or "daemon" or "grok-bot") return false;
         if (command is "update" or "uninstall") return false;
         if (args.Contains("--no-update-check")) return false;
 
