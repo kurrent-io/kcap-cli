@@ -40,6 +40,8 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
     public ReadOnlyObservableCollection<RailSessionViewModel> Sessions { get; }
 
     readonly CompositeDisposable _disposables = new();
+    readonly BehaviorSubject<bool> _expanded;
+    readonly Action<bool> _setExpanded;
 
     public RailRepoViewModel(
             IGroup<AgentRow, string, string> group,
@@ -57,18 +59,14 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
         IsNoRepository = Label == "No repository";
         RootDisplay = DisplayFor(RootPath, Label);
         _isExpanded = isExpanded;
-        var expanded = new BehaviorSubject<bool>(isExpanded).DisposeWith(_disposables);
-        ToggleCommand = ReactiveCommand.Create(() => {
-            IsExpanded = !IsExpanded;
-            setExpanded(IsExpanded);
-            expanded.OnNext(IsExpanded);
-            this.RaisePropertyChanged(nameof(ToggleAccessibleName));
-        }).DisposeWith(_disposables);
+        _setExpanded = setExpanded;
+        _expanded = new BehaviorSubject<bool>(isExpanded).DisposeWith(_disposables);
+        ToggleCommand = ReactiveCommand.Create(() => SetExpanded(!IsExpanded)).DisposeWith(_disposables);
 
         // Preserve main's collapsed-group verdict, including pending permissions, questions,
         // usage limits, and background work. Expanded, the individual session marks take over.
         var header = group.Cache.Connect().QueryWhenChanged()
-            .CombineLatest(agentsWithPending, agentsAwaitingAnswer, agentsRunningCommands, expanded,
+            .CombineLatest(agentsWithPending, agentsAwaitingAnswer, agentsRunningCommands, _expanded,
                 (query, pending, answering, commands, visible) => visible ? null
                     : SessionStatusDots.Rollup(query.Items, pending, answering, commands))
             .Replay(1).RefCount();
@@ -93,6 +91,16 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             .SortAndBind(_sessionsSource, SessionComparer)
             .Subscribe()
             .DisposeWith(_disposables);
+    }
+
+    internal void Expand() => SetExpanded(true);
+
+    void SetExpanded(bool expanded) {
+        if (IsExpanded == expanded) return;
+        IsExpanded = expanded;
+        _setExpanded(expanded);
+        _expanded.OnNext(expanded);
+        this.RaisePropertyChanged(nameof(ToggleAccessibleName));
     }
 
     static readonly IComparer<RailSessionViewModel> SessionComparer = Comparer<RailSessionViewModel>.Create((a, b) => {

@@ -20,6 +20,7 @@ namespace Capacitor.App.ViewModels;
 /// pipeline, so every inner Connect() below already fires on the UI thread.
 public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _disposables = new();
+    readonly IAgentDirectory _directory;
     // Keep the user's choices when the directory empties/re-forms a group during refresh.
     readonly HashSet<string> _collapsedRepos = new(StringComparer.Ordinal);
 
@@ -61,6 +62,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
             Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest = null) {
+        _directory = directory;
         IObservable<string?> selected = _selectedAgentIdChanges;
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
         // here so every nested OAPH downstream sees
@@ -98,6 +100,16 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()
             .DisposeWith(_disposables);
+    }
+
+    public void NotifySessionOpened(string agentId, AgentOrigin origin) {
+        var row = _directory.Rows.Lookup($"{(origin == AgentOrigin.Remote ? "remote" : "local")}:{agentId}");
+        if (!row.HasValue && origin == AgentOrigin.Local)
+            row = _directory.Rows.Lookup($"pending:{agentId}");
+        if (!row.HasValue) return;
+        var repo = row.Value.RepoGroupKey;
+        _collapsedRepos.Remove(repo);
+        Repos.FirstOrDefault(group => group.RootPath == repo)?.Expand();
     }
 
     internal static string WorktreeKeyFor(AgentStatusDto dto) =>

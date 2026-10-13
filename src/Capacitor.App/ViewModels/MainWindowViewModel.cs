@@ -563,7 +563,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
     /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
     /// running.
-    public void OpenSession(string agentId, AgentOrigin? origin = null) {
+    public void OpenSession(string agentId, AgentOrigin? origin = null) => OpenSessionCore(agentId, origin, revealInRail: true);
+
+    void OpenSessionCore(string agentId, AgentOrigin? origin, bool revealInRail) {
         if (_navigation.ShutdownLatched) return;
 
         // Neither lane holds the id: opening the local workspace for it would attach a terminal to
@@ -574,6 +576,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // lane's same-id agent is a different agent, and a remote host the local daemon has taken
         // over no longer owns the id at all: both are a real swap.
         if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) {
+            if (revealInRail) Rail?.NotifySessionOpened(agentId, lane);
             return;
         }
 
@@ -583,6 +586,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (next is null) return;
 
         SwapTo(next);
+        if (revealInRail) Rail?.NotifySessionOpened(agentId, lane);
     }
 
     public void OpenSessionPullRequest(string agentId, AgentOrigin origin, PullRequestSubjectDto? subject = null) {
@@ -711,7 +715,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
-        OpenSession(open.AgentId, origin);
+        OpenSessionCore(open.AgentId, origin, revealInRail: false);
         if (ReferenceEquals(CurrentWorkspace, open)) return;
         switch (CurrentWorkspace) {
             case WorkspaceViewModel local when terminal: local.ShowTerminalCommand.Execute().Subscribe(); break;

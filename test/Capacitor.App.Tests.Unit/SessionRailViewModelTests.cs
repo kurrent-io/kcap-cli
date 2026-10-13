@@ -40,6 +40,31 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Revealing_a_session_honors_origin_and_covers_pending_sessions() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("same", "/local"), new RepoIdentity("path:/local", "local")));
+            directory.Rows.AddOrUpdate(AgentRow.FromRemote(RemoteDto("same", "owner", "remote")));
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(new PendingLaunchDto("pending", "claude", "/pending", "Title", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/pending", "pending")));
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("same", AgentOrigin.Remote);
+            await Assert.That(rail.Repos.Single(r => r.IsExpanded).Label).IsEqualTo("owner/remote");
+            rail.Repos.Single(r => r.IsExpanded).ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("same", AgentOrigin.Local);
+            await Assert.That(rail.Repos.Single(r => r.IsExpanded).Label).IsEqualTo("local");
+            rail.Repos.Single(r => r.IsExpanded).ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("pending", AgentOrigin.Local);
+            await Assert.That(rail.Repos.Single(r => r.IsExpanded).Label).IsEqualTo("pending");
+            rail.Repos.Single(r => r.IsExpanded).ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("missing", AgentOrigin.Local);
+            await Assert.That(rail.Repos.Any(r => r.IsExpanded)).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Creation_time_order_survives_updates_and_reversed_refreshes() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();

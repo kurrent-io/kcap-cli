@@ -725,6 +725,49 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_or_reopening_a_session_reveals_only_its_repository(bool remote) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            const string id = "a1";
+            var row = AgentRow.FromLocal(WorkspaceFixtures.Agent(id, "claude", false, "/repos/alpha"),
+                new RepoIdentity("path:/repos/alpha", "alpha"));
+            RemoteSessionViewModel? remoteWorkspace = null;
+            if (remote) remoteWorkspace = host.New(id);
+            else host.Directory.Rows.AddOrUpdate(row);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(WorkspaceFixtures.Agent("other", "claude", false, "/repos/beta"),
+                new RepoIdentity("path:/repos/beta", "beta")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            var vm = NewVm(service, id => NewWorkspace(service, id), rail,
+                originOf: _ => remote ? AgentOrigin.Remote : AgentOrigin.Local,
+                remoteWorkspaceFactory: _ => remoteWorkspace, directory: host.Directory);
+            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
+            var target = rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id));
+            var other = rail.Repos.Single(repo => repo != target);
+            vm.OpenSessionIfCurrent(id, vm.NavigationGeneration);
+            await Assert.That(target.IsExpanded).IsTrue();
+            await Assert.That(other.IsExpanded).IsFalse();
+            await Assert.That(rail.SelectedAgentId).IsEqualTo(id);
+            var workspace = vm.CurrentWorkspace;
+            target.ToggleCommand.Execute().Subscribe();
+            vm.OpenSession(id);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(workspace);
+            await Assert.That(target.IsExpanded).IsTrue();
+            await Assert.That(other.IsExpanded).IsFalse();
+            // Remember the navigation expansion if a refresh recreates the group.
+            var current = host.Directory.Rows.Items.Single(r => r.Id == id);
+            host.Directory.Rows.Remove(current.Key);
+            host.Directory.Rows.AddOrUpdate(current);
+            await Assert.That(rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id)).IsExpanded).IsTrue();
+            vm.CloseWorkspace();
+            await workspace!.TeardownAsync();
+        });
+    }
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_selection_follows_the_workspace() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
@@ -845,7 +888,11 @@ public class MainWindowViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
-            var vm = NewVm(service,
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("other", "claude", false, "/repos/kcap-cli"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            var vm = NewVm(service, rail: rail,
                 workspaceFactory: id => NewWorkspace(service, id),
                 originOf: _ => AgentOrigin.Remote,
                 remoteWorkspaceFactory: id => host.New(id, "s1"),
@@ -853,6 +900,7 @@ public class MainWindowViewModelTests {
                 directory: host.Directory);
 
             vm.OpenSession("r1");
+            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
             var remote = (RemoteSessionViewModel)vm.CurrentWorkspace!;
             await remote.ShowTerminalCommand.Execute().ToTask();
             await Assert.That(remote.IsTerminalActive).IsTrue();
@@ -863,6 +911,7 @@ public class MainWindowViewModelTests {
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             host.Directory.Rows.Remove("remote:r1");
 
+            await Assert.That(rail.Repos.Any(repo => repo.IsExpanded)).IsFalse();
             await Assert.That(remote.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
