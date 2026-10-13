@@ -126,16 +126,16 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     }
 
     // Windows draws its caption buttons over the top-right of the extended client area, so the
-    // content pane starts below the title bar there. macOS keeps its buttons on the left, over the rail.
+    // content pane starts below the title bar there.
     void KeepContentClearOfCaptionButtons() {
-        if (OperatingSystem.IsMacOS()) return;
+        if (!OperatingSystem.IsWindows()) return;
         this.GetObservable(WindowDecorationMarginProperty)
             .Subscribe(margin => ContentPane.Margin = new Thickness(0, margin.Top, 0, 0));
     }
 
-    // macOS takes ⌘, from the native app menu; nothing draws that menu elsewhere.
+    // macOS takes ⌘, from the native app menu, which Windows does not draw.
     void BindSettingsShortcut() {
-        if (OperatingSystem.IsMacOS()) return;
+        if (!OperatingSystem.IsWindows()) return;
         var binding = new KeyBinding { Gesture = new KeyGesture(Key.OemComma, KeyModifiers.Control) };
         KeyBindings.Add(binding);
 

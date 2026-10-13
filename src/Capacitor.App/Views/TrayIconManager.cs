@@ -4,11 +4,10 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu. Only Avalonia's macOS backend
-/// raises NativeMenu.NeedsUpdate before a menu opens; the Windows and Linux backends never do, and
-/// Windows shows nothing at all for a menu with no items. So macOS rebuilds lazily inside
-/// NeedsUpdate, while everywhere else the menu is rebuilt on every model change and a left-click
-/// opens the main window.
+/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu. Avalonia's Windows backend never
+/// raises NativeMenu.NeedsUpdate and shows nothing at all for a menu with no items, so on Windows
+/// the menu is rebuilt on every model change and a left-click opens the main window. Elsewhere it
+/// rebuilds lazily inside NeedsUpdate.
 public sealed class TrayIconManager : IDisposable {
     readonly Application _app;
     readonly TrayIcon _trayIcon;
@@ -18,30 +17,30 @@ public sealed class TrayIconManager : IDisposable {
     readonly IDisposable _subscription;
 
     public TrayIconManager(Application app, TrayViewModel vm)
-        : this(app, vm, backendRaisesNeedsUpdate: OperatingSystem.IsMacOS()) { }
+        : this(app, vm, rebuildEagerly: OperatingSystem.IsWindows()) { }
 
-    public TrayIconManager(Application app, TrayViewModel vm, bool backendRaisesNeedsUpdate) {
+    public TrayIconManager(Application app, TrayViewModel vm, bool rebuildEagerly) {
         _app = app;
         _builder = new TrayMenuBuilder(vm);
 
         _trayIcon = new TrayIcon { Menu = _menu, ToolTipText = "Kurrent Capacitor" };
         TrayIcon.SetIcons(app, new TrayIcons { _trayIcon });
 
-        if (backendRaisesNeedsUpdate) {
+        if (rebuildEagerly) {
+            _trayIcon.Command = vm.OpenMainWindowCommand;
+            _trayIcon.Clicked += (_, _) => vm.RequestPauseRefresh();
+        } else {
             // macOS status-item menus never raise NativeMenu.Opening, so this is also the pause refresh kick.
             _menu.NeedsUpdate += (_, _) => {
                 vm.RequestPauseRefresh();
                 _sync.OnNeedsUpdate(model => _builder.Rebuild(_menu, model));
             };
-        } else {
-            _trayIcon.Command = vm.OpenMainWindowCommand;
-            _trayIcon.Clicked += (_, _) => vm.RequestPauseRefresh();
         }
 
         _subscription = vm.WhenAnyValue(x => x.MenuModel).Subscribe(model => {
             _trayIcon.Icon = TrayIconRenderer.Get(model.State, model.RunningCount);
-            if (backendRaisesNeedsUpdate) _sync.OnModelChanged(model);
-            else _builder.Rebuild(_menu, model);
+            if (rebuildEagerly) _builder.Rebuild(_menu, model);
+            else _sync.OnModelChanged(model);
         });
     }
 

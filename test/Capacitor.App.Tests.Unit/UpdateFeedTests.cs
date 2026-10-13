@@ -6,7 +6,7 @@ namespace Capacitor.App.Tests.Unit;
 public class UpdateFeedTests {
     [Test]
     public async Task Default_is_the_kurrent_desktop_feed_for_this_platform() {
-        var channel = UpdateFeed.Channel(OperatingSystem.IsWindows(), OperatingSystem.IsLinux(), RuntimeInformation.ProcessArchitecture);
+        var channel = UpdateFeed.Channel(OperatingSystem.IsWindows(), OperatingSystem.IsLinux(), UpdateFeed.ChannelArchitecture(OperatingSystem.IsWindows()));
 
         await Assert.That(UpdateFeed.Resolve(_ => null)).IsEqualTo($"https://www.kurrent.io/download/desktop/{channel}/");
     }

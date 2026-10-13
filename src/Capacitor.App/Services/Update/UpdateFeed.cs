@@ -7,9 +7,12 @@ public static class UpdateFeed {
 
     /// The feed for the platform this build runs on. Each channel is published under its own RID,
     /// and a package applied from another channel's feed would replace the app with a foreign build.
-    /// The process architecture, not the OS one: an x64 build emulated on an ARM machine must stay on
-    /// the x64 feed it was installed from.
-    public static string BaseUrl { get; } = BaseUrlFor(Channel(OperatingSystem.IsWindows(), OperatingSystem.IsLinux(), RuntimeInformation.ProcessArchitecture));
+    public static string BaseUrl { get; } = BaseUrlFor(Channel(OperatingSystem.IsWindows(), OperatingSystem.IsLinux(), ChannelArchitecture(OperatingSystem.IsWindows())));
+
+    /// On Windows the process architecture, not the OS one: an x64 build emulated on Windows on ARM
+    /// must stay on the x64 feed it was installed from.
+    public static Architecture ChannelArchitecture(bool isWindows) =>
+        isWindows ? RuntimeInformation.ProcessArchitecture : RuntimeInformation.OSArchitecture;
 
     public static string BaseUrlFor(string channel) => $"https://www.kurrent.io/download/desktop/{channel}/";
 

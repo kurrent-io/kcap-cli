@@ -829,10 +829,10 @@ public class MainWindowSmokeTests {
             text ?? block.Text ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             new Typeface(block.FontFamily, block.FontStyle, block.FontWeight), block.FontSize, null).Width;
 
-    /// Off macOS no native app menu carries ⌘,, so the window itself binds Ctrl+, to Settings.
+    /// Windows draws no native app menu to carry ⌘,, so the window itself binds Ctrl+, to Settings.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Settings_shortcut_is_bound_to_the_settings_command_off_macOS() {
+    public async Task Settings_shortcut_is_bound_to_the_settings_command_on_Windows() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (bound, isSettings) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
@@ -845,7 +845,7 @@ public class MainWindowSmokeTests {
                 return result;
             });
 
-            await Assert.That(bound).IsEqualTo(!OperatingSystem.IsMacOS());
+            await Assert.That(bound).IsEqualTo(OperatingSystem.IsWindows());
             if (bound) await Assert.That(isSettings).IsTrue();
         });
     }

@@ -462,7 +462,7 @@ public class TrayAdapterTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task NeedsUpdate_backend_leaves_the_menu_empty_and_the_click_unbound_until_NeedsUpdate() {
+    public async Task Lazy_cadence_leaves_the_menu_empty_and_the_click_unbound_until_NeedsUpdate() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (icon, tooltip, itemCountBeforeNeedsUpdate, command) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
@@ -473,7 +473,7 @@ public class TrayAdapterTests {
                 service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", active: 2));
 
                 var app = Application.Current!;
-                using var manager = new TrayIconManager(app, vm, backendRaisesNeedsUpdate: true);
+                using var manager = new TrayIconManager(app, vm, rebuildEagerly: false);
                 var trayIcon = TrayIcon.GetIcons(app)!.Single();
 
                 return (trayIcon.Icon, trayIcon.ToolTipText, trayIcon.Menu!.Items.Count, trayIcon.Command);
@@ -490,7 +490,7 @@ public class TrayAdapterTests {
     /// first right-click.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Backend_without_NeedsUpdate_populates_the_menu_at_construction_and_opens_the_window_on_click() {
+    public async Task Eager_cadence_populates_the_menu_at_construction_and_opens_the_window_on_click() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (labels, commandIsOpen) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
@@ -499,7 +499,7 @@ public class TrayAdapterTests {
                 using var vm = new TrayViewModel(service, pause, NewActions(service), consent);
 
                 var app = Application.Current!;
-                using var manager = new TrayIconManager(app, vm, backendRaisesNeedsUpdate: false);
+                using var manager = new TrayIconManager(app, vm, rebuildEagerly: true);
                 var trayIcon = TrayIcon.GetIcons(app)!.Single();
 
                 var items = trayIcon.Menu!.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
@@ -514,7 +514,7 @@ public class TrayAdapterTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Backend_without_NeedsUpdate_rebuilds_the_menu_on_every_model_change() {
+    public async Task Eager_cadence_rebuilds_the_menu_on_every_model_change() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (before, after) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
@@ -523,7 +523,7 @@ public class TrayAdapterTests {
                 using var vm = new TrayViewModel(service, pause, NewActions(service), consent);
 
                 var app = Application.Current!;
-                using var manager = new TrayIconManager(app, vm, backendRaisesNeedsUpdate: false);
+                using var manager = new TrayIconManager(app, vm, rebuildEagerly: true);
                 var menu = TrayIcon.GetIcons(app)!.Single().Menu!;
                 var header = () => ((NativeMenuItem)menu.Items[0]).Header;
                 var initial = header();
