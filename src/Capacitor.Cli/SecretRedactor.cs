@@ -20,9 +20,9 @@ public static partial class SecretRedactor {
     internal const string UnparsableOutputPlaceholder =
         """{"type":"redacted_unparsable_line","reason":"redacted line was no longer valid JSON"}""";
 
-    // A deadline only a super-linear pattern reaches: the env-var scan costs about 27 ns per char,
-    // so a 16M-char value takes under half a second, while the JSON-key pattern is quadratic on a
-    // quote-less run of keywords and would otherwise never return.
+    // A deadline only a super-linear pattern reaches: the linear patterns together cost about
+    // 90 ns per char, so a 16M-char value takes under two seconds, while the JSON-key pattern is
+    // quadratic on a quote-less run of keywords and would otherwise never return.
     internal static readonly TimeSpan OutOfProcessMatchTimeout = TimeSpan.FromSeconds(30);
 
     // The generated patterns carry the watcher's per-call deadline; a caller scanning a whole
@@ -222,7 +222,8 @@ public static partial class SecretRedactor {
     [GeneratedRegex("(?:AKIA|ASIA|AROA|AIDA|AIPA|AGPA|ANPA|ANVA|ASCA|APKA|ABIA|ACCA)[0-9A-Z]{16,128}(?![0-9A-Z])", RegexOptions.None, matchTimeoutMilliseconds: 100)]
     private static partial Regex AwsUniqueIdRx();
 
-    [GeneratedRegex(@"(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}", RegexOptions.None, matchTimeoutMilliseconds: 100)]
+    // Anchored: SecretPatterns finds candidates by prefix and confirms each one here.
+    [GeneratedRegex(@"\G(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}", RegexOptions.None, matchTimeoutMilliseconds: 100)]
     private static partial Regex VendorTokenRx();
 
     [GeneratedRegex(
@@ -231,8 +232,9 @@ public static partial class SecretRedactor {
     )]
     private static partial Regex JsonKeySecretRx();
 
-    // The run boundary keeps scanning linear; digits must remain eligible for OAUTH2_TOKEN.
-    [GeneratedRegex(@"(?<![A-Za-z_])([A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*=)([^\s""\\]+)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
+    // The match starts at `=` and finds the name behind it, so letters without one cost nothing;
+    // the name is the whole [A-Za-z_] run before it, so a digit ends it, as in OAUTH2_TOKEN.
+    [GeneratedRegex(@"(?<=(?<![A-Za-z_])[A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*)=([^\s""\\]+)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
     private static partial Regex EnvVarSecretRx();
 
     [GeneratedRegex("""((?:""" + SecretKeywords + """)[\w.\-]*:[ \t]+)([^\s"\\]{8,})""", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
