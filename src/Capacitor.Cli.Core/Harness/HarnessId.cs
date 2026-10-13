@@ -17,4 +17,5 @@ public enum HarnessId {
     OpenCode,
     Antigravity,
     MistralVibe,
+    Grok,
 }

@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.OpenCode;
@@ -47,10 +48,10 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         };
     }
 
-    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--skills"];
+    static readonly string[] ExclusiveTargetFlags = ["--codex", "--cursor", "--copilot", "--gemini", "--kiro", "--pi", "--opencode", "--antigravity", "--mistral-vibe", "--grok", "--skills"];
 
     const string MutuallyExclusiveMsg =
-        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, and --skills are mutually exclusive.";
+        "--cursor, --codex, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --grok, and --skills are mutually exclusive.";
 
     static bool HasConflictingTargets(string[] args) =>
         ExclusiveTargetFlags.Count(args.Contains) > 1;
@@ -84,6 +85,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             if (args.Contains("--codex"))
                 return RefuseToolsOnlyAsync("Codex", "its hooks and skills install as one unit");
 
+            if (args.Contains("--grok"))
+                return RefuseToolsOnlyAsync("Grok", "kcap installs no tools for it; Grok loads the ones set up for Claude Code");
+
             if (!ExclusiveTargetFlags.Any(args.Contains))
                 return RefuseToolsOnlyAsync("Claude Code", "its MCP servers and skills ship inside the plugin that records sessions");
         }
@@ -97,6 +101,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--opencode")) return InstallOpenCode(args);
         if (args.Contains("--antigravity")) return InstallAntigravity(args);
         if (args.Contains("--mistral-vibe")) return InstallVibe(args);
+        if (args.Contains("--grok")) return InstallGrok(args);
 
         return InstallClaude(args);
     }
@@ -135,6 +140,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         if (args.Contains("--opencode")) return await RemoveOpenCode(args);
         if (args.Contains("--antigravity")) return await RemoveAntigravity(args);
         if (args.Contains("--mistral-vibe")) return await RemoveVibe(args);
+        if (args.Contains("--grok")) return await RemoveGrok(args);
 
         return await RemoveClaude(args);
     }
@@ -2363,6 +2369,46 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         return hooksFailed || mcpFailed || instrFailed ? 1 : 0;
+    }
+
+    async Task<int> InstallGrok(string[] args) {
+        var hooksPath   = GetArg(args, "--grok-hooks-path") ?? env.Harnesses.Of<GrokHarness>().Paths.KcapHooksJson;
+        var refreshOnly = args.Contains("--if-installed");
+
+        if (refreshOnly && !GrokHooksInstaller.IsInstalled(hooksPath)) return 0;
+
+        // The hook file names the bare `kcap hook --grok` command, so Grok must find kcap on PATH.
+        if (!refreshOnly && !KcapOnPath) {
+            await env.Stderr.WriteLineAsync(
+                "Cannot install Grok hooks: 'kcap' is not on PATH. Re-install kcap: " + InstallProvenance.ReinstallCommand());
+            return 1;
+        }
+
+        if (!GrokHooksInstaller.Install(hooksPath)) {
+            await env.Stderr.WriteLineAsync($"Could not write Grok hooks to {hooksPath}.");
+            return refreshOnly ? 0 : 1;
+        }
+
+        await env.Stdout.WriteLineAsync(refreshOnly ? $"Grok hooks refreshed ({hooksPath})" : $"Grok hooks installed ({hooksPath})");
+
+        if (!args.Contains("--skip-grok-skills"))
+            await InstallVendorSkillsAsync(env.Agents.UserSkillsDir, "Agent", refreshOnly);
+
+        return 0;
+    }
+
+    async Task<int> RemoveGrok(string[] args) {
+        var hooksPath = GetArg(args, "--grok-hooks-path") ?? env.Harnesses.Of<GrokHarness>().Paths.KcapHooksJson;
+
+        try {
+            await env.Stdout.WriteLineAsync(GrokHooksInstaller.Remove(hooksPath)
+                ? $"Grok hooks removed ({hooksPath})"
+                : "Grok hooks were not installed.");
+            return 0;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await env.Stderr.WriteLineAsync($"Could not remove Grok hooks at {hooksPath}: {ex.Message}");
+            return 1;
+        }
     }
 
     async Task<int> InstallVibe(string[] args) {

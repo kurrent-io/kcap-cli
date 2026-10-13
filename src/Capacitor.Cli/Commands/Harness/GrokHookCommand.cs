@@ -1,0 +1,112 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Grok;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.PrDetection;
+
+namespace Capacitor.Cli.Commands.Harness;
+
+/// <summary>
+/// <c>kcap hook --grok</c>, run by Grok Build for the events <see cref="GrokHooksInstaller"/> registers.
+/// Session start posts the session and starts the watcher on the session's <c>updates.jsonl</c>; Stop
+/// restarts a watcher that is gone. The watcher ends the session itself once Grok exits.
+/// </summary>
+/// <remarks>
+/// Grok reads a passive hook's exit code and nothing else, and a non-zero exit from Stop could hold the
+/// turn open, so this always exits 0 and writes nothing to stdout.
+/// </remarks>
+sealed class GrokHookCommand(
+        ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
+        HarnessRegistry harnesses, ICapacitorHttpClient http, WatcherManager watchers, GitProviderRouter router) {
+    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
+
+    string Url => profiles.Resolution.ServerUrl!;
+
+    public async Task<int> Handle(TextReader stdin) {
+        var body = await stdin.ReadToEndAsync();
+
+        JsonNode? node;
+        try { node = JsonNode.Parse(body); } catch { return 0; }
+        if (node is null) return 0;
+
+        try {
+            await DispatchAsync(node);
+        } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+            await Console.Error.WriteLineAsync($"[kcap] grok hook failed: {ex.Message}");
+        }
+
+        return 0;
+    }
+
+    async Task DispatchAsync(JsonNode node) {
+        var dashedSessionId = Str(node, "sessionId");
+        if (string.IsNullOrEmpty(dashedSessionId) || !Guid.TryParse(dashedSessionId, out _)) return;
+
+        var sessionId = dashedSessionId.Replace("-", "");
+        if (DisabledSessions.IsDisabled(sessionId, config)) return;
+
+        var cwd           = Str(node, "cwd");
+        var activeProfile = profiles.Effective;
+
+        if (PathExclusion.IsOutOfScope(cwd, activeProfile?.AllowedPaths, activeProfile?.ExcludedPaths, home)) return;
+
+        // Session start carries no transcript path; every later event names the file.
+        var transcriptPath = Str(node, "transcriptPath")
+                          ?? (cwd is null ? null : harnesses.Of<GrokHarness>().Paths.UpdatesJsonl(cwd, dashedSessionId));
+        if (transcriptPath is null) return;
+
+        switch (Str(node, "hookEventName")) {
+            case "session_start":
+                await StartRecording(node, sessionId, cwd, activeProfile, transcriptPath);
+                break;
+            case "stop" when !watchers.IsWatcherAlive(sessionId):
+                await EnsureWatcher(sessionId, transcriptPath, cwd, skipTitle: true);
+                break;
+        }
+    }
+
+    async Task StartRecording(JsonNode node, string sessionId, string? cwd, Profile? activeProfile, string transcriptPath) {
+        var forwarded = new JsonObject {
+            ["hook_event_name"] = "SessionStart",
+            ["session_id"]      = sessionId,
+            ["cwd"]             = cwd ?? "",
+            ["home_dir"]        = home.Path,
+        };
+
+        if ((Str(node, "workspaceRoot") ?? (cwd is null ? null : GitRepository.FindRoot(cwd))) is { } root) forwarded["workspace_root"] = root;
+        if (Timestamp(node) is { } startedAt) forwarded["started_at"]         = startedAt.ToString("O");
+        if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
+
+        var enriched = await RepositoryDetection.EnrichWithRepositoryInfo(router, config, forwarded.ToJsonString(), clock.Time);
+
+        if (await RepoExclusion.IsOutOfScopeAsync(router, config, enriched,
+                                                  activeProfile?.AllowedRepos, activeProfile?.ExcludedRepos, clock.Time)) {
+            DisabledSessions.Mark(sessionId, config);
+            return;
+        }
+
+        var outcome = await _poster.PostOrSpoolAsync("session-start/grok", enriched, "grok-hook",
+            new HookSpool(config, clock.Time), sessionId, route: "session-start/grok");
+
+        if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return;
+
+        // A resumed session already has its title.
+        await EnsureWatcher(sessionId, transcriptPath, cwd, skipTitle: Str(node, "source") == "load");
+    }
+
+    Task EnsureWatcher(string sessionId, string transcriptPath, string? cwd, bool skipTitle) =>
+        watchers.EnsureWatcherRunning(sessionId, transcriptPath,
+            agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: skipTitle, vendor: "grok");
+
+    static DateTimeOffset? Timestamp(JsonNode node) =>
+        Str(node, "timestamp") is { } s
+     && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts)
+            ? ts
+            : null;
+
+    static string? Str(JsonNode node, string field) =>
+        node[field] is JsonValue v && v.TryGetValue<string>(out var s) && s.Length > 0 ? s : null;
+}

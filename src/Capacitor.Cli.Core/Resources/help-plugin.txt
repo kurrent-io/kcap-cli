@@ -152,6 +152,13 @@ Options:
   --skip-mistral-vibe-skills
                       With --mistral-vibe: skip installing the kcap skills into
                       ~/.agents/skills.
+  --grok              Target Grok Build: write kcap's own ~/.grok/hooks/kcap.json
+                      (honours $GROK_HOME) for SessionStart/Stop and install the
+                      agent skills. Writes the bare `kcap hook --grok` command, so
+                      kcap must be on PATH. Grok loads hooks at startup — restart
+                      any running `grok` session.
+  --skip-grok-skills  With --grok: skip installing the kcap skills into
+                      ~/.agents/skills.
   --tools-only        With --cursor, --copilot, --gemini, --kiro, --pi, --opencode,
                       --antigravity or --mistral-vibe: install only the tools (MCP
                       servers, skills, steering instructions; the
@@ -299,6 +306,7 @@ Examples:
   kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   kcap plugin install --antigravity         # Install Antigravity capture plugin (~/.gemini/config/plugins/kcap/)
   kcap plugin install --mistral-vibe        # Install Mistral Vibe hooks (merge into ~/.vibe/hooks.toml) + MCP
+  kcap plugin install --grok                # Write ~/.grok/hooks/kcap.json + agent skills
   kcap plugin install --cursor --tools-only # Cursor MCP servers + agent skills, no hooks
   kcap plugin install --kiro --tools-only   # Kiro MCP servers + skills, default agent unchanged
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
@@ -312,4 +320,5 @@ Examples:
   kcap plugin remove --opencode             # Delete ~/.config/opencode/plugins/kcap.ts
   kcap plugin remove --antigravity          # Remove the kcap plugin from ~/.gemini/config/plugins/kcap/
   kcap plugin remove --mistral-vibe         # Remove kcap hooks + MCP from ~/.vibe/hooks.toml and config.toml
+  kcap plugin remove --grok                 # Delete ~/.grok/hooks/kcap.json
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills

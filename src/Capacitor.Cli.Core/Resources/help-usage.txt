@@ -95,8 +95,8 @@ MCP servers (stdio):
   mcp knowledge                      Read facts and skills and fine-tune skills from agents
 
 Plugin:
-  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
-  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
+  plugin install [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--skills]   Register hooks/skills (Claude default; flag picks the vendor)
+  plugin remove  [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--skills]   Remove hooks/skills (Claude default; flag picks the vendor)
 
 Maintenance:
   update                           Check for and install updates
