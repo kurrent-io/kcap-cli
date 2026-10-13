@@ -119,6 +119,7 @@ public class GrokImportTests : IDisposable {
     [Arguments("tool_call", "\"title\":\"run\"", "session/update")]
     [Arguments("tool_call_update", "\"toolCallId\":\"c1\",\"status\":\"in_progress\"", "session/update")]
     [Arguments("turn_completed", "\"usage\":{}", "_x.ai/session/update")]
+    [Arguments("turn_completed", "\"usage\":{\"modelUsage\":{\"grok-4.5-build\":{\"inputTokens\":0,\"outputTokens\":0}}}", "_x.ai/session/update")]
     public async Task A_trailing_line_the_server_maps_to_nothing_leaves_the_session_loaded(string kind, string extra, string method) {
         var dir = Path.Combine(Home.Path, ".grok", "sessions", "%2Frepo%2Fdemo", Parent);
         Directory.CreateDirectory(dir);

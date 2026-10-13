@@ -253,13 +253,19 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
                 ("session/update", "tool_call_update")
                     => update.Str("status") is "completed" or "failed" && update.Str("toolCallId") is { Length: > 0 },
                 ("_x.ai/session/update", "turn_completed")
-                    => update.Obj("usage")?.Obj("modelUsage")?.EnumerateObject().Any(m => m.Value.ValueKind == JsonValueKind.Object) == true,
+                    => update.Obj("usage")?.Obj("modelUsage")?.EnumerateObject().Any(HasUsage) == true,
                 _ => false,
             };
         } catch (JsonException) {
             return false;
         }
     }
+
+    static readonly string[] TokenBuckets = ["inputTokens", "cachedReadTokens", "outputTokens", "reasoningTokens"];
+
+    // The server drops a model whose every token bucket is zero.
+    static bool HasUsage(JsonProperty model) =>
+        model.Name.Length > 0 && model.Value.IsObject && TokenBuckets.Any(k => model.Value.Num(k) > 0);
 
     async Task<bool> PostAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {
