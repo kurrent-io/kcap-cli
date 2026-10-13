@@ -152,8 +152,21 @@ Options:
   --skip-mistral-vibe-skills
                       With --mistral-vibe: skip installing the kcap skills into
                       ~/.agents/skills.
+  --muse              Target Muse Code: merge kcap's hooks (one group per lifecycle
+                      event) into the shared settings.json
+                      (~/.config/muse/, honours $XDG_CONFIG_HOME), register the
+                      kcap MCP servers under mcp_servers (mode: optional), and install
+                      the agent skills. A settings.json that does not parse is left
+                      untouched and the install fails. Writes the bare
+                      `kcap hook --muse --no-update-check` command, so kcap must be
+                      on PATH. Muse loads hooks at startup — restart any running
+                      `muse` session.
+  --skip-muse-mcp     With --muse: skip registering the kcap MCP servers in
+                      settings.json (the mcp_servers block).
+  --skip-muse-skills  With --muse: skip installing the kcap skills into
+                      ~/.agents/skills.
   --tools-only        With --cursor, --copilot, --gemini, --kiro, --pi, --opencode,
-                      --antigravity or --mistral-vibe: install only the tools (MCP
+                      --antigravity, --mistral-vibe or --muse: install only the tools (MCP
                       servers, skills, steering instructions; the
                       --skip-<vendor>-* flags still apply) and nothing that
                       records sessions: no hooks, no Pi or
@@ -299,6 +312,7 @@ Examples:
   kcap plugin install --opencode            # Install OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
   kcap plugin install --antigravity         # Install Antigravity capture plugin (~/.gemini/config/plugins/kcap/)
   kcap plugin install --mistral-vibe        # Install Mistral Vibe hooks (merge into ~/.vibe/hooks.toml) + MCP
+  kcap plugin install --muse                # Install Muse Code hooks (merge into ~/.config/muse/settings.json) + MCP
   kcap plugin install --cursor --tools-only # Cursor MCP servers + agent skills, no hooks
   kcap plugin install --kiro --tools-only   # Kiro MCP servers + skills, default agent unchanged
   kcap plugin install --skills --if-installed   # Refresh skills if previously installed (used by npm postinstall)
@@ -312,4 +326,5 @@ Examples:
   kcap plugin remove --opencode             # Delete ~/.config/opencode/plugins/kcap.ts
   kcap plugin remove --antigravity          # Remove the kcap plugin from ~/.gemini/config/plugins/kcap/
   kcap plugin remove --mistral-vibe         # Remove kcap hooks + MCP from ~/.vibe/hooks.toml and config.toml
+  kcap plugin remove --muse                 # Remove kcap hooks + MCP from ~/.config/muse/settings.json
   kcap plugin remove --skills               # Remove agent skills + legacy ~/.codex/skills
