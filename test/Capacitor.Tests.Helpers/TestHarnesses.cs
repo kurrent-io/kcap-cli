@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
@@ -59,7 +60,8 @@ public static class TestHarnesses {
             PiHarness.Over(new PiPaths(home, null)),
             OpenCodeHarness.Over(new OpenCodePaths(home, null, null, null)),
             AntigravityHarness.Over(gemini),
-            MistralVibeHarness.Over(new MistralVibePaths(home, null)));
+            MistralVibeHarness.Over(new MistralVibePaths(home, null)),
+            MuseHarness.Over(new MusePaths(home, null, null)));
     }
 
     /// <summary>One harness that answers from the search path alone — no run signal, whatever names
