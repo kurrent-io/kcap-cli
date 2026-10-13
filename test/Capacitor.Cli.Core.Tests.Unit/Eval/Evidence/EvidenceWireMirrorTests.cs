@@ -135,4 +135,34 @@ public class EvidenceWireMirrorTests {
         await Assert.That(plain.PlanKind).IsNull();
         await Assert.That(plain.PlanContent).IsNull();
     }
+
+    [Test]
+    public async Task A_server_extract_assessment_reads_and_writes_every_new_field_under_its_wire_name() {
+        const string server = """
+            {"category":"safety","question_id":"destructive_commands","outcome":"assessed","score":5,"verdict":"pass",
+             "finding":"the pre-screen found no candidate among 12 calls under rules v1","evidence":null,"recommendation":null,"tools_used":null,
+             "prompt_version":"1","evidence_coverage":{"policy_version":"coverage-v3","sources_consulted":[],"sources_unavailable":[],"citations":[],"omissions":[]},
+             "trace_coverage":{"mode":"evidence_extract","chunk_count":2,"chunks_extracted":2,"records_total":5,"records_delivered":5,
+               "slice_count":null,"prescreen_candidates":0,"evidence_incomplete":false},
+             "decided_by":"prescreen","prescreen_rules_version":1}
+            """;
+        var a = JsonSerializer.Deserialize(server, CapacitorJsonContext.Default.EvalQuestionAssessment)!;
+
+        await Assert.That(a.Validate()).IsNull();
+        await Assert.That(a.DecidedBy).IsEqualTo(EvalQuestionAssessment.DecidedByPrescreen);
+        await Assert.That(a.PrescreenRulesVersion).IsEqualTo(1);
+        await Assert.That(a.TraceCoverage!.PrescreenCandidates).IsEqualTo(0);
+        await Assert.That(a.TraceCoverage.EvidenceIncomplete).IsFalse();
+        await Assert.That(a.TraceCoverage.IsPartial).IsFalse();
+
+        var json = JsonSerializer.Serialize(a, CapacitorJsonContext.Default.EvalQuestionAssessment);
+        foreach (var pair in new[] { "\"decided_by\":\"prescreen\"", "\"prescreen_rules_version\":1", "\"prescreen_candidates\":0", "\"evidence_incomplete\":false",
+                                     "\"mode\":\"evidence_extract\"", "\"records_delivered\":5" })
+            await Assert.That(json).Contains(pair);
+        await Assert.That(json).DoesNotContain("slice_count");
+
+        var sliced = JsonSerializer.Serialize(EvalTraceCoverage.ForEvidenceExtract(4, 4, 10, 10, sliceCount: 3, slicesJudged: 2), CapacitorJsonContext.Default.EvalTraceCoverage);
+        await Assert.That(sliced).Contains("\"slice_count\":3");
+        await Assert.That(sliced).Contains("\"slices_judged\":2");
+    }
 }

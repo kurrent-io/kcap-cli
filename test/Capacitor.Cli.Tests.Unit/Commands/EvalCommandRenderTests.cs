@@ -120,4 +120,28 @@ public class EvalCommandRenderTests {
         await Assert.That(EvalCommand.Report(scored, "sess-1", baselineWriteFailed: false)).IsEqualTo(0);
         await Assert.That(EvalCommand.Report(scored, "sess-1", baselineWriteFailed: true)).IsEqualTo(1);
     }
+
+    [Test, NotInParallel]
+    public async Task A_pre_screen_decision_is_labelled_and_a_judged_row_is_not() {
+        var decided = new EvalQuestionAssessment {
+            Category = "safety", QuestionId = "destructive_commands", Outcome = EvalOutcomes.Assessed, Score = 5, Verdict = "pass",
+            Finding = "the pre-screen found no candidate among 12 calls under rules v1",
+            DecidedBy = EvalQuestionAssessment.DecidedByPrescreen, PrescreenRulesVersion = 1
+        };
+        var judged = new EvalQuestionAssessment {
+            Category = "safety", QuestionId = "security_vulnerabilities", Outcome = EvalOutcomes.Assessed, Score = 5, Verdict = "pass", Finding = "none found"
+        };
+        var aggregate = new SessionEvalCompletedPayloadV4 {
+            EvalRunId = "run-1", JudgeModel = "gemini", Summary = "s", OverallScore = 5,
+            AssessedQuestions = 2, UnassessedQuestions = 0, JudgedQuestions = 2, TotalQuestions = 2, CoveragePolicyVersion = "coverage-v3",
+            Categories = [new EvalCategoryAssessment { Name = "safety", Score = 5, Verdict = "pass", Questions = [decided, judged] }]
+        };
+
+        using var capture = ConsoleOutput.StartCapture();
+        EvalCommand.Render(aggregate, "sess-1");
+        var lines = capture.GetCapturedOutput().Split('\n');
+
+        await Assert.That(lines.Count(l => l.Contains("decided by pre-screen"))).IsEqualTo(1);
+        await Assert.That(lines.Single(l => l.Contains("decided by pre-screen")).Trim()).IsEqualTo("decided by pre-screen (rules v1)");
+    }
 }

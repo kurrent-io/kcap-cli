@@ -29,11 +29,14 @@ public record EvalEvidenceCoverage {
     public const int MaxSources   = 2_000;
     public const int MaxDetail    = 500;
 
-    /// <summary>The server's coverage rules; <c>coverage-v1</c> admits only its own vocabulary, anything else the full one.</summary>
+    /// <summary>The server's coverage rules; <c>coverage-v1</c> and <c>coverage-v2</c> admit only their own omission kinds, anything
+    /// else the full set.</summary>
     public string? Validate() {
         if (string.IsNullOrWhiteSpace(PolicyVersion) || PolicyVersion.Length > 64) return "policy_version must be non-empty and at most 64 characters";
         var v1    = PolicyVersion == EvalService.CoveragePolicyVersion;
-        var kinds = v1 ? EvalOmissionKinds.V1 : EvalOmissionKinds.All;
+        var kinds = v1 ? EvalOmissionKinds.V1
+                  : PolicyVersion == EvalService.EvidenceCoveragePolicyVersion ? EvalOmissionKinds.All
+                  : EvalOmissionKinds.V3;
         var stops = v1 ? EvalStopReasons.V1 : EvalStopReasons.All;
         if (StopReason is not null && !stops.Contains(StopReason)) return $"stop_reason '{StopReason}' is unknown";
         if (SourcesConsulted.Count > MaxSources || SourcesUnavailable.Count > MaxSources) return $"a source list exceeds {MaxSources}";

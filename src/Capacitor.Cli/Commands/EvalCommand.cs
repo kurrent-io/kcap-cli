@@ -148,6 +148,10 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
                     output.WriteLine($"    {marker} {q.QuestionId,-26} {q.Outcome}: {q.Finding}");
                 }
 
+                if (q.DecidedBy == EvalQuestionAssessment.DecidedByPrescreen) {
+                    output.WriteLine($"        decided by pre-screen (rules v{q.PrescreenRulesVersion})");
+                }
+
                 if (!string.IsNullOrEmpty(q.Evidence)) {
                     output.WriteLine($"        evidence: {q.Evidence}");
                 }

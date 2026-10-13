@@ -1,6 +1,7 @@
 namespace Capacitor.Cli.Core.Eval.Contracts;
 
-/// <summary>Mirrors the server's omission vocabulary: <see cref="V1"/> for <c>coverage-v1</c>, <see cref="All"/> for <c>coverage-v2</c>.</summary>
+/// <summary>Mirrors the server's omission vocabulary: <see cref="V1"/> for <c>coverage-v1</c>, <see cref="All"/> for <c>coverage-v2</c>
+/// (the retrieval contract the golden fixture pins), <see cref="V3"/> for <c>coverage-v3</c> and any newer version.</summary>
 public static class EvalOmissionKinds {
     public const string TurnIndexElided         = "turn_index_elided";
     public const string TurnsNotFetched         = "turns_not_fetched";
@@ -15,6 +16,8 @@ public static class EvalOmissionKinds {
     public const string SourcesNotConsulted     = "sources_not_consulted";
     public const string PagesNotFetched         = "pages_not_fetched";
     public const string BodiesNotFetched        = "bodies_not_fetched";
+    public const string ChunksNotExtracted      = "chunks_not_extracted";
+    public const string RecordsNotDelivered     = "records_not_delivered";
 
     public static readonly IReadOnlySet<string> V1 = new HashSet<string>(StringComparer.Ordinal) {
         TurnIndexElided, TurnsNotFetched, ToolResultTruncated, FieldElided, EntriesElided,
@@ -24,4 +27,6 @@ public static class EvalOmissionKinds {
     public static readonly IReadOnlySet<string> All = new HashSet<string>(V1, StringComparer.Ordinal) {
         ScopeIncomplete, SourcesNotConsulted, PagesNotFetched, BodiesNotFetched
     };
+
+    public static readonly IReadOnlySet<string> V3 = new HashSet<string>(All, StringComparer.Ordinal) { ChunksNotExtracted, RecordsNotDelivered };
 }
