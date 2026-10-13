@@ -159,6 +159,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
+            if (_session is not null) _requestedSubject = null;
             _session = id;
             _choices.Clear();
             _sessionItems.Clear();
@@ -233,7 +234,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
 
     void ApplyRequestedSubject() {
         if (_session is null || _requestedSubject is not { } subject) return;
-        _requestedSubject = null;
         var choice = _choices.FirstOrDefault(item => item.Subject == subject);
         if (choice is null) {
             // A fresh list confirms availability; never fall back to a different PR while loading.
@@ -255,8 +255,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     }
 
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
-        if (_disposed || choice?.Subject == _selected?.Subject) return;
+        if (_disposed) return;
         if (choice is not null && !_choices.Contains(choice)) return;
+        if (explicitSelection) {
+            _requestedSubject = choice?.Subject;
+            _explicitSelection = true;
+        }
+        if (choice?.Subject == _selected?.Subject) return;
         _explicitSelection = explicitSelection;
         if (_selected is not null) {
             if (_positions.Count >= 20 && !_positions.ContainsKey(_selected.Subject)) _positions.Remove(_positions.MinBy(x => x.Value.Touched).Key);

@@ -45,11 +45,11 @@ public class RailSessionViewModelTests {
                 new Dictionary<string, RailPullRequestSummary>());
             using var localReadable = new BehaviorSubject<bool>(true);
             var openedSessions = new List<string>();
-            var openedPrs = new List<(string, AgentOrigin)>();
+            var openedPrs = new List<(string, AgentOrigin, PullRequestSubjectDto?)>();
             using var row = new RailSessionViewModel(Row() with { SessionId = "s1" },
                 new BehaviorSubject<string?>(null), NoPending, NotStale, openedSessions.Add, _ => { }, TimeProvider.System,
                 pullRequests: summaries, localOnAppServer: localReadable,
-                openPullRequest: (id, origin, _) => openedPrs.Add((id, origin)));
+                openPullRequest: (id, origin, subject) => openedPrs.Add((id, origin, subject)));
             var changes = new List<string?>();
             row.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
             await Assert.That(row.HasPullRequest).IsFalse();
@@ -62,7 +62,7 @@ public class RailSessionViewModelTests {
             await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
             await Assert.That(changes).Contains(nameof(RailSessionViewModel.PullRequestLabel));
             row.OpenPullRequestCommand.Execute().Subscribe();
-            await Assert.That(openedPrs).IsEquivalentTo(new[] { ("a1", AgentOrigin.Local) });
+            await Assert.That(openedPrs).IsEquivalentTo(new[] { ("a1", AgentOrigin.Local, row.PullRequest!.Subject) });
             await Assert.That(openedSessions).IsEmpty();
             summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(3) });
             await Assert.That(row.PullRequestLabel).IsEqualTo("3 PRs");
@@ -79,13 +79,15 @@ public class RailSessionViewModelTests {
     public async Task A_remote_pr_opens_on_the_remote_origin_even_when_local_reads_are_disabled() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             AgentOrigin? opened = null;
+            PullRequestSubjectDto? openedSubject = null;
             using var row = new RailSessionViewModel(RemoteRow("a1") with { SessionId = "s1" },
                 new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
                 pullRequests: new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
                     new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(FakePullRequestSource.Link(142))) }),
-                localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin, _) => opened = origin);
+                localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin, subject) => { opened = origin; openedSubject = subject; });
             row.OpenPullRequestCommand.Execute().Subscribe();
             await Assert.That(opened).IsEqualTo(AgentOrigin.Remote);
+            await Assert.That(openedSubject).IsEqualTo(row.PullRequest!.Subject);
         });
     }
 

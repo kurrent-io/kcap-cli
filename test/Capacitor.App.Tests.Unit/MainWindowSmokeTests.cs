@@ -659,6 +659,12 @@ public class MainWindowSmokeTests {
             var flyout = (Flyout)FlyoutBase.GetAttachedFlyout(pr)!;
             await Assert.That(flyout.IsOpen).IsTrue();
             await Assert.That(vm.CurrentWorkspace).IsNull();
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> {
+                ["s1"] = summaries.Value["s1"],
+                ["s2"] = new(1, PullRequestWire.Subject(source.Links[1]), "Draft"),
+            });
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(flyout.IsOpen).IsTrue();
             var options = ((StackPanel)((ScrollViewer)flyout.Content!).Content!).Children.OfType<Button>().ToArray();
             await Assert.That(options).Count().IsEqualTo(2);
             await Assert.That(AutomationProperties.GetName(options[0])).Contains("example/repo #1");
@@ -705,7 +711,7 @@ public class MainWindowSmokeTests {
     public async Task Pr_link_is_a_separate_focusable_control_and_opens_the_native_reader() {
         await AvaloniaSession.RunOnUiAsync(async () => {
             var time = new FakeTimeProvider();
-            var source = new FakePullRequestSource(time) { Links = [FakePullRequestSource.Link(142)] };
+            var source = new FakePullRequestSource(time) { Links = [FakePullRequestSource.Link(142), FakePullRequestSource.Link(143)] };
             using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
                 new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, PullRequestWire.Subject(source.Links[0]), "Open") });
             var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source,

@@ -301,7 +301,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);
-        ShowPullRequestCommand = ReactiveCommand.Create(() => OpenPullRequest());
+        ShowPullRequestCommand = ReactiveCommand.Create(() => { if (ShowsPullRequestTab) ActiveTab = RemoteTab.PullRequest; });
         _disposables.Add(ShowPullRequestCommand);
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = RemoteTab.Chat; });
         ShowTerminalCommand = ReactiveCommand.Create(() => { if (ShowsTerminalTab) ActiveTab = RemoteTab.Terminal; });

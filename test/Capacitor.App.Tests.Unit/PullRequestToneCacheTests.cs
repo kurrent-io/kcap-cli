@@ -11,6 +11,52 @@ namespace Capacitor.App.Tests.Unit;
 /// overviews on a slow cadence, independent of which workspace is open.
 public class PullRequestToneCacheTests {
     [Test]
+    [Arguments("empty")]
+    [Arguments("denied")]
+    [Arguments("transient")]
+    [Arguments("unavailable")]
+    public async Task A_failed_short_window_renewal_returns_to_the_normal_cadence(string failure) {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 8;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        if (failure == "empty") source.Links = [];
+        else if (failure == "unavailable") source.Capability = PullRequestCapabilityKind.Unavailable;
+        else source.Failure = failure;
+        time.Advance(TimeSpan.FromSeconds(1));
+        var reads = source.Lists;
+        time.Advance(TimeSpan.FromSeconds(60));
+        await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "metadata removed");
+        await Assert.That(source.Lists).IsEqualTo(reads);
+        source.Capability = PullRequestCapabilityKind.Supported;
+        time.Advance(TimeSpan.FromSeconds(60));
+        await WaitUntilAsync(() => source.Lists == reads + 1, "normal-cadence retry");
+    }
+
+    [Test]
+    public async Task Renewing_an_unchanged_summary_preserves_its_identity_when_another_session_changes() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 8;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        directory.Rows.AddOrUpdate(Row("a2", "s2"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.Count == 2, "both summaries");
+        var summary = cache.CurrentSummaries["s1"];
+        time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => source.Lists == 4, "both summaries renewed");
+        directory.Rows.Remove("local:a2");
+        await WaitUntilAsync(() => cache.CurrentSummaries.Count == 1, "other session removed");
+        await Assert.That(ReferenceEquals(cache.CurrentSummaries["s1"], summary)).IsTrue();
+        source.Lifecycles[1] = "merged";
+        time.Advance(TimeSpan.FromSeconds(1));
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].MenuItems[0].Lifecycle == "Merged", "real metadata change");
+        await Assert.That(ReferenceEquals(cache.CurrentSummaries["s1"], summary)).IsFalse();
+    }
+
+    [Test]
     public async Task An_eight_second_access_window_renews_without_a_metadata_gap() {
         var (directory, source, time, cache) = Build();
         using var _c = cache;

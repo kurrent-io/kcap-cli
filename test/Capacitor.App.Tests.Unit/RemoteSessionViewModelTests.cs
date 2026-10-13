@@ -103,8 +103,23 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.ShowsPullRequestTab).IsTrue();
             await Assert.That(vm.PullRequests.Choices).Count().IsEqualTo(2);
             await Assert.That(vm.PullRequests.Selected!.Subject.Number).IsEqualTo(1);
+            vm.PullRequests.ShowSectionCommand.Execute("checks").Subscribe();
+            await WaitUntilAsync(() => vm.PullRequests.Rows.Count > 0 && !vm.PullRequests.IsReading, what: "checks loaded");
+            var rows = vm.PullRequests.Rows.ToArray();
+            var pages = source.Pages;
             vm.ShowChatCommand.Execute().Subscribe();
             await Assert.That(vm.ShowsChatPane).IsTrue();
+            var lists = source.Lists;
+            var overviews = source.Overviews;
+            h.Time.Advance(TimeSpan.FromSeconds(4));
+            vm.ShowPullRequestCommand.Execute().Subscribe();
+            await Assert.That(vm.IsPullRequestActive).IsTrue();
+            await Assert.That(vm.PullRequests.Selected!.Subject.Number).IsEqualTo(1);
+            await Assert.That(source.Lists).IsEqualTo(lists);
+            await Assert.That(source.Overviews).IsEqualTo(overviews);
+            await Assert.That(source.Pages).IsEqualTo(pages);
+            await Assert.That(vm.PullRequests.Section).IsEqualTo("checks");
+            await Assert.That(vm.PullRequests.Rows).IsEquivalentTo(rows);
             await vm.TeardownAsync();
         });
     }

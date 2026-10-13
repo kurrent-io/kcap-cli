@@ -124,7 +124,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         _disposables.Add(OpenCommand);
         OpenPullRequestCommand = ReactiveCommand.Create(() => {
             if (HasPullRequest && !HasMultiplePullRequests)
-                openPullRequest?.Invoke(row.Id, row.Origin == AgentOrigin.Remote ? AgentOrigin.Remote : AgentOrigin.Local, null);
+                openPullRequest?.Invoke(row.Id, row.Origin == AgentOrigin.Remote ? AgentOrigin.Remote : AgentOrigin.Local, PullRequest!.Subject);
         });
         _disposables.Add(OpenPullRequestCommand);
         OpenPullRequestChoiceCommand = ReactiveCommand.Create<RailPullRequestMenuItem>(item => {

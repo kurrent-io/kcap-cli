@@ -77,7 +77,7 @@ public sealed class PullRequestToneCache : IDisposable {
             if (gone.Count > 0) Publish();
             var expired = _summaries.Keys.Where(s => !_sessions.Contains(s)
                 || _time.GetElapsedTime(_summaryAccess[s].Started).TotalSeconds > _summaryAccess[s].Seconds - 5).ToList();
-            foreach (var session in expired) { _summaries.Remove(session); _summaryAccess.Remove(session); }
+            foreach (var session in expired) { _summaries.Remove(session); _summaryAccess.Remove(session); _refreshAfter.Remove(session); }
             if (expired.Count > 0) PublishSummaries();
             due = _sessions
                 .Where(s => !_inFlight.Contains(s) && (!_readAt.TryGetValue(s, out var at) || _time.GetElapsedTime(at) >= _refreshAfter.GetValueOrDefault(s, _refreshEvery)))
@@ -89,6 +89,11 @@ public sealed class PullRequestToneCache : IDisposable {
 
     async Task ReadAsync(string session, long version, CancellationToken ct) {
         try {
+            // Only a successfully renewed summary earns the faster access-window cadence.
+            lock (_lock) {
+                if (_disposed || _versions.GetValueOrDefault(session) != version) return;
+                _refreshAfter.Remove(session);
+            }
             var capability = await _source.DiscoverAsync(false, ct).ConfigureAwait(false);
             if (capability.Kind != PullRequestCapabilityKind.Supported) {
                 // Signed out, or a server without overviews, is a verdict; an unreachable one is not.
@@ -126,11 +131,13 @@ public sealed class PullRequestToneCache : IDisposable {
                     if (_disposed || _versions.GetValueOrDefault(session) != version) return;
                     if (items.Length == 0) { _summaries.Remove(session); _summaryAccess.Remove(session); }
                     else if (reads.All(read => read.CanReveal(_time))) {
-                        _summaries[session] = new RailPullRequestSummary(items.Length,
+                        var summary = new RailPullRequestSummary(items.Length,
                             items.Length == 1 ? PullRequestWire.Subject(items[0]) : null,
                             items.Length == 1 ? LifecycleLabel(reads[0].Data!) : "Unknown",
                             items.Select((link, i) => new RailPullRequestMenuItem(PullRequestWire.Subject(link),
                                 reads[i].Data!.Title ?? link.Title, LifecycleLabel(reads[i].Data!))).ToArray());
+                        if (!_summaries.TryGetValue(session, out var previous) || !SameSummary(previous, summary))
+                            _summaries[session] = summary;
                         var remaining = reads.Min(r => r.RemainingSeconds(_time));
                         _summaryAccess[session] = (_time.GetTimestamp(), remaining);
                         var renewAfter = _time.GetElapsedTime(_readAt[session]).TotalSeconds + Math.Max(1, remaining - 10);
@@ -160,6 +167,7 @@ public sealed class PullRequestToneCache : IDisposable {
             _tones.Remove(session);
             _summaries.Remove(session);
             _summaryAccess.Remove(session);
+            _refreshAfter.Remove(session);
             Publish();
             PublishSummaries();
         }
@@ -168,11 +176,14 @@ public sealed class PullRequestToneCache : IDisposable {
     void PublishSummaries() {
         if (_summaryPublished.Value.Count == _summaries.Count
             && _summaryPublished.Value.All(p => _summaries.GetValueOrDefault(p.Key) is { } next
-                && next.Count == p.Value.Count && next.Subject == p.Value.Subject && next.Lifecycle == p.Value.Lifecycle
-                && next.MenuItems.SequenceEqual(p.Value.MenuItems))) return;
+                && SameSummary(next, p.Value))) return;
         _summaryPublished.OnNext(_summaries.Count == 0 ? FrozenDictionary<string, RailPullRequestSummary>.Empty
             : _summaries.ToFrozenDictionary(StringComparer.Ordinal));
     }
+
+    static bool SameSummary(RailPullRequestSummary left, RailPullRequestSummary right) =>
+        left.Count == right.Count && left.Subject == right.Subject && left.Lifecycle == right.Lifecycle
+        && left.MenuItems.SequenceEqual(right.MenuItems);
 
     void Set(string session, PullRequestTone tone, long version) {
         lock (_lock) {

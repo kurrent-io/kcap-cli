@@ -715,13 +715,18 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
+        var subject = open switch {
+            WorkspaceViewModel local => local.PullRequests?.Selected?.Subject,
+            RemoteSessionViewModel remote => remote.PullRequests?.Selected?.Subject,
+            _ => null,
+        };
         OpenSessionCore(open.AgentId, origin, revealInRail: false);
         if (ReferenceEquals(CurrentWorkspace, open)) return;
         switch (CurrentWorkspace) {
             case WorkspaceViewModel local when terminal: local.ShowTerminalCommand.Execute().Subscribe(); break;
             case RemoteSessionViewModel remote when terminal: remote.ShowTerminalCommand.Execute().Subscribe(); break;
-            case WorkspaceViewModel local when pullRequest: local.OpenPullRequest(); break;
-            case RemoteSessionViewModel remote when pullRequest: remote.OpenPullRequest(); break;
+            case WorkspaceViewModel local when pullRequest: local.OpenPullRequest(subject); break;
+            case RemoteSessionViewModel remote when pullRequest: remote.OpenPullRequest(subject); break;
         }
     }
 
