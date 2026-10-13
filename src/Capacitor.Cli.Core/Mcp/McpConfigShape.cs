@@ -25,7 +25,9 @@ public sealed record McpConfigShape(
     string?     TypeValue,          // "stdio" (Copilot), "local" (OpenCode), or null
     string      EnvKey,             // "env" (most) or "environment" (OpenCode) — reserved for future env support
     EnableStyle Enable,             // OpenCode wants "enabled": true
-    TrustStyle  Trust = TrustStyle.None // per-server auto-approve for AutoApprove servers, if the harness supports it
+    TrustStyle  Trust = TrustStyle.None, // per-server auto-approve for AutoApprove servers, if the harness supports it
+    string?     TransportValue = null,  // Muse: "stdio" under a `transport` key, or null
+    string?     ModeValue      = null   // Muse: "optional" under a `mode` key, or null
 ) {
     // Cursor / Kiro / Antigravity share the plain, trust-less shape (Cursor has no per-server trust
     // field — auto-approve there is a separate permissions.json classifier / the --approve-mcps flag).
@@ -35,4 +37,7 @@ public sealed record McpConfigShape(
     // Copilot's `tools` field is availability, not approval — no per-server trust knob to write here.
     public static readonly McpConfigShape Copilot  = new("mcpServers", CommandAsArgvArray: false, TypeValue: "stdio", EnvKey: "env",         Enable: EnableStyle.None);
     public static readonly McpConfigShape OpenCode = new("mcp",        CommandAsArgvArray: true,  TypeValue: "local", EnvKey: "environment", Enable: EnableStyle.EnabledTrue);
+    // Muse's settings-level `mcp_servers` is keyed by name; `mode: optional` keeps a stopped kcap
+    // daemon from aborting a Muse run.
+    public static readonly McpConfigShape Muse     = new("mcp_servers", CommandAsArgvArray: false, TypeValue: null,    EnvKey: "env",         Enable: EnableStyle.None, TransportValue: "stdio", ModeValue: "optional");
 }
