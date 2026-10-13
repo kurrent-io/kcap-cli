@@ -5,7 +5,7 @@ using Capacitor.Cli.Capture;
 namespace Capacitor.Cli.Tests.Unit;
 
 public partial class SecretPatternsTests {
-    // The patterns as plain left-to-right scans, before they were reshaped for speed.
+    // Reference shapes: plain left-to-right scans whose results the reshaped patterns must reproduce.
     const string UnanchoredVendorToken =
         @"(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}";
 
