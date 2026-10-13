@@ -295,6 +295,52 @@ public class WizardAuthBridgesTests {
         await Assert.That(string.Join("\n", progress.Errors)).Contains("owned by someone else");
     }
 
+    // The wizard has no way to enter an invite code, so the gate has to say where to get one.
+    [Test]
+    [Arguments(HttpStatusCode.Forbidden,  "invite_required", "invite-only")]
+    [Arguments(HttpStatusCode.BadRequest, "invalid_code",    "isn't valid")]
+    [Arguments(HttpStatusCode.Conflict,   "code_exhausted",  "used up")]
+    public async Task An_invite_gate_refusal_names_where_to_request_an_invite(HttpStatusCode status, string reason, string expected) {
+        var progress = await RefusedProvision(status, $$"""{"reason":"{{reason}}","requestUrl":"https://site.example/get-started#request"}""");
+
+        await Assert.That(progress).Contains(expected);
+        await Assert.That(progress).Contains("https://site.example/get-started#request");
+    }
+
+    [Test]
+    public async Task An_invite_gate_refusal_with_no_request_url_names_no_url() {
+        var progress = await RefusedProvision(HttpStatusCode.Forbidden, """{"reason":"invite_required"}""");
+
+        await Assert.That(progress).Contains("invite-only");
+        await Assert.That(progress).DoesNotContain("http");
+    }
+
+    [Test]
+    public async Task Any_other_403_keeps_the_generic_failure() {
+        var progress = await RefusedProvision(HttpStatusCode.Forbidden, """{"reason":"something_else"}""");
+
+        await Assert.That(progress).Contains("HTTP 403");
+    }
+
+    static async Task<string> RefusedProvision(HttpStatusCode status, string body) {
+        var (provisioner, handler, progress, time) = NewProvisioner();
+
+        handler.Respond = (request, _) => request.RequestUri!.AbsolutePath == "/api/signup/availability"
+            ? (HttpStatusCode.OK, """{"available":true}""")
+            : (status, body);
+
+        provisioner.OfferMode     = _ => Task.FromResult<ProvisionMode>(new ProvisionMode.Create());
+        provisioner.PromptOrgName = _ => Task.FromResult<string?>("Acme");
+        provisioner.PromptSlug    = (suggestion, _, _) => Task.FromResult<string?>(suggestion);
+        provisioner.ConfirmCreate = (_, _, _) => Task.FromResult(true);
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+
+        return string.Join("\n", progress.Errors);
+    }
+
     [Test]
     public async Task Choosing_an_existing_workspace_hands_the_input_back_unresolved() {
         var (provisioner, handler, _, time) = NewProvisioner();

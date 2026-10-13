@@ -181,6 +181,10 @@ public sealed class WizardTenantProvisioner(
                 return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
             case 202 or 200:
                 return await PollAsync(tokens, slug, orgName, origin, ct);
+            case 403 when outcome.Body?.Reason == "invite_required":
+            case 400 when outcome.Body?.Reason == "invalid_code":
+            case 409 when outcome.Body?.Reason == "code_exhausted":
+                return Failed(InviteRefusal(outcome.Body.Reason, outcome.Body.RequestUrl), outcome.Body.Reason);
             case 400:
                 return Failed(Reason400(outcome.Body?.Reason), outcome.Body?.Reason ?? "invalid_request");
             case 409:
@@ -287,6 +291,17 @@ public sealed class WizardTenantProvisioner(
         telemetry.Funnel.WorkspaceFailed(reason);
 
         return ProvisionOffer.Failed;
+    }
+
+    // The wizard has no invite-code entry, so a gated server can only be answered with where to ask.
+    static string InviteRefusal(string reason, string? requestUrl) {
+        var why = reason switch {
+            "invalid_code"   => "That invite code isn't valid.",
+            "code_exhausted" => "That invite code has been used up.",
+            _                => "Capacitor is invite-only right now."
+        };
+
+        return requestUrl is { Length: > 0 } ? $"{why} Request an invite at {requestUrl}." : why;
     }
 
     static string Reason400(string? reason) => reason switch {

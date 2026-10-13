@@ -21,7 +21,12 @@ sealed class ScriptedConsole : IAnsiConsole, IDisposable {
             ColorSystem = ColorSystemSupport.NoColors,
             Interactive = InteractionSupport.Yes,
             Out         = new AnsiConsoleOutput(new StringWriter(_text)),
+            // Spectre's CI enrichers (GitHub Actions and friends) force a non-interactive profile
+            // whatever was asked for, so a prompt that works in a terminal throws on the runner.
+            Enrichment  = new ProfileEnrichment { UseDefaultEnrichers = false },
         });
+        _inner.Profile.Capabilities.Interactive = true;
+        _inner.Profile.Capabilities.Ansi        = true;
         AnsiConsole.Console = this;
     }
 

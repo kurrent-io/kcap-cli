@@ -353,11 +353,13 @@ public sealed class SpectreTenantProvisioner(
         // The slug is safe to embed — it is validated down to [a-z0-9-] — but an organization name is
         // arbitrary text, and a quote or a backtick in one turns a command meant for copying into a
         // different command. The reader knows their own name; the shape is what they need.
+        // The code is a credential, so the command names the flag and leaves its value to the reader.
+        var inviteFlag   = requested?.InviteCode is null ? "" : " --invite-code <code>";
         var createPlain  = Scripted
-            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --tier {tier.Wire()} --no-prompt"
+            ? $"Re-run kcap setup --org \"<name>\" --slug {slug} --tier {tier.Wire()}{inviteFlag} --no-prompt"
             : "Re-run kcap setup";
         var createMarkup = Scripted
-            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --tier {tier.Wire()} --no-prompt[/]"
+            ? $"Re-run [cyan]kcap setup --org \"<name>\" --slug {Markup.Escape(slug)} --tier {tier.Wire()}{Markup.Escape(inviteFlag)} --no-prompt[/]"
             : "Re-run [cyan]kcap setup[/]";
         // The live display is a terminal affordance; on a scripted run its fallback renderer would put
         // a hundred-odd progress lines on stdout, which is the stream that run's failures avoid.

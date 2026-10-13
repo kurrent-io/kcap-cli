@@ -229,6 +229,34 @@ public class TenantProvisionerHeadlessTests {
         await Assert.That(retryLine).DoesNotContain("rm -rf");
     }
 
+    // Without the flag the printed command would hit the gate again; the code itself stays out of a log.
+    [Test]
+    public async Task A_failed_build_names_the_invite_code_flag_but_never_the_code() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new ProvisioningStubHandler { ProvisionStatus = HttpStatusCode.Accepted, StatusState = "failed" };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", InviteCode: "SECRET1"));
+
+        await provisioner.OfferCreateAsync(Tokens());
+
+        var retryLine = capture.GetCapturedError()
+            .Split('\n')
+            .Single(l => l.Contains("Re-run", StringComparison.Ordinal));
+
+        await Assert.That(retryLine).Contains("--tier free --invite-code <code> --no-prompt");
+        await Assert.That(capture.GetCapturedError()).DoesNotContain("SECRET1");
+    }
+
+    [Test]
+    public async Task A_failed_build_with_no_invite_code_names_no_invite_code_flag() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new ProvisioningStubHandler { ProvisionStatus = HttpStatusCode.Accepted, StatusState = "failed" };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme"));
+
+        await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(capture.GetCapturedError()).DoesNotContain("--invite-code");
+    }
+
     [Test]
     public async Task The_requested_tier_reaches_the_provision_call() {
         using var handler = new ProvisioningStubHandler();
