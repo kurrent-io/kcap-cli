@@ -114,12 +114,11 @@ public class ForeignHookUnderGrokTests : IDisposable {
             try { process.StandardInput.Close(); } catch (IOException) { }
         }
 
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var stdout = process.StandardOutput.ReadToEndAsync(cts.Token);
+        var stderr = process.StandardError.ReadToEndAsync(cts.Token);
         await process.WaitForExitAsync(cts.Token);
 
-        return (process.ExitCode, stdout, stderr);
+        return (process.ExitCode, await stdout, await stderr);
     }
 }
