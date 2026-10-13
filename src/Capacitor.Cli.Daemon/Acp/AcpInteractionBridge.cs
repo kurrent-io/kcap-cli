@@ -62,7 +62,9 @@ internal sealed partial class AcpInteractionBridge(
         // The server's policy judge, consulted for a call no rule decided when the launch's policy
         // enables it. Null leaves an undecided call exactly as it is without one.
         PolicyJudgeGateway?                                                           policyJudge = null,
-        TimeSpan?                                                                     judgeBudget = null
+        TimeSpan?                                                                     judgeBudget = null,
+        // The vendor's own match for an admitted frame; Kiro's title match when unset.
+        Func<JsonElement, IReadOnlySet<string>, bool>?                                admissionMatcher = null
     ) {
     static readonly IReadOnlySet<string> EmptyAdmitted = new HashSet<string>(StringComparer.Ordinal);
 
@@ -206,7 +208,7 @@ internal sealed partial class AcpInteractionBridge(
         // correctly-configured reviewer never raises a frame is measurably false on Kiro, which
         // intermittently prompts for a tool that is in its own trust list.
         if (unattendedPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove) {
-            if (!UnattendedToolAdmission.IsAdmitted(parsed.ToolCall, admittedToolIds ?? EmptyAdmitted))
+            if (!(admissionMatcher ?? UnattendedToolAdmission.IsAdmitted)(parsed.ToolCall, admittedToolIds ?? EmptyAdmitted))
                 return ReapForbiddenPermissionFrame(parsed.ToolCall);
 
             var admittedChoice = TrySelectLeastPrivilegeAllow(options);

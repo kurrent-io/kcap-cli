@@ -1158,7 +1158,7 @@ minimum version automatically at startup and refuses anything older. Use `kcap d
 permission, and it never blocks a first launch.
 
 **To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment
-(Gemini, Kiro, OpenCode, Antigravity, and Pi):
+(Gemini, Kiro, OpenCode, Antigravity, Pi, and Grok):
 
 ```bash
 export KCAP_GEMINI_UNATTENDED_REVIEWER=0        # this DAEMON's environment — not a server setting
@@ -1166,6 +1166,7 @@ export KCAP_KIRO_UNATTENDED_REVIEWER=0
 export KCAP_OPENCODE_UNATTENDED_REVIEWER=0
 export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0
 export KCAP_PI_UNATTENDED_REVIEWER=0
+export KCAP_GROK_UNATTENDED_REVIEWER=0
 ```
 
 Unset means enabled. A value the daemon cannot read as true or false is treated as **disabled**, and
@@ -1912,12 +1913,21 @@ from the server's frontier so no content is lost. Like the Claude ceiling, the r
 
 ### Hosted Grok agents
 
-The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok` is on `PATH` (or `KCAP_GROK_PATH` names it). A per-launch model is applied through Grok's `model` session option; with none, Grok runs its own default. Not yet an unattended reviewer.
+The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok` is on `PATH` (or `KCAP_GROK_PATH` names it). A per-launch model is applied through Grok's `model` session option; with none, Grok runs its own default.
 
 - **A hosted Grok asks before it acts, even if you run Grok with always-approve.** Grok applies `permission_mode = "always-approve"` from `~/.grok/config.toml` to agent sessions too, which would let it run every tool without asking the daemon. The daemon turns that off for the sessions it hosts, so approvals and the launch dialog's permission presets apply.
 - **It runs as its own process,** never through a shared `grok leader`, so stopping the agent stops Grok.
 - **It is recorded once.** kcap's own Grok hook loads inside the hosted child and stands down there, because the daemon already records the session. A `grok` the hosted agent starts itself is still recorded.
 - **It carries no cost yet.** Grok reports a hosted turn's token usage in an extension the daemon does not forward, so a hosted Grok session shows no cost; a Grok session you run yourself does.
+
+#### Grok as an unattended review-flow reviewer
+
+Enabled by default; `KCAP_GROK_UNATTENDED_REVIEWER=0` in the daemon's environment disables it. Grok reviews in an owned worktree only, never a borrowed checkout, because nothing in it contains what the reviewer reads.
+
+- **Grok asks before every edit and every command it does not class as read-only.** The daemon approves only calls on the MCP servers it injected for the review, its result channel among them. Any other request ends the round rather than being answered, so a reviewer that tries to write is stopped, not trusted.
+- **The reviewer gets reads, search and the shell, and no edit tools.** It is launched with an agent profile that removes `search_replace` and `write`, subagents and web search, so a well-behaved review raises nothing to refuse.
+- **Your Claude Code and Cursor setup stays out of it.** The reviewer loads none of their MCP servers, hooks, skills or rules. Your own `~/.grok` MCP servers and hooks still load: Grok has no switch for them. A call to one of those servers is refused like any other.
+- **Version floor:** the daemon records the installed `grok` at startup and refuses an older build. `kcap daemon reviewer affirm --vendor grok` moves it.
 
 ### Hosted Pi agents
 

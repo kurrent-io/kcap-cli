@@ -298,7 +298,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>Recorded from <see cref="EmitEnvelope"/>, opened by the factory before construction. Null
     /// for every launch/test that carries no journal.</summary>
     readonly TranscriptJournal? _journal;
-    readonly Func<JsonObject>? _sessionNewMeta;
+    readonly Func<bool, JsonObject>? _sessionNewMeta;
 
     readonly ReapVerdictGate _gate;
 
@@ -511,7 +511,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             string?                                                                         policyCwd = null,
             TranscriptJournal?                                                              journal = null,
             PolicyJudgeGateway?                                                             policyJudge = null,
-            Func<JsonObject>?                                                               sessionNewMeta = null
+            Func<bool, JsonObject>?                                                         sessionNewMeta = null,
+            Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null
         ) {
         _sessionNewMeta = sessionNewMeta;
         _journal = journal;
@@ -565,7 +566,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 vendor,
                 notifyPolicyDecision,
                 policyCwd,
-                policyJudge);
+                policyJudge,
+                admissionMatcher: admissionMatcher);
         }
 
         // The original launch's incarnation. Every later candidate goes through the same wiring
@@ -903,7 +905,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
-                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke()),
+                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke(_isReviewFlow)),
                 CapacitorJsonContext.Default.SessionNewParams);
 
             sessionNewResult = await RunHandshakeStageAsync(

@@ -1282,6 +1282,7 @@ public static partial class DaemonRunner {
         "opencode"    => v => config.OpenCodeUnattendedReviewerEnabled    = v,
         "antigravity" => v => config.AntigravityUnattendedReviewerEnabled = v,
         "pi"          => v => config.PiUnattendedReviewerEnabled          = v,
+        "grok"        => v => config.GrokUnattendedReviewerEnabled        = v,
         _ => throw new NotSupportedException(
             $"Gated reviewer '{vendor}' is in GatedReviewers.All but no DaemonConfig flag is wired to "
           + $"its opt-out switch, so setting {GatedReviewers.Resolve(vendor)?.EnableEnvVar ?? "it"} "
@@ -1350,6 +1351,10 @@ public static partial class DaemonRunner {
 
         SeedReviewerAffirmation(
             stateDir, PiVendor, config.PiUnattendedReviewerEnabled, config.PiPath, binaries);
+
+        SeedReviewerAffirmation(
+            stateDir, AcpVendorDescriptors.Grok.Vendor,
+            config.GrokUnattendedReviewerEnabled, config.GrokPath, binaries);
 
         SeedVersionFloor(stateDir, AntigravityVendor, config.AntigravityPath, binaries);
     }
@@ -1477,6 +1482,7 @@ public static partial class DaemonRunner {
     internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
     internal const string AntigravityLauncherPolicyVersion = "antigravity-unattended-v1";
     internal const string OpenCodeLauncherPolicyVersion = "opencode-unattended-v1";
+    internal const string GrokLauncherPolicyVersion = "grok-unattended-v1";
     internal const string PiLauncherPolicyVersion = "pi-unattended-v1";
 
     /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
@@ -1517,6 +1523,7 @@ public static partial class DaemonRunner {
                 "copilot" => CopilotLauncherPolicyVersion,
                 AntigravityVendor => AntigravityLauncherPolicyVersion,
                 "opencode" => OpenCodeLauncherPolicyVersion,
+                "grok"    => GrokLauncherPolicyVersion,
                 PiVendor  => PiLauncherPolicyVersion,
                 _         => $"{vendor}-unattended-v1"
             };
