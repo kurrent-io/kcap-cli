@@ -47,6 +47,10 @@ Options:
                               trial (a personal email, or a domain that already
                               has one) gets a Free workspace instead, and setup
                               says why.
+  --invite-code <code>        Invite code for a workspace created with --org and
+                              --slug, while creating one is invite-only. Without
+                              it, an invite-only run ends naming where to request
+                              one; the prompted flow asks for the code instead.
   --no-prompt                 Non-interactive mode (requires <tenant> or
                               --server-url, or --org + --slug to create a
                               workspace as part of the run)
@@ -202,6 +206,9 @@ an account with no workspace yet can create one: if yours already has a differen
 one, setup signs in, stops and says so rather than going on to configure that one.
 They cannot be combined with --server-url (or `kcap setup <tenant>`), which points
 at a workspace that exists, or with --github, whose lane never provisions.
+While creating a workspace is invite-only, the prompted flow asks for an invite
+code (three tries) and names where to request one; a run with --org and --slug
+takes it as --invite-code instead.
 
 SSO discovery only lists
 workspaces that use org SSO, so a workspace whose members sign in with the GitHub

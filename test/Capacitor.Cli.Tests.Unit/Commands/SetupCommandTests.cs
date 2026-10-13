@@ -1648,6 +1648,30 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task ParseRequestedWorkspace_carries_the_invite_code_through() {
+        var (workspace, error) = Parse("setup", "--org", "Acme", "--slug", "acme", "--invite-code", "  ABCD  ");
+
+        await Assert.That(error).IsNull();
+        await Assert.That(workspace!.InviteCode).IsEqualTo("ABCD");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.InviteCode).IsNull();
+    }
+
+    // An invite code with nothing to create would otherwise be dropped in silence.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_invite_code_with_no_workspace_to_create() {
+        var (workspace, error) = Parse("setup", "--invite-code", "ABCD");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--org and --slug");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_invite_code_with_no_value() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--invite-code").Error!)
+            .Contains("--invite-code needs a value");
+    }
+
+    [Test]
     public async Task ParseRequestedWorkspace_refuses_half_a_pair() {
         await Assert.That(Parse("setup", "--org", "Acme").Error).Contains("--slug");
         await Assert.That(Parse("setup", "--slug", "acme").Error).Contains("--org");

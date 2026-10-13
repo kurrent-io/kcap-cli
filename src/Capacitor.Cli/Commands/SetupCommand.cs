@@ -2294,9 +2294,10 @@ sealed class SetupCommand(
     }
 
     /// <summary>
-    /// Reads <c>--org</c>/<c>--slug</c> into the answers the create-a-workspace prompts would have
-    /// collected, or the error that stops the run; (null, null) when neither was passed. Every
-    /// rejection is a combination that would otherwise take the flags and never act on them.
+    /// Reads <c>--org</c>/<c>--slug</c>/<c>--tier</c>/<c>--invite-code</c> into the answers the
+    /// create-a-workspace prompts would have collected, or the error that stops the run; (null, null)
+    /// when neither --org nor --slug was passed. Every rejection is a combination that would
+    /// otherwise take the flags and never act on them.
     /// </summary>
     internal static (RequestedWorkspace? Workspace, string? Error) ParseRequestedWorkspace(
             string[] args, bool haveServerUrl) {
@@ -2305,9 +2306,14 @@ sealed class SetupCommand(
         var (orgGiven, orgName)   = ValuedFlag(args, "--org");
         var (slugGiven, slug)     = ValuedFlag(args, "--slug");
         var (tierGiven, tierText) = ValuedFlag(args, "--tier");
+        var (codeGiven, code)     = ValuedFlag(args, "--invite-code");
 
-        if (!orgGiven && !slugGiven)
-            return tierGiven ? (null, $"--tier picks the plan for a workspace to create, so it needs --org and --slug: {Usage}") : (null, null);
+        if (!orgGiven && !slugGiven) {
+            if (tierGiven) return (null, $"--tier picks the plan for a workspace to create, so it needs --org and --slug: {Usage}");
+            if (codeGiven) return (null, $"--invite-code redeems an invite for a workspace to create, so it needs --org and --slug: {Usage}");
+
+            return (null, null);
+        }
 
         var tier = !tierGiven ? WorkspaceTier.Free : tierText?.Trim().ToLowerInvariant() switch {
             "team" => WorkspaceTier.Team,
@@ -2321,6 +2327,7 @@ sealed class SetupCommand(
         // nothing still asked for a workspace.
         if (orgGiven && orgName is null)   return (null, $"--org needs a value: {Usage}");
         if (slugGiven && slug is null)     return (null, $"--slug needs a value: {Usage}");
+        if (codeGiven && code is null)     return (null, $"--invite-code needs a value: {Usage} --invite-code <code>");
 
         // Both or neither. The slug becomes a permanent public hostname, so deriving one from the
         // name would pick it on the user's behalf in the one run nobody is watching.
@@ -2342,7 +2349,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value, code?.Trim()), null);
     }
 
     static readonly string[] DiscoverFlags =
