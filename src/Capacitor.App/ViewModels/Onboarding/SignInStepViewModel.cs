@@ -56,6 +56,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     readonly UiQuestion<string?>       _orgName = new();
     readonly UiQuestion<string?>       _slug    = new();
     readonly UiQuestion<bool>          _confirm = new();
+    readonly UiQuestion<string?>       _inviteCode = new();
 
     AuthAttempt?   _attempt;
     ConnectIntent? _running;
@@ -78,6 +79,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     bool    _orgNamePromptVisible;
     bool    _slugPromptVisible;
     bool    _confirmVisible;
+    bool    _inviteCodePromptVisible;
+    string  _inviteCodeText = "";
+    string? _inviteCodeError;
+    string? _inviteRequestUrl;
     string  _orgNameText = "";
     string  _slugText = "";
     string? _slugError;
@@ -169,6 +174,13 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             ConfirmText    = $"Create {(string.IsNullOrWhiteSpace(OrgName) ? slug : OrgName.Trim())} at {Host(origin)}?";
             ConfirmVisible = true;
         }, () => ConfirmVisible = false, ct);
+        provisioner.PromptInviteCode = (requestUrl, error, ct) => _inviteCode.AskAsync(_post, () => {
+            // A complaint keeps the refused code in the box so a typo can be fixed in place.
+            if (error is null) InviteCode = "";
+            InviteRequestUrl        = requestUrl;
+            InviteCodeError         = error;
+            InviteCodePromptVisible = true;
+        }, () => InviteCodePromptVisible = false, ct);
         provisioner.PollProgress = (attempt, max) =>
             _post(() => ProvisioningProgress = "Your workspace is still being prepared…");
 
@@ -216,6 +228,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             _confirm.Answer(true);
         });
         DeclineCreateCommand = ReactiveCommand.Create(() => _confirm.Answer(false));
+        SubmitInviteCodeCommand = ReactiveCommand.Create(() => _inviteCode.Answer(InviteCode),
+            this.WhenAnyValue(x => x.InviteCode, code => !string.IsNullOrWhiteSpace(code)));
+        CancelInviteCodeCommand     = ReactiveCommand.Create(() => _inviteCode.Answer(null));
+        OpenInviteRequestUrlCommand = ReactiveCommand.Create(() => Open(InviteRequestUrl));
 
         AcknowledgeQuarantineCommand = ReactiveCommand.CreateFromTask(AcknowledgeQuarantineAsync);
     }
@@ -224,7 +240,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
 
     public SignInPhase Phase =>
-        ConfirmVisible                             ? SignInPhase.ConfirmCreate
+        InviteCodePromptVisible                    ? SignInPhase.InviteCode
+        : ConfirmVisible                           ? SignInPhase.ConfirmCreate
         : OrgNamePromptVisible || SlugPromptVisible ? SignInPhase.CreateWorkspace
         : ModeChoiceVisible                          ? SignInPhase.NoWorkspace
         : TenantPickerVisible                        ? SignInPhase.PickWorkspace
@@ -236,6 +253,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         SignInPhase.PickWorkspace                                 => "Choose a workspace",
         SignInPhase.NoWorkspace                                   => "No Capacitor workspace yet",
         SignInPhase.CreateWorkspace or SignInPhase.ConfirmCreate => "Create your workspace",
+        SignInPhase.InviteCode                                    => "Enter your invite code",
         SignInPhase.Provisioning                                  => "Setting up your workspace",
         _                                                         => "Sign in to Capacitor",
     };
@@ -251,6 +269,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             "Your account isn't in a Capacitor workspace. Create one now, or point this machine at one you already have.",
         SignInPhase.CreateWorkspace or SignInPhase.ConfirmCreate =>
             "Your team's sessions live here. You can invite people from it once it's ready.",
+        SignInPhase.InviteCode   => "Capacitor is invite-only right now.",
         SignInPhase.Provisioning => "This usually takes about five minutes, sometimes longer. Keep this window open.",
         _                        => null,
     };
@@ -283,6 +302,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public ReactiveCommand<Unit, Unit> CancelSlugCommand            { get; }
     public ReactiveCommand<Unit, Unit> ConfirmCreateCommand         { get; }
     public ReactiveCommand<Unit, Unit> DeclineCreateCommand         { get; }
+    public ReactiveCommand<Unit, Unit> SubmitInviteCodeCommand      { get; }
+    public ReactiveCommand<Unit, Unit> CancelInviteCodeCommand      { get; }
+    public ReactiveCommand<Unit, Unit> OpenInviteRequestUrlCommand  { get; }
     public ReactiveCommand<Unit, Unit> AcknowledgeQuarantineCommand { get; }
     public ReactiveCommand<Unit, Unit> ContinueWithWorkAccountCommand { get; }
     public ReactiveCommand<Unit, Unit> UseCodeCommand               { get; }
@@ -436,6 +458,31 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             this.RaiseAndSetIfChanged(ref _confirmVisible, value);
             RestatePhase();
         }
+    }
+
+    public bool InviteCodePromptVisible {
+        get => _inviteCodePromptVisible;
+        private set {
+            this.RaiseAndSetIfChanged(ref _inviteCodePromptVisible, value);
+            RestatePhase();
+        }
+    }
+
+    public string InviteCode {
+        get => _inviteCodeText;
+        set => this.RaiseAndSetIfChanged(ref _inviteCodeText, value);
+    }
+
+    /// Why the last code was refused; null on the first ask.
+    public string? InviteCodeError {
+        get => _inviteCodeError;
+        private set => this.RaiseAndSetIfChanged(ref _inviteCodeError, value);
+    }
+
+    /// Where the server says to ask for an invite, when it names one.
+    public string? InviteRequestUrl {
+        get => _inviteRequestUrl;
+        private set => this.RaiseAndSetIfChanged(ref _inviteRequestUrl, value);
     }
 
     public string OrgName {
@@ -778,12 +825,13 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void HidePrompts() {
-        _tenantChoiceMade    = false;
-        TenantPickerVisible  = false;
-        ModeChoiceVisible    = false;
-        OrgNamePromptVisible = false;
-        SlugPromptVisible    = false;
-        ConfirmVisible       = false;
+        _tenantChoiceMade       = false;
+        TenantPickerVisible     = false;
+        ModeChoiceVisible       = false;
+        OrgNamePromptVisible    = false;
+        SlugPromptVisible       = false;
+        ConfirmVisible          = false;
+        InviteCodePromptVisible = false;
     }
 
     void SetStatus(string text, bool isError, string? detail = null) {

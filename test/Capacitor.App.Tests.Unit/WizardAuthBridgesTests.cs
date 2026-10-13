@@ -295,7 +295,7 @@ public class WizardAuthBridgesTests {
         await Assert.That(string.Join("\n", progress.Errors)).Contains("owned by someone else");
     }
 
-    // The wizard has no way to enter an invite code, so the gate has to say where to get one.
+    // With no way to ask for a code, the gate has to say where to get one.
     [Test]
     [Arguments(HttpStatusCode.Forbidden,  "invite_required", "invite-only")]
     [Arguments(HttpStatusCode.BadRequest, "invalid_code",    "isn't valid")]
@@ -339,6 +339,126 @@ public class WizardAuthBridgesTests {
         await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
 
         return string.Join("\n", progress.Errors);
+    }
+
+    const string RequestUrl = "https://site.example/get-started#request";
+
+    static string Gate(string reason) => $$"""{"reason":"{{reason}}","requestUrl":"{{RequestUrl}}"}""";
+
+    /// A provisioner past the create prompts whose provision POSTs answer from <paramref name="replies"/>
+    /// in order (the last one repeats), recording the code each POST carried.
+    static (WizardTenantProvisioner Provisioner, RecordingAuthProgress Progress, FakeTimeProvider Time, List<string?> SentCodes)
+            GatedProvisioner(params (HttpStatusCode Status, string Body)[] replies) {
+        var (provisioner, handler, progress, time) = NewProvisioner();
+        var sent = new List<string?>();
+
+        handler.Respond = (request, _) => {
+            if (request.RequestUri!.AbsolutePath == "/api/signup/availability") return (HttpStatusCode.OK, """{"available":true}""");
+
+            var body = System.Text.Json.Nodes.JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!;
+            sent.Add(body["code"]?.GetValue<string>());
+
+            return replies[Math.Min(sent.Count, replies.Length) - 1];
+        };
+
+        provisioner.OfferMode     = _ => Task.FromResult<ProvisionMode>(new ProvisionMode.Create());
+        provisioner.PromptOrgName = _ => Task.FromResult<string?>("Acme");
+        provisioner.PromptSlug    = (suggestion, _, _) => Task.FromResult<string?>(suggestion);
+        provisioner.ConfirmCreate = (_, _, _) => Task.FromResult(true);
+
+        return (provisioner, progress, time, sent);
+    }
+
+    static readonly (HttpStatusCode, string) Live =
+        (HttpStatusCode.OK, """{"slug":"acme","state":"active","workosOrgId":"org_1","url":"https://acme.kcap.ai"}""");
+
+    [Test]
+    public async Task A_gated_provision_asks_for_a_code_and_sends_it_trimmed_on_the_next_request() {
+        var (provisioner, _, time, sent) = GatedProvisioner((HttpStatusCode.Forbidden, Gate("invite_required")), Live);
+        var asked = new List<(string? RequestUrl, string? Error)>();
+        provisioner.PromptInviteCode = (requestUrl, error, _) => {
+            asked.Add((requestUrl, error));
+
+            return Task.FromResult<string?>("  ab12 ");
+        };
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Created);
+        await Assert.That(asked).IsEquivalentTo([((string?)RequestUrl, (string?)null)]);
+        await Assert.That(sent).IsEquivalentTo([null, "ab12"]);
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("   ")]
+    public async Task No_code_fails_the_offer_naming_where_to_request_one(string? answer) {
+        var (provisioner, progress, time, sent) = GatedProvisioner((HttpStatusCode.Forbidden, Gate("invite_required")), Live);
+        provisioner.PromptInviteCode = (_, _, _) => Task.FromResult(answer);
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(string.Join("\n", progress.Errors))
+            .IsEqualTo($"Capacitor is invite-only right now. Request an invite at {RequestUrl}.");
+        await Assert.That(sent).IsEquivalentTo([(string?)null]);
+    }
+
+    [Test]
+    [Arguments(HttpStatusCode.BadRequest, "invalid_code",   "That invite code isn't valid.")]
+    [Arguments(HttpStatusCode.Conflict,   "code_exhausted", "That invite code has been used up.")]
+    public async Task A_refused_code_asks_again_with_why_and_the_next_code_can_succeed(
+            HttpStatusCode status, string reason, string complaint) {
+        var (provisioner, _, time, sent) = GatedProvisioner(
+            (HttpStatusCode.Forbidden, Gate("invite_required")), (status, Gate(reason)), Live);
+        var errors = new List<string?>();
+        provisioner.PromptInviteCode = (_, error, _) => {
+            errors.Add(error);
+
+            return Task.FromResult<string?>(errors.Count == 1 ? "WRNG" : "GOOD");
+        };
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Created);
+        await Assert.That(errors).IsEquivalentTo([null, complaint]);
+        await Assert.That(sent).IsEquivalentTo([null, "WRNG", "GOOD"]);
+    }
+
+    [Test]
+    public async Task The_third_wrong_code_fails_the_offer() {
+        var (provisioner, progress, time, sent) = GatedProvisioner(
+            (HttpStatusCode.Forbidden, Gate("invite_required")), (HttpStatusCode.BadRequest, Gate("invalid_code")));
+        var prompts = 0;
+        provisioner.PromptInviteCode = (_, _, _) => Task.FromResult<string?>($"C{++prompts}");
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(prompts).IsEqualTo(3);
+        await Assert.That(sent).IsEquivalentTo([null, "C1", "C2", "C3"]);
+        await Assert.That(string.Join("\n", progress.Errors))
+            .IsEqualTo($"That invite code isn't valid. Request an invite at {RequestUrl}.");
+    }
+
+    /// A server that answers a supplied code by asking for one again must not loop forever.
+    [Test]
+    public async Task An_invite_required_answer_to_a_supplied_code_counts_toward_the_cap() {
+        var (provisioner, progress, time, sent) = GatedProvisioner((HttpStatusCode.Forbidden, Gate("invite_required")));
+        var errors = new List<string?>();
+        provisioner.PromptInviteCode = (_, error, _) => {
+            errors.Add(error);
+
+            return Task.FromResult<string?>("SAME");
+        };
+
+        var offer = await Drive(provisioner.OfferCreateAsync(Tokens()), time);
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(sent).IsEquivalentTo([null, "SAME", "SAME", "SAME"]);
+        await Assert.That(errors).IsEquivalentTo([null, "That invite code wasn't accepted.", "That invite code wasn't accepted."]);
+        await Assert.That(string.Join("\n", progress.Errors))
+            .IsEqualTo($"That invite code wasn't accepted. Request an invite at {RequestUrl}.");
     }
 
     [Test]
