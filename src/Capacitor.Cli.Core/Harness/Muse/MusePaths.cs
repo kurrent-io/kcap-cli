@@ -18,8 +18,10 @@ public sealed class MusePaths {
     public string SkillsDir    => Path.Combine(ConfigRoot, "skills");
     public string SessionsDir  => Path.Combine(DataRoot, "sessions");
 
-    public string SessionLogPath(string sessionId, DateOnly day) =>
-        Path.Combine(SessionsDir,
+    /// <summary>Null for an id that is not a single path segment, so nothing can climb out of
+    /// <see cref="SessionsDir"/>.</summary>
+    public string? SessionLogPath(string sessionId, DateOnly day) =>
+        !IsSingleSegment(sessionId) ? null : Path.Combine(SessionsDir,
             day.Year.ToString("D4", CultureInfo.InvariantCulture),
             day.Month.ToString("D2", CultureInfo.InvariantCulture),
             day.Day.ToString("D2", CultureInfo.InvariantCulture),
@@ -31,9 +33,11 @@ public sealed class MusePaths {
     /// <summary>Today, then the adjacent days, then one directory-level glob over every date; null
     /// when no log exists yet — a caller must not record a path Muse has not created.</summary>
     public string? ResolveSessionLog(string sessionId, DateOnly today) {
+        if (!IsSingleSegment(sessionId)) return null;
+
         foreach (var day in new[] { today, today.AddDays(-1), today.AddDays(1) }) {
             var candidate = SessionLogPath(sessionId, day);
-            if (File.Exists(candidate)) return candidate;
+            if (candidate is not null && File.Exists(candidate)) return candidate;
         }
 
         if (!Directory.Exists(SessionsDir)) return null;
@@ -49,6 +53,10 @@ public sealed class MusePaths {
 
         return null;
     }
+
+    static bool IsSingleSegment(string id) =>
+        !string.IsNullOrWhiteSpace(id) && !id.Contains("..", StringComparison.Ordinal)
+     && id.IndexOfAny(['/', '\\']) < 0 && id.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
 
     public bool HasUserData() => File.Exists(SettingsJson) || Directory.Exists(SessionsDir);
 }

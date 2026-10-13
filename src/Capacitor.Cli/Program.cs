@@ -92,7 +92,7 @@ if (InteractiveLifetime.IsInteractiveCommand(command) && detachedImport is null)
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe") || args.Contains("--muse"))) {
     return 0;
 }
 
@@ -969,8 +969,11 @@ switch (command) {
         if (args.Contains("--mistral-vibe")) {
             return await Run<MistralVibeHookCommand>().Handle(Console.In);
         }
+        if (args.Contains("--muse")) {
+            return await Run<MuseHookCommand>().Handle(Console.In);
+        }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --muse");
         return 1;
     }
     case "cursor":
