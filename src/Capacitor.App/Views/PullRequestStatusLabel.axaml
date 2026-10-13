@@ -3,6 +3,7 @@
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.PullRequestStatusLabel"
+             x:Name="Root"
              x:DataType="vm:PullRequestStatus">
     <UserControl.Styles>
         <Style Selector="TextBlock.statusText">
@@ -15,7 +16,7 @@
         <Style Selector="TextBlock.statusText.danger"><Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" /></Style>
     </UserControl.Styles>
     <!-- Same icon column as work-item parts and subagents: 12×16 slot, nudged up half a pixel against the 13/16 text. -->
-    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9" ToolTip.Tip="{Binding Tip}">
+    <Grid ColumnDefinitions="Auto,*" ToolTip.Tip="{Binding Tip}">
         <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
             <Panel Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
                    IsVisible="{Binding UsesDiscIcon}">
@@ -49,6 +50,7 @@
                   HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding UsesGlyphIcon}" />
         </Panel>
         <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
+                   Margin="9,0,0,0" IsVisible="{Binding #Root.ShowText}"
                    Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
                    Classes.danger="{Binding IsDanger}" VerticalAlignment="Top" />
     </Grid>

@@ -19,6 +19,8 @@ namespace Capacitor.App.ViewModels;
 /// pipeline, so every inner Connect() below already fires on the UI thread.
 public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _disposables = new();
+    // Keep the user's choices when the directory empties/re-forms a group during refresh.
+    readonly HashSet<string> _collapsedRepos = new(StringComparer.Ordinal);
 
     // SelectedAgentId is fed to the nested VMs via this subject, not this.WhenAnyValue: that
     // call routes through ReactiveUI's ObservableForProperty/RxAppBuilder global init, which is
@@ -87,7 +89,10 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
                 g, selected, pending, stale, openLocalSession, openRemoteSession, time, answering, commands,
-                prs, localOnAppServer, openPullRequest))
+                prs, localOnAppServer, openPullRequest, !_collapsedRepos.Contains(g.Key), expanded => {
+                    if (expanded) _collapsedRepos.Remove(g.Key);
+                    else _collapsedRepos.Add(g.Key);
+                }))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

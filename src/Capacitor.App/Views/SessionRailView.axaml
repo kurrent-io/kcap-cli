@@ -27,30 +27,20 @@
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
         </Style>
         <Style Selector="Button.railPr">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="5" />
-            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="4,2" />
+            <Setter Property="MinHeight" Value="22" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style Selector="Button.railPr /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
         <Style Selector="Button.railPr:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.railPr:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
-        </Style>
-        <Style Selector="TextBlock.railPrState">
-            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="FontSize" Value="11" />
-        </Style>
-        <Style Selector="TextBlock.railPrState.success">
-            <Setter Property="Foreground" Value="{StaticResource KcapSuccessBrush}" />
-        </Style>
-        <Style Selector="TextBlock.railPrState.danger">
-            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
         <!-- Hover paints the raised surface, so the open row needs its own background and a
              heavier title to read as selected beside a hovered sibling. No left accent: a
@@ -91,8 +81,7 @@
         <Style Selector="Panel.glyph, Border.vendorMark">
             <Setter Property="RenderTransform" Value="translateY(-1px)" />
         </Style>
-        <!-- Status word and the age share one 11px line. The logo and glyph sit in that line;
-             chip padding stays on the chip, not on the age, or the age drops below the line. -->
+        <!-- Status, machine, and age share an 11px line; the logo and glyph sit in that line. -->
         <Style Selector="Border.railChip">
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
@@ -303,103 +292,98 @@
                     <ItemsControl x:Name="RailRepos" ItemsSource="{Binding Rail.Repos, FallbackValue={x:Null}}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:RailRepoViewModel">
-                                <StackPanel Margin="0,10,0,0">
-                                    <Grid ColumnDefinitions="*,Auto" Margin="8,0,8,5" ToolTip.Tip="{Binding RootDisplay}">
-                                        <TextBlock Grid.Column="0"
-                                                   Text="{Binding Label, Converter={x:Static views:UppercaseConverter.Instance}}"
-                                                   FontSize="12" FontWeight="Bold" LetterSpacing="1.2"
-                                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Grid.Column="1" Text="{Binding CountText}" FontSize="12"
-                                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
-                                                   Margin="8,0,0,0" />
-                                    </Grid>
-                                    <TextBlock Text="Work with no checkout yet. It keeps a title and a session; parts and blockers arrive once it lands in a repo."
-                                               FontSize="12" LineHeight="17" Foreground="{StaticResource KcapFaintBrush}"
-                                               TextWrapping="Wrap" Margin="8,0,8,4"
-                                               IsVisible="{Binding IsNoRepository}" />
-                                    <ItemsControl ItemsSource="{Binding Sessions}" Margin="8,0,0,0">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:RailSessionViewModel">
-                                                <Border Classes="railSession" Classes.selected="{Binding IsSelected}" Margin="0,2,0,0"
-                                                        Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}">
-                                                <StackPanel>
-                                                    <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
-                                                            HorizontalContentAlignment="Stretch" Padding="8,6"
-                                                            AutomationProperties.Name="{Binding SessionAccessibleName}"
-                                                            Classes="railRow" Classes.selected="{Binding IsSelected}">
-                                                        <ToolTip.Tip>
-                                                            <StackPanel Spacing="10" MaxWidth="320">
-                                                                <views:AgentStatusTip DataContext="{Binding Status}" />
-                                                                <StackPanel Spacing="1" IsVisible="{Binding IsRemote}">
-                                                                    <TextBlock Text="{Binding MachineBadge}" TextWrapping="Wrap" />
-                                                                    <TextBlock Text="Machine · remote daemon" Classes="kcapTipCaption" />
-                                                                </StackPanel>
-                                                                <StackPanel Spacing="1" IsVisible="{Binding CheckoutPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                                                    <TextBlock Text="{Binding CheckoutPath}" TextWrapping="Wrap" />
-                                                                    <TextBlock Text="Checkout" Classes="kcapTipCaption" />
-                                                                </StackPanel>
-                                                            </StackPanel>
-                                                        </ToolTip.Tip>
-                                                        <StackPanel Spacing="3">
-                                                            <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
-                                                                       Classes="rowTitle" IsVisible="{Binding HasTitle}"
-                                                                       Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                                            <!-- WrapPanel children are measured unconstrained; cap labels so the age retains room. -->
-                                                            <Grid ColumnDefinitions="*,Auto">
-                                                                <WrapPanel VerticalAlignment="Center">
-                                                                    <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
-                                                                            VerticalAlignment="Center" Background="Transparent" IsVisible="{Binding HasVendor}"
-                                                                            AutomationProperties.Name="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}">
-                                                                        <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                                                        Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
-                                                                    </Border>
-                                                                    <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160" ToolTip.Tip="{x:Null}"
-                                                                                           Margin="0,0,6,0" VerticalAlignment="Center" />
-                                                                    <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                                                            Background="{StaticResource KcapSurfaceRaisedBrush}" MaxWidth="160"
-                                                                            BorderBrush="{StaticResource KcapBorderStrongBrush}" BorderThickness="1"
-                                                                            ToolTip.Tip="{Binding MachineTooltip}" AutomationProperties.Name="{Binding MachineTooltip}"
-                                                                            CornerRadius="4" Padding="5,1" Margin="0,0,6,0">
-                                                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="4">
-                                                                            <Path Width="12" Height="12" VerticalAlignment="Center" Stretch="Uniform"
-                                                                                  Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.3" StrokeLineCap="Round" StrokeJoin="Round"
-                                                                                  Data="M2,2 H14 V11 H2 Z M8,11 V14 M5,14 H11" />
-                                                                            <TextBlock Grid.Column="1" Text="{Binding MachineLabel}" Classes="railChipLabel" TextTrimming="CharacterEllipsis"
-                                                                                       Foreground="{StaticResource KcapMutedBrush}" />
-                                                                        </Grid>
-                                                                    </Border>
-                                                                </WrapPanel>
-                                                                <TextBlock Grid.Column="1" Text="{Binding Meta}" Classes="railMeta" MaxWidth="180"
-                                                                           TextTrimming="CharacterEllipsis" Margin="8,0,0,0" HorizontalAlignment="Right"
-                                                                           Foreground="{StaticResource KcapFaintBrush}" />
-                                                            </Grid>
-                                                        </StackPanel>
-                                                    </Button>
-                                                    <Button Classes="railPr" Command="{Binding OpenPullRequestCommand}"
-                                                            IsVisible="{Binding HasPullRequest}"
-                                                            AutomationProperties.Name="{Binding PullRequestAccessibleName}"
-                                                            ToolTip.Tip="{Binding PullRequestTooltip}"
-                                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Margin="8,0,8,6"
-                                                            FontSize="11" Foreground="{StaticResource KcapMutedBrush}">
-                                                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
-                                                            <Path Width="12" Height="12" Stretch="Uniform" VerticalAlignment="Center"
-                                                                  Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
-                                                                  Data="M4,5 A2,2 0 1 0 4,1 A2,2 0 1 0 4,5 M4,5 V13 M12,11 A2,2 0 1 0 12,15 A2,2 0 1 0 12,11 M12,11 V6 Q12,3 8,3 M10,1 L8,3 L10,5" />
-                                                            <TextBlock Grid.Column="1" Text="{Binding PullRequestLabel}" Foreground="{StaticResource KcapTextBrush}"
-                                                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                                            <TextBlock Grid.Column="2" Classes="railPrState" DataContext="{Binding PullRequestStatus}"
-                                                                       x:DataType="vm:PullRequestStatus" Text="{Binding Text}"
-                                                                       VerticalAlignment="Center"
-                                                                       Classes.success="{Binding IsSuccess}" Classes.danger="{Binding IsDanger}"
-                                                                       IsVisible="{Binding $parent[Button].((vm:RailSessionViewModel)DataContext).HasPullRequestLifecycle}" />
-                                                        </Grid>
-                                                    </Button>
-                                                </StackPanel>
+                                <StackPanel Margin="8,10,8,0">
+                                    <Button Classes="sectionHeader expandable railRepoHeader" Command="{Binding ToggleCommand}"
+                                            ToolTip.Tip="{Binding Tooltip}" AutomationProperties.Name="{Binding ToggleAccessibleName}">
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                            <TextBlock Text="{Binding Label, Converter={x:Static views:UppercaseConverter.Instance}}"
+                                                       Classes="eyebrow" TextTrimming="CharacterEllipsis" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                <Border IsVisible="{Binding ShowsHeaderBadge}" VerticalAlignment="Center" MaxWidth="76">
+                                                    <views:AgentStatusMark Classes="railRepoStatus" DataContext="{Binding HeaderStatus}" ToolTip.Tip="{x:Null}" />
                                                 </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
+                                                <TextBlock Text="{Binding CountText}" Classes="sectionMeta" />
+                                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
+                                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
+                                                </Panel>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Button>
+                                    <Border Classes="sectionBody" IsVisible="{Binding IsExpanded}" Padding="8,2,0,2">
+                                        <ItemsControl ItemsSource="{Binding Sessions}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:RailSessionViewModel">
+                                                    <Border Classes="railSession" Classes.selected="{Binding IsSelected}" Margin="0,2,0,0"
+                                                            Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}">
+                                                        <StackPanel>
+                                                            <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
+                                                                    HorizontalContentAlignment="Stretch" Padding="8,6"
+                                                                    AutomationProperties.Name="{Binding SessionAccessibleName}"
+                                                                    Classes="railRow" Classes.selected="{Binding IsSelected}">
+                                                                <ToolTip.Tip>
+                                                                    <StackPanel Spacing="10" MaxWidth="320">
+                                                                        <views:AgentStatusTip DataContext="{Binding Status}" />
+                                                                        <StackPanel Spacing="1" IsVisible="{Binding IsRemote}">
+                                                                            <TextBlock Text="{Binding MachineBadge}" TextWrapping="Wrap" />
+                                                                            <TextBlock Text="Machine · remote daemon" Classes="kcapTipCaption" />
+                                                                        </StackPanel>
+                                                                        <StackPanel Spacing="1" IsVisible="{Binding CheckoutPath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                                                            <TextBlock Text="{Binding CheckoutPath}" TextWrapping="Wrap" />
+                                                                            <TextBlock Text="Checkout" Classes="kcapTipCaption" />
+                                                                        </StackPanel>
+                                                                    </StackPanel>
+                                                                </ToolTip.Tip>
+                                                                <StackPanel Spacing="3">
+                                                                    <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
+                                                                               Classes="rowTitle" IsVisible="{Binding HasTitle}"
+                                                                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                                                    <!-- WrapPanel children are measured unconstrained; cap labels so the age retains room. -->
+                                                                    <Grid ColumnDefinitions="*,Auto">
+                                                                        <WrapPanel VerticalAlignment="Center">
+                                                                            <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
+                                                                                    VerticalAlignment="Center" Background="Transparent" IsVisible="{Binding HasVendor}"
+                                                                                    AutomationProperties.Name="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}">
+                                                                                <ContentControl HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                                Content="{Binding Vendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=14}" />
+                                                                        </Border>
+                                                                        <views:AgentStatusMark DataContext="{Binding Status}" MaxWidth="160" ToolTip.Tip="{x:Null}"
+                                                                                               Margin="0,0,6,0" VerticalAlignment="Center" />
+                                                                        <Border Classes="railChip" IsVisible="{Binding MachineBadge, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                                                                MaxWidth="140" Margin="0,0,6,0"
+                                                                                ToolTip.Tip="{Binding MachineTooltip}" AutomationProperties.Name="{Binding MachineTooltip}">
+                                                                            <TextBlock Text="{Binding MachineLabel}" Classes="railChipLabel" TextTrimming="CharacterEllipsis"
+                                                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                                                        </Border>
+                                                                    </WrapPanel>
+                                                                    <TextBlock Grid.Column="1" Text="{Binding Meta}" Classes="railMeta" MaxWidth="180"
+                                                                               IsVisible="{Binding Meta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                                               TextTrimming="CharacterEllipsis" Margin="8,0,0,0" HorizontalAlignment="Right"
+                                                                               Foreground="{StaticResource KcapFaintBrush}" />
+                                                                </Grid>
+                                                            </StackPanel>
+                                                        </Button>
+                                                        <Button Classes="railPr" Command="{Binding OpenPullRequestCommand}"
+                                                                IsVisible="{Binding HasPullRequest}"
+                                                                AutomationProperties.Name="{Binding PullRequestAccessibleName}"
+                                                                ToolTip.Tip="{Binding PullRequestTooltip}"
+                                                                HorizontalAlignment="Left" HorizontalContentAlignment="Left" Margin="4,0,8,4"
+                                                                FontSize="11" Foreground="{StaticResource KcapMutedBrush}">
+                                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                <views:PullRequestStatusLabel Classes="railPrMark" DataContext="{Binding PullRequestStatus}"
+                                                                                              ShowText="False"
+                                                                                              IsVisible="{Binding $parent[Button].((vm:RailSessionViewModel)DataContext).HasPullRequestLifecycle}"
+                                                                                              VerticalAlignment="Center" />
+                                                                <TextBlock Text="{Binding PullRequestLabel}" Foreground="{StaticResource KcapMutedBrush}"
+                                                                           VerticalAlignment="Center" />
+                                                            </StackPanel>
+                                                        </Button>
+                                                    </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Border>
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>

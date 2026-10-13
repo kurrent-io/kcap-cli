@@ -58,7 +58,7 @@ public static class SessionStatusDots {
             : pending || usageLimitSummary is not null ? AgentStatusKind.NeedsYou
             : status == "Starting" ? AgentStatusKind.Starting
             : IsWorking(status, awaitingInput, liveSubagents, liveCommands) ? AgentStatusKind.Working
-            : waitsOnUser ? AgentStatusKind.Idle
+            : waitsOnUser || status == "Idle" ? AgentStatusKind.Idle
             : status == "Completed" ? AgentStatusKind.Done
             : AgentStatusKind.Other;
         var label = kind switch {
@@ -113,7 +113,7 @@ public static class SessionStatusDots {
         return string.Join('\n', lines);
     }
 
-    /// Dominant surfaced status for a collapsed worktree. Null when every child is settled or
+    /// Dominant surfaced status for a collapsed session group. Null when every child is settled or
     /// only carrying the daemon's own word. The accessible name counts the dominant kind.
     public static AgentStatusPresentation? Rollup(
             IEnumerable<AgentRow> rows, IReadOnlySet<string> pending, IReadOnlySet<string>? answering = null,

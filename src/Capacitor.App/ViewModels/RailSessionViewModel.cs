@@ -43,7 +43,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public bool HasPullRequestLifecycle => PullRequest?.HasLifecycle == true;
     public string PullRequestTooltip => $"{PullRequest?.Description}\n\nLinked to this session: {SessionAccessibleName}\nOpen pull request details";
     public bool HasPullRequest => PullRequest is not null;
-    public string PullRequestAccessibleName => $"Open {PullRequestLabel} for {Primary ?? Vendor}";
+    public string PullRequestAccessibleName => $"Open {PullRequestLabel}{(HasPullRequestLifecycle ? $", {PullRequest?.Lifecycle}" : "")} for {Primary ?? Vendor}";
     readonly ObservableAsPropertyHelper<bool> _isSelected;
     public bool IsSelected => _isSelected.Value;
 
@@ -84,7 +84,8 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             }).DisposeWith(_disposables);
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
         var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
-        var age = UptimeFormat.Format(
+        // Remote CreatedAt is registry registration time, not a trustworthy session start.
+        var age = row.Origin == AgentOrigin.Remote ? null : UptimeFormat.Format(
             time.GetUtcNow().UtcDateTime - DateTime.SpecifyKind(row.CreatedAt, DateTimeKind.Utc));
 
         Primary = string.IsNullOrEmpty(row.Title) ? null : row.Title;

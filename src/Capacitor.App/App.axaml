@@ -596,5 +596,6 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
+        <StyleInclude Source="avares://Kurrent Capacitor/Views/SectionStyles.axaml" />
     </Application.Styles>
 </Application>

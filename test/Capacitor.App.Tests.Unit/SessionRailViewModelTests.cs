@@ -145,6 +145,34 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Repository_collapse_survives_updates_and_group_recreation() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, _, rail) = Build();
+            using (rail) {
+                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha"));
+                service.Agents.AddOrUpdate(Dto("b1", "/dev/beta"));
+                var alpha = rail.Repos[0];
+                await Assert.That(alpha.IsExpanded).IsTrue();
+                alpha.ToggleCommand.Execute().Subscribe();
+                service.Agents.AddOrUpdate(Dto("a2", "/dev/alpha"));
+                rail.SelectedAgentId = "a2";
+                await Assert.That(alpha.IsExpanded).IsFalse();
+                await Assert.That(alpha.CountText).IsEqualTo("2 sessions");
+                await Assert.That(rail.Repos[1].IsExpanded).IsTrue();
+                service.Agents.RemoveKeys(["a1", "a2"]);
+                service.Agents.AddOrUpdate(Dto("a3", "/dev/alpha"));
+                var recreated = rail.Repos[0];
+                await Assert.That(recreated.IsExpanded).IsFalse();
+                recreated.ToggleCommand.Execute().Subscribe();
+                service.Agents.RemoveKey("a3");
+                service.Agents.AddOrUpdate(Dto("a4", "/dev/alpha"));
+                await Assert.That(rail.Repos[0].IsExpanded).IsTrue();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Dispose_stops_tracking() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();
