@@ -11,9 +11,8 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Integration;
 
 /// <summary>
-/// <c>kcap hook --grok</c> against a stub server. The payloads are the shapes a live Grok 1.0.52 run
-/// handed its hooks: camelCase keys, snake_case event values, and a transcript path on every event but
-/// session start.
+/// <c>kcap hook --grok</c> against a stub server, with payloads shaped as Grok hands them to its hooks:
+/// camelCase keys, snake_case event values, and a transcript path on every event but session start.
 /// </summary>
 public class GrokHookCommandTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }

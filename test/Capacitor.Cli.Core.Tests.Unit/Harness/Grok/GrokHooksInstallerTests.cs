@@ -52,4 +52,14 @@ public class GrokHooksInstallerTests {
     public async Task Not_installed_when_nothing_was_written() {
         await Assert.That(GrokHooksInstaller.IsInstalled(HooksPath)).IsFalse();
     }
+
+    [Test]
+    [Arguments("[]")]
+    [Arguments("{\"hooks\":[]}")]
+    [Arguments("not json")]
+    public async Task A_file_of_the_wrong_shape_is_not_installed(string content) {
+        Tmp.CreateFile(Path.Combine(".grok", "hooks", "kcap.json"), content);
+
+        await Assert.That(GrokHooksInstaller.IsInstalled(HooksPath)).IsFalse();
+    }
 }

@@ -26,6 +26,7 @@ public sealed class RefreshCommand(IProcessRunner runner) {
         ["plugin", "install", "--gemini",      "--if-installed"],
         ["plugin", "install", "--kiro",        "--if-installed"],
         ["plugin", "install", "--antigravity", "--if-installed"],
+        ["plugin", "install", "--grok",        "--if-installed"],
         ["plugin", "install",                  "--if-installed"],
         ["daemon", "service", "refresh"],
     ];

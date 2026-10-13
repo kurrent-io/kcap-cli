@@ -94,7 +94,7 @@ sealed class GrokHookCommand(
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url) || transcriptPath is null) return;
 
         // A resumed session already has its title.
-        await EnsureWatcher(sessionId, transcriptPath, cwd, skipTitle: Str(node, "source") == "load");
+        await EnsureWatcher(sessionId, transcriptPath, cwd, skipTitle: Str(node, "source") is "load" or "resume");
     }
 
     Task EnsureWatcher(string sessionId, string transcriptPath, string? cwd, bool skipTitle) =>

@@ -46,7 +46,7 @@ public sealed class GrokPaths {
             var marker = Path.Combine(dir, ".cwd");
 
             try {
-                if (File.Exists(marker) && File.ReadAllText(marker).Trim() == cwd) return dir;
+                if (File.Exists(marker) && File.ReadAllText(marker).TrimEnd('\n', '\r') == cwd) return dir;
             } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
 

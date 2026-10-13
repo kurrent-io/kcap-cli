@@ -46,6 +46,17 @@ public class GrokPathsTests {
         await Assert.That(p.UpdatesJsonl(cwd, "s1")).IsEqualTo(Path.Combine(dir.Path, "s1", "updates.jsonl"));
     }
 
+    /// <summary>A cwd may end in a space; only the file's line ending is not part of it.</summary>
+    [Test]
+    public async Task A_long_cwd_ending_in_a_space_still_matches_its_dot_cwd_file() {
+        var p   = new GrokPaths(new UserHome(Tmp.Path), null);
+        var cwd = "/" + string.Join("/", Enumerable.Repeat("a-very-long-directory-name", 12)) + " ";
+        var dir = Tmp.CreateDir(".grok", "sessions", "slug-with-space");
+        Tmp.CreateFile(Path.Combine(".grok", "sessions", "slug-with-space", ".cwd"), cwd + "\n");
+
+        await Assert.That(p.UpdatesJsonl(cwd, "s1")).IsEqualTo(Path.Combine(dir.Path, "s1", "updates.jsonl"));
+    }
+
     [Test]
     public async Task A_long_cwd_with_no_matching_dot_cwd_file_has_no_transcript_path() {
         var p   = new GrokPaths(new UserHome(Tmp.Path), null);

@@ -1675,7 +1675,7 @@ Vibe has **no session-start or session-end hook** — only the three tool/turn h
 
 #### Grok hooks
 
-Grok Build is detected via `~/.grok/` or `grok` on `PATH`, honouring `GROK_HOME`. `install --grok` (and `kcap setup`) writes kcap's own `~/.grok/hooks/kcap.json`, which Grok loads alongside any other `*.json` in that directory, and installs the kcap skills to `~/.agents/skills` (opt out `--skip-grok-skills`). Each hook runs the bare `kcap hook --grok`, so kcap must be on `PATH`. User-level hooks need no `/hooks-trust`. Grok loads hooks at startup — restart any running `grok` session after install.
+Grok Build is detected via `~/.grok/` or `grok` on `PATH`, honouring `GROK_HOME`. `install --grok` (and `kcap setup`) writes kcap's own `~/.grok/hooks/kcap.json`, which Grok loads alongside any other `*.json` in that directory, and installs the kcap skills to `~/.agents/skills` (`kcap plugin install --grok --skip-grok-skills` opts out). Each hook runs the bare `kcap hook --grok`, so kcap must be on `PATH`. User-level hooks need no `/hooks-trust`. Grok loads hooks at startup — restart any running `grok` session after install.
 
 ```bash
 kcap plugin install --grok                  # write ~/.grok/hooks/kcap.json + agent skills
