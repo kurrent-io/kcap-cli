@@ -96,32 +96,44 @@ public class RemoteSessionViewSmokeTests {
             var platform = DispatchProxy.Create<IWindowImpl, MoveRecorder>();
             var recorder = (MoveRecorder)platform;
             recorder.Target = platformWindow.PlatformImpl!;
-            using var host = new Host(windowImpl: platform);
-            await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
-            await Assert.That(host.View.GetVisualDescendants().OfType<WorkContextView>().Any()).IsFalse();
+            var closed = typeof(ITopLevelImpl).GetProperty("Closed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
+            var helperClosed = closed.GetValue(recorder.Target);
+            try {
+                using var host = new Host(windowImpl: platform);
+                try {
+                    await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+                    await Assert.That(host.View.GetVisualDescendants().OfType<WorkContextView>().Any()).IsFalse();
 
-            // Blank padding needs a hit-testable background; title text must bubble too.
-            var title = host.View.FindControl<TextBlock>("RemoteTitle")!;
-            var titlePoint = title.TranslatePoint(new Point(4, title.Bounds.Height / 2), host.Window)!.Value;
-            foreach (var point in new[] { new Point(200, 8), titlePoint }) {
-                platformWindow.MouseDown(point, MouseButton.Left);
-                platformWindow.MouseUp(point, MouseButton.Left);
+                    // Blank padding needs a hit-testable background; title text must bubble too.
+                    var title = host.View.FindControl<TextBlock>("RemoteTitle")!;
+                    var titlePoint = title.TranslatePoint(new Point(4, title.Bounds.Height / 2), host.Window)!.Value;
+                    foreach (var point in new[] { new Point(200, 8), titlePoint }) {
+                        platformWindow.MouseDown(point, MouseButton.Left);
+                        platformWindow.MouseUp(point, MouseButton.Left);
+                    }
+                    await Assert.That(recorder.Moves).IsEqualTo(2);
+
+                    platformWindow.MouseDown(new Point(200, 8), MouseButton.Right);
+                    platformWindow.MouseUp(new Point(200, 8), MouseButton.Right);
+                    await Assert.That(recorder.Moves).IsEqualTo(2);
+
+                    var terminal = host.View.FindControl<Button>("TerminalTabButton")!;
+                    var buttonPoint = terminal.TranslatePoint(new Point(terminal.Bounds.Width / 2, terminal.Bounds.Height / 2), host.Window)!.Value;
+                    platformWindow.MouseDown(buttonPoint, MouseButton.Left);
+                    platformWindow.MouseUp(buttonPoint, MouseButton.Left);
+                    host.Settle();
+                    await Assert.That(host.Vm.IsTerminalActive).IsTrue();
+                    await Assert.That(recorder.Moves).IsEqualTo(2);
+                } finally {
+                    await host.Vm.TeardownAsync();
+                }
+            } finally {
+                // Host replaces the shared implementation's close callback. Restore the helper's
+                // callback after Host closes so its managed subscriptions are released too.
+                closed.SetValue(recorder.Target, helperClosed);
+                platformWindow.Close();
             }
-            await Assert.That(recorder.Moves).IsEqualTo(2);
-
-            platformWindow.MouseDown(new Point(200, 8), MouseButton.Right);
-            platformWindow.MouseUp(new Point(200, 8), MouseButton.Right);
-            await Assert.That(recorder.Moves).IsEqualTo(2);
-
-            var terminal = host.View.FindControl<Button>("TerminalTabButton")!;
-            var buttonPoint = terminal.TranslatePoint(new Point(terminal.Bounds.Width / 2, terminal.Bounds.Height / 2), host.Window)!.Value;
-            platformWindow.MouseDown(buttonPoint, MouseButton.Left);
-            platformWindow.MouseUp(buttonPoint, MouseButton.Left);
-            host.Settle();
-            await Assert.That(host.Vm.IsTerminalActive).IsTrue();
-            await Assert.That(recorder.Moves).IsEqualTo(2);
-
-            await host.Vm.TeardownAsync();
+            await Assert.That(platformWindow.PlatformImpl).IsNull();
             return true;
         });
     }
