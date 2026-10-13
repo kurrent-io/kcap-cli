@@ -301,6 +301,13 @@ kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-cursor-hook
 kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-codex-hooks   # only Cursor
 ```
 
+**Muse Assistant.** Muse runs kcap inside its own VM, where the only persistent place is `~` and the image ships a Codex that Muse itself never uses. `kcap setup <tenant> --muse-assistant` is the posture for that machine: it implies `--no-prompt`, `--device` and `--skip-import`, installs nothing for any harness (no Codex hooks, no `~/.codex/config.toml` MCP or network allowlist, no `~/.agents/skills`), defaults visibility to `private` (an explicit `--default-visibility` still wins), and prints — before its first network call — the hosts Muse's egress filter will ask the user to approve in the chat (`<tenant>.kcap.ai`, `phog.kurrent.io`, `auth.kcap.ai`, `signin.kcap.ai`; choose **Always allow this site** on each card). Until a host is approved it resolves to a placeholder address, so a "cannot reach server" from this run means "not yet approved": approve the cards and run the same command again. The whole connection — install under `~/workspace`, this sign-in, the kcap MCP servers as a Muse custom connector, a `capacitor` skill and an hourly `kcap status` cron — is driven by the `connect-capacitor` skill (`kcap/skills/connect-capacitor/SKILL.md`): paste it into Muse, or ask Muse to read it from `https://raw.githubusercontent.com/kurrent-io/kcap-cli/main/kcap/skills/connect-capacitor/SKILL.md`, and say "Connect Capacitor".
+
+```bash
+npm install --prefix ~/workspace/kcap @kurrent/kcap
+~/workspace/kcap/node_modules/.bin/kcap setup --server-url https://<tenant>.kcap.ai --device --no-prompt --muse-assistant
+```
+
 > **`--no-prompt` imports this machine's history.** The step 6 import defaults to yes like every other prompt, so `kcap setup --no-prompt` uploads every session on this machine (not only the current repository's), synchronously and without the agent handoff, when authentication requirements are satisfied. Add `--skip-import` to opt out.
 
 #### After setup

@@ -134,6 +134,18 @@ Options:
                               past sessions. Also disables the import that
                               --no-prompt performs by default. An import you
                               choose on the browser's Import screen still runs.
+  --muse-assistant            Set up for Muse Assistant (the Meta assistant whose
+                              VM home is /home/hatch). Implies --no-prompt, --device
+                              and --skip-import, needs <tenant> or --server-url,
+                              installs no hooks, skills or MCP servers for any
+                              harness (the image's Codex is not Muse's), defaults
+                              visibility to private (--default-visibility still
+                              wins), prints the hosts the user will be asked to
+                              approve in the chat before the first network call,
+                              and reads "cannot reach server" as "not yet
+                              approved" with a retry hint. Run from the
+                              connect-capacitor skill; see README → Unattended
+                              setup → Muse Assistant.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
