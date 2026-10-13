@@ -426,6 +426,69 @@ public class ClaudeChatRulesTests {
         await Assert.That(mention.SubmittedInputs).IsEquivalentTo(new[] { "what does <task-notification> mean?" });
     }
 
+    const string Handback = "<agent-message from=\\\"a1d0fa10be8d6d5ce\\\">\\n[Subagent hand-back] The text below is the final report of a subagent. The report follows:\\n  Could not post it.\\n  \\n  - **What happened:** a classifier stopped me.\\n  ```sh\\n  ls -O -\\n  ```\\n</agent-message>";
+    const string HandbackBody = "Could not post it.\n\n- **What happened:** a classifier stopped me.\n```sh\nls -O -\n```";
+
+    /// A subagent's hand-back is that agent's report, never the user's turn: it shows without the
+    /// wrapper, the harness preamble or the two-space indent the harness adds to every line.
+    [Test]
+    public async Task A_handback_delivered_mid_turn_is_the_subagents_report() {
+        var result = R($$$"""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"{{{Handback}}}","origin":{"kind":"peer","from":"a1d0fa10be8d6d5ce","handback":true},"isMeta":true}}""");
+        var note = result.Envelopes.Single();
+        await Assert.That(note.Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo(HandbackBody);
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+    }
+
+    /// Delivered while the session is idle, the hand-back is a meta record with a lead line and the
+    /// harness's guidance after the close; it is the only record of the report, so it still shows.
+    [Test]
+    public async Task A_handback_delivered_while_idle_shows_despite_the_meta_flag() {
+        var result = R($$$"""{"type":"user","isMeta":true,"origin":{"kind":"peer","from":"a1d0fa10be8d6d5ce","handback":true},"message":{"role":"user","content":"Another Claude session sent a message:\n{{{Handback}}}\n\nThat \"other Claude session\" is an agent working inside this same session."}}""");
+        var note = result.Envelopes.Single();
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentReport);
+        await Assert.That(note.Text).IsEqualTo(HandbackBody);
+        await Assert.That(result.SubmittedInputs).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_peer_message_recognised_by_text_alone_is_not_a_user_turn() {
+        var byText = R("""{"type":"user","message":{"content":"<agent-message from=\"reviewer\">\nLooks good to me.\n</agent-message>"}}""");
+        await Assert.That(byText.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(byText.Envelopes.Single().ToolKind).IsEqualTo(ChatDisplayKind.AgentMessage);
+        await Assert.That(byText.Envelopes.Single().Text).IsEqualTo("Looks good to me.");
+        await Assert.That(byText.SubmittedInputs).IsEmpty();
+
+        var mention = R("""{"type":"user","message":{"content":"why did <agent-message from=\"x\"> show up?"}}""");
+        await Assert.That(mention.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(mention.SubmittedInputs).IsEquivalentTo(new[] { "why did <agent-message from=\"x\"> show up?" });
+
+        var typed = R("""{"type":"user","origin":{"kind":"human"},"message":{"content":"<agent-message from=\"x\">\nwhat is this?\n</agent-message>"}}""");
+        await Assert.That(typed.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(typed.SubmittedInputs.Single()).StartsWith("<agent-message");
+
+        var oneLine = R("""{"type":"user","message":{"content":"<agent-message from=\"x\"> is what?"}}""");
+        await Assert.That(oneLine.Envelopes.Single().Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(oneLine.SubmittedInputs).IsEquivalentTo(new[] { "<agent-message from=\"x\"> is what?" });
+    }
+
+    [Test]
+    public async Task A_close_tag_on_the_last_line_of_text_still_ends_the_message() {
+        var note = R("""{"type":"user","message":{"content":"<agent-message from=\"reviewer\">\nDone.</agent-message>\n\nGuidance for the model."}}""").Envelopes.Single();
+        await Assert.That(note.ToolKind).IsEqualTo(ChatDisplayKind.AgentMessage);
+        await Assert.That(note.Text).IsEqualTo("Done.");
+    }
+
+    /// The notification that follows a hand-back points at the report instead of repeating it; the
+    /// pointer is dropped and the subagent still finishes.
+    [Test]
+    public async Task A_notification_pointing_at_a_handback_shows_only_its_summary() {
+        var result = R("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>Agent \"Post plan\" finished</summary>\n<result>This agent's report was delivered to you as a message from \"a1\" (its SubagentHandback call). Read it there; it is not repeated here.\n</result>\n</task-notification>"}}""");
+        await Assert.That(result.Envelopes.Single().Text).IsEqualTo("**Agent \"Post plan\" finished**");
+        await Assert.That(result.Runs.Single()).IsTypeOf<RunSignal.Finished>();
+    }
+
     [Test]
     public async Task Stopped_from_a_TaskStop_success_result_and_nothing_from_a_TaskOutput_probe() {
         var stop = R("""{"type":"user","timestamp":"2026-09-17T10:07:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Successfully stopped task: a9f262478e032f427"}]},"toolUseResult":{"task_id":"a9f262478e032f427","task_type":"local_agent","message":"Successfully stopped task: a9f262478e032f427"}}""");

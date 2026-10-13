@@ -702,6 +702,24 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A subagent's hand-back is that agent's report, so its row names the agent rather than the user.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_subagent_handback_renders_as_a_subagent_report() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [
+                """{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<agent-message from=\"a1\">\n[Subagent hand-back] Preamble. The report follows:\n  **Done.**\n</agent-message>","origin":{"kind":"peer","from":"a1"}}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+
+            var note = (SystemNoteItem)h.Chat.Items.Single();
+            await Assert.That(note.Label).IsEqualTo(SystemNoteItem.AgentReportLabel);
+            await Assert.That(note.Text).IsEqualTo("**Done.**");
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Cards_are_filtered_to_the_agent_ordered_by_request_time_and_removed_on_resolve() {

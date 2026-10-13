@@ -140,7 +140,7 @@
                     <views:ChatCardRow>
                         <Border Classes="systemNote chatSystemCard" Margin="0,8,0,12">
                             <StackPanel Spacing="6">
-                                <views:ChatKindHeader Label="Note" IconData="{x:Static views:ToolCategoryIcons.NoteIcon}" />
+                                <views:ChatKindHeader Label="{Binding Label}" IconData="{Binding IconData}" />
                                 <views:MarkdownView Text="{Binding Text}"
                                                     OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                     RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
