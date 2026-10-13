@@ -18,7 +18,9 @@ public static class GrokSubagents {
 
                 if (root.Str("method") == "_x.ai/session/update"
                  && root.Obj("params")?.Obj("update") is { } update
-                 && update.Str("child_session_id") is { Length: > 0 } child) {
+                 // The id names a sibling directory, so a non-GUID one could point outside the sessions dir.
+                 && update.Str("child_session_id") is { Length: > 0 } child
+                 && Guid.TryParse(child, out _)) {
                     found = update.Str("sessionUpdate") switch {
                         "subagent_spawned"  => new(child, update.Str("subagent_type"), Finished: false),
                         "subagent_finished" => new(child, update.Str("subagent_type"), Finished: true),

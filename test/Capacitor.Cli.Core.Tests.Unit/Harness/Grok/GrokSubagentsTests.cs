@@ -19,6 +19,16 @@ public class GrokSubagentsTests {
         await Assert.That(events[1].Finished).IsTrue();
     }
 
+    /// <summary>The child id becomes a path segment, so only a session id Grok could have written is
+    /// accepted; anything else would point the import at a file outside the sessions directory.</summary>
+    [Test]
+    [Arguments("../../../.ssh/id_rsa")]
+    [Arguments("/etc/passwd")]
+    [Arguments("child-id")]
+    public async Task A_child_id_that_is_not_a_session_id_is_ignored(string child) {
+        await Assert.That(GrokSubagents.Read([Spawned.Replace("01a135a0-64af-7661-94e6-282ec3ef065c", child)]).ToArray()).IsEmpty();
+    }
+
     [Test]
     public async Task A_child_s_transcript_is_its_sibling_session_directory() {
         var parent = Path.Combine("home", ".grok", "sessions", "%2Frepo", "parent-id", "updates.jsonl");
