@@ -1255,19 +1255,30 @@ partial class WatchCommand(
             if (!await PostSubagentStartAsync(sessionId, agentId, type ?? "subagent", transcript, ct)) continue;
 
             tracker.Started(child);
-            var key = $"{sessionId}-{agentId}";
-            await watchers.EnsureWatcherRunning(key: key, transcriptPath: transcript,
-                agentId: agentId, sessionIdOverride: sessionId, vendor: "grok");
-            spawnedChildKeys.Add(key);
+            Log(time, $"Grok subagent {agentId} ({type}) registered");
+        }
 
-            Log(time, $"Grok subagent {agentId} ({type}) registered + child watcher spawned");
+        // Every tick, not only at registration: a child watcher that failed to spawn or exited early is
+        // restarted, and a failed launch leaves the parent watcher running.
+        foreach (var (child, _) in tracker.Active()) {
+            if (ct.IsCancellationRequested) return;
+
+            var agentId = GrokSubagents.AgentId(child);
+            var key     = $"{sessionId}-{agentId}";
+            try {
+                await watchers.EnsureWatcherRunning(key: key, transcriptPath: GrokSubagents.ChildTranscript(transcriptPath, child),
+                    agentId: agentId, sessionIdOverride: sessionId, vendor: "grok");
+                spawnedChildKeys.Add(key);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                Log(time, $"Grok subagent {agentId} child watcher failed to start: {ex.Message}");
+            }
         }
 
         foreach (var (child, type) in tracker.AwaitingStop()) {
             if (ct.IsCancellationRequested) return;
 
-            await new GrokSubagentTeardown(profiles, http, watchers, time).FinishAsync(sessionId, transcriptPath, child, type);
-            tracker.Stopped(child);
+            if (await new GrokSubagentTeardown(profiles, http, watchers, time).FinishAsync(sessionId, transcriptPath, child, type))
+                tracker.Stopped(child);
         }
     }
 

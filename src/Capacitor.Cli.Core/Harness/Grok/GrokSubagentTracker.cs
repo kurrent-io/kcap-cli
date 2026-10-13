@@ -30,6 +30,10 @@ public sealed class GrokSubagentTracker {
     public IReadOnlyList<(string Child, string? Type)> AwaitingStop() =>
         [.. _types.Where(t => _started.Contains(t.Key) && _finished.Contains(t.Key) && !_stopped.Contains(t.Key)).Select(t => (t.Key, t.Value))];
 
+    /// <summary>Registered children still running, whose watchers must stay up.</summary>
+    public IReadOnlyList<(string Child, string? Type)> Active() =>
+        [.. _types.Where(t => _started.Contains(t.Key) && !_finished.Contains(t.Key) && !_stopped.Contains(t.Key)).Select(t => (t.Key, t.Value))];
+
     public void Started(string child) => _started.Add(child);
 
     public void Stopped(string child) => _stopped.Add(child);

@@ -55,4 +55,18 @@ public class GrokSubagentTrackerTests {
         await Assert.That(t.Seeded).IsTrue();
         await Assert.That(t.AwaitingStart().Select(c => c.Child)).IsEquivalentTo(new[] { "c1" });
     }
+
+    /// <summary>A registered child keeps its watcher ensured until it finishes, so one that failed to
+    /// spawn or exited early is restarted on a later tick.</summary>
+    [Test]
+    public async Task A_started_child_is_active_until_it_finishes() {
+        var t = new GrokSubagentTracker();
+        t.Observe([Spawned("c1"), Spawned("c2")]);
+        t.Started("c1");
+
+        await Assert.That(t.Active().Select(c => c.Child)).IsEquivalentTo(new[] { "c1" });
+
+        t.Observe([Finished("c1")]);
+        await Assert.That(t.Active()).IsEmpty();
+    }
 }

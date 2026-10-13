@@ -21,23 +21,31 @@ sealed class GrokSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient 
     /// <param name="register">Post <c>subagent-start</c> first, for a child the live scan never
     /// registered; without it the drain has no watermark and sends nothing. Lifecycle ids are
     /// deterministic, so a repeat start is harmless.</param>
-    internal async Task FinishAsync(string sessionId, string parentTranscript, string childSessionId, string? agentType, bool register = false) {
+    /// <returns>Whether the stop is settled: accepted, or refused for good. Otherwise the caller retries.</returns>
+    internal async Task<bool> FinishAsync(string sessionId, string parentTranscript, string childSessionId, string? agentType, bool register = false) {
         var agentId    = GrokSubagents.AgentId(childSessionId);
         var transcript = GrokSubagents.ChildTranscript(parentTranscript, childSessionId);
 
-        if (register && !await StartAsync(sessionId, agentId, agentType ?? "subagent", transcript)) return;
+        if (register && !await StartAsync(sessionId, agentId, agentType ?? "subagent", transcript)) return false;
 
         // Independent steps, so the stop is attempted even when the kill or the drain fails.
         await SafeAsync(() => watchers.KillWatcher($"{sessionId}-{agentId}"));
         await SafeAsync(() => watchers.InlineDrainAsync(sessionId, transcript, agentId, vendor: "grok"));
-        await SafeAsync(() => PostStopAsync(sessionId, agentId, agentType ?? "subagent", transcript));
+
+        int status;
+        try { status = await PostStopAsync(sessionId, agentId, agentType ?? "subagent", transcript); } catch { return false; }
+
+        return status is >= 200 and < 300 || !HookSpool.IsRetryable(status);
     }
 
     /// <summary>Every subagent the parent's transcript names, read from disk so a restarted parent
     /// watcher still finds them.</summary>
     internal async Task DrainAsync(string sessionId, string parentTranscript) {
+        // Yield first, so the caller's time cap is running before a long transcript is read.
+        await Task.Yield();
+
         string[] lines;
-        try { lines = File.ReadAllTextShared(parentTranscript).Split('\n'); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
+        try { lines = (await File.ReadAllTextSharedAsync(parentTranscript)).Split('\n'); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return; }
 
         // A child whose transcript is gone may still have been registered live, so it is stopped without
         // registering; one whose transcript exists is registered first in case the live scan never was.
@@ -59,11 +67,12 @@ sealed class GrokSubagentTeardown(ProfileContext profiles, ICapacitorHttpClient 
         }
     }
 
-    async Task PostStopAsync(string sessionId, string agentId, string agentType, string transcript) {
+    async Task<int> PostStopAsync(string sessionId, string agentId, string agentType, string transcript) {
         using var client  = await http.ForBackgroundAsync();
         var       payload = GeminiSubagentDiscovery.BuildStopPayload(sessionId, agentId, agentType, transcript);
         using var content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
-        await client.PostWithRetryAsync($"{profiles.Resolution.ServerUrl}/hooks/subagent-stop", content, time);
+        using var resp    = await client.PostWithRetryAsync($"{profiles.Resolution.ServerUrl}/hooks/subagent-stop", content, time);
+        return (int)resp.StatusCode;
     }
 
     static async Task SafeAsync(Func<Task> op) {
