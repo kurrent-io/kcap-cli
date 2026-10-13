@@ -178,6 +178,16 @@ public class AgentDirectoryTests {
     }
 
     [Test]
+    public async Task LowercaseIdleRemoteAgentsRemainVisibleAndUseTheCanonicalStatus() {
+        var (_, remote, _, dir) = Build();
+        using var _d = dir;
+        remote.Cache.AddOrUpdate(Remote("b1", status: "idle"));
+
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("remote:b1").Value.Status).IsEqualTo("Idle");
+    }
+
+    [Test]
     public async Task NoOpRecomputeSkipsUpdateChanges() {
         var (_, remote, _, dir) = Build();
         using var _d = dir;

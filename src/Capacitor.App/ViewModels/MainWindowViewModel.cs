@@ -110,6 +110,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     ObservableAsPropertyHelper<AttachState>? _state;
     public AttachState State => _state?.Value ?? AttachState.Connecting;
+    ObservableAsPropertyHelper<bool>? _loadingSessions;
+    public bool LoadingSessions => _loadingSessions?.Value ?? true;
+    ObservableAsPropertyHelper<bool>? _showsNoSessions;
+    public bool ShowsNoSessions => _showsNoSessions?.Value ?? false;
 
     // Display text for why we're not connected: friendly copy only — never a raw wire token
     // like daemon_unreachable. Null outside Unreachable.
@@ -499,6 +503,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.State, AttachState.Connecting)
                 .DisposeWith(disposables);
 
+            var loadingSessions = status.Select(s => s.State == AttachState.Connecting).DistinctUntilChanged();
+            _loadingSessions = loadingSessions
+                .ToProperty(this, x => x.LoadingSessions, true)
+                .DisposeWith(disposables);
+            var railEmpty = Rail?.WhenAnyValueUnsafe(r => r.IsEmpty) ?? Observable.Return(false);
+            _showsNoSessions = loadingSessions.CombineLatest(railEmpty, (loading, empty) => !loading && empty)
+                .DistinctUntilChanged()
+                .ToProperty(this, x => x.ShowsNoSessions, false)
+                .DisposeWith(disposables);
+
             _reason = status.Select(ReasonText)
                 .ToProperty(this, x => x.Reason, (string?)null)
                 .DisposeWith(disposables);
@@ -558,7 +572,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // Re-clicking the open session must not tear down and rebuild a live attach. The other
         // lane's same-id agent is a different agent, and a remote host the local daemon has taken
         // over no longer owns the id at all: both are a real swap.
-        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return;
+        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) {
+            return;
+        }
 
         ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
             ? remote(agentId)
@@ -566,7 +582,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (next is null) return;
 
         SwapTo(next);
-        Rail?.NotifySessionOpened(agentId);
+    }
+
+    public void OpenSessionPullRequest(string agentId, AgentOrigin origin) {
+        if (_navigation.ShutdownLatched) return;
+        OpenSession(agentId, origin);
+        if (CurrentWorkspace?.AgentId != agentId || Superseded(CurrentWorkspace, origin)) return;
+        switch (CurrentWorkspace) {
+            case WorkspaceViewModel local: local.OpenPullRequest(); break;
+            case RemoteSessionViewModel remote: remote.OpenPullRequest(); break;
+        }
     }
 
     static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
@@ -638,11 +663,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Where(moved => moved)
                 .Take(1)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
+                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive, remote.IsPullRequestActive)),
             // Not a one-shot: a swap the host cannot complete leaves the watch armed for the next
             // proof, and one that completes retires it through the swap's own re-arming.
             WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
-                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
+                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
         // A watch that fired while it was still being armed has already swapped the workspace and
@@ -683,13 +708,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         && !SessionStatusDots.IsTerminal(twin.Status)
         && twin.SessionId == droppedSession;
 
-    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
+    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
         OpenSession(open.AgentId, origin);
-        if (!terminal || ReferenceEquals(CurrentWorkspace, open)) return;
+        if (ReferenceEquals(CurrentWorkspace, open)) return;
         switch (CurrentWorkspace) {
-            case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
-            case RemoteSessionViewModel remote: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+            case WorkspaceViewModel local when terminal: local.ShowTerminalCommand.Execute().Subscribe(); break;
+            case RemoteSessionViewModel remote when terminal: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+            case WorkspaceViewModel local when pullRequest: local.OpenPullRequest(); break;
+            case RemoteSessionViewModel remote when pullRequest: remote.OpenPullRequest(); break;
         }
     }
 

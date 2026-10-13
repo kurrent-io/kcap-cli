@@ -10,6 +10,66 @@ namespace Capacitor.App.Tests.Unit;
 /// The rail's PR colours come from one cache that reads every listed session's links and
 /// overviews on a slow cadence, independent of which workspace is open.
 public class PullRequestToneCacheTests {
+    [Test]
+    public async Task Summary_uses_lifecycle_for_one_pr_and_count_for_several() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.Links = [FakePullRequestSource.Link(142)];
+        source.Lifecycles[142] = "draft";
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        await Assert.That(cache.CurrentSummaries["s1"].Label).IsEqualTo("PR #142");
+        await Assert.That(cache.CurrentSummaries["s1"].Status.Text).IsEqualTo("Draft");
+        source.Lifecycles[142] = "merged";
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Lifecycle == "Merged", "merged summary");
+        source.Links = [FakePullRequestSource.Link(142), FakePullRequestSource.Link(143), FakePullRequestSource.Link(143)];
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Count == 2, "multiple summary");
+        await Assert.That(cache.CurrentSummaries["s1"].Label).IsEqualTo("2 PRs");
+    }
+
+    [Test]
+    public async Task A_short_access_window_is_renewed_before_expiry() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 30;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => source.Lists == 2, "access renewal");
+        await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
+    }
+
+    [Test]
+    public async Task A_transient_failure_keeps_metadata_only_until_its_access_window_expires() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 30;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        source.Failure = "transient";
+        time.Advance(TimeSpan.FromSeconds(20));
+        await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
+        time.Advance(TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "expired summary");
+    }
+
+    [Test]
+    public async Task A_denied_refresh_clears_metadata_immediately() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        source.Failure = "denied";
+        time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "revoked summary");
+    }
+
     static readonly RepoIdentity Repo = new("path:/repo", "repo");
 
     static AgentRow Row(string id, string? sessionId) => AgentRow.FromLocal(
@@ -18,7 +78,7 @@ public class PullRequestToneCacheTests {
     static (FakeAgentDirectory Directory, FakePullRequestSource Source, FakeTimeProvider Time, PullRequestToneCache Cache) Build() {
         var directory = new FakeAgentDirectory();
         var time = new FakeTimeProvider();
-        var source = new FakePullRequestSource(time);
+        var source = new FakePullRequestSource(time) { AccessSeconds = 300 };
         var cache = new PullRequestToneCache(directory, source, time);
         return (directory, source, time, cache);
     }

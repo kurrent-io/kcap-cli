@@ -17,6 +17,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using SvcSystems.UI.Terminal;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -44,10 +45,10 @@ public class MainWindowSmokeTests {
 
     /// A real WorkspaceViewModel over the fake service and scripted attach/surface fakes — same
     /// pieces MainWindowViewModelTests wires, over the actions this file's NewActions built.
-    static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, AgentActionService actions, string agentId) =>
+    static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, AgentActionService actions, string agentId, IPullRequestSource? pullRequests = null) =>
         new(agentId, service, actions, new FakeTerminalAttachClientFactory().Factory,
             () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
-            new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
+            new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests);
 
     // A tip's bindings only resolve once it is parented to its adorner. String tips need no
     // open; two-line panels do. Always open so callers can treat both the same.
@@ -488,11 +489,12 @@ public class MainWindowSmokeTests {
     }
 
     /// A shown MainWindow whose rail holds two rows, "Fix the flaky test"
-    /// and "Leave this one alone", under one worktree named feature-x. A sibling worktree
-    /// adds one more row under that name.
+    /// and "Leave this one alone", with an optional sibling checkout.
     static (MainWindowViewModel Vm, MainWindow Window) RailWindow(
             bool awaitingInput = false, int? liveSubagents = null, string? model = null, string? siblingWorktree = null,
-            string? firstStatus = null, IReadOnlySet<string>? pendingIds = null, PendingLaunchDto? pending = null) {
+            string? firstStatus = null, IReadOnlySet<string>? pendingIds = null, PendingLaunchDto? pending = null,
+            IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequestSummaries = null,
+            IPullRequestSource? pullRequests = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
@@ -500,10 +502,10 @@ public class MainWindowSmokeTests {
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a1", "agent", "claude", "/dev/alpha/wt/feature-x", firstStatus ?? "Running",
             null, null, null, DateTime.UtcNow, model, null, Title: "Fix the flaky test",
-            AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents));
+            AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents, SessionId: "s1"));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
-            null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone"));
+            null, null, null, DateTime.UtcNow, null, null, Title: "Leave this one alone", SessionId: "s2"));
         if (siblingWorktree is not null)
             service.Agents.AddOrUpdate(new AgentStatusDto(
                 "a3", "agent", "claude", $"/dev/alpha/wt/{siblingWorktree}", "Running",
@@ -517,12 +519,13 @@ public class MainWindowSmokeTests {
             : p;
         var directory = new AgentDirectory(
             service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null),
-            resolveRepoRoot, null, null, TimeProvider.System);
+            resolveRepoRoot, null, "http://localhost:9999", TimeProvider.System);
         var rail = new SessionRailViewModel(
-            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System, resolveRepoRoot,
-            agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds));
+            directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System,
+            agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds),
+            pullRequests: pullRequestSummaries, openPullRequest: (id, origin) => vm!.OpenSessionPullRequest(id, origin));
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-            workspaceFactory: id => NewWorkspace(service, actions, id), rail: rail);
+            workspaceFactory: id => NewWorkspace(service, actions, id, pullRequests), rail: rail);
         var window = new MainWindow { DataContext = vm };
         window.Show();
         Dispatcher.UIThread.RunJobs();
@@ -533,12 +536,107 @@ public class MainWindowSmokeTests {
     static Button RailRow(MainWindow window, string text) => window.GetVisualDescendants().OfType<Button>()
         .First(b => b.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == text));
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pr_link_is_a_separate_focusable_control_and_opens_the_native_reader() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var time = new FakeTimeProvider();
+            var source = new FakePullRequestSource(time) { Links = [FakePullRequestSource.Link(142)] };
+            using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, PullRequestWire.Subject(source.Links[0]), "Open") });
+            var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source);
+            try {
+                var session = RailRow(window, "Fix the flaky test");
+                var pr = window.GetVisualDescendants().OfType<Button>().Single(b => b.IsVisible && b.Classes.Contains("railPr"));
+                await Assert.That(pr.Focusable).IsTrue();
+                await Assert.That(pr.GetVisualAncestors().Contains(session)).IsFalse();
+                var card = session.FindAncestorOfType<Border>()!;
+                await Assert.That(card.Classes.Contains("railSession")).IsTrue();
+                await Assert.That(pr.GetVisualAncestors().Contains(card)).IsTrue();
+                await Assert.That(pr.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "PR #142")).IsTrue();
+                await Assert.That(pr.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Open" && t.IsVisible)).IsTrue();
+                await Assert.That(ToolTip.GetTip(pr) as string).Contains("Linked to this session: Fix the flaky test");
+                await Assert.That(AutomationProperties.GetName(pr)).Contains("Fix the flaky test");
+                pr.Command!.Execute(null);
+                var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
+                await WorkspaceFixtures.WaitUntilAsync(() => workspace.PullRequests!.CanReveal && !workspace.PullRequests.IsReading,
+                    what: "native PR reader");
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await Assert.That(workspace.AgentId).IsEqualTo("a1");
+                await Assert.That(workspace.IsPullRequestActive).IsTrue();
+                await Assert.That(card.Classes.Contains("selected")).IsTrue();
+                await Assert.That((card.Background as ISolidColorBrush)!.Color.A).IsGreaterThan((byte)0);
+                await Assert.That(window.GetVisualDescendants().OfType<PullRequestReader>().Any()).IsTrue();
+                await Assert.That(workspace.PullRequests!.Selected!.Subject.Number).IsEqualTo(142);
+                summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(3) });
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                var updatedPr = window.GetVisualDescendants().OfType<Button>().Single(b => b.IsVisible && b.Classes.Contains("railPr"));
+                await Assert.That(updatedPr.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "3 PRs")).IsTrue();
+                await Assert.That(updatedPr.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("railPrState")).IsVisible).IsFalse();
+                summaries.OnNext(new Dictionary<string, RailPullRequestSummary>());
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await Assert.That(updatedPr.IsVisible).IsFalse();
+                await workspace.TeardownAsync();
+            } finally {
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Remote_machine_badge_and_tooltip_identify_the_daemon_in_both_selection_states() => AvaloniaSession.RunOnUiAsync(async () => {
+        const string machine = "rail-qa-with-a-long-daemon-name";
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
+        using var directory = new FakeAgentDirectory();
+        directory.Rows.AddOrUpdate(AgentRow.FromRemote(new Capacitor.Remote.Models.AgentInstanceDto {
+            AgentId = "r1", Status = "idle", DaemonName = machine, OwnerUserId = "u1", Vendor = "claude",
+            Prompt = "File listing", RepoOwner = "o", RepoName = "repo", RepoPath = "/remote/repo", RegisteredAt = DateTime.UtcNow,
+        }));
+        using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try {
+            var row = RailRow(window, "File listing");
+            var badge = row.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("railChip"));
+            var label = badge.GetVisualDescendants().OfType<TextBlock>().Single();
+            await Assert.That(label.Text).IsEqualTo($"on {machine}");
+            await Assert.That(badge.IsEffectivelyVisible).IsTrue();
+            await Assert.That(badge.Bounds.Width).IsGreaterThan(0);
+            await Assert.That((badge.BorderBrush as ISolidColorBrush)!.Color.A).IsGreaterThan((byte)0);
+            await Assert.That(ToolTip.GetTip(badge) as string).Contains(machine);
+            await Assert.That(ToolTip.GetTip(badge) as string).Contains("remote daemon");
+            var restingColor = (label.Foreground as ISolidColorBrush)!.Color;
+            ToolTip.SetIsOpen(row, true);
+            Dispatcher.UIThread.RunJobs();
+            var tip = (StackPanel)ToolTip.GetTip(row)!;
+            var machineLines = tip.Children.OfType<StackPanel>().SelectMany(p => p.Children.OfType<TextBlock>()).Select(t => t.Text).ToArray();
+            await Assert.That(machineLines).Contains(machine);
+            await Assert.That(machineLines).Contains("Machine · remote daemon");
+            ToolTip.SetIsOpen(row, false);
+            rail.SelectedAgentId = "r1";
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(badge.IsEffectivelyVisible).IsTrue();
+            await Assert.That((label.Foreground as ISolidColorBrush)!.Color).IsEqualTo(restingColor);
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// The rail's own click path: a session row rendered by SessionRailView carries the
     /// VM's OpenCommand, and executing it opens that agent's workspace.
     ///
     /// Also pins the selection highlight as RENDERED state, not just as a bound class. A row's
     /// resting Background must come from the `railRow` class style: a local `Background` attribute
-    /// on the Button would be a LocalValue, outrank the `.selected`/`.holdsSelected` style
+    /// on the Button would be a LocalValue, outrank the `.selected` style
     /// triggers, and leave the highlight permanently invisible while still passing any
     /// class-membership assertion. Comparing the opened row's alpha against its sibling's is what
     /// fails if a future local value defeats the style again.
@@ -557,9 +655,7 @@ public class MainWindowSmokeTests {
                 var result = (vm.CurrentWorkspace?.AgentId,
                     SelectedClass: Row("Fix the flaky test").Classes.Contains("selected"),
                     SelectedAlpha: Alpha(Row("Fix the flaky test")),
-                    SiblingAlpha: Alpha(Row("Leave this one alone")),
-                    // The worktree header row carries the same hazard through holdsSelected.
-                    WorktreeAlpha: Alpha(Row("feature-x")));
+                    SiblingAlpha: Alpha(Row("Leave this one alone")));
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
@@ -568,7 +664,6 @@ public class MainWindowSmokeTests {
             await Assert.That(opened.SelectedClass).IsTrue();
             await Assert.That(opened.SelectedAlpha).IsGreaterThan((byte)0); // the highlight actually paints
             await Assert.That(opened.SiblingAlpha).IsEqualTo((byte)0); // an unopened row stays transparent
-            await Assert.That(opened.WorktreeAlpha).IsGreaterThan((byte)0);
         });
     }
 
@@ -630,73 +725,30 @@ public class MainWindowSmokeTests {
         });
     }
 
-    /// The worktree header is as tall as its attention badge while expanded, so collapsing onto
-    /// the badge does not grow the row.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Collapsing_a_waiting_worktree_does_not_grow_the_header() {
+    public async Task Sessions_from_different_checkouts_share_the_same_indent_without_headers() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var seen = await AvaloniaSession.DispatchAsync(() => {
-                var (_, window) = RailWindow(awaitingInput: true);
-                var header = RailRow(window, "feature-x");
-                var expanded = header.Bounds.Height;
-                header.Command!.Execute(null);
-                Dispatcher.UIThread.RunJobs();
-                var collapsed = header.Bounds.Height;
-                window.Close();
-                Dispatcher.UIThread.RunJobs();
-                return (expanded, collapsed);
-            });
-            await Assert.That(seen.expanded).IsGreaterThanOrEqualTo(32);
-            await Assert.That(seen.collapsed).IsEqualTo(seen.expanded);
-        });
-    }
-
-    /// The count sits tight against the chevron on the right edge, expanded or collapsed.
-    /// Collapsed, the status mark sits in a fixed column, so worktrees whose names differ in
-    /// length show their statuses at one x.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Worktree_statuses_line_up_beside_a_tight_count() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var seen = await AvaloniaSession.DispatchAsync(() => {
-                var (_, window) = RailWindow(awaitingInput: true, siblingWorktree: "x");
+                var (_, window) = RailWindow(siblingWorktree: "x");
                 window.UpdateLayout();
-                var header = RailRow(window, "feature-x");
-                var sibling = RailRow(window, "x");
-                double Left(Control control) => control.TranslatePoint(default, window)!.Value.X;
-                double Right(Control control) => control.TranslatePoint(new Point(control.Bounds.Width, 0), window)!.Value.X;
-                Avalonia.Controls.Shapes.Path Chevron(Button row) => row.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First(p => p.IsVisible && p.StrokeThickness == 1.8);
-                TextBlock Count(Button row, string text) => row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == text);
-                AgentStatusMark Mark(Button row) => row.GetVisualDescendants().OfType<AgentStatusMark>().First(m => m.IsVisible);
-                var label = header.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "feature-x");
-                var branch = header.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().First(p => p.StrokeThickness == 1.5);
-                var expandedGap = Left(Chevron(header)) - Right(Count(header, "2"));
-                header.Command!.Execute(null);
-                sibling.Command!.Execute(null);
+                var first = RailRow(window, "Fix the flaky test");
+                var other = RailRow(window, "Sibling work");
+                ToolTip.SetIsOpen(first, true);
                 Dispatcher.UIThread.RunJobs();
-                window.UpdateLayout();
                 var result = (
-                    ExpandedGap: expandedGap,
-                    CollapsedGap: Left(Chevron(header)) - Right(Count(header, "2")),
-                    MarkOffset: Math.Abs(Left(Mark(header)) - Left(Mark(sibling))),
-                    MarkClearsCount: Left(Count(header, "2")) - Right(Mark(header)),
-                    ChevronOffset: Math.Abs(Left(Chevron(header)) - Left(Chevron(sibling))),
-                    BranchBeforeTitle: Right(branch) <= Left(label),
-                    Parenthetical: header.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "(2)"));
+                    Offset: Math.Abs(first.TranslatePoint(default, window)!.Value.X - other.TranslatePoint(default, window)!.Value.X),
+                    HasHeader: window.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text is "feature-x" or "x"),
+                    Tip: ToolTip.GetTip(first) is StackPanel panel
+                        ? panel.Children.OfType<StackPanel>().SelectMany(p => p.Children.OfType<TextBlock>()).First(t => t.Text == "/dev/alpha/wt/feature-x").Text
+                        : null);
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 return result;
             });
-            await Assert.That(seen.ExpandedGap).IsGreaterThan(0);
-            await Assert.That(seen.ExpandedGap).IsLessThan(8);
-            await Assert.That(seen.CollapsedGap).IsGreaterThan(0);
-            await Assert.That(seen.CollapsedGap).IsLessThan(8);
-            await Assert.That(seen.MarkOffset).IsLessThan(0.5);
-            await Assert.That(seen.MarkClearsCount).IsGreaterThan(0);
-            await Assert.That(seen.ChevronOffset).IsLessThan(0.5);
-            await Assert.That(seen.BranchBeforeTitle).IsTrue();
-            await Assert.That(seen.Parenthetical).IsFalse();
+            await Assert.That(seen.Offset).IsLessThan(0.5);
+            await Assert.That(seen.HasHeader).IsFalse();
+            await Assert.That(seen.Tip).Contains("/dev/alpha/wt/feature-x");
         });
     }
 
@@ -734,8 +786,8 @@ public class MainWindowSmokeTests {
                     MarkLeft: Left(mark),
                     MetaGap: row.Bounds.Width - Right(meta),
                     ModelInRow: row.GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text == "opus"),
-                    ChildTips: row.GetVisualDescendants().Count(v => v is Control c && ToolTip.GetTip(c) is not null),
-                    RowTipIsStatus: ToolTip.GetTip(row) is AgentStatusTip,
+                    ChildTips: row.GetVisualDescendants().Count(v => v is Control c && c.IsEffectivelyVisible && ToolTip.GetTip(c) is not null),
+                    RowTipIsStatus: ToolTip.GetTip(row) is StackPanel tip && tip.Children.OfType<AgentStatusTip>().Any(),
                     RowTip: ((RailSessionViewModel)row.DataContext!).Tooltip,
                     HasMark: vendor.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Any(),
                     MetaAlign: meta.VerticalAlignment);

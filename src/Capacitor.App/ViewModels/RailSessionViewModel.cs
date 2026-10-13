@@ -15,23 +15,35 @@ namespace Capacitor.App.ViewModels;
 /// point-in-time snapshot.
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Id { get; }
+    public string Key { get; }
+    public string? CheckoutPath { get; }
     /// Null when the row has no title, in which case the chips line stands alone as the row.
     public string? Primary { get; }
     public bool HasTitle { get; }
+    public string SessionAccessibleName => Primary ?? (HasVendor ? Vendor : "Session");
     public string Vendor { get; }
     public bool HasVendor { get; }
     public string? Model { get; }
     public string Meta { get; }
-    public string Tooltip => Status.Tip;
+    public string Tooltip => MachineBadge is { Length: > 0 } machine
+        ? $"{Status.Tip}\n\n{machine}\nMachine · remote daemon" : Status.Tip;
     /// The daemon name badge for a remote row; null for a local one.
     public string? MachineBadge { get; }
+    public string MachineLabel => $"on {MachineBadge}";
+    public string MachineTooltip => $"This session runs on the remote daemon ‘{MachineBadge}’.";
     public bool IsRemote { get; }
     /// A launch the daemon has not published yet: Meta carries its stage instead of an age.
     public bool IsStarting { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
-
-    internal DateTime CreatedAt { get; }
-
+    public ReactiveCommand<Unit, Unit> OpenPullRequestCommand { get; }
+    RailPullRequestSummary? _pullRequest;
+    public RailPullRequestSummary? PullRequest => _pullRequest;
+    public string PullRequestLabel => PullRequest?.Label ?? "";
+    public PullRequestStatus? PullRequestStatus => PullRequest?.Status;
+    public bool HasPullRequestLifecycle => PullRequest?.HasLifecycle == true;
+    public string PullRequestTooltip => $"{PullRequest?.Description}\n\nLinked to this session: {SessionAccessibleName}\nOpen pull request details";
+    public bool HasPullRequest => PullRequest is not null;
+    public string PullRequestAccessibleName => $"Open {PullRequestLabel} for {Primary ?? Vendor}";
     readonly ObservableAsPropertyHelper<bool> _isSelected;
     public bool IsSelected => _isSelected.Value;
 
@@ -49,9 +61,27 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote, TimeProvider time,
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
-            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null) {
+            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
+            IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
+            IObservable<bool>? localOnAppServer = null, Action<string, AgentOrigin>? openPullRequest = null) {
         Id = row.Id;
-        CreatedAt = row.CreatedAt;
+        Key = row.Key;
+        CheckoutPath = (row.WorkLocation == WorkLocationText.Borrowed ? row.BorrowedFrom : row.WorktreePath) ?? row.RepoPath;
+        (pullRequests ?? Observable.Return<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                FrozenDictionary<string, RailPullRequestSummary>.Empty))
+            .CombineLatest(localOnAppServer ?? Observable.Return(true), (map, localReadable) =>
+                row.SessionId is { Length: > 0 } sid && (row.Origin != AgentOrigin.Local || localReadable)
+                    ? map.GetValueOrDefault(sid) : null)
+            .DistinctUntilChanged()
+            .Subscribe(summary => {
+                this.RaiseAndSetIfChanged(ref _pullRequest, summary, nameof(PullRequest));
+                this.RaisePropertyChanged(nameof(PullRequestLabel));
+                this.RaisePropertyChanged(nameof(PullRequestStatus));
+                this.RaisePropertyChanged(nameof(HasPullRequestLifecycle));
+                this.RaisePropertyChanged(nameof(PullRequestTooltip));
+                this.RaisePropertyChanged(nameof(HasPullRequest));
+                this.RaisePropertyChanged(nameof(PullRequestAccessibleName));
+            }).DisposeWith(_disposables);
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
         var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;
         var age = UptimeFormat.Format(
@@ -85,6 +115,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
 
         OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));
         _disposables.Add(OpenCommand);
+        OpenPullRequestCommand = ReactiveCommand.Create(() => {
+            if (HasPullRequest) openPullRequest?.Invoke(row.Id, row.Origin == AgentOrigin.Remote ? AgentOrigin.Remote : AgentOrigin.Local);
+        });
+        _disposables.Add(OpenPullRequestCommand);
     }
 
     static string Join(params string?[] parts) =>

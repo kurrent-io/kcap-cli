@@ -9,9 +9,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One repository level of the rail. IsNoRepository is the "No repository" sentinel group — its
-/// single nested worktree group renders headerless. No ObserveOn: the outer pipeline already
-/// marshaled (RailWorktreeViewModel's identical note).
+/// Repository heading and its sessions. Streams arrive on the UI thread from the rail root.
 public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
     public string RootPath { get; }
     /// RootPath in a form worth showing a user — a tooltip, never a comparer or collapse key.
@@ -22,28 +20,20 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
     readonly ObservableAsPropertyHelper<string> _countText;
     public string CountText => _countText.Value;
 
-    readonly ObservableCollectionExtended<RailWorktreeViewModel> _worktreesSource = new();
-    public ReadOnlyObservableCollection<RailWorktreeViewModel> Worktrees { get; }
-
-    // Main checkout first, then leaf label; path tiebreak keeps the order total.
-    static readonly IComparer<RailWorktreeViewModel> WorktreeComparer =
-        Comparer<RailWorktreeViewModel>.Create((a, b) => {
-            var byMain = b.IsMainCheckout.CompareTo(a.IsMainCheckout);
-            if (byMain != 0) return byMain;
-            var byLabel = StringComparer.OrdinalIgnoreCase.Compare(a.Label, b.Label);
-            return byLabel != 0 ? byLabel : string.CompareOrdinal(a.Path, b.Path);
-        });
+    readonly ObservableCollectionExtended<RailSessionViewModel> _sessionsSource = new();
+    public ReadOnlyObservableCollection<RailSessionViewModel> Sessions { get; }
 
     readonly CompositeDisposable _disposables = new();
 
     public RailRepoViewModel(
-            IGroup<AgentRow, string, string> group, RailCollapseState collapse,
+            IGroup<AgentRow, string, string> group,
             IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
-            IObservable<bool> remoteStale, Func<string, string> resolveRepoRoot,
+            IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote, TimeProvider time,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
-            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
-            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null) {
+            IObservable<IReadOnlySet<string>> agentsAwaitingAnswer,
+            IObservable<IReadOnlyDictionary<string, int>> agentsRunningCommands,
+            IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>> pullRequests,
+            IObservable<bool> localOnAppServer, Action<string, AgentOrigin>? openPullRequest) {
         RootPath = group.Key;
         // Rows in one group share RepoGroupLabel by construction — any member names it.
         Label = group.Cache.Items[0].RepoGroupLabel;
@@ -55,14 +45,13 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.CountText, initialValue: "")
             .DisposeWith(_disposables);
 
-        Worktrees = new ReadOnlyObservableCollection<RailWorktreeViewModel>(_worktreesSource);
+        Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         group.Cache.Connect()
-            .Group(SessionRailViewModel.WorktreeKeyFor)
-            .Transform(wt => new RailWorktreeViewModel(
-                wt.Key, resolveRepoRoot, showHeader: !IsNoRepository, wt.Cache, collapse, selectedAgentId,
-                agentsWithPending, remoteStale, openLocal, openRemote, time, pullRequestTones, agentsAwaitingAnswer, agentsRunningCommands))
+            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale,
+                openLocal, openRemote, time, agentsAwaitingAnswer, agentsRunningCommands,
+                pullRequests, localOnAppServer, openPullRequest))
             .DisposeMany()
-            .SortAndBind(_worktreesSource, WorktreeComparer)
+            .Bind(_sessionsSource)
             .Subscribe()
             .DisposeWith(_disposables);
     }

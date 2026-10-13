@@ -13,20 +13,17 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// The session rail's root: repository → worktree → session over directory.Rows.
+/// The session rail's root: repository → sessions over directory.Rows.
 /// Ctor-scoped and disposable like HomeViewModel — the tree must be live from construction.
 /// ONE ObserveOn at the top of the pipeline: nested group caches are mutated by this outer
 /// pipeline, so every inner Connect() below already fires on the UI thread.
 public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
-    readonly IAgentDirectory _directory;
-    readonly RailCollapseState _collapse = new();
     readonly CompositeDisposable _disposables = new();
 
     // SelectedAgentId is fed to the nested VMs via this subject, not this.WhenAnyValue: that
     // call routes through ReactiveUI's ObservableForProperty/RxAppBuilder global init, which is
     // only reliably primed when some other test has already pumped the headless dispatcher
-    // first — the same race RailWorktreeViewModel's IsExpanded/SessionsVisible sharing avoids
-    // (see its header comment) and AvaloniaSession.cs documents for MainThreadScheduler.
+    // first — AvaloniaSession.cs documents the MainThreadScheduler initialization race.
     readonly BehaviorSubject<string?> _selectedAgentIdChanges = new(null);
 
     string? _selectedAgentId;
@@ -53,24 +50,17 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             return byLabel != 0 ? byLabel : string.CompareOrdinal(a.RootPath, b.RootPath);
         });
 
-    /// resolveRepoRoot defaults to the real .git-reading heuristic; tests inject a pure one.
-    /// agentsWithPending defaults to an always-empty set so callers that don't wire the
-    /// permission service still compile and render.
     public SessionRailViewModel(
             IAgentDirectory directory,
             Action<string> openLocalSession, Action<string> openRemoteSession, TimeProvider time,
-            Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
-            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null) {
-        _directory = directory;
-        var resolveRoot = resolveRepoRoot ?? GitRepository.ResolveMainRepoRoot;
-        // Not disposed with the rest: same as RailCollapseState's Changes subject, a bare
-        // signaling Subject the class never tears down, so a post-Dispose set never throws.
+            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
+            IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
+            Action<string, AgentOrigin>? openPullRequest = null) {
         IObservable<string?> selected = _selectedAgentIdChanges;
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
-        // here so every nested OAPH downstream (RailSessionViewModel, RailWorktreeViewModel) sees
+        // here so every nested OAPH downstream sees
         // it on the UI thread without adding its own ObserveOn.
         var pending = (agentsWithPending ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -79,9 +69,11 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
         // the UI thread without its own ObserveOn.
         var stale = directory.RemoteStale.ObserveOn(RxSchedulers.MainThreadScheduler);
-        // The tone cache publishes from its read continuations; marshaled once here like the others.
-        var tones = (pullRequestTones ?? Observable.Return<IReadOnlyDictionary<string, PullRequestTone>>(FrozenDictionary<string, PullRequestTone>.Empty))
-            .ObserveOn(RxSchedulers.MainThreadScheduler);
+        var prs = (pullRequests ?? Observable.Return<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                FrozenDictionary<string, RailPullRequestSummary>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler);
+        var localOnAppServer = directory.LocalDaemonOnAppServer.ObserveOn(RxSchedulers.MainThreadScheduler);
+        var commands = (agentsRunningCommands ?? Observable.Return<IReadOnlyDictionary<string, int>>(
+                FrozenDictionary<string, int>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler);
 
         _isEmpty = directory.Rows.CountChanged
             .Select(c => c == 0)
@@ -94,21 +86,12 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones, answering, agentsRunningCommands))
+                g, selected, pending, stale, openLocalSession, openRemoteSession, time, answering, commands,
+                prs, localOnAppServer, openPullRequest))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()
             .DisposeWith(_disposables);
-    }
-
-    /// The launch auto-open's counterpart: a session opened into an explicitly collapsed
-    /// worktree must never highlight an invisible row.
-    public void NotifySessionOpened(string agentId) {
-        var row = _directory.Rows.Lookup($"local:{agentId}");
-        if (!row.HasValue) row = _directory.Rows.Lookup($"remote:{agentId}");
-        if (!row.HasValue) row = _directory.Rows.Lookup($"pending:{agentId}");
-        if (!row.HasValue || row.Value.CheckoutKey is not { Length: > 0 } path) return;
-        _collapse.Set(path, collapsed: false);
     }
 
     internal static string WorktreeKeyFor(AgentStatusDto dto) =>

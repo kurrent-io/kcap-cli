@@ -734,12 +734,12 @@ public class MainWindowViewModelTests {
             var directory = new AgentDirectory(
                 service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p, null, null,
                 TimeProvider.System);
-            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, p => p);
+            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
             var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail);
 
             vm.OpenSession("a1");
             await Assert.That(rail.SelectedAgentId).IsEqualTo("a1");
-            await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsTrue(); // NotifySessionOpened ran
+            await Assert.That(rail.Repos[0].Sessions[0].IsSelected).IsTrue();
 
             vm.CloseWorkspace();
             await Assert.That(rail.SelectedAgentId).IsNull();

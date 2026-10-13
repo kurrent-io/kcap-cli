@@ -37,9 +37,10 @@ public class RemoteSessionViewModelTests {
                 Vendor = vendor, OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
 
-        public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null) {
+        public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
+                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface(), planArtifacts);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface(), planArtifacts, pullRequests: pullRequests);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -63,6 +64,27 @@ public class RemoteSessionViewModelTests {
             Permissions.Dispose();
             Directory.Dispose();
         }
+    }
+
+    [Test]
+    public async Task A_remote_session_opens_the_native_pr_reader_and_keeps_the_picker() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePullRequestSource(h.Time);
+            var vm = h.Build(Harness.Row(), pullRequests: source);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            vm.PullRequests!.SetForeground(true);
+            vm.OpenPullRequest();
+            await WaitUntilAsync(() => vm.PullRequests.CanReveal && !vm.PullRequests.IsReading, what: "PR reader");
+            await Assert.That(vm.IsPullRequestActive).IsTrue();
+            await Assert.That(vm.ShowsPullRequestPane).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            await Assert.That(vm.ShowsPullRequestTab).IsTrue();
+            await Assert.That(vm.PullRequests.Choices).Count().IsEqualTo(2);
+            vm.ShowChatCommand.Execute().Subscribe();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await vm.TeardownAsync();
+        });
     }
 
     [Test]

@@ -636,13 +636,15 @@ public partial class App : Application {
         _menuBar?.SetFeedbackAction(openFeedback);
 
         var commands = new BackgroundCommandActivity();
+        Action linkGitHub = () => {
+            if (profiles?.Resolution.ServerUrl is { Length: > 0 } url)
+                LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
+        };
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, opener, permissions,
             workContext, ops, uploader,
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
-            linkGitHub: () => {
-                if (profiles?.Resolution.ServerUrl is { Length: > 0 } url) LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
-            },
+            linkGitHub: linkGitHub,
             access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
             commands: commands);
         // The origin lookup below and this call are two reads of a cache the directory's own
@@ -651,7 +653,9 @@ public partial class App : Application {
         RemoteSessionViewModel? BuildRemote(string agentId) =>
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, _time,
-                    () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands)
+                    () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
+                    pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
+                    signInCompleted: serverClients.SignInCompleted)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
@@ -663,7 +667,7 @@ public partial class App : Application {
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
                 agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer, agentsRunningCommands: commands.Running,
                 requestSignIn: requestSignIn,
-                lifecycleAttention: lifecycleAttention, pullRequestTones: pullRequestTones.Tones,
+                lifecycleAttention: lifecycleAttention, pullRequestSummaries: pullRequestTones.Summaries,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
@@ -1260,7 +1264,7 @@ public partial class App : Application {
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null, Action? requestSignIn = null,
             IObservable<string?>? lifecycleAttention = null,
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
+            IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequestSummaries = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
             IServerLane? lane = null, Func<CancellationToken, Task<string?>>? viewerId = null,
             string? localMachineId = null, IObservable<bool>? restartPending = null,
@@ -1311,7 +1315,8 @@ public partial class App : Application {
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
             openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
-            pullRequestTones: pullRequestTones, agentsAwaitingAnswer: agentsAwaitingAnswer, agentsRunningCommands: agentsRunningCommands);
+            agentsAwaitingAnswer: agentsAwaitingAnswer, agentsRunningCommands: agentsRunningCommands,
+            pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin) => vm?.OpenSessionPullRequest(agentId, origin));
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,

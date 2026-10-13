@@ -40,7 +40,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     // Defaults to false — the Activity flyout starts closed (MainWindow.axaml), so Activity is off
     // regardless of the window's own visibility.
     bool _activityOpen;
-    WorkspaceViewModel? _foregroundWorkspace;
+    PullRequestContextViewModel? _foregroundPullRequests;
 
     /// Assigned by App.BuildAndShowMainWindow — the SAME IAppNotifier instance
     /// AgentActionService pushes into, so the toast overlay and stderr mirroring are always in
@@ -151,14 +151,17 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void UpdateActivityVisibility() {
         if (DataContext is MainWindowViewModel vm) {
             vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.CurrentWorkspace is null);
-            // Only a local workspace owns a PR reader; a remote host has none to foreground.
-            var workspace = vm.CurrentWorkspace as WorkspaceViewModel;
-            if (_foregroundWorkspace != workspace) _foregroundWorkspace?.PullRequests?.SetForeground(false);
-            _foregroundWorkspace = workspace;
-            workspace?.PullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);
+            var pullRequests = vm.CurrentWorkspace switch {
+                WorkspaceViewModel local => local.PullRequests,
+                RemoteSessionViewModel remote => remote.PullRequests,
+                _ => null,
+            };
+            if (_foregroundPullRequests != pullRequests) _foregroundPullRequests?.SetForeground(false);
+            _foregroundPullRequests = pullRequests;
+            pullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);
         } else {
-            _foregroundWorkspace?.PullRequests?.SetForeground(false);
-            _foregroundWorkspace = null;
+            _foregroundPullRequests?.SetForeground(false);
+            _foregroundPullRequests = null;
         }
     }
 }

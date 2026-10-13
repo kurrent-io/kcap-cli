@@ -5,6 +5,8 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
 using DynamicData;
 using ReactiveUI.Reactive;
@@ -12,7 +14,7 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 public enum RemoteSessionAccess { Connecting, Ready, Denied, Offline, NoSession }
-public enum RemoteTab { Chat, Terminal, Artefacts }
+public enum RemoteTab { Chat, Terminal, PullRequest, Artefacts }
 
 /// The workspace for a row the app has no socket to: the header, the chat pane over the server's
 /// stream — its cards included — Stop and Open in web. Access is the server's explicit signal,
@@ -47,6 +49,22 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// vendor's family decides, exactly as it does for a local dto without one.
     public RemoteTerminalViewModel? Terminal { get; }
     public bool ShowsTerminalTab => Terminal is not null;
+    public PullRequestContextViewModel? PullRequests { get; }
+    public ReactiveCommand<Unit, Unit> ShowPullRequestCommand { get; }
+    bool _showsPullRequestTab;
+    public bool ShowsPullRequestTab {
+        get => _showsPullRequestTab;
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
+        }
+    }
+    public void OpenPullRequest() {
+        if (PullRequests is null) return;
+        ActiveTab = RemoteTab.PullRequest;
+        if (!PullRequests.IsReading) PullRequests.Refresh();
+    }
+
     public ArtefactsTabViewModel Artefacts { get; }
     public ReactiveCommand<Unit, Unit> ShowArtefactsCommand { get; }
     bool _showsArtefactsTab;
@@ -57,7 +75,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
         }
     }
-    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsArtefactsTab;
+    public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab || ShowsArtefactsTab;
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
 
@@ -83,10 +101,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             this.RaiseAndSetIfChanged(ref _activeTab, value);
             RaiseTabProjections();
             Artefacts.IsShown = IsArtefactsActive;
+            PullRequests?.SetReaderVisible(IsPullRequestActive);
         }
     }
     public bool IsChatActive => ActiveTab == RemoteTab.Chat;
     public bool IsTerminalActive => ActiveTab == RemoteTab.Terminal;
+    public bool IsPullRequestActive => ActiveTab == RemoteTab.PullRequest;
     public bool IsArtefactsActive => ActiveTab == RemoteTab.Artefacts;
 
     // Stop's canExecute reads the ended flag here, not through this.WhenAnyValue: that call routes
@@ -141,6 +161,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public bool ShowsChatPane => ShowsPanes && IsChatActive;
     public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
+    public bool ShowsPullRequestPane => ShowsPanes && IsPullRequestActive;
     public bool ShowsArtefactsPane => ShowsPanes && IsArtefactsActive;
 
     // What the terminal reports its viewport on. Same reason as _sessionEndedChanges above for a
@@ -152,6 +173,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         this.RaisePropertyChanged(nameof(IsChatActive));
         this.RaisePropertyChanged(nameof(IsTerminalActive));
         this.RaisePropertyChanged(nameof(IsArtefactsActive));
+        this.RaisePropertyChanged(nameof(IsPullRequestActive));
+        this.RaisePropertyChanged(nameof(ShowsPullRequestPane));
         this.RaisePropertyChanged(nameof(ShowsArtefactsPane));
         this.RaisePropertyChanged(nameof(ShowsPanes));
         this.RaisePropertyChanged(nameof(ShowsChatPane));
@@ -171,13 +194,27 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time,
             Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
-            BackgroundCommandActivity? commands = null) {
+            BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
+            Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null) {
         _row = row;
         _opener = opener;
         _access = access;
         AgentId = row.Id;
         _sessionIds = new BehaviorSubject<string?>(row.SessionId);
         _session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(row, ended: false));
+
+        PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
+            _sessionIds.Select(sid => (AgentStatusDto?)new AgentStatusDto(row.Id, "agent", row.Vendor, null,
+                row.Status, null, null, null, row.CreatedAt, null, null, SessionId: sid)),
+            pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
+            requestSignIn, linkGitHub, signInCompleted);
+        PullRequests?.HasPullRequestChanges.Subscribe(has => {
+            ShowsPullRequestTab = has;
+            if (!has && IsPullRequestActive && PullRequests.HasListed) ActiveTab = RemoteTab.Chat;
+        }).DisposeWith(_disposables);
+        lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
+            .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
@@ -259,6 +296,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);
+        ShowPullRequestCommand = ReactiveCommand.Create(OpenPullRequest);
+        _disposables.Add(ShowPullRequestCommand);
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = RemoteTab.Chat; });
         ShowTerminalCommand = ReactiveCommand.Create(() => { if (ShowsTerminalTab) ActiveTab = RemoteTab.Terminal; });
         _disposables.Add(OpenInWebCommand);
@@ -333,5 +372,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         await Chat.TeardownAsync();
         if (Terminal is { } terminal) await terminal.TeardownAsync();
         await Artefacts.TeardownAsync();
+        if (PullRequests is { } pullRequests) await pullRequests.TeardownAsync();
     }
 }

@@ -112,6 +112,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public ReactiveCommand<Unit, Unit> ShowPullRequestCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowArtefactsCommand { get; }
 
+    public void OpenPullRequest() {
+        if (PullRequests is null) return;
+        ActiveTab = WorkspaceTab.PullRequest;
+        if (!PullRequests.IsReading) PullRequests.Refresh();
+    }
+
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = WorkspaceTab.Artefacts; }
 
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
@@ -174,7 +180,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         WorkContext.PullRequests = PullRequests;
         PullRequests?.HasPullRequestChanges.Subscribe(has => {
             ShowsPullRequestTab = has;
-            if (!has && IsPullRequestActive) ActiveTab = WorkspaceTab.Chat;
+            if (!has && IsPullRequestActive && PullRequests.HasListed) ActiveTab = WorkspaceTab.Chat;
         }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)

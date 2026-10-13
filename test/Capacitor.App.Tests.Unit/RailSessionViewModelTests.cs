@@ -12,6 +12,58 @@ namespace Capacitor.App.Tests.Unit;
 /// MainWindowViewModelTests' header comment. Every test here runs inside
 /// AvaloniaSession.WithImmediateRxScheduler and carries [NotInParallel("AvaloniaSession")].
 public class RailSessionViewModelTests {
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pr_metadata_updates_and_its_action_is_separate_from_session_opening() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                new Dictionary<string, RailPullRequestSummary>());
+            using var localReadable = new BehaviorSubject<bool>(true);
+            var openedSessions = new List<string>();
+            var openedPrs = new List<(string, AgentOrigin)>();
+            using var row = new RailSessionViewModel(Row() with { SessionId = "s1" },
+                new BehaviorSubject<string?>(null), NoPending, NotStale, openedSessions.Add, _ => { }, TimeProvider.System,
+                pullRequests: summaries, localOnAppServer: localReadable,
+                openPullRequest: (id, origin) => openedPrs.Add((id, origin)));
+            var changes = new List<string?>();
+            row.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+            await Assert.That(row.HasPullRequest).IsFalse();
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> {
+                ["s1"] = new(1, Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(FakePullRequestSource.Link(142)), "Draft"),
+            });
+            await Assert.That(row.PullRequestLabel).IsEqualTo("PR #142");
+            await Assert.That(row.PullRequestStatus!.Text).IsEqualTo("Draft");
+            await Assert.That(row.PullRequestTooltip).Contains("Linked to this session: Fix the flaky test");
+            await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
+            await Assert.That(changes).Contains(nameof(RailSessionViewModel.PullRequestLabel));
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(openedPrs).IsEquivalentTo(new[] { ("a1", AgentOrigin.Local) });
+            await Assert.That(openedSessions).IsEmpty();
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(3) });
+            await Assert.That(row.PullRequestLabel).IsEqualTo("3 PRs");
+            await Assert.That(row.HasPullRequestLifecycle).IsFalse();
+            localReadable.OnNext(false);
+            await Assert.That(row.HasPullRequest).IsFalse();
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(openedPrs).Count().IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_pr_opens_on_the_remote_origin_even_when_local_reads_are_disabled() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            AgentOrigin? opened = null;
+            using var row = new RailSessionViewModel(RemoteRow("a1") with { SessionId = "s1" },
+                new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
+                pullRequests: new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                    new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(2) }),
+                localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin) => opened = origin);
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(opened).IsEqualTo(AgentOrigin.Remote);
+        });
+    }
+
     static readonly IObservable<IReadOnlySet<string>> NoPending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
     static readonly IObservable<bool> NotStale = new BehaviorSubject<bool>(false);
     static readonly RepoIdentity Repo = new("path:/repo", "repo");

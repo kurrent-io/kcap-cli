@@ -14,14 +14,20 @@ namespace Capacitor.App.Services;
 /// rather than mapped to None, so consumers can test membership.
 public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
-    static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(15);
+    static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(1);
 
     readonly IPullRequestSource _source;
     readonly TimeProvider _time;
     readonly TimeSpan _refreshEvery;
     readonly object _lock = new();
     readonly Dictionary<string, PullRequestTone> _tones = new(StringComparer.Ordinal);
+    readonly Dictionary<string, RailPullRequestSummary> _summaries = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (long Started, double Seconds)> _summaryAccess = new(StringComparer.Ordinal);
+    readonly BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>> _summaryPublished = new(FrozenDictionary<string, RailPullRequestSummary>.Empty);
+    readonly Dictionary<string, TimeSpan> _refreshAfter = new(StringComparer.Ordinal);
     readonly Dictionary<string, long> _readAt = new(StringComparer.Ordinal);
+    readonly Dictionary<string, long> _versions = new(StringComparer.Ordinal);
+    long _nextVersion;
     readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
     readonly BehaviorSubject<IReadOnlyDictionary<string, PullRequestTone>> _published = new(FrozenDictionary<string, PullRequestTone>.Empty);
     readonly CompositeDisposable _subscriptions = new();
@@ -52,62 +58,121 @@ public sealed class PullRequestToneCache : IDisposable {
 
     public IReadOnlyDictionary<string, PullRequestTone> Current => _published.Value;
 
+    public IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>> Summaries => _summaryPublished;
+    public IReadOnlyDictionary<string, RailPullRequestSummary> CurrentSummaries => _summaryPublished.Value;
+
     void Tick() {
-        List<string> due;
+        List<(string Session, long Version)> due;
         CancellationToken ct;
         lock (_lock) {
             if (_disposed) return;
             // Taken under the lock: a dispose racing the reads below would otherwise hand them a disposed source.
             ct = _cancel.Token;
-            foreach (var session in _readAt.Keys.Where(s => !_sessions.Contains(s)).ToList()) _readAt.Remove(session);
+            foreach (var session in _versions.Keys.Where(s => !_sessions.Contains(s)).ToList()) _versions.Remove(session);
+            foreach (var session in _sessions)
+                if (!_versions.ContainsKey(session)) _versions[session] = ++_nextVersion;
+            foreach (var session in _readAt.Keys.Where(s => !_sessions.Contains(s)).ToList()) { _readAt.Remove(session); _refreshAfter.Remove(session); }
             var gone = _tones.Keys.Where(s => !_sessions.Contains(s)).ToList();
             foreach (var session in gone) _tones.Remove(session);
             if (gone.Count > 0) Publish();
+            var expired = _summaries.Keys.Where(s => !_sessions.Contains(s)
+                || _time.GetElapsedTime(_summaryAccess[s].Started).TotalSeconds > _summaryAccess[s].Seconds - 5).ToList();
+            foreach (var session in expired) { _summaries.Remove(session); _summaryAccess.Remove(session); }
+            if (expired.Count > 0) PublishSummaries();
             due = _sessions
-                .Where(s => !_inFlight.Contains(s) && (!_readAt.TryGetValue(s, out var at) || _time.GetElapsedTime(at) >= _refreshEvery))
-                .ToList();
-            foreach (var session in due) { _inFlight.Add(session); _readAt[session] = _time.GetTimestamp(); }
+                .Where(s => !_inFlight.Contains(s) && (!_readAt.TryGetValue(s, out var at) || _time.GetElapsedTime(at) >= _refreshAfter.GetValueOrDefault(s, _refreshEvery)))
+                .Select(s => (Session: s, Version: _versions[s])).ToList();
+            foreach (var (session, _) in due) { _inFlight.Add(session); _readAt[session] = _time.GetTimestamp(); }
         }
-        foreach (var session in due) _ = ReadAsync(session, ct);
+        foreach (var (session, version) in due) _ = ReadAsync(session, version, ct);
     }
 
-    async Task ReadAsync(string session, CancellationToken ct) {
+    async Task ReadAsync(string session, long version, CancellationToken ct) {
         try {
             var capability = await _source.DiscoverAsync(false, ct).ConfigureAwait(false);
             if (capability.Kind != PullRequestCapabilityKind.Supported) {
                 // Signed out, or a server without overviews, is a verdict; an unreachable one is not.
-                if (capability.Kind != PullRequestCapabilityKind.Unavailable) Set(session, PullRequestTone.None);
+                if (capability.Kind != PullRequestCapabilityKind.Unavailable) Clear(session, version);
                 return;
             }
             var links = await _source.ListAsync(session, ct).ConfigureAwait(false);
             if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
-                if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") Set(session, PullRequestTone.None);
+                if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied" || links.Reason is "identity_changed" or "integration_changed" or "no_reader") Clear(session, version);
                 return;
             }
             var tones = new List<PullRequestTone>();
+            var reads = new List<PullRequestRead<PullRequestOverviewDto>>();
+            var items = links.Data.Items.DistinctBy(PullRequestWire.Subject).ToArray();
             var denied = false;
             var missed = false;
-            foreach (var link in links.Data.Items) {
+            foreach (var link in items) {
                 var read = await _source.OverviewAsync(session, PullRequestWire.Subject(link), ct).ConfigureAwait(false);
                 // The same gate the reader applies: a read past its access window reveals nothing.
-                if (read.CanReveal(_time)) tones.Add(PullRequestTones.From(read.Data!));
-                else if (read.AccessFailure is "denied" or "invalid") denied = true;
+                if (read.CanReveal(_time)) {
+                    tones.Add(PullRequestTones.From(read.Data!));
+                    reads.Add(read);
+                }
+                else if (read.AccessFailure is "denied" or "invalid" || read.Kind is PullRequestReadKind.SignedOut or PullRequestReadKind.SubjectUnavailable
+                    || read.Reason is "identity_changed" or "integration_changed" or "no_reader") denied = true;
                 else missed = true;
             }
             // A denial clears the tone, as the card does, whatever the session's other PRs read. A
             // miss on any PR keeps the last tone whole: the readable remainder alone could only
             // understate it.
-            if (denied) Set(session, PullRequestTone.None);
-            else if (!missed) Set(session, PullRequestTones.Strongest(tones));
+            if (denied) Clear(session, version);
+            else if (!missed) {
+                Set(session, PullRequestTones.Strongest(tones), version);
+                lock (_lock) {
+                    if (_disposed || _versions.GetValueOrDefault(session) != version) return;
+                    if (items.Length == 0) { _summaries.Remove(session); _summaryAccess.Remove(session); }
+                    else if (reads.All(read => read.CanReveal(_time))) {
+                        _summaries[session] = new RailPullRequestSummary(items.Length,
+                            items.Length == 1 ? PullRequestWire.Subject(items[0]) : null,
+                            items.Length == 1 ? LifecycleLabel(reads[0].Data!) : "Unknown");
+                        var remaining = reads.Min(r => r.RemainingSeconds(_time));
+                        _summaryAccess[session] = (_time.GetTimestamp(), remaining);
+                        var renewAfter = _time.GetElapsedTime(_readAt[session]).TotalSeconds + remaining - 10;
+                        _refreshAfter[session] = TimeSpan.FromSeconds(Math.Clamp(renewAfter, 5, _refreshEvery.TotalSeconds));
+                    }
+                    PublishSummaries();
+                }
+            }
         } catch (OperationCanceledException) {
         } finally {
             lock (_lock) _inFlight.Remove(session);
         }
     }
 
-    void Set(string session, PullRequestTone tone) {
+    static string LifecycleLabel(PullRequestOverviewDto overview) => overview.Lifecycle switch {
+        "merged" => "Merged",
+        "closed" => "Closed",
+        "draft" => "Draft",
+        "open" when overview.IsDraft == true => "Draft",
+        "open" => "Open",
+        _ => "Unknown",
+    };
+
+    void Clear(string session, long version) {
         lock (_lock) {
-            if (_disposed || !_sessions.Contains(session)) return;
+            if (_disposed || _versions.GetValueOrDefault(session) != version) return;
+            _tones.Remove(session);
+            _summaries.Remove(session);
+            _summaryAccess.Remove(session);
+            Publish();
+            PublishSummaries();
+        }
+    }
+
+    void PublishSummaries() {
+        if (_summaryPublished.Value.Count == _summaries.Count
+            && _summaryPublished.Value.All(p => _summaries.GetValueOrDefault(p.Key) == p.Value)) return;
+        _summaryPublished.OnNext(_summaries.Count == 0 ? FrozenDictionary<string, RailPullRequestSummary>.Empty
+            : _summaries.ToFrozenDictionary(StringComparer.Ordinal));
+    }
+
+    void Set(string session, PullRequestTone tone, long version) {
+        lock (_lock) {
+            if (_disposed || _versions.GetValueOrDefault(session) != version) return;
             if (tone == PullRequestTone.None) _tones.Remove(session);
             else _tones[session] = tone;
             Publish();
@@ -129,6 +194,7 @@ public sealed class PullRequestToneCache : IDisposable {
         _timer.Dispose();
         _subscriptions.Dispose();
         _published.OnCompleted();
+        _summaryPublished.OnCompleted();
         _cancel.Dispose();
     }
 }
