@@ -148,10 +148,6 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
                     output.WriteLine($"    {marker} {q.QuestionId,-26} {q.Outcome}: {q.Finding}");
                 }
 
-                if (q.DecidedBy == EvalQuestionAssessment.DecidedByPrescreen) {
-                    output.WriteLine($"        decided by pre-screen (rules v{q.PrescreenRulesVersion})");
-                }
-
                 if (!string.IsNullOrEmpty(q.Evidence)) {
                     output.WriteLine($"        evidence: {q.Evidence}");
                 }
@@ -162,12 +158,6 @@ class EvalCommand(ProfileContext profiles, HarnessRegistry harnesses, ICapacitor
                     parts.AddRange(coverage.Omissions.Select(o => $"{o.Kind}×{o.Count}"));
                     if (coverage.SourcesUnavailable.Count > 0) parts.Add($"{coverage.SourcesUnavailable.Count} sources unavailable");
                     output.WriteLine($"        coverage: {string.Join("; ", parts)}");
-                }
-
-                if (q.TraceCoverage is { Mode: EvalTraceCoverage.EvidenceExtractMode, IsPartial: true } extract) {
-                    var counts = $"chunks {extract.ChunksExtracted}/{extract.ChunkCount}, records {extract.RecordsDelivered}/{extract.RecordsTotal}";
-                    if (extract.SliceCount is not null) counts += $", slices {extract.SlicesJudged}/{extract.SliceCount}";
-                    output.WriteLine($"        partial: {counts}");
                 }
 
                 if (q.EvidenceCoverage is { Citations.Count: > 0 } cited) {
