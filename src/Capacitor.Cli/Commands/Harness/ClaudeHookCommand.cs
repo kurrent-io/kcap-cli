@@ -139,16 +139,20 @@ public sealed class ClaudeHookCommand(
                 return 0;
             }
 
-            if (ledger.HasPlan(evt.SessionId) || ledger.WasNudged(evt.SessionId, evt.Kind)) return 0;
+            if (ledger.HasPlan(evt.SessionId)) return 0;
 
             var profile = profiles.Effective;
             if (profile?.DisablePlansNudge is true) return 0;
             if (!McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, harnesses, "kcap-plans")) return 0;
             if (await ShouldSuppressCaptureAsync(evt.SessionId, body, "post-tool-use", profile, clock.Budget(ToolHookCeiling))) return 0;
             if (evt.Nudge() is not { } nudge) return 0;
+            if (!ledger.TryClaimNudge(evt.SessionId, evt.Kind)) return 0;
 
-            await (stdout ?? Console.Out).WriteLineAsync(ClaudeTaskListEvent.RenderHookOutput(nudge));
-            ledger.RecordNudge(evt.SessionId, evt.Kind);
+            try {
+                await (stdout ?? Console.Out).WriteLineAsync(ClaudeTaskListEvent.RenderHookOutput(nudge));
+            } catch {
+                ledger.ReleaseNudge(evt.SessionId, evt.Kind);
+            }
             return 0;
         } catch {
             return 0;

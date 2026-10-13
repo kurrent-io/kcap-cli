@@ -10,16 +10,29 @@ public class TaskListNudgeLedgerTests {
         var ledger = new TaskListNudgeLedger(Config.Root);
 
         ledger.RecordPlan("s1");
-        ledger.RecordNudge("s1", ClaudeTaskListEvent.Moment.Created);
 
         await Assert.That(ledger.HasPlan("s1")).IsTrue();
-        await Assert.That(ledger.WasNudged("s1", ClaudeTaskListEvent.Moment.Created)).IsTrue();
-        await Assert.That(ledger.WasNudged("s1", ClaudeTaskListEvent.Moment.Completed)).IsFalse();
         await Assert.That(ledger.HasPlan("s2")).IsFalse();
+        await Assert.That(ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Created)).IsTrue();
 
         ledger.Evict("s1");
 
         await Assert.That(ledger.HasPlan("s1")).IsFalse();
-        await Assert.That(ledger.WasNudged("s1", ClaudeTaskListEvent.Moment.Created)).IsFalse();
+        await Assert.That(ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Created)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_reminder_is_claimed_once_until_released() {
+        var ledger = new TaskListNudgeLedger(Config.Root);
+
+        var claims = await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(_ => Task.Run(() => ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Created))));
+
+        await Assert.That(claims.Count(c => c)).IsEqualTo(1);
+        await Assert.That(ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Completed)).IsTrue();
+
+        ledger.ReleaseNudge("s1", ClaudeTaskListEvent.Moment.Created);
+
+        await Assert.That(ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Created)).IsTrue();
     }
 }

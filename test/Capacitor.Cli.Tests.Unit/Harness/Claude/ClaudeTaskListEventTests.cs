@@ -86,6 +86,35 @@ public class ClaudeTaskListEventTests {
     }
 
     [Test]
+    [Arguments("cat \"$S/progress.md\"")]
+    [Arguments("tail -5 progress.md && git log --oneline -3")]
+    public async Task Reading_the_ledger_is_not_writing_it(string command) {
+        await Assert.That(ClaudeTaskListEvent.Parse(Payload("Bash", new JsonObject { ["command"] = command }))).IsNull();
+    }
+
+    [Test]
+    [Arguments("git commit -m \"complete refactor\" && echo \"Task 2: in progress\" >> \"$S/progress.md\"")]
+    [Arguments("printf 'Task 1: pending\\n' >> progress.md; echo completed")]
+    public async Task Only_a_finished_task_entry_completes(string command) {
+        await Assert.That(ClaudeTaskListEvent.Parse(Payload("Bash", new JsonObject { ["command"] = command }))?.Kind)
+            .IsEqualTo(ClaudeTaskListEvent.Moment.Created);
+    }
+
+    [Test]
+    public async Task A_tee_into_the_ledger_is_a_write() {
+        await Assert.That(ClaudeTaskListEvent.Parse(Payload("Bash", new JsonObject { ["command"] = "echo 'Task 3: complete' | tee -a \"$S/progress.md\"" }))?.Kind)
+            .IsEqualTo(ClaudeTaskListEvent.Moment.Completed);
+    }
+
+    [Test]
+    public async Task A_rejected_plan_write_is_not_a_plan() {
+        var hook = JsonNode.Parse(Payload("mcp__kcap-plans__set_plan_tasks"))!.AsObject();
+        hook["tool_response"] = new JsonObject { ["isError"] = true };
+
+        await Assert.That(ClaudeTaskListEvent.Parse(hook.ToJsonString())).IsNull();
+    }
+
+    [Test]
     public async Task A_Bash_command_that_never_names_the_ledger_is_ignored() {
         await Assert.That(ClaudeTaskListEvent.Parse(Payload("Bash", new JsonObject { ["command"] = "git commit -m complete" }))).IsNull();
     }

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core.Plans;
 
 namespace Capacitor.Cli.Harness.Claude;
@@ -7,7 +8,7 @@ namespace Capacitor.Cli.Harness.Claude;
 /// tools, or a workflow ledger file such as the Superpowers <c>progress.md</c> — or writes kcap plan tasks.
 /// The first two are the moments a session with no kcap plan tasks is reminded to keep them; the third
 /// ends the reminders for the session.</summary>
-sealed record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.Moment Kind, bool FromLedger = false) {
+sealed partial record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.Moment Kind, bool FromLedger = false) {
     public enum Moment { Created, Completed, PlanWritten }
 
     /// <summary>Superpowers' executing-plans and subagent-driven-development keep their ledger under this
@@ -30,13 +31,13 @@ sealed record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.Moment K
         var input = hook["tool_input"] as JsonObject;
 
         if (LedgerWrite(tool, input) is { } written)
-            return new(sessionId, Mentions(written, "complete") ? Moment.Completed : Moment.Created, FromLedger: true);
+            return new(sessionId, FinishedEntry().IsMatch(written) ? Moment.Completed : Moment.Created, FromLedger: true);
 
         Moment? kind = tool switch {
             "TaskCreate"                       => Moment.Created,
             "TaskUpdate"                       => Text(input?["status"]) == "completed" ? Moment.Completed : null,
             "TodoWrite"                        => AnyCompleted(input?["todos"]) ? Moment.Completed : Moment.Created,
-            _ when WritesTasks(tool)           => Moment.PlanWritten,
+            _ when WritesTasks(tool)           => IsError(hook["tool_response"]) ? null : Moment.PlanWritten,
             _                                  => null
         };
 
@@ -73,12 +74,13 @@ sealed record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.Moment K
             }
         }.ToJsonString();
 
-    /// <summary>The text a call wrote into a ledger file, or null when it touched none. A Bash command
-    /// counts when it names the file anywhere: the ledger path usually sits behind a shell variable.</summary>
+    /// <summary>The text a call wrote into a ledger file, or null when it wrote none. A Bash command counts
+    /// when it redirects or tees into the file; the path before the name usually sits behind a shell
+    /// variable, so only the name is matched.</summary>
     static string? LedgerWrite(string? tool, JsonObject? input) {
         switch (tool) {
             case "Bash":
-                return Text(input?["command"]) is { } command && Mentions(command, LedgerFileName) ? command : null;
+                return Text(input?["command"]) is { } command && BashLedgerWrite().IsMatch(command) ? command : null;
             case "Write" or "Edit":
                 if (Text(input?["file_path"]) is not { } path || !string.Equals(Path.GetFileName(path), LedgerFileName, StringComparison.OrdinalIgnoreCase)) return null;
                 return Text(input?["content"]) ?? Text(input?["new_string"]) ?? "";
@@ -92,7 +94,16 @@ sealed record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.Moment K
     static bool WritesTasks(string? tool) =>
         PlanToolNames.IsWrite(tool) && !tool!.EndsWith(PlanToolNames.DeclareDocument, StringComparison.Ordinal);
 
-    static bool Mentions(string text, string term) => text.Contains(term, StringComparison.OrdinalIgnoreCase);
+    /// <summary>The Superpowers ledger's completion line; a bare "complete" elsewhere in a command, such
+    /// as a commit message, says nothing about a task.</summary>
+    [GeneratedRegex(@"\bTask\s+[\w.-]+\s*:\s*complete(?:d)?\b", RegexOptions.IgnoreCase)]
+    private static partial Regex FinishedEntry();
+
+    [GeneratedRegex(@"(?:>>?|\btee\b(?:\s+-a)?)\s*[""']?[^\s;&|<>""']*progress\.md\b", RegexOptions.IgnoreCase)]
+    private static partial Regex BashLedgerWrite();
+
+    static bool IsError(JsonNode? response) =>
+        response is JsonObject o && (o["isError"] ?? o["is_error"]) is JsonValue v && v.TryGetValue<bool>(out var error) && error;
 
     static bool AnyCompleted(JsonNode? todos) =>
         todos is JsonArray items && items.Any(t => Text(t?["status"]) == "completed");

@@ -12,9 +12,24 @@ sealed class TaskListNudgeLedger(ConfigRoot config) {
 
     public void RecordPlan(string sessionId) => Mark(sessionId, PlanWritten);
 
-    public bool WasNudged(string sessionId, ClaudeTaskListEvent.Moment moment) => Has(sessionId, moment.ToString());
+    /// <summary>Claims a reminder by creating its marker, so concurrent hooks for one parallel tool batch
+    /// cannot all emit it. False only when another hook holds the claim.</summary>
+    public bool TryClaimNudge(string sessionId, ClaudeTaskListEvent.Moment moment) {
+        var marker = Path.Combine(SessionDir(sessionId), moment.ToString());
+        try {
+            Directory.CreateDirectory(SessionDir(sessionId));
+            using (new FileStream(marker, FileMode.CreateNew, FileAccess.Write)) { }
+            return true;
+        } catch (IOException) when (File.Exists(marker)) {
+            return false;
+        } catch {
+            return true;
+        }
+    }
 
-    public void RecordNudge(string sessionId, ClaudeTaskListEvent.Moment moment) => Mark(sessionId, moment.ToString());
+    public void ReleaseNudge(string sessionId, ClaudeTaskListEvent.Moment moment) {
+        try { File.Delete(Path.Combine(SessionDir(sessionId), moment.ToString())); } catch { }
+    }
 
     public void Evict(string sessionId) {
         try { Directory.Delete(SessionDir(sessionId), recursive: true); } catch { }
