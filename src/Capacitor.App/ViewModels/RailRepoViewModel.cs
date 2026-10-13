@@ -5,6 +5,7 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.PullRequests;
 using DynamicData;
 using DynamicData.Binding;
 using ReactiveUI.Reactive;
@@ -48,7 +49,7 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlySet<string>> agentsAwaitingAnswer,
             IObservable<IReadOnlyDictionary<string, int>> agentsRunningCommands,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>> pullRequests,
-            IObservable<bool> localOnAppServer, Action<string, AgentOrigin>? openPullRequest,
+            IObservable<bool> localOnAppServer, Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest,
             bool isExpanded, Action<bool> setExpanded) {
         RootPath = group.Key;
         // Rows in one group share RepoGroupLabel by construction — any member names it.
@@ -89,10 +90,17 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
                 openLocal, openRemote, time, agentsAwaitingAnswer, agentsRunningCommands,
                 pullRequests, localOnAppServer, openPullRequest))
             .DisposeMany()
-            .Bind(_sessionsSource)
+            .SortAndBind(_sessionsSource, SessionComparer)
             .Subscribe()
             .DisposeWith(_disposables);
     }
+
+    static readonly IComparer<RailSessionViewModel> SessionComparer = Comparer<RailSessionViewModel>.Create((a, b) => {
+        var created = a.CreatedAt.CompareTo(b.CreatedAt);
+        if (created != 0) return created;
+        var id = StringComparer.Ordinal.Compare(a.Id, b.Id);
+        return id != 0 ? id : StringComparer.Ordinal.Compare(a.Key, b.Key);
+    });
 
     // RootPath's own prefixes ("repo:", "path:", "daemon:{owner}/{daemon}:{path}") are a group
     // identity, not display text (RepoIdentity's own rule) — this is the one place that reads

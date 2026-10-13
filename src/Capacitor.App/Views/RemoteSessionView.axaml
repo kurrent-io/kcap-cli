@@ -34,7 +34,7 @@
                             <Button x:Name="TerminalTabButton" Content="Terminal" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsTerminalActive}" Command="{Binding ShowTerminalCommand}"
                                     IsVisible="{Binding ShowsTerminalTab}" />
-                            <Button x:Name="PullRequestTabButton" Content="PR" Classes="kcapSegmentItem"
+                            <Button x:Name="PullRequestTabButton" Content="Pull Request" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsPullRequestActive}" Command="{Binding ShowPullRequestCommand}"
                                     IsVisible="{Binding ShowsPullRequestTab}" />
                             <Button x:Name="ArtefactsTabButton" Content="Artefacts" Classes="kcapSegmentItem"

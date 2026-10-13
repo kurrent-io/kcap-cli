@@ -5,6 +5,7 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -16,6 +17,7 @@ namespace Capacitor.App.ViewModels;
 public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Id { get; }
     public string Key { get; }
+    public DateTime CreatedAt { get; }
     public string? CheckoutPath { get; }
     /// Null when the row has no title, in which case the chips line stands alone as the row.
     public string? Primary { get; }
@@ -36,14 +38,16 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public bool IsStarting { get; }
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
     public ReactiveCommand<Unit, Unit> OpenPullRequestCommand { get; }
+    public ReactiveCommand<RailPullRequestMenuItem, Unit> OpenPullRequestChoiceCommand { get; }
     RailPullRequestSummary? _pullRequest;
     public RailPullRequestSummary? PullRequest => _pullRequest;
     public string PullRequestLabel => PullRequest?.Label ?? "";
     public PullRequestStatus? PullRequestStatus => PullRequest?.Status;
     public bool HasPullRequestLifecycle => PullRequest?.HasLifecycle == true;
-    public string PullRequestTooltip => $"{PullRequest?.Description}\n\nLinked to this session: {SessionAccessibleName}\nOpen pull request details";
+    public bool HasMultiplePullRequests => PullRequest?.Count > 1;
+    public string PullRequestTooltip => $"{PullRequest?.Description}\n\nLinked to this session: {SessionAccessibleName}\n{(HasMultiplePullRequests ? "Choose a pull request" : "Open pull request details")}";
     public bool HasPullRequest => PullRequest is not null;
-    public string PullRequestAccessibleName => $"Open {PullRequestLabel}{(HasPullRequestLifecycle ? $", {PullRequest?.Lifecycle}" : "")} for {Primary ?? Vendor}";
+    public string PullRequestAccessibleName => $"{(HasMultiplePullRequests ? "Choose from" : "Open")} {PullRequestLabel}{(HasPullRequestLifecycle ? $", {PullRequest?.Lifecycle}" : "")} for {Primary ?? Vendor}";
     readonly ObservableAsPropertyHelper<bool> _isSelected;
     public bool IsSelected => _isSelected.Value;
 
@@ -63,9 +67,10 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
-            IObservable<bool>? localOnAppServer = null, Action<string, AgentOrigin>? openPullRequest = null) {
+            IObservable<bool>? localOnAppServer = null, Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest = null) {
         Id = row.Id;
         Key = row.Key;
+        CreatedAt = row.CreatedAt;
         CheckoutPath = (row.WorkLocation == WorkLocationText.Borrowed ? row.BorrowedFrom : row.WorktreePath) ?? row.RepoPath;
         (pullRequests ?? Observable.Return<IReadOnlyDictionary<string, RailPullRequestSummary>>(
                 FrozenDictionary<string, RailPullRequestSummary>.Empty))
@@ -78,6 +83,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
                 this.RaisePropertyChanged(nameof(PullRequestLabel));
                 this.RaisePropertyChanged(nameof(PullRequestStatus));
                 this.RaisePropertyChanged(nameof(HasPullRequestLifecycle));
+                this.RaisePropertyChanged(nameof(HasMultiplePullRequests));
                 this.RaisePropertyChanged(nameof(PullRequestTooltip));
                 this.RaisePropertyChanged(nameof(HasPullRequest));
                 this.RaisePropertyChanged(nameof(PullRequestAccessibleName));
@@ -117,9 +123,15 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         OpenCommand = ReactiveCommand.Create(() => (IsRemote ? openRemote : openLocal)(row.Id));
         _disposables.Add(OpenCommand);
         OpenPullRequestCommand = ReactiveCommand.Create(() => {
-            if (HasPullRequest) openPullRequest?.Invoke(row.Id, row.Origin == AgentOrigin.Remote ? AgentOrigin.Remote : AgentOrigin.Local);
+            if (HasPullRequest && !HasMultiplePullRequests)
+                openPullRequest?.Invoke(row.Id, row.Origin == AgentOrigin.Remote ? AgentOrigin.Remote : AgentOrigin.Local, null);
         });
         _disposables.Add(OpenPullRequestCommand);
+        OpenPullRequestChoiceCommand = ReactiveCommand.Create<RailPullRequestMenuItem>(item => {
+            if (PullRequest?.MenuItems.Any(current => current.Subject == item.Subject) == true)
+                openPullRequest?.Invoke(row.Id, row.Origin == AgentOrigin.Remote ? AgentOrigin.Remote : AgentOrigin.Local, item.Subject);
+        });
+        _disposables.Add(OpenPullRequestChoiceCommand);
     }
 
     static string Join(params string?[] parts) =>

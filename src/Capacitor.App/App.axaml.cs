@@ -1316,7 +1316,7 @@ public partial class App : Application {
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
             openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
             agentsAwaitingAnswer: agentsAwaitingAnswer, agentsRunningCommands: agentsRunningCommands,
-            pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin) => vm?.OpenSessionPullRequest(agentId, origin));
+            pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin, subject) => vm?.OpenSessionPullRequest(agentId, origin, subject));
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,

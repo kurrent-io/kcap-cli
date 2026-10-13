@@ -8,6 +8,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Views;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.PullRequests;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -584,13 +585,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         SwapTo(next);
     }
 
-    public void OpenSessionPullRequest(string agentId, AgentOrigin origin) {
+    public void OpenSessionPullRequest(string agentId, AgentOrigin origin, PullRequestSubjectDto? subject = null) {
         if (_navigation.ShutdownLatched) return;
         OpenSession(agentId, origin);
         if (CurrentWorkspace?.AgentId != agentId || Superseded(CurrentWorkspace, origin)) return;
         switch (CurrentWorkspace) {
-            case WorkspaceViewModel local: local.OpenPullRequest(); break;
-            case RemoteSessionViewModel remote: remote.OpenPullRequest(); break;
+            case WorkspaceViewModel local: local.OpenPullRequest(subject); break;
+            case RemoteSessionViewModel remote: remote.OpenPullRequest(subject); break;
         }
     }
 

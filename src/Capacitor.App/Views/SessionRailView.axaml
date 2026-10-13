@@ -365,7 +365,7 @@
                                                                 </Grid>
                                                             </StackPanel>
                                                         </Button>
-                                                            <Button x:Name="SessionPullRequestLink" Classes="railPr" Command="{Binding OpenPullRequestCommand}"
+                                                            <Button x:Name="SessionPullRequestLink" Classes="railPr" Command="{Binding OpenPullRequestCommand}" Click="OnPullRequestClick"
                                                                 IsVisible="{Binding HasPullRequest}"
                                                                 AutomationProperties.Name="{Binding PullRequestAccessibleName}"
                                                                 ToolTip.Tip="{Binding PullRequestTooltip}"

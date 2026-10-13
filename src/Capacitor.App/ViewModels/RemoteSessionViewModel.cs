@@ -53,14 +53,15 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public ReactiveCommand<Unit, Unit> ShowPullRequestCommand { get; }
     bool _showsPullRequestTab;
     public bool ShowsPullRequestTab {
-        get => _showsPullRequestTab;
+        get => _showsPullRequestTab || IsPullRequestActive;
         private set {
             this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
             this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
         }
     }
-    public void OpenPullRequest() {
+    public void OpenPullRequest(PullRequestSubjectDto? subject = null) {
         if (PullRequests is null) return;
+        if (subject is not null) PullRequests.SelectSubject(subject);
         ActiveTab = RemoteTab.PullRequest;
         if (!PullRequests.IsReading) PullRequests.Refresh();
     }
@@ -174,6 +175,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         this.RaisePropertyChanged(nameof(IsTerminalActive));
         this.RaisePropertyChanged(nameof(IsArtefactsActive));
         this.RaisePropertyChanged(nameof(IsPullRequestActive));
+        this.RaisePropertyChanged(nameof(ShowsPullRequestTab));
+        this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
         this.RaisePropertyChanged(nameof(ShowsPullRequestPane));
         this.RaisePropertyChanged(nameof(ShowsArtefactsPane));
         this.RaisePropertyChanged(nameof(ShowsPanes));
@@ -208,10 +211,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 row.Status, null, null, null, row.CreatedAt, null, null, SessionId: sid)),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
             requestSignIn, linkGitHub, signInCompleted);
-        PullRequests?.HasPullRequestChanges.Subscribe(has => {
-            ShowsPullRequestTab = has;
-            if (!has && IsPullRequestActive && PullRequests.HasListed) ActiveTab = RemoteTab.Chat;
-        }).DisposeWith(_disposables);
+        if (PullRequests is { } context)
+            context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
+                .Subscribe(state => {
+                    ShowsPullRequestTab = state.has;
+                    if (!state.has && IsPullRequestActive && state.listed) ActiveTab = RemoteTab.Chat;
+                }).DisposeWith(_disposables);
         lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
@@ -296,7 +301,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
             canStop);
-        ShowPullRequestCommand = ReactiveCommand.Create(OpenPullRequest);
+        ShowPullRequestCommand = ReactiveCommand.Create(() => OpenPullRequest());
         _disposables.Add(ShowPullRequestCommand);
         ShowChatCommand = ReactiveCommand.Create(() => { ActiveTab = RemoteTab.Chat; });
         ShowTerminalCommand = ReactiveCommand.Create(() => { if (ShowsTerminalTab) ActiveTab = RemoteTab.Terminal; });

@@ -128,11 +128,13 @@ public sealed class PullRequestToneCache : IDisposable {
                     else if (reads.All(read => read.CanReveal(_time))) {
                         _summaries[session] = new RailPullRequestSummary(items.Length,
                             items.Length == 1 ? PullRequestWire.Subject(items[0]) : null,
-                            items.Length == 1 ? LifecycleLabel(reads[0].Data!) : "Unknown");
+                            items.Length == 1 ? LifecycleLabel(reads[0].Data!) : "Unknown",
+                            items.Select((link, i) => new RailPullRequestMenuItem(PullRequestWire.Subject(link),
+                                reads[i].Data!.Title ?? link.Title, LifecycleLabel(reads[i].Data!))).ToArray());
                         var remaining = reads.Min(r => r.RemainingSeconds(_time));
                         _summaryAccess[session] = (_time.GetTimestamp(), remaining);
-                        var renewAfter = _time.GetElapsedTime(_readAt[session]).TotalSeconds + remaining - 10;
-                        _refreshAfter[session] = TimeSpan.FromSeconds(Math.Clamp(renewAfter, 5, _refreshEvery.TotalSeconds));
+                        var renewAfter = _time.GetElapsedTime(_readAt[session]).TotalSeconds + Math.Max(1, remaining - 10);
+                        _refreshAfter[session] = TimeSpan.FromSeconds(Math.Clamp(renewAfter, 1, _refreshEvery.TotalSeconds));
                     }
                     PublishSummaries();
                 }
@@ -165,7 +167,9 @@ public sealed class PullRequestToneCache : IDisposable {
 
     void PublishSummaries() {
         if (_summaryPublished.Value.Count == _summaries.Count
-            && _summaryPublished.Value.All(p => _summaries.GetValueOrDefault(p.Key) == p.Value)) return;
+            && _summaryPublished.Value.All(p => _summaries.GetValueOrDefault(p.Key) is { } next
+                && next.Count == p.Value.Count && next.Subject == p.Value.Subject && next.Lifecycle == p.Value.Lifecycle
+                && next.MenuItems.SequenceEqual(p.Value.MenuItems))) return;
         _summaryPublished.OnNext(_summaries.Count == 0 ? FrozenDictionary<string, RailPullRequestSummary>.Empty
             : _summaries.ToFrozenDictionary(StringComparer.Ordinal));
     }

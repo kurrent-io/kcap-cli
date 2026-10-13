@@ -14,6 +14,33 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_menu_choice_survives_initial_session_and_link_loading(bool beforePresence) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        if (!beforePresence) h.Push();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        if (beforePresence) h.Push();
+        await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        await Assert.That(h.Vm.Selected.IsAvailable).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_menu_choice_removed_from_the_list_does_not_open_another_pr() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(99)));
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasListed, what: "links loaded");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(99);
+        await Assert.That(h.Vm.Selected.IsAvailable).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Reads_start_only_in_the_foreground_and_focus_loss_masks_already_loaded_bodies() => RunOnUiAsync(async () => {
         var h = new Harness();
         h.Push();

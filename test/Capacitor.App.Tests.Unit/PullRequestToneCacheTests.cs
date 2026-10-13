@@ -11,6 +11,22 @@ namespace Capacitor.App.Tests.Unit;
 /// overviews on a slow cadence, independent of which workspace is open.
 public class PullRequestToneCacheTests {
     [Test]
+    public async Task An_eight_second_access_window_renews_without_a_metadata_gap() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 8;
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "summary");
+        for (var i = 0; i < 6; i++) {
+            var before = source.Lists;
+            time.Advance(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(() => source.Lists > before, "short-window renewal");
+            await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsTrue();
+        }
+    }
+
+    [Test]
     public async Task Summary_uses_lifecycle_for_one_pr_and_count_for_several() {
         var (directory, source, time, cache) = Build();
         using var _c = cache;
@@ -28,6 +44,8 @@ public class PullRequestToneCacheTests {
         time.Advance(TimeSpan.FromMinutes(2));
         await WaitUntilAsync(() => cache.CurrentSummaries["s1"].Count == 2, "multiple summary");
         await Assert.That(cache.CurrentSummaries["s1"].Label).IsEqualTo("2 PRs");
+        await Assert.That(cache.CurrentSummaries["s1"].MenuItems.Select(i => i.Subject.Number)).IsEquivalentTo([142, 143]);
+        await Assert.That(cache.CurrentSummaries["s1"].MenuItems.Single(i => i.Subject.Number == 142).Lifecycle).IsEqualTo("Merged");
     }
 
     [Test]

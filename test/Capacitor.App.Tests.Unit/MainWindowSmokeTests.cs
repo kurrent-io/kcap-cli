@@ -8,6 +8,8 @@ using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Shapes;
 using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -525,7 +527,7 @@ public class MainWindowSmokeTests {
         var rail = new SessionRailViewModel(
             directory, id => vm!.OpenSession(id), _ => { }, TimeProvider.System,
             agentsWithPending: pendingIds is null ? null : Observable.Return(pendingIds),
-            pullRequests: pullRequestSummaries, openPullRequest: (id, origin) => vm!.OpenSessionPullRequest(id, origin));
+            pullRequests: pullRequestSummaries, openPullRequest: (id, origin, subject) => vm!.OpenSessionPullRequest(id, origin, subject));
         vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
             workspaceFactory: id => NewWorkspace(service, actions, id, pullRequests), rail: rail);
         var window = new MainWindow { DataContext = vm };
@@ -636,6 +638,62 @@ public class MainWindowSmokeTests {
             header.Command.Execute(null);
             Dispatcher.UIThread.RunJobs();
             await Assert.That(mark.IsEffectivelyVisible).IsFalse();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Multiple_pr_menu_opens_the_chosen_reader_and_closes_on_access_loss() => AvaloniaSession.RunOnUiAsync(async () => {
+        var source = new FakePullRequestSource(new FakeTimeProvider());
+        var items = source.Links.Select(link => new RailPullRequestMenuItem(PullRequestWire.Subject(link), $"Change {link.Number}", "Open")).ToArray();
+        using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+            new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(2, Items: items) });
+        var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source);
+        try {
+            var pr = window.GetVisualDescendants().OfType<Button>().Single(b => b.IsVisible && b.Classes.Contains("railPr"));
+            pr.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+            var flyout = (Flyout)FlyoutBase.GetAttachedFlyout(pr)!;
+            await Assert.That(flyout.IsOpen).IsTrue();
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+            var options = ((StackPanel)((ScrollViewer)flyout.Content!).Content!).Children.OfType<Button>().ToArray();
+            await Assert.That(options).Count().IsEqualTo(2);
+            await Assert.That(AutomationProperties.GetName(options[0])).Contains("example/repo #1");
+            options[0].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Assert.That(flyout.IsOpen).IsFalse();
+            var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
+            await WorkspaceFixtures.WaitUntilAsync(() => workspace.PullRequests!.CanReveal && !workspace.PullRequests.IsReading, what: "chosen PR");
+            await Assert.That(workspace.PullRequests!.Selected!.Subject.Number).IsEqualTo(1);
+            pr.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Assert.That(((Flyout)FlyoutBase.GetAttachedFlyout(pr)!).IsOpen).IsTrue();
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary>());
+            await Assert.That(((Flyout)FlyoutBase.GetAttachedFlyout(pr)!).IsOpen).IsFalse();
+            await workspace.TeardownAsync();
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Local_pr_empty_and_failed_initial_loads_keep_navigation_available(bool failed) => AvaloniaSession.RunOnUiAsync(async () => {
+        var source = new FakePullRequestSource(new FakeTimeProvider()) { Links = [],
+            Capability = failed ? PullRequestCapabilityKind.Unavailable : PullRequestCapabilityKind.Supported };
+        var (vm, window) = RailWindow(pullRequests: source);
+        try {
+            vm.OpenSessionPullRequest("a1", AgentOrigin.Local);
+            var workspace = (WorkspaceViewModel)vm.CurrentWorkspace!;
+            await WorkspaceFixtures.WaitUntilAsync(() => failed ? workspace.PullRequests!.Notice is { } note && note != "Loading pull requests…" : workspace.PullRequests!.HasListed,
+                what: "first list settled");
+            await Assert.That(workspace.IsPullRequestActive).IsEqualTo(failed);
+            await Assert.That(workspace.ShowsPullRequestTab).IsEqualTo(failed);
+            await workspace.TeardownAsync();
         } finally {
             window.Close();
             Dispatcher.UIThread.RunJobs();

@@ -40,6 +40,29 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Creation_time_order_survives_updates_and_reversed_refreshes() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, _, rail) = Build();
+            using (rail) {
+                var created = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+                var rows = new[] { Dto("c", "/repo", created: created.AddHours(1)),
+                    Dto("b", "/repo", created: created), Dto("a", "/repo", created: created) };
+                service.Agents.AddOrUpdate(rows);
+                await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
+                    .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+                service.Agents.AddOrUpdate(rows[1] with { Title = "Updated title", AwaitingInput = true });
+                await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
+                    .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+                service.Agents.Clear();
+                service.Agents.AddOrUpdate(rows.Reverse());
+                await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
+                    .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Groups_sessions_under_repository_with_no_repository_last() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();

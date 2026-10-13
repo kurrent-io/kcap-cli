@@ -7,6 +7,7 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using DynamicData;
 using DynamicData.Binding;
 using ReactiveUI.Reactive;
@@ -59,7 +60,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
-            Action<string, AgentOrigin>? openPullRequest = null) {
+            Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest = null) {
         IObservable<string?> selected = _selectedAgentIdChanges;
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
         // here so every nested OAPH downstream sees

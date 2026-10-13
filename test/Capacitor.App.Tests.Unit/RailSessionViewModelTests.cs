@@ -3,6 +3,7 @@ using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
@@ -12,6 +13,30 @@ namespace Capacitor.App.Tests.Unit;
 /// MainWindowViewModelTests' header comment. Every test here runs inside
 /// AvaloniaSession.WithImmediateRxScheduler and carries [NotInParallel("AvaloniaSession")].
 public class RailSessionViewModelTests {
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Multiple_prs_open_only_the_selected_current_choice(bool remote) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var items = new[] { new RailPullRequestMenuItem(PullRequestWire.Subject(FakePullRequestSource.Link(1)), "First", "Open"),
+                new RailPullRequestMenuItem(PullRequestWire.Subject(FakePullRequestSource.Link(2)), "Second", "Draft") };
+            using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(2, Items: items) });
+            var opened = new List<(string, AgentOrigin, PullRequestSubjectDto?)>();
+            using var row = new RailSessionViewModel((remote ? RemoteRow("a1") : Row()) with { SessionId = "s1" },
+                new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
+                pullRequests: summaries, openPullRequest: (id, origin, subject) => opened.Add((id, origin, subject)));
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(opened).IsEmpty();
+            row.OpenPullRequestChoiceCommand.Execute(items[0]).Subscribe();
+            await Assert.That(opened).IsEquivalentTo(new[] { ("a1", remote ? AgentOrigin.Remote : AgentOrigin.Local, (PullRequestSubjectDto?)items[0].Subject) });
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary>());
+            row.OpenPullRequestChoiceCommand.Execute(items[1]).Subscribe();
+            await Assert.That(opened).Count().IsEqualTo(1);
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Pr_metadata_updates_and_its_action_is_separate_from_session_opening() {
@@ -24,7 +49,7 @@ public class RailSessionViewModelTests {
             using var row = new RailSessionViewModel(Row() with { SessionId = "s1" },
                 new BehaviorSubject<string?>(null), NoPending, NotStale, openedSessions.Add, _ => { }, TimeProvider.System,
                 pullRequests: summaries, localOnAppServer: localReadable,
-                openPullRequest: (id, origin) => openedPrs.Add((id, origin)));
+                openPullRequest: (id, origin, _) => openedPrs.Add((id, origin)));
             var changes = new List<string?>();
             row.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
             await Assert.That(row.HasPullRequest).IsFalse();
@@ -57,8 +82,8 @@ public class RailSessionViewModelTests {
             using var row = new RailSessionViewModel(RemoteRow("a1") with { SessionId = "s1" },
                 new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
                 pullRequests: new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
-                    new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(2) }),
-                localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin) => opened = origin);
+                    new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(FakePullRequestSource.Link(142))) }),
+                localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin, _) => opened = origin);
             row.OpenPullRequestCommand.Execute().Subscribe();
             await Assert.That(opened).IsEqualTo(AgentOrigin.Remote);
         });

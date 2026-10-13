@@ -67,6 +67,27 @@ public class RemoteSessionViewModelTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Initial_pr_loading_keeps_the_tab_visible_and_an_empty_result_returns_to_chat(bool failed) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [],
+                Capability = failed ? Capacitor.Cli.Core.PullRequests.PullRequestCapabilityKind.Unavailable : Capacitor.Cli.Core.PullRequests.PullRequestCapabilityKind.Supported };
+            var vm = h.Build(Harness.Row(), pullRequests: source);
+            vm.OpenPullRequest();
+            await Assert.That(vm.IsPullRequestActive).IsTrue();
+            await Assert.That(vm.ShowsPullRequestTab).IsTrue();
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => failed ? vm.PullRequests.Notice is { } note && note != "Loading pull requests…" : vm.PullRequests.HasListed, what: "first list settled");
+            await Assert.That(vm.IsPullRequestActive).IsEqualTo(failed);
+            await Assert.That(vm.ShowsPullRequestTab).IsEqualTo(failed);
+            await Assert.That(vm.IsChatActive).IsEqualTo(!failed);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
     public async Task A_remote_session_opens_the_native_pr_reader_and_keeps_the_picker() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
@@ -74,13 +95,14 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(), pullRequests: source);
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             vm.PullRequests!.SetForeground(true);
-            vm.OpenPullRequest();
+            vm.OpenPullRequest(Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(source.Links[0]));
             await WaitUntilAsync(() => vm.PullRequests.CanReveal && !vm.PullRequests.IsReading, what: "PR reader");
             await Assert.That(vm.IsPullRequestActive).IsTrue();
             await Assert.That(vm.ShowsPullRequestPane).IsTrue();
             await Assert.That(vm.ShowsChatPane).IsFalse();
             await Assert.That(vm.ShowsPullRequestTab).IsTrue();
             await Assert.That(vm.PullRequests.Choices).Count().IsEqualTo(2);
+            await Assert.That(vm.PullRequests.Selected!.Subject.Number).IsEqualTo(1);
             vm.ShowChatCommand.Execute().Subscribe();
             await Assert.That(vm.ShowsChatPane).IsTrue();
             await vm.TeardownAsync();

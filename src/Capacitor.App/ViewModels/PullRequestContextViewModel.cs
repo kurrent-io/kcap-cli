@@ -41,6 +41,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     string? _branch;
     PullRequestChoice? _selected;
     bool _explicitSelection;
+    PullRequestSubjectDto? _requestedSubject;
     bool _updatingChoices;
     PullRequestOverviewDto? _overview;
     PullRequestRead<PullRequestOverviewDto>? _overviewRead;
@@ -168,6 +169,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             ClearProtected();
             _stopped = false;
             _hasListed = false;
+            ApplyRequestedSubject();
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
@@ -223,6 +225,35 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         Notify();
         if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
+    public void SelectSubject(PullRequestSubjectDto subject) {
+        if (_disposed) return;
+        _requestedSubject = subject;
+        ApplyRequestedSubject();
+    }
+
+    void ApplyRequestedSubject() {
+        if (_session is null || _requestedSubject is not { } subject) return;
+        _requestedSubject = null;
+        var choice = _choices.FirstOrDefault(item => item.Subject == subject);
+        if (choice is null) {
+            // A fresh list confirms availability; never fall back to a different PR while loading.
+            choice = new PullRequestChoice(new PullRequestLinkDto {
+                Provider = subject.Provider, Host = subject.Host, RepoHash = subject.RepoHash,
+                Owner = subject.Owner, RepoName = subject.RepoName, Number = subject.Number,
+            }, IsAvailable: false);
+            _choices.Add(choice);
+        }
+        _explicitSelection = true;
+        if (!_hasListed) {
+            // Pin the requested subject without cancelling the initial link discovery.
+            _selected = choice;
+            this.RaisePropertyChanged(nameof(Selected));
+            Notify();
+            return;
+        }
+        Select(choice, explicitSelection: true);
+    }
+
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
         if (_disposed || choice?.Subject == _selected?.Subject) return;
         if (choice is not null && !_choices.Contains(choice)) return;
