@@ -30,6 +30,7 @@ public static class MuseHooksInstaller {
             if (hooks is null) { hooks = new JsonObject(); root["hooks"] = hooks; changed = true; }
 
             foreach (var eventName in MuseHooksParser.MuseHookEvents) {
+                if (hooks[eventName] is not null and not JsonArray) continue;
                 var groups = hooks[eventName] as JsonArray;
                 if (groups is null) { groups = new JsonArray(); hooks[eventName] = groups; changed = true; }
                 if (groups.Any(MuseHooksParser.EntryReferencesCapacitorMuseHook)) continue;
@@ -39,7 +40,7 @@ public static class MuseHooksInstaller {
             return changed;
         });
 
-        if (outcome is SettingsEdit.Changed or SettingsEdit.Unchanged && IsInstalled(settingsPath)) WriteMarker(settingsPath);
+        if (outcome is (SettingsEdit.Changed or SettingsEdit.Unchanged) && IsInstalled(settingsPath)) WriteMarker(settingsPath);
         return outcome;
     }
 
@@ -49,16 +50,21 @@ public static class MuseHooksInstaller {
             var changed = false;
             foreach (var eventName in hooks.Select(kv => kv.Key).ToList()) {
                 if (hooks[eventName] is not JsonArray groups) continue;
-                var kept = new JsonArray(groups.Where(g => !MuseHooksParser.EntryReferencesCapacitorMuseHook(g)).Select(g => g!.DeepClone()).ToArray());
-                if (kept.Count == groups.Count) continue;
+                var removed = false;
+                for (var i = groups.Count - 1; i >= 0; i--) {
+                    if (!MuseHooksParser.EntryReferencesCapacitorMuseHook(groups[i])) continue;
+                    groups.RemoveAt(i);
+                    removed = true;
+                }
+                if (!removed) continue;
                 changed = true;
-                if (kept.Count == 0) hooks.Remove(eventName); else hooks[eventName] = kept;
+                if (groups.Count == 0) hooks.Remove(eventName);
             }
             if (changed && hooks.Count == 0) root.Remove("hooks");
             return changed;
         }, createIfMissing: false);
 
-        DeleteMarker(settingsPath);
+        if (outcome is SettingsEdit.Changed or SettingsEdit.Unchanged) DeleteMarker(settingsPath);
         return outcome;
     }
 

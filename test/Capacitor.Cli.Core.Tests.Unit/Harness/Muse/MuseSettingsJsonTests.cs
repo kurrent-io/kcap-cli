@@ -27,6 +27,19 @@ public class MuseSettingsJsonTests {
     }
 
     [Test]
+    public async Task Register_adds_schema_version_to_an_existing_file_without_one_and_keeps_other_members() {
+        var path = Tmp.CreateFile("settings.json", """{"model":"muse-spark-1.3","theme":"dark"}""");
+
+        await Assert.That(MuseSettingsJson.RegisterKcapMcpServers(path, new UserHome(Tmp.Path))).IsEqualTo(JsonMcpConfigWriter.Change.Updated);
+
+        var root = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+        await Assert.That(root["schema_version"]!.GetValue<int>()).IsEqualTo(1);
+        await Assert.That(root["model"]!.GetValue<string>()).IsEqualTo("muse-spark-1.3");
+        await Assert.That(root["theme"]!.GetValue<string>()).IsEqualTo("dark");
+        await Assert.That(root["mcp_servers"]!["kcap-sessions"]).IsNotNull();
+    }
+
+    [Test]
     public async Task Register_on_a_missing_file_creates_schema_version() {
         var path = Tmp.PathTo("settings.json");
         await Assert.That(MuseSettingsJson.RegisterKcapMcpServers(path, new UserHome(Tmp.Path))).IsEqualTo(JsonMcpConfigWriter.Change.Updated);

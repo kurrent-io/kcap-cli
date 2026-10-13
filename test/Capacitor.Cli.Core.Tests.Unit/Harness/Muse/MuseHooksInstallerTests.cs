@@ -83,4 +83,36 @@ public class MuseHooksInstallerTests {
         MuseHooksInstaller.Remove(path);
         await Assert.That(MuseHooksInstaller.ReadMarker(path)).IsNull();
     }
+
+    [Test]
+    public async Task A_null_element_in_a_hook_array_survives_install_and_remove() {
+        var path = Tmp.CreateFile("settings.json", """{"schema_version":1,"hooks":{"Stop":[null]}}""");
+
+        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(MuseHooksInstaller.Remove(path)).IsEqualTo(SettingsEdit.Changed);
+
+        var stop = (JsonArray)JsonNode.Parse(File.ReadAllText(path))!["hooks"]!["Stop"]!;
+        await Assert.That(stop.Count).IsEqualTo(1);
+        await Assert.That(stop[0]).IsNull();
+    }
+
+    [Test]
+    public async Task An_event_whose_value_is_not_an_array_is_left_alone() {
+        var path = Tmp.CreateFile("settings.json", """{"schema_version":1,"hooks":{"Stop":"nope"}}""");
+
+        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(MuseHooksInstaller.Remove(path)).IsEqualTo(SettingsEdit.Changed);
+
+        var root = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+        await Assert.That(root["hooks"]!["Stop"]!.GetValue<string>()).IsEqualTo("nope");
+    }
+
+    [Test]
+    public async Task Remove_on_a_malformed_file_keeps_the_marker() {
+        var path   = Tmp.CreateFile("settings.json", "{not json");
+        var marker = Tmp.CreateFile(MuseHooksInstaller.MarkerFileName, "1.2.3");
+
+        await Assert.That(MuseHooksInstaller.Remove(path)).IsEqualTo(SettingsEdit.Malformed);
+        await Assert.That(File.Exists(marker)).IsTrue();
+    }
 }
