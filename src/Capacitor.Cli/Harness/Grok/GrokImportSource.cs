@@ -231,8 +231,8 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
     static DateTimeOffset? Time(string? s) =>
         s is not null && DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var ts) ? ts : null;
 
-    // The server's watermark is the last line it mapped to an event; the lines after it that map to
-    // nothing (subagent bookkeeping, command lists, a tool's progress) must not read as unsent.
+    // The server's watermark is the last line it mapped to an event, so this mirrors when the server's
+    // Grok normalizer emits one; a trailing line it maps to nothing must not read as unsent.
     static int LastImportableIndex(IReadOnlyList<string> lines) {
         for (var i = lines.Count - 1; i >= 0; i--)
             if (IsImportable(lines[i])) return i;
@@ -247,9 +247,13 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
             if (doc.RootElement.ValueKind != JsonValueKind.Object || doc.RootElement.Obj("params")?.Obj("update") is not { } update) return false;
 
             return (doc.RootElement.Str("method"), update.Str("sessionUpdate")) switch {
-                ("session/update", "user_message_chunk" or "agent_message_chunk" or "agent_thought_chunk" or "tool_call") => true,
-                ("session/update", "tool_call_update") => update.Str("status") is "completed" or "failed",
-                ("_x.ai/session/update", "turn_completed") => true,
+                ("session/update", "user_message_chunk" or "agent_message_chunk" or "agent_thought_chunk")
+                    => update.Obj("content")?.Str("text") is { Length: > 0 },
+                ("session/update", "tool_call") => update.Str("toolCallId") is { Length: > 0 },
+                ("session/update", "tool_call_update")
+                    => update.Str("status") is "completed" or "failed" && update.Str("toolCallId") is { Length: > 0 },
+                ("_x.ai/session/update", "turn_completed")
+                    => update.Obj("usage")?.Obj("modelUsage")?.EnumerateObject().Any(m => m.Value.ValueKind == JsonValueKind.Object) == true,
                 _ => false,
             };
         } catch (JsonException) {

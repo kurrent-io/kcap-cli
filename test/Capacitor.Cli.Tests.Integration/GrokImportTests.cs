@@ -112,6 +112,32 @@ public class GrokImportTests : IDisposable {
         await Assert.That(batches.Single().GetProperty("agent_id").GetString()).IsEqualTo(Child.Replace("-", ""));
     }
 
+    /// <summary>Each trailing line is one the server parses but maps to no event, so it never moves the
+    /// watermark past the first line.</summary>
+    [Test]
+    [Arguments("agent_message_chunk", "\"content\":{\"type\":\"text\",\"text\":\"\"}", "session/update")]
+    [Arguments("tool_call", "\"title\":\"run\"", "session/update")]
+    [Arguments("tool_call_update", "\"toolCallId\":\"c1\",\"status\":\"in_progress\"", "session/update")]
+    [Arguments("turn_completed", "\"usage\":{}", "_x.ai/session/update")]
+    public async Task A_trailing_line_the_server_maps_to_nothing_leaves_the_session_loaded(string kind, string extra, string method) {
+        var dir = Path.Combine(Home.Path, ".grok", "sessions", "%2Frepo%2Fdemo", Parent);
+        Directory.CreateDirectory(dir);
+        File.WriteAllLines(Path.Combine(dir, "updates.jsonl"), [
+            Line(Parent, "user_message_chunk", "\"content\":{\"type\":\"text\",\"text\":\"hi\"}"),
+            Line(Parent, kind, extra, method),
+        ]);
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
+               .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
+
+        using var client = new HttpClient();
+        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+
+        await Assert.That(classified.Single().Status).IsEqualTo(ImportCommand.ClassificationStatus.AlreadyLoaded);
+    }
+
     /// <summary>A later batch landing past a refused one would move the server's watermark beyond the
     /// lines it never took, and a re-run would resume after them.</summary>
     [Test]
