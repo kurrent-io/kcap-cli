@@ -20,6 +20,13 @@ public class HostedHarnessCatalogTests {
         await Assert.That(options.All(o => o.Available)).IsTrue();
     }
 
+    /// <summary>A daemon too old to host Grok advertises nothing for it, so silence must not offer it.</summary>
+    [Test]
+    public async Task Grok_is_listed_only_when_a_daemon_advertises_it() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("grok");
+        await Assert.That(HostedHarnessCatalog.Build(["grok"]).Single(o => o.Vendor == "grok").Available).IsTrue();
+    }
+
     [Test]
     public async Task A_recording_only_harness_is_listed_only_when_advertised() {
         await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");

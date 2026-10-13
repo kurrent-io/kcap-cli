@@ -39,9 +39,9 @@ public static class HostedHarnessCatalog {
     /// fallback makes an unmapped vendor indistinguishable from a mapped "rpc" one.
     internal static IReadOnlyCollection<string> MappedVendors => TransportFamilies.Keys;
 
-    /// Harnesses kcap records but no daemon hosts: listed only when a daemon advertises one, since
-    /// the server refuses their launch and an older daemon's silence must not offer them.
-    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe" };
+    /// Harnesses listed only when a daemon advertises one: no daemon hosts Mistral Vibe, and one too
+    /// old to host Grok says nothing about it, so a daemon's silence must not offer either.
+    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe", "grok" };
 
     public static IReadOnlyList<HarnessOption> Build(string[]? supportedVendors) {
         // null = an older daemon that never sent the field: unknown, not empty.

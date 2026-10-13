@@ -32,7 +32,7 @@ class Agent:
 
 def approve(m):
     opts = m.get("params", {}).get("options", [])
-    pick = next((o for o in opts if o.get("kind") == "reject_once"), opts[0] if opts else None)
+    pick = next((o for o in opts if o.get("kind") == "reject_once"), None)
     return {"outcome": {"outcome": "selected", "optionId": pick["optionId"]}} if pick else {"outcome": {"outcome": "cancelled"}}
 
 init = {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}}

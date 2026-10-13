@@ -87,8 +87,8 @@ public class GrokHostedLaunchTests {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.OpenCode, new DaemonConfig(), Ctx() with { Vendor = "opencode" });
 
-        await Assert.That(psi.Environment.ContainsKey(GrokHookEnvironment.HostedVar)
-                       && psi.Environment[GrokHookEnvironment.HostedVar] == Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue(GrokHookEnvironment.HostedVar, out var value) ? value : null)
+            .IsEqualTo(Environment.GetEnvironmentVariable(GrokHookEnvironment.HostedVar));
     }
 
     [Test]

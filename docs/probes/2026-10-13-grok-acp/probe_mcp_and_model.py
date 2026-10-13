@@ -32,14 +32,13 @@ class Agent:
 
 def approve(m):
     opts = m.get("params", {}).get("options", [])
-    pick = next((o for o in opts if o.get("kind") == "allow_once"), opts[0] if opts else None)
+    pick = next((o for o in opts if o.get("kind") == "allow_once"), None)
     return {"outcome": {"outcome": "selected", "optionId": pick["optionId"]}} if pick else {"outcome": {"outcome": "cancelled"}}
 
 init = {"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False}}
 NONCE = "nonce-7f3a91c2"
 a = Agent("mcp")
 a.call("initialize", init, 60)
-env = [{"name": "GROK_CLAUDE_MCPS_ENABLED", "value": "0"}]
 new = a.call("session/new", {"cwd": WS, "mcpServers": [{"name": "kcap-probe", "command": sys.executable, "args": ["-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_echo.py"), NONCE], "env": []}], "_meta": {"yoloMode": True}}, 90)
 sid = new.get("result", {}).get("sessionId")
 r = a.call("session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "Call the MCP tool kcap_probe_echo and reply with exactly what it returned."}]}, 240)
