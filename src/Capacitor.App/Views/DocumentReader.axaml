@@ -1,0 +1,36 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.DocumentReader"
+             x:DataType="vm:DocumentReaderViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <Grid RowDefinitions="Auto,*">
+        <StackPanel Margin="24,20,24,12" Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+                <Border Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="6,1">
+                    <TextBlock x:Name="DocumentKind" Text="{Binding KindLabel}" FontSize="10.5" FontWeight="SemiBold"
+                               Foreground="{StaticResource KcapMutedBrush}" />
+                </Border>
+                <TextBlock Text="{Binding Path}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip.Tip="{Binding Path}" />
+            </StackPanel>
+            <TextBlock x:Name="DocumentTitle" Text="{Binding FileName}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"
+                       Foreground="{StaticResource KcapTextBrush}" />
+            <TextBlock FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}">
+                <Run Text="{Binding MetaLabel}" />
+            </TextBlock>
+            <Border x:Name="DocumentNotice" IsVisible="{Binding HasNotice}" HorizontalAlignment="Left"
+                    Background="{StaticResource KcapWarningDimBrush}" CornerRadius="6" Padding="10,6">
+                <TextBlock Text="{Binding Notice}" FontSize="12.5" Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
+            </Border>
+        </StackPanel>
+        <!-- MarkdownView disables its own scrollbars; this viewer is the one scroller. -->
+        <ScrollViewer x:Name="DocumentScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      IsVisible="{Binding HasBody}">
+            <views:MarkdownView Margin="24,0,24,24" Text="{Binding Body}" Flavor="GitHub"
+                                OpenLink="{Binding $parent[views:ArtefactsView].((vm:ArtefactsTabViewModel)DataContext).OpenLinkCommand}" />
+        </ScrollViewer>
+    </Grid>
+</UserControl>

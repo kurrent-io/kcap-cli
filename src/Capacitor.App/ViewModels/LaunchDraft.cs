@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core;
+
 namespace Capacitor.App.ViewModels;
 
 /// Everything one launch sends, captured before the upload starts. The request is built from this
@@ -7,5 +9,5 @@ namespace Capacitor.App.ViewModels;
 /// actually sent.
 public sealed record LaunchDraft(
     string Machine, bool Remote, string RepoPath, string Vendor, string Goal, int GoalEdits,
-    string Model, string? Effort, string? PermissionMode, IReadOnlyList<StagedAttachment> Files,
-    int TrayGeneration);
+    string Model, string? Effort, string? PermissionMode, CodexLaunchPosture? CodexPosture,
+    IReadOnlyList<StagedAttachment> Files, int TrayGeneration);

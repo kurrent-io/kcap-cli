@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Plans;
@@ -459,6 +460,35 @@ public class PlanSectionViewModelTests {
 
             await Assert.That(h.Source.Requested.Count).IsEqualTo(1);
             await Assert.That(h.Vm.HasPlan).IsFalse();
+        });
+    }
+
+    /// A document row is a way into the tab: the command hands the declared path to whoever
+    /// opens documents, and the open one stays marked through a refresh.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_document_row_opens_by_path_and_the_open_mark_survives_a_refresh() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var opened = new List<string>();
+            h.Vm.OpenDocument = opened.Add;
+            h.Source.Enqueue(Ready(Plan("p1", documents: [Doc("design", "docs/x-design.md"), Doc("plan", "docs/x.md")])));
+            await h.SwitchAsync(SessionA);
+
+            await h.Vm.OpenDocumentCommand.Execute(h.Vm.Documents[1]);
+            await Assert.That(opened).IsEquivalentTo(new[] { "docs/x-design.md" });
+
+            h.Vm.MarkOpen("/Users/me/repo/docs/x-design.md");
+            await Assert.That(h.Vm.Documents[1].IsOpen).IsTrue();
+            await Assert.That(h.Vm.Documents[0].IsOpen).IsFalse();
+
+            h.Source.Enqueue(Ready(Plan("p1", documents: [Doc("design", "docs/x-design.md"), Doc("plan", "docs/x.md"), Doc("spec", "docs/s.md")])));
+            await h.RefreshAsync();
+            await Assert.That(h.Vm.Documents.Single(d => d.Kind == "design").IsOpen).IsTrue();
+
+            h.Vm.MarkOpen(null);
+            await Assert.That(h.Vm.Documents.Any(d => d.IsOpen)).IsFalse();
+            await h.Vm.TeardownAsync();
         });
     }
 }

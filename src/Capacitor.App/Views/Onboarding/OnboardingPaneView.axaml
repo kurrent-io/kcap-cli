@@ -1,0 +1,117 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:app="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.OnboardingPaneView"
+             x:DataType="vm:OnboardingViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <!-- Per-step templates, selected by ViewModel type; the ContentControl below deliberately
+         sets no ContentTemplate, which would win over every one of these. -->
+    <UserControl.DataTemplates>
+        <DataTemplate DataType="vm:WelcomeStepViewModel">
+            <Border Classes="frCard">
+                <StackPanel Spacing="14">
+                    <TextBlock Classes="frMicro" Text="WHAT SETUP DOES ON THIS MACHINE" />
+                    <ItemsControl x:Name="WelcomeItems" ItemsSource="{x:Static vm:WelcomeStepViewModel.Items}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:WelcomeItem">
+                                <Border Classes="frRowRule" Padding="2,11">
+                                    <Grid ColumnDefinitions="180,*" ColumnSpacing="14">
+                                        <TextBlock Classes="frLabel" Text="{Binding Title}" />
+                                        <TextBlock Grid.Column="1" Classes="frDetail" FontSize="12.5" Text="{Binding Detail}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Classes="frNote">
+                        <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
+                            Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor, or run kcap setup in your terminal." />
+                    </TextBlock>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:SignInStepViewModel">
+            <views:SignInPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:HarnessesStepViewModel">
+            <views:HarnessesPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:HistoryStepViewModel">
+            <views:HistoryPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:DaemonStepViewModel">
+            <views:DaemonPaneView />
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:DoneStepViewModel">
+            <views:DonePaneView />
+        </DataTemplate>
+    </UserControl.DataTemplates>
+
+
+    <Panel>
+        <!-- The setup page's bloom: behind the column, never under the pointer. -->
+        <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Fill="{StaticResource FrBloomBrush}" IsHitTestVisible="False" />
+
+        <Grid RowDefinitions="*,Auto">
+        <ScrollViewer x:Name="StepScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,60,32,24" Spacing="26">
+                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
+                    <Path Data="{x:Static views:OnboardingPaneView.Wordmark}" Fill="{StaticResource KcapTextBrush}"
+                          Height="18" Stretch="Uniform" HorizontalAlignment="Left" />
+                    <Button Grid.Column="1" Classes="frQuiet" Content="Finish later"
+                            Command="{Binding FinishLaterCommand}"
+                            ToolTip.Tip="Continue setup from Help and support in Capacitor" />
+                </Grid>
+
+                <StackPanel Spacing="14">
+                    <TextBlock x:Name="StepEyebrowText" Classes="frEyebrow" Text="{Binding Eyebrow}" />
+                    <!-- Fallback presenter: always shows the current step's title, template or not. -->
+                    <TextBlock x:Name="StepTitleText" Classes="frHeadline" Text="{Binding Current.Title}" />
+                    <TextBlock x:Name="StepLedeText" Classes="frLede" Text="{Binding Current.Lede}"
+                               IsVisible="{Binding Current.Lede, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
+            </StackPanel>
+        </ScrollViewer>
+        <Border Grid.Row="1" Background="{StaticResource KcapCanvasBrush}"
+                BorderBrush="{StaticResource FrDividerBrush}" BorderThickness="0,1,0,0">
+                <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="10">
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+                        <Button x:Name="BackButton" Classes="frSecondary" Content="Back"
+                                Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
+                        <Button Grid.Column="2" x:Name="SkipButton" Classes="frSecondary" Command="{Binding SkipCommand}"
+                                Content="{Binding SkipLabel}"
+                                IsVisible="{Binding SkipVisible}" />
+                        <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="frSecondary" Content="Cancel"
+                                Command="{Binding CancelTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="frPrimary" Content="Continue"
+                                Command="{Binding ConfirmTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
+                                Classes.frPrimary="{Binding NextIsPrimary}"
+                                Classes.frSecondary="{Binding NextIsSecondary}"
+                                Content="{Binding NextLabel}"
+                                IsVisible="{Binding NextVisible}" />
+                    </Grid>
+
+                    <!-- Daemon step only. These lines name that step's action, and the other pages have none. -->
+                    <TextBlock x:Name="LifecycleStatusText" Classes="frNote" Text="{Binding Surface.StatusText}"
+                               IsVisible="{Binding ShowLifecycleStatus}" />
+                    <TextBlock x:Name="LifecycleAttentionText" Classes="frError" Text="{Binding Surface.AttentionText}"
+                               IsVisible="{Binding ShowLifecycleAttention}" />
+                </StackPanel>
+        </Border>
+        </Grid>
+
+        <!-- The pane covers the window's own drag strip. -->
+        <Border Height="40" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+    </Panel>
+</UserControl>

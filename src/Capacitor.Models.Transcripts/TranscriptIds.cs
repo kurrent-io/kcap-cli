@@ -34,4 +34,17 @@ public static class TranscriptIds {
     }
 
     public static Guid CodexRecord(string line) => Hash(Encoding.UTF8.GetBytes(line));
+
+    /// A Vibe record's id is the hash of its exact source line — a legacy <c>messages.jsonl</c> line,
+    /// or one flattened entry of the unified store. Identical lines dedup to one event, as with Codex;
+    /// the unified reader keeps distinct entries distinct by carrying each entry's own bytes
+    /// (<c>createdAt</c>, content) into the line it emits. Derived events off one line take a
+    /// <see cref="Sibling"/> suffix.
+    public static Guid VibeRecord(string line) => Hash(Encoding.UTF8.GetBytes(line));
+
+    /// A unified-store entry carries its own stable <c>id</c> that survives the entry moving from a
+    /// journal delta into a published chunk and survives re-import, so its canonical id hashes that id
+    /// rather than the surrounding bytes (which <c>updatedAt</c>/<c>generationStatus</c> churn). Scoped
+    /// by a prefix so an id can never collide with another derivation's input.
+    public static Guid VibeEntry(string entryId) => Hash(Encoding.UTF8.GetBytes("vibe-entry:" + entryId));
 }

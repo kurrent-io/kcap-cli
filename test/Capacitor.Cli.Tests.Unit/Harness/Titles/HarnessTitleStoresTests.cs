@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Copilot;
@@ -31,6 +32,33 @@ public class HarnessTitleStoresTests {
         var transcript = Home.CreateFile([".codex", "sessions", "2026", "09", "29", $"rollout-2026-09-29T10-00-00-{Id}.jsonl"]);
 
         var store = HarnessTitleStores.For("codex", null, Id.Replace("-", ""), transcript, Harnesses);
+
+        await Assert.That(store!.Read()!.Title).IsEqualTo("Codex name");
+    }
+
+    [Test]
+    public async Task Codex_reads_the_index_of_the_account_that_wrote_the_rollout() {
+        Home.CreateFile([".codex-b", "session_index.jsonl"], $$"""{"id":"{{Id}}","thread_name":"From B","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+        var rollout  = Home.CreateFile([".codex-b", "sessions", "2026", "09", "29", $"rollout-2026-09-29T10-00-00-{Id}.jsonl"]);
+        var registry = new AccountRegistry {
+            Accounts = [new VendorAccount("b", HarnessId.Codex, AccountDirectory.Normalize(Home.PathTo(".codex-b")), "b", DateTimeOffset.UnixEpoch)]
+        };
+
+        var store = HarnessTitleStores.For("codex", null, Id.Replace("-", ""), rollout, Harnesses, registry, Home);
+
+        await Assert.That(store!.Read()!.Title).IsEqualTo("From B");
+    }
+
+    [Test]
+    public async Task Codex_falls_back_to_the_environment_home_over_a_hand_edited_registry() {
+        Home.CreateFile([".codex", "session_index.jsonl"], $$"""{"id":"{{Id}}","thread_name":"Codex name","updated_at":"2026-09-29T10:00:00Z"}""" + "\n");
+        var transcript = Home.CreateFile([".codex", "sessions", "2026", "09", "29", $"rollout-2026-09-29T10-00-00-{Id}.jsonl"]);
+        var accounts   = Home.CreateFile(["accounts", "accounts.json"], """
+            { "accounts": [ { "id": "x", "vendor": "Codex", "label": "x", "added_at": "2026-01-01T00:00:00Z" } ] }
+            """);
+
+        var store = HarnessTitleStores.For("codex", null, Id.Replace("-", ""), transcript, Harnesses,
+                                           new AccountStore(Path.GetDirectoryName(accounts)!).TryLoad(), Home);
 
         await Assert.That(store!.Read()!.Title).IsEqualTo("Codex name");
     }

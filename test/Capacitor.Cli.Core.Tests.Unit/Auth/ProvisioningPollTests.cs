@@ -51,4 +51,18 @@ public class ProvisioningPollTests {
     [Test]
     public async Task Server_error_keeps_waiting() =>
         await Assert.That(ProvisioningPoll.Classify(503, null, null)).IsEqualTo(PollVerdict.Wait);
+
+    /// <summary>Only a status the server answered with marks a workspace as still being built; an
+    /// outage must not keep a removed workspace in discovery.</summary>
+    [Test]
+    [Arguments(200, "provisioning", true)]
+    [Arguments(200, "reserved",     true)]
+    [Arguments(200, "active",       false)]
+    [Arguments(200, "failed",       false)]
+    [Arguments(200, null,           false)]
+    [Arguments(404, null,           false)]
+    [Arguments(503, null,           false)]
+    [Arguments(0,   null,           false)]
+    public async Task IsPending_needs_an_answered_in_progress_state(int status, string? state, bool expected) =>
+        await Assert.That(ProvisioningPoll.IsPending(status, state)).IsEqualTo(expected);
 }

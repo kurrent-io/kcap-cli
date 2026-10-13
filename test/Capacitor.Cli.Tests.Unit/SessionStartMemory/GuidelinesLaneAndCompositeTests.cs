@@ -1,6 +1,4 @@
 using System.Net;
-using System.Net.Http.Headers;
-using System.Text;
 using Capacitor.Cli.SessionStartMemory;
 
 using Microsoft.Extensions.Time.Testing;
@@ -115,7 +113,8 @@ public class GuidelinesLaneAndCompositeTests {
         var time     = new FakeTimeProvider();
         var memory2  = new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(memH)), time);
         var guide2   = new SessionStartGuidelinesLane(Lazy(new HttpClient(guideH)), time);
-        return new SessionStartCompositeContextProvider(scope, memory2, guide2, time);
+        var flows    = new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NotFound, "", null))), time);
+        return new SessionStartCompositeContextProvider(scope, memory2, guide2, flows, time);
     }
 
     [Test]
@@ -226,27 +225,5 @@ public class GuidelinesLaneAndCompositeTests {
         await Assert.That(SessionGuidelinesEmitter.BuildFragment((IReadOnlyList<GuidelineRow>?)null)).IsNull();
         await Assert.That(SessionGuidelinesEmitter.BuildFragment(new List<GuidelineRow>())).IsNull();
         await Assert.That(SessionGuidelinesEmitter.BuildFragment(new List<GuidelineRow> { new("safety", " ") })).IsNull();
-    }
-
-    // ---- Stubs ----
-
-    sealed class FixedScope(string? repo, string? machine) : ISessionStartMemoryScopeResolver {
-        public Task<SessionStartMemoryScope> ResolveAsync(string? cwd, TimeSpan budget, CancellationToken ct) =>
-            Task.FromResult(new SessionStartMemoryScope(repo, machine));
-    }
-
-    sealed class Handler(HttpStatusCode status, string body, TimeSpan? retryAfter = null) : HttpMessageHandler {
-        public int Calls;
-        public string? Uri;
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
-            Calls++;
-            Uri = request.RequestUri?.ToString();
-            var response = new HttpResponseMessage(status) {
-                Content = new StringContent(body, Encoding.UTF8, "application/json")
-            };
-            if (retryAfter is { } delay) response.Headers.RetryAfter = new RetryConditionHeaderValue(delay);
-            return Task.FromResult(response);
-        }
     }
 }

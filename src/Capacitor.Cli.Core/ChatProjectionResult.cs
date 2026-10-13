@@ -6,5 +6,5 @@ namespace Capacitor.Cli.Core;
 public sealed record ChatProjectionResult(
         IReadOnlyList<AcpEventEnvelope> Envelopes,
         IReadOnlyList<string>           SubmittedInputs,
-        IReadOnlyList<SubagentSignal>   Subagents
+        IReadOnlyList<RunSignal>   Runs
     );

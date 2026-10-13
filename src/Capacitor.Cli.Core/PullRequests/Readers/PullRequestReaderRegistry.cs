@@ -80,7 +80,7 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var stamp = Stamp(provider);
         if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.OverviewAsync(sessionId, subject, ct).ConfigureAwait(false);
-        return Stale(subject, stamp, sessionId) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return Stale(subject, stamp, sessionId) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read with { Reader = provider.Tool?.Name };
     }
 
     public async Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
@@ -92,7 +92,7 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
         var stamp = Stamp(provider);
         if (TakeChange(sessionId, subject, stamp)) return new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed");
         var read = await provider.PageAsync<T>(sessionId, subject, section, cursor, resolved, threadId, ct).ConfigureAwait(false);
-        return Stale(subject, stamp, sessionId) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read;
+        return Stale(subject, stamp, sessionId) ? new(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed") : read with { Reader = provider.Tool?.Name };
     }
 
     public PullRequestReaderNote? NoteFor(string provider, string host) {
@@ -110,8 +110,9 @@ public sealed class PullRequestReaderRegistry(IPullRequestSource sessionLinks, I
                 PullRequestReaderStatusKind.Failed when status.Reason == "unsupported_version" => $"Update {tool.Name} to read pull requests here.",
                 _ => null
             };
-            var showInstall = status.Kind == PullRequestReaderStatusKind.ToolMissing || status.Reason == "unsupported_version";
-            if (text is not null) return new(text, showInstall ? tool.InstallUrl : null, tool.Name);
+            var update = status.Kind == PullRequestReaderStatusKind.Failed && status.Reason == "unsupported_version";
+            var showInstall = status.Kind == PullRequestReaderStatusKind.ToolMissing || update;
+            if (text is not null) return new(text, showInstall ? tool.InstallUrl : null, showInstall ? (update ? "Update " : "Install ") + tool.Name : null);
         }
         return null;
     }

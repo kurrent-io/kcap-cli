@@ -21,6 +21,13 @@ public class HostedHarnessCatalogTests {
     }
 
     [Test]
+    public async Task A_recording_only_harness_is_listed_only_when_advertised() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
+        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
+        await Assert.That(HostedHarnessCatalog.Build(["mistral-vibe"]).Single(o => o.Vendor == "mistral-vibe").Available).IsTrue();
+    }
+
+    [Test]
     public async Task Transport_family_matches_how_the_daemon_hosts_each_vendor() {
         var options = HostedHarnessCatalog.Build(null).ToDictionary(o => o.Vendor);
 
@@ -131,10 +138,11 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("low")).IsEqualTo("Low");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("medium")).IsEqualTo("Medium");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("high")).IsEqualTo("High");
-        await Assert.That(HostedHarnessCatalog.EffortLabelFor("xhigh")).IsEqualTo("Max");
+        await Assert.That(HostedHarnessCatalog.EffortLabelFor("xhigh")).IsEqualTo("Extra high");
+        await Assert.That(HostedHarnessCatalog.EffortLabelFor("max")).IsEqualTo("Max");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("weird")).IsEqualTo("weird");
         await Assert.That(HostedHarnessCatalog.EffortLadder)
-            .IsEquivalentTo(["low", "medium", "high", "xhigh"], CollectionOrdering.Matching);
+            .IsEquivalentTo(["low", "medium", "high", "xhigh", "max"], CollectionOrdering.Matching);
     }
 
     /// The tokens are the Claude CLI's own `--permission-mode` choices, listed from most to least
@@ -162,5 +170,24 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("Claude")).IsTrue();
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("codex")).IsFalse();
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("cursor")).IsFalse();
+    }
+
+    /// The daemon validates these exact Codex CLI tokens and forwards them to argv.
+    [Test]
+    public async Task Codex_posture_choices_are_the_tokens_the_daemon_accepts() {
+        await Assert.That(HostedHarnessCatalog.CodexSandboxes.Select(m => m.Token))
+            .IsEquivalentTo(["read-only", "workspace-write", "danger-full-access"], CollectionOrdering.Matching);
+        await Assert.That(HostedHarnessCatalog.CodexApprovals.Select(m => m.Token))
+            .IsEquivalentTo(["untrusted", "on-request", "never"], CollectionOrdering.Matching);
+        await Assert.That(HostedHarnessCatalog.CodexSandboxes.Select(m => m.Token)).Contains(HostedHarnessCatalog.DefaultCodexSandbox);
+        await Assert.That(HostedHarnessCatalog.CodexApprovals.Select(m => m.Token)).Contains(HostedHarnessCatalog.DefaultCodexApproval);
+    }
+
+    [Test]
+    public async Task Only_codex_takes_a_launch_time_posture() {
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("codex")).IsTrue();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("Codex")).IsTrue();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("claude")).IsFalse();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("cursor")).IsFalse();
     }
 }

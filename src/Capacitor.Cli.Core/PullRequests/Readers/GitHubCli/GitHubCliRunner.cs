@@ -7,14 +7,20 @@ namespace Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 /// Locates and spawns <c>gh</c>. A GUI app inherits launchd's PATH, which omits Homebrew and
 /// user-local prefixes, so the login shell's PATH is searched first on macOS and Linux.
 /// </summary>
-public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? shell, Func<string, string?> getEnv) : IDisposable {
+public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? shell, Func<string, string?> getEnv) : IDisposable, IAsyncDisposable {
     public const int OutputLimit = 4 * 1024 * 1024;
     public const int ViewOutputLimit = 16 * 1024 * 1024;
     public static readonly TimeSpan Deadline = TimeSpan.FromSeconds(20);
     static readonly IReadOnlyDictionary<string, string> Overlay = new Dictionary<string, string>(StringComparer.Ordinal) {
         ["GH_PROMPT_DISABLED"] = "1", ["GH_NO_UPDATE_NOTIFIER"] = "1", ["NO_COLOR"] = "1", ["GH_PAGER"] = "cat", ["CLICOLOR"] = "0",
     };
-    readonly SemaphoreSlim _slots = new(2, 2);
+    const int Slots = 2;
+    static readonly TimeSpan QuiesceCap = TimeSpan.FromSeconds(2);
+    readonly SemaphoreSlim _slots = new(Slots, Slots);
+    // Cancelled, never disposed: a run racing teardown must still be able to link to it.
+    readonly CancellationTokenSource _lifetime = new();
+    readonly Lock _quiesceGate = new();
+    Task? _quiesced;
     string? _path;
 
     public async Task<string?> LocateAsync(bool refresh, CancellationToken ct) {
@@ -27,22 +33,28 @@ public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? she
         return found;
     }
 
+    /// <summary>Once the runner is disposed every run, in flight or new, ends as <see cref="GitHubCliOutcome.NotStarted"/>; only the caller's own token throws.</summary>
     public async Task<GitHubCliResult> RunAsync(string[] args, int outputLimit = OutputLimit, CancellationToken ct = default) {
-        var path = _path ?? await LocateAsync(false, ct).ConfigureAwait(false);
-        if (path is null) return new(GitHubCliOutcome.NotStarted, -1, "", "gh is not installed");
-        await _slots.WaitAsync(ct).ConfigureAwait(false);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
         try {
-            ProcessResult result;
+            var path = _path ?? await LocateAsync(false, linked.Token).ConfigureAwait(false);
+            if (path is null) return new(GitHubCliOutcome.NotStarted, -1, "", "gh is not installed");
+            await _slots.WaitAsync(linked.Token).ConfigureAwait(false);
             try {
-                result = await runner.RunAsync(path, args, new RunOptions(Overlay, Deadline, CancelMode.KillTree), ct).ConfigureAwait(false);
-            } catch (Exception exception) when (exception is InvalidOperationException or IOException or Win32Exception) {
-                _path = null;
-                return new(GitHubCliOutcome.NotStarted, -1, "", exception.Message);
-            }
-            if (result.TimedOut) return new(GitHubCliOutcome.TimedOut, result.ExitCode, "", result.Stderr);
-            if (result.Stdout.Length > outputLimit) return new(GitHubCliOutcome.Oversized, result.ExitCode, "", "");
-            return new(result.ExitCode == 0 ? GitHubCliOutcome.Ok : GitHubCliOutcome.Failed, result.ExitCode, result.Stdout, result.Stderr);
-        } finally { _slots.Release(); }
+                ProcessResult result;
+                try {
+                    result = await runner.RunBoundedAsync(path, args, new RunOptions(Overlay, Deadline, CancelMode.KillTree), outputLimit, linked.Token).ConfigureAwait(false);
+                } catch (Exception exception) when (exception is InvalidOperationException or IOException or Win32Exception) {
+                    _path = null;
+                    return new(GitHubCliOutcome.NotStarted, -1, "", exception.Message);
+                }
+                if (result.TimedOut) return new(GitHubCliOutcome.TimedOut, result.ExitCode, "", result.Stderr);
+                if (result.Oversized) return new(GitHubCliOutcome.Oversized, result.ExitCode, "", "");
+                return new(result.ExitCode == 0 ? GitHubCliOutcome.Ok : GitHubCliOutcome.Failed, result.ExitCode, result.Stdout, result.Stderr);
+            } finally { _slots.Release(); }
+        } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested && !ct.IsCancellationRequested) {
+            return new(GitHubCliOutcome.NotStarted, -1, "", "gh runner disposed");
+        }
     }
 
     public static bool ValidHost(string? host) => host is { Length: > 0 and <= 253 } && !host.Contains('/') && Uri.CheckHostName(host) == UriHostNameType.Dns;
@@ -57,5 +69,19 @@ public sealed class GitHubCliRunner(IProcessRunner runner, ILoginShellProbe? she
     public static bool ValidNodeId(string? id) => id is { Length: > 0 and <= 256 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '=' or '-');
     public static bool ValidCursor(string? cursor) => cursor is { Length: > 0 and <= 512 } && cursor.All(c => c is >= '!' and <= '~');
 
-    public void Dispose() => _slots.Dispose();
+    public bool IsStopped => _lifetime.IsCancellationRequested;
+
+    // Kills any gh still running (KillTree) rather than leaving it to outlive the app.
+    public void Dispose() => _lifetime.Cancel();
+
+    /// <summary>Also waits, up to a short cap, for the killed runs: a slot frees only once its gh has exited. Later calls share the first wait.</summary>
+    public ValueTask DisposeAsync() {
+        lock (_quiesceGate) return new(_quiesced ??= QuiesceAsync());
+    }
+
+    // Claims the slots concurrently so the cap bounds the whole wait, not each slot in turn.
+    async Task QuiesceAsync() {
+        _lifetime.Cancel();
+        await Task.WhenAll(Enumerable.Range(0, Slots).Select(_ => _slots.WaitAsync(QuiesceCap))).ConfigureAwait(false);
+    }
 }

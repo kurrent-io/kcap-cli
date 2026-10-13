@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Pty.Unix;
@@ -7,7 +9,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
 /// <summary>What a consumer of <see cref="UnixPtyProcess.ReadOutputAsync"/> relies on, driven
 /// through real PTYs: order, back-pressure, quiet cancellation and disposal.</summary>
 [ParallelLimiter<SubprocessLimit>]
-public class UnixPtyProcessOutputTests {
+public partial class UnixPtyProcessOutputTests {
     static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     [Test]
@@ -98,6 +100,52 @@ public class UnixPtyProcessOutputTests {
 
         await proc.DisposeAsync().AsTask().WaitAsync(Bound);
         await read.WaitAsync(Bound);
+    }
+
+    /// <summary>A signal handled while the reader is parked in <c>poll</c> fails it with EINTR; the
+    /// stream must carry on to the child's own output instead of ending early. Linux only: the
+    /// reader is found by its thread name and signalled alone, which macOS has no way to do.
+    /// Exclusive because the handler is process-wide and every reader shares the thread name.</summary>
+    [Test, NotInParallel]
+    public async Task A_signal_interrupting_the_reader_does_not_end_the_stream() {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var handler = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, _ => { });
+        using var spawner = new UnixSpawnerThread();
+        var       proc    = Spawn(spawner, "/bin/sh", "-c", "sleep 2; echo done");
+        try {
+            var read      = ReadToEndAsync(proc);
+            var signalled = 0;
+            var until     = DateTime.UtcNow + TimeSpan.FromSeconds(1.5);
+
+            while (DateTime.UtcNow < until && !read.IsCompleted) {
+                foreach (var tid in ReaderThreadIds()) {
+                    if (Native.tgkill(Environment.ProcessId, tid, LinuxSigwinch) == 0) signalled++;
+                }
+
+                await Task.Delay(10);
+            }
+
+            var output = await read.WaitAsync(Bound);
+
+            await Assert.That(signalled).IsGreaterThan(0);
+            await Assert.That(Encoding.ASCII.GetString(output)).Contains("done");
+        } finally {
+            await proc.DisposeAsync();
+        }
+    }
+
+    const int LinuxSigwinch = 28;
+
+    // The kernel keeps 15 characters of a thread name, which cuts "kcap-pty-reader-{pid}" to this.
+    static IEnumerable<int> ReaderThreadIds() =>
+        Directory.EnumerateDirectories("/proc/self/task")
+            .Where(task => File.ReadAllText(Path.Combine(task, "comm")).Trim() == "kcap-pty-reader")
+            .Select(task => int.Parse(Path.GetFileName(task), CultureInfo.InvariantCulture));
+
+    static partial class Native {
+        [LibraryImport("libc", SetLastError = true)]
+        internal static partial int tgkill(int tgid, int tid, int sig);
     }
 
     static IPtyProcess Spawn(UnixSpawnerThread spawner, string command, params string[] args)

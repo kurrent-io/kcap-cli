@@ -11,7 +11,7 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task A_requested_start_lists_what_the_server_used() {
-        var (text, isError) = StartAgentTool.Render(200, Requested);
+        var (text, isError) = StartAgentTool.Render(200, Requested, "wi:item");
 
         await Assert.That(isError).IsFalse();
         await Assert.That(text).StartsWith("status: requested\n");
@@ -26,7 +26,7 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task A_requested_start_promises_an_attempt_and_claims_no_attachment() {
-        var (text, _) = StartAgentTool.Render(200, Requested);
+        var (text, _) = StartAgentTool.Render(200, Requested, "wi:item");
 
         await Assert.That(text).Contains("work_item: 9d35573ceee554d58c1bbc909fe7d099 (named)");
         await Assert.That(text).Contains("will be attempted");
@@ -39,7 +39,7 @@ public class StartAgentRenderTests {
         var (text, isError) = StartAgentTool.Render(200, """
             {"status":"requested","agent_id":"a1b2c3d4","url":"u","daemon":"d","repo_path":"/r","vendor":"claude","model":"default",
              "work_item":{"id":null,"reason":"requester_has_no_item"}}
-            """);
+            """, "requester");
 
         await Assert.That(isError).IsFalse();
         await Assert.That(text).Contains("work_item: none (requester_has_no_item)\n");
@@ -50,8 +50,8 @@ public class StartAgentRenderTests {
     [Arguments("not json")]
     [Arguments("{}")]
     [Arguments("[]")]
-    public async Task An_accepted_start_with_an_unreadable_answer_says_an_agent_was_most_likely_started(string body) {
-        var (text, isError) = StartAgentTool.Render(200, body);
+    public async Task An_accepted_start_with_an_unreadable_answer_reports_uncertainty(string body) {
+        var (text, isError) = StartAgentTool.Render(200, body, "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo(StartAgentTool.UnreadableAnswer);
@@ -75,7 +75,7 @@ public class StartAgentRenderTests {
     [Arguments(409, "daemon_changed")]
     [Arguments(503, "start_not_recorded")]
     public async Task A_coded_refusal_is_the_servers_message_and_nothing_else(int status, string code) {
-        var (text, isError) = StartAgentTool.Render(status, $$"""{"error":"{{code}}","message":"The server's own words."}""");
+        var (text, isError) = StartAgentTool.Render(status, $$"""{"error":"{{code}}","message":"The server's own words."}""", "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo($"Error ({code}): The server's own words.");
@@ -83,10 +83,10 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task A_refusal_shows_the_details_the_server_sent() {
-        var ambiguous = StartAgentTool.Render(409, """{"error":"ambiguous_daemon","message":"Several daemons run here.","daemons":["mac-studio","mac-studio-2"]}""").Text;
-        var vendor    = StartAgentTool.Render(409, """{"error":"vendor_unavailable","message":"m","vendors":["claude","codex"]}""").Text;
-        var capacity  = StartAgentTool.Render(409, """{"error":"daemon_at_capacity","message":"m","active":4,"max":4}""").Text;
-        var limit     = StartAgentTool.Render(409, """{"error":"start_limit_reached","message":"m","limit":15}""").Text;
+        var ambiguous = StartAgentTool.Render(409, """{"error":"ambiguous_daemon","message":"Several daemons run here.","daemons":["mac-studio","mac-studio-2"]}""", "none").Text;
+        var vendor    = StartAgentTool.Render(409, """{"error":"vendor_unavailable","message":"m","vendors":["claude","codex"]}""", "none").Text;
+        var capacity  = StartAgentTool.Render(409, """{"error":"daemon_at_capacity","message":"m","active":4,"max":4}""", "none").Text;
+        var limit     = StartAgentTool.Render(409, """{"error":"start_limit_reached","message":"m","limit":15}""", "none").Text;
 
         await Assert.That(ambiguous).IsEqualTo("Error (ambiguous_daemon): Several daemons run here.\ndaemons: mac-studio, mac-studio-2");
         await Assert.That(vendor).IsEqualTo("Error (vendor_unavailable): m\nvendors: claude, codex");
@@ -96,7 +96,7 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task A_code_without_a_message_is_still_a_refusal() {
-        var (text, isError) = StartAgentTool.Render(409, """{"error":"daemon_changed"}""");
+        var (text, isError) = StartAgentTool.Render(409, """{"error":"daemon_changed"}""", "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo("Error (daemon_changed)");
@@ -107,7 +107,7 @@ public class StartAgentRenderTests {
     [Test]
     public async Task A_send_that_threw_is_relayed_in_the_servers_words() {
         var (text, isError) = StartAgentTool.Render(502,
-            """{"error":"failed","message":"The launch command could not be confirmed as sent. The agent may or may not have started."}""");
+            """{"error":"failed","message":"The launch command could not be confirmed as sent. The agent may or may not have started."}""", "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo(
@@ -117,7 +117,7 @@ public class StartAgentRenderTests {
     [Test]
     public async Task A_record_that_was_not_written_is_relayed_as_nothing_sent() {
         var (text, isError) = StartAgentTool.Render(503,
-            """{"error":"start_not_recorded","message":"The start could not be recorded, so nothing was sent. Try again."}""");
+            """{"error":"start_not_recorded","message":"The start could not be recorded, so nothing was sent. Try again."}""", "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo("Error (start_not_recorded): The start could not be recorded, so nothing was sent. Try again.");
@@ -125,7 +125,7 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task An_uncoded_server_error_is_shown_as_sent_with_the_outcome_unknown() {
-        var (text, isError) = StartAgentTool.Render(500, "upstream exploded");
+        var (text, isError) = StartAgentTool.Render(500, "upstream exploded", "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo("Error: HTTP 500 — upstream exploded\n" + StartAgentTool.OutcomeUnknown);
@@ -133,7 +133,7 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task An_uncoded_400_is_shown_as_the_server_sent_it() {
-        var (text, isError) = StartAgentTool.Render(400, """{"title":"Bad Request","status":400}""");
+        var (text, isError) = StartAgentTool.Render(400, """{"title":"Bad Request","status":400}""", "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo("""Error: HTTP 400 — {"title":"Bad Request","status":400}""");
@@ -148,7 +148,7 @@ public class StartAgentRenderTests {
     [Arguments(404, "Not Found")]
     [Arguments(404, """{"title":"Not Found","status":404}""")]
     public async Task An_uncoded_404_or_405_means_the_server_cannot_start_agents(int status, string body) {
-        var (text, isError) = StartAgentTool.Render(status, body);
+        var (text, isError) = StartAgentTool.Render(status, body, "none");
 
         await Assert.That(isError).IsTrue();
         await Assert.That(text).IsEqualTo(StartAgentTool.ServerCannotStartAgents);
@@ -156,7 +156,7 @@ public class StartAgentRenderTests {
 
     [Test]
     public async Task A_404_with_a_code_is_a_refusal_and_is_relayed() {
-        var (text, _) = StartAgentTool.Render(404, """{"error":"session_not_found","message":"No such session."}""");
+        var (text, _) = StartAgentTool.Render(404, """{"error":"session_not_found","message":"No such session."}""", "none");
 
         await Assert.That(text).IsEqualTo("Error (session_not_found): No such session.");
         await Assert.That(text).DoesNotContain("cannot start agents");

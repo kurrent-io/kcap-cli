@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
@@ -127,5 +128,81 @@ public class StatusCommandHooksTests {
         var line = StatusCommand.BuildHooksStatusLine([(HarnessId.Claude, true)]);
 
         await Assert.That(line).IsEqualTo("Claude ✓");
+    }
+
+    static readonly DateTimeOffset Now = new(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>Configured is not recording: a wired agent that never ran a hook says what to do next,
+    /// and Codex, which runs no hook until trusted, says so too.</summary>
+    [Test]
+    public async Task RecordingLine_tells_a_wired_but_silent_agent_what_to_do() {
+        await Assert.That(StatusCommand.RecordingLine(HarnessId.Claude, "Claude Code", null, Now))
+            .IsEqualTo("Claude Code: no hook event yet. Start a new Claude Code session");
+        await Assert.That(StatusCommand.RecordingLine(HarnessId.Codex, "Codex", null, Now)).Contains("trust the kcap hooks");
+    }
+
+    [Test]
+    [Arguments(0, "just now")]
+    [Arguments(5, "5m ago")]
+    [Arguments(180, "3h ago")]
+    [Arguments(4320, "3d ago")]
+    public async Task RecordingLine_reports_how_long_ago_the_last_hook_ran(int minutesAgo, string expected) {
+        var line = StatusCommand.RecordingLine(HarnessId.Claude, "Claude Code", Now.AddMinutes(-minutesAgo), Now);
+
+        await Assert.That(line).IsEqualTo($"Claude Code: hooks running, last hook event {expected}");
+    }
+
+    [Test]
+    public async Task GitHookWarning_names_only_a_git_known_to_be_too_old() {
+        await Assert.That(StatusCommand.GitHookWarning(new Version(2, 50, 1))).Contains("ignores kcap's commit hook");
+        await Assert.That(StatusCommand.GitHookWarning(new Version(2, 54, 0))).IsNull();
+        await Assert.That(StatusCommand.GitHookWarning(null)).IsNull();
+    }
+
+    static VendorAccount Account(HarnessId vendor, string dir) =>
+        new(dir, vendor, dir, Path.GetFileName(dir), DateTimeOffset.UnixEpoch);
+
+    static string DefaultOf(HarnessId vendor) => vendor is HarnessId.Claude ? "/h/.claude" : "/h/.codex";
+
+    [Test]
+    public async Task Account_lines_are_omitted_for_a_single_default_per_vendor() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
+            (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Recording),
+        ], DefaultOf);
+
+        await Assert.That(line).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Account_lines_show_a_lone_account_outside_the_default_directory() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Recording),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains(".claude-work");
+    }
+
+    [Test]
+    public async Task Account_lines_list_each_account_with_its_state() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
+            (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Broken),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains(".claude-work");
+        await Assert.That(line).Contains("broken — run kcap accounts rewire");
+        await Assert.That(line).Contains("recording");
+    }
+
+    [Test]
+    public async Task Account_lines_share_the_accounts_command_wording_for_a_wired_codex_account() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Installed),
+            (Account(HarnessId.Codex, "/h/.codex-work"), RecordingState.NotWired),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains("hooks installed (trust in Codex)");
+        await Assert.That(line).Contains("not wired");
     }
 }

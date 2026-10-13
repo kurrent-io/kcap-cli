@@ -33,17 +33,17 @@ public class RemoteSessionViewSmokeTests {
         public readonly RemoteSessionView View;
         public readonly Window Window;
 
-        public Host() {
+        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1") {
             _access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
             var row = AgentRow.FromRemote(new AgentInstanceDto {
-                AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac",
+                AgentId = "a1", SessionId = sessionId, Status = "Running", DaemonName = "work-mac",
                 Vendor = "claude", OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
             _directory.Rows.AddOrUpdate(row);
             Vm = new RemoteSessionViewModel(row, _directory, _access, Permissions, NewActions(), Lane,
                 (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time,
-                () => new FakeTerminalSurface());
+                () => new FakeTerminalSurface(), planArtifacts);
             View = new RemoteSessionView { DataContext = Vm };
             Window = new Window { Content = View, Width = 900, Height = 700 };
             Window.Show();
@@ -144,6 +144,31 @@ public class RemoteSessionViewSmokeTests {
             var keys = host.View.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("specialKey")).Select(b => b.Content as string).ToList();
             await Assert.That(keys).Contains("Esc");
             await Assert.That(keys).Contains("Ctrl+C");
+
+            await host.Vm.TeardownAsync();
+            return true;
+        });
+    }
+
+    [Test]
+    public async Task The_artefacts_tab_hosts_the_list_and_reader_and_open_in_web_is_an_icon() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var source = new FakePlanArtifactSource();
+            source.Default = Ready(Doc("docs/x-design.md"));
+            using var host = new Host(source, DocumentSession);
+            await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+            await (host.Vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            host.Settle();
+            var tab = host.View.FindControl<Button>("ArtefactsTabButton")!;
+            await Assert.That(tab.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.View.FindControl<ContentControl>("ArtefactsPane")!.Content).IsNull();
+
+            await host.Vm.ShowArtefactsCommand.Execute();
+            host.Settle();
+            await Assert.That(host.View.FindControl<ContentControl>("ArtefactsPane")!.Content).IsTypeOf<ArtefactsView>();
+            var open = host.View.FindControl<Button>("OpenInWebButton")!;
+            await Assert.That(ToolTip.GetTip(open)).IsEqualTo("Open in web");
+            await Assert.That(open.Content).IsNotTypeOf<string>();
 
             await host.Vm.TeardownAsync();
             return true;

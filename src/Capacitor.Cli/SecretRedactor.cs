@@ -50,19 +50,21 @@ public static partial class SecretRedactor {
     public static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine) =>
         RedactLineWithOutcome(rawJsonlLine, TimeProvider.System);
 
-    internal static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine, TimeProvider time) {
+    internal static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine, TimeProvider time) =>
+        RedactLineWithOutcome(rawJsonlLine, new RedactionBudget(time), WatcherPatterns);
+
+    internal static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine, RedactionBudget budget, SecretPatterns patterns) {
         var bytes = Encoding.UTF8.GetByteCount(rawJsonlLine);
         if (bytes > MaxRecordBytes) return Lost(RedactionLossReason.InputLimit);
-        var budget = new RedactionBudget(time);
         try {
             string line;
             RedactionLossReason? loss = null;
             try {
-                line = RedactJsonStringValues(rawJsonlLine, bytes, budget) ?? rawJsonlLine;
+                line = RedactJsonStringValues(rawJsonlLine, bytes, budget, patterns) ?? rawJsonlLine;
             } catch (JsonException) {
                 if (rawJsonlLine.Length > MaxRedactableLineChars)
                     return Lost(RedactionLossReason.MalformedInput);
-                line = WatcherPatterns.RedactSecrets(rawJsonlLine, budget);
+                line = patterns.RedactSecrets(rawJsonlLine, budget);
                 loss = RedactionLossReason.MalformedInput;
             }
             budget.Check();
@@ -89,7 +91,7 @@ public static partial class SecretRedactor {
     public static string? RedactValue(ReadOnlySpan<char> value, bool keyIsSecret) =>
         OutOfProcessPatterns.Value.Redact(value, keyIsSecret, RedactionBudget.Unlimited);
 
-    static string? RedactJsonStringValues(string line, int byteCount, RedactionBudget budget) {
+    static string? RedactJsonStringValues(string line, int byteCount, RedactionBudget budget, SecretPatterns patterns) {
         if (line.Length == 0) return null;
 
         var input = ArrayPool<byte>.Shared.Rent(byteCount);
@@ -97,10 +99,10 @@ public static partial class SecretRedactor {
 
         try {
             Encoding.UTF8.GetBytes(line, input.AsSpan());
-            if (!Rewrite(input.AsSpan(0, byteCount), decoded, null, budget)) return null;
+            if (!Rewrite(input.AsSpan(0, byteCount), decoded, null, budget, patterns)) return null;
             using var output = new BoundedJsonBufferWriter(MaxRecordBytes);
             using var writer = new Utf8JsonWriter(output, WriterOptions);
-            Rewrite(input.AsSpan(0, byteCount), decoded, writer, budget);
+            Rewrite(input.AsSpan(0, byteCount), decoded, writer, budget, patterns);
             return Encoding.UTF8.GetString(output.WrittenMemory.Span);
         } finally {
             ArrayPool<char>.Shared.Return(decoded, clearArray: true);
@@ -109,7 +111,7 @@ public static partial class SecretRedactor {
     }
 
     // Scan first so an unchanged record keeps its original encoding and cannot exceed an output cap.
-    static bool Rewrite(ReadOnlySpan<byte> utf8, Span<char> decoded, Utf8JsonWriter? writer, RedactionBudget budget) {
+    static bool Rewrite(ReadOnlySpan<byte> utf8, Span<char> decoded, Utf8JsonWriter? writer, RedactionBudget budget, SecretPatterns patterns) {
         var reader = new Utf8JsonReader(utf8, ReaderOptions);
 
         var redactedAny = false;
@@ -127,9 +129,9 @@ public static partial class SecretRedactor {
             switch (reader.TokenType) {
                 case JsonTokenType.PropertyName:
                     var name = decoded[..reader.CopyString(decoded)];
-                    keyIsSecret = inSecret || WatcherPatterns.IsSecretKey(name, budget);
+                    keyIsSecret = inSecret || patterns.IsSecretKey(name, budget);
 
-                    if (WatcherPatterns.IsSecretItself(name, budget)) {
+                    if (patterns.IsSecretItself(name, budget)) {
                         writer?.WritePropertyName($"{RedactedMarker}-{++redactedKeys}");
                         redactedAny = true;
                     } else {
@@ -140,7 +142,7 @@ public static partial class SecretRedactor {
 
                 case JsonTokenType.String:
                     var value = decoded[..reader.CopyString(decoded)];
-                    if (WatcherPatterns.Redact(value, keyIsSecret || inSecret, budget) is { } clean) {
+                    if (patterns.Redact(value, keyIsSecret || inSecret, budget) is { } clean) {
                         writer?.WriteStringValue(JsonEncodedText.Encode(clean, WriterOptions.Encoder));
                         redactedAny = true;
                     } else {

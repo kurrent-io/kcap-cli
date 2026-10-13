@@ -86,6 +86,9 @@ public static partial class EvalService {
     /// <summary>The evidence-retrieval route's coverage policy version.</summary>
     public const string EvidenceCoveragePolicyVersion = "coverage-v2";
 
+    /// <summary>The server's evidence-extract route's coverage policy version; the CLI reads it and never produces it.</summary>
+    public const string ExtractCoveragePolicyVersion = "coverage-v3";
+
     // Shared between RunRetrospectiveAsync and the tools-enabled per-question
     // branch of RunQuestionAsync. Built from JudgeMcpServerName so the
     // allowlist prefix can never drift from the server key we register —

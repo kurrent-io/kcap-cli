@@ -295,13 +295,16 @@ public class BrowserFirstRunFlowTests {
 
         public List<DateOnly> Dates { get; } = [];
 
-        /// <summary>What the run reports. Null models a run that lost a pass, whose counts are
-        /// unaccounted rather than zero.</summary>
-        public FirstRunImportTotals? Moved { get; set; } = new(3, 1, 0);
+        /// <summary>What the run reports. <see cref="FirstRunImportResult.Lost"/> models a run that
+        /// lost a pass, whose counts are unaccounted rather than zero.</summary>
+        public FirstRunImportResult Moved { get; set; } = new(new(3, 1, 0));
 
-        public async Task<FirstRunImportTotals?> ImportAsync(
-                FirstRunImportAnswer answer, DateOnly today, CancellationToken ct) {
+        public List<FirstRunAgentsAnswer?> AgentsSeen { get; } = [];
+
+        public async Task<FirstRunImportResult> ImportAsync(
+                FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null) {
             log.Add("import");
+            AgentsSeen.Add(agents);
             Advance?.Invoke();
             Imports.Add(answer);
             Dates.Add(today);
@@ -1501,7 +1504,7 @@ public class BrowserFirstRunFlowTests {
     [Test]
     public async Task Reports_what_the_run_moved_against_the_decision_that_ran() {
         var h = Build(importing: true);
-        h.Importing!.Moved = new FirstRunImportTotals(7, 2, 1);
+        h.Importing!.Moved = new FirstRunImportResult(new(7, 2, 1));
         h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
         h.Channel.Polls.Enqueue(new(200, Done()));
 
@@ -1597,7 +1600,7 @@ public class BrowserFirstRunFlowTests {
     [Test]
     public async Task Reports_a_token_and_no_figures_for_a_run_that_lost_a_pass() {
         var h = Build(importing: true);
-        h.Importing!.Moved = null;
+        h.Importing!.Moved = FirstRunImportResult.Lost;
         h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
         h.Channel.Polls.Enqueue(new(200, Done()));
 
@@ -1610,6 +1613,83 @@ public class BrowserFirstRunFlowTests {
         await Assert.That(sent.Reason).IsEqualTo("run_failed");
         await Assert.That((sent.Imported, sent.Skipped, sent.Failed)).IsEqualTo((0, 0, 0))
                     .Because("a partial tally would put a measured-looking zero where nobody measured");
+    }
+
+    [Test]
+    public async Task The_outcome_carries_background_and_prompt() {
+        const string prompt = "Follow my kcap import\n(run: 0123)";
+
+        var h = Build(importing: true);
+        h.Importing!.Moved = new FirstRunImportResult(new(1, 0, 0), "running", 4, prompt);
+        h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
+        h.Channel.Polls.Enqueue(new(200, Done()));
+
+        await Run(h);
+
+        var sent = h.Channel.OutcomeReports.Single();
+
+        await Assert.That((sent.Imported, sent.Skipped, sent.Failed)).IsEqualTo((1, 0, 0));
+        await Assert.That(sent.Background).IsEqualTo("running");
+        await Assert.That(sent.BackgroundRemaining).IsEqualTo(4);
+        await Assert.That(sent.HandoffPrompt).IsEqualTo(prompt);
+        await Assert.That(sent.HandoffSuppressed).IsNull();
+    }
+
+    [Test]
+    public async Task The_import_is_told_which_harnesses_the_agents_answer_installs() {
+        var h = Build(importing: true);
+        h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
+        h.Channel.Polls.Enqueue(new(200, Done()));
+
+        await Run(h);
+
+        var agents = h.Importing!.AgentsSeen.Single();
+
+        await Assert.That(agents).IsNotNull();
+        await Assert.That(agents!.Records(HarnessId.Claude)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_run_failed_outcome_still_carries_background() {
+        var h = Build(importing: true);
+        h.Importing!.Moved = new FirstRunImportResult(null, "running", 9, HandoffSuppressed: "import_failed");
+        h.Channel.Polls.Enqueue(new(200, ImportAnswered()));
+        h.Channel.Polls.Enqueue(new(200, Done()));
+
+        await Run(h);
+
+        var sent = h.Channel.OutcomeReports.Single();
+
+        await Assert.That(sent.Reason).IsEqualTo("run_failed");
+        await Assert.That((sent.Imported, sent.Skipped, sent.Failed)).IsEqualTo((0, 0, 0));
+        await Assert.That(sent.Background).IsEqualTo("running");
+        await Assert.That(sent.BackgroundRemaining).IsEqualTo(9);
+        await Assert.That(sent.HandoffSuppressed).IsEqualTo("import_failed");
+    }
+
+    /// <summary>Pins the wire as additive: an older server must see exactly the fields it already knows
+    /// when none of the new ones is set.</summary>
+    [Test]
+    public async Task Outcome_json_carries_new_fields_only_when_set() {
+        var bare = new ReportFirstRunImportOutcomeRequest {
+            DecidedAt = Decided, Imported = 1, Skipped = 0, Failed = 0
+        };
+
+        var bareJson = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+            bare, CapacitorJsonContext.Default.ReportFirstRunImportOutcomeRequest))!.AsObject();
+
+        await Assert.That(bareJson.Select(p => p.Key).Order(StringComparer.Ordinal).ToArray())
+                    .IsEquivalentTo(new[] { "decided_at", "failed", "imported", "reason", "skipped" });
+
+        var full = bare with { Background = "running", BackgroundRemaining = 4, HandoffSuppressed = "no_new_sessions" };
+
+        var fullJson = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+            full, CapacitorJsonContext.Default.ReportFirstRunImportOutcomeRequest))!.AsObject();
+
+        await Assert.That(fullJson["background"]!.GetValue<string>()).IsEqualTo("running");
+        await Assert.That(fullJson["background_remaining"]!.GetValue<int>()).IsEqualTo(4);
+        await Assert.That(fullJson["handoff_suppressed"]!.GetValue<string>()).IsEqualTo("no_new_sessions");
+        await Assert.That(fullJson.ContainsKey("handoff_prompt")).IsFalse();
     }
 
     [Test]

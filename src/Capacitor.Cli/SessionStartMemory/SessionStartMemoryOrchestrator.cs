@@ -23,10 +23,8 @@ internal sealed class SessionStartMemoryOrchestrator(
     public async Task<string?> GetFragmentAsync(SessionMemoryLifecycle lifecycle,
         SessionStartMemoryContextRequest request,
         Func<CancellationToken, Task<bool>>? commitGate = null) {
-        // Both lanes disabled ⇒ no lease is spent, so a flag flipped on mid-session can still
-        // inject on a later callback (the disabled-lane disposition rule). A single disabled lane does NOT short-circuit
-        // here — the composite provider runs the enabled lane and contributes its content.
-        if (request.Disabled && request.GuidelinesDisabled) return null;
+        // Every lane off spends no lease, so a lane switched on mid-session can still inject on a later callback.
+        if (request.AllLanesDisabled) return null;
 
         var started = time.GetTimestamp();
         TimeSpan Remaining() {

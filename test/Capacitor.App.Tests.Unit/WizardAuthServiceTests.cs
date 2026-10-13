@@ -83,9 +83,9 @@ public class WizardAuthServiceTests {
         var gate = new TaskCompletionSource<AuthResult>();
         var service = new WizardAuthService((_, _) => gate.Task);
 
-        var attempt = service.Begin(new ConnectIntent.Create());
+        var attempt = service.Begin(new ConnectIntent.Discover(ForceDevice: true));
 
-        Assert.Throws<InvalidOperationException>(() => service.Begin(new ConnectIntent.Create()));
+        Assert.Throws<InvalidOperationException>(() => service.Begin(new ConnectIntent.Discover(ForceDevice: true)));
 
         gate.SetResult(Committed(Acme));
         await attempt.Result.WaitAsync(TimeSpan.FromSeconds(5));
@@ -100,7 +100,7 @@ public class WizardAuthServiceTests {
             return starts == 1 ? gate.Task : Task.FromResult<AuthResult>(Committed(Work));
         });
 
-        var first = service.Begin(new ConnectIntent.Create());
+        var first = service.Begin(new ConnectIntent.Discover(ForceDevice: true));
         gate.SetResult(new AuthResult.Failed("nope"));
         await first.Result.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -174,7 +174,7 @@ public class WizardAuthServiceTests {
 
         SetWritable(dir, false);
         try {
-            var result = await service.Begin(new ConnectIntent.Create()).Result.WaitAsync(TimeSpan.FromSeconds(5));
+            var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result.WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(result).IsTypeOf<AuthResult.Failed>();
             await Assert.That(((AuthResult.Failed)result).Message).IsEqualTo("claim_arm_failed");
@@ -195,7 +195,7 @@ public class WizardAuthServiceTests {
         var service = new WizardAuthService(
             (_, ct) => ScriptedCommitAsync(WizardAuthService.ArmingHook(claims), [Acme], () => { }, ct));
 
-        var result = await service.Begin(new ConnectIntent.Create()).Result.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result.WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
         await Assert.That(claims.Pending()).IsEquivalentTo([new ConsentFlipClaim(Acme.Profile, Acme.CanonicalServer)]);
@@ -213,7 +213,7 @@ public class WizardAuthServiceTests {
             return Committed(Acme);
         });
 
-        var attempt = service.Begin(new ConnectIntent.Create());
+        var attempt = service.Begin(new ConnectIntent.Discover(ForceDevice: true));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         attempt.Cancel();
 
@@ -234,7 +234,7 @@ public class WizardAuthServiceTests {
             return Committed(Acme);
         });
 
-        var attempt = service.Begin(new ConnectIntent.Create());
+        var attempt = service.Begin(new ConnectIntent.Discover(ForceDevice: true));
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         attempt.Cancel();
 
@@ -246,7 +246,7 @@ public class WizardAuthServiceTests {
         var gate = new TaskCompletionSource<AuthResult>();
         var service = new WizardAuthService((_, _) => gate.Task);
 
-        service.Begin(new ConnectIntent.Create());
+        service.Begin(new ConnectIntent.Discover(ForceDevice: true));
         var quiesced = service.QuiescedAsync();
 
         await Assert.That(quiesced.IsCompleted).IsFalse();
@@ -261,7 +261,7 @@ public class WizardAuthServiceTests {
     public async Task An_operation_that_throws_is_reported_as_failed() {
         var service = new WizardAuthService((_, _) => throw new InvalidOperationException("boom"));
 
-        var result = await service.Begin(new ConnectIntent.Create()).Result.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result.WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(((AuthResult.Failed)result).Message).IsEqualTo("boom");
@@ -271,7 +271,7 @@ public class WizardAuthServiceTests {
     public async Task Cancelling_a_settled_attempt_is_a_no_op() {
         var service = new WizardAuthService((_, _) => Task.FromResult<AuthResult>(Committed(Acme)));
 
-        var attempt = service.Begin(new ConnectIntent.Create());
+        var attempt = service.Begin(new ConnectIntent.Discover(ForceDevice: true));
         await attempt.Result.WaitAsync(TimeSpan.FromSeconds(5));
         attempt.Cancel();
 

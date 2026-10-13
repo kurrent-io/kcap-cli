@@ -37,7 +37,7 @@ internal sealed class PolicyDecisionEmitter(ConfigRoot config, TimeProvider time
             CapacitorJsonContext.Default.PolicySnapshotUploadV1);
         // The marker may only be written once the append actually persisted, or a failed write would
         // suppress every later attempt and leave the decisions unresolvable.
-        if (!spool.Append(sessionId, "policy-snapshot", body)) return;
+        if (!spool.Append(sessionId, HookSpool.PolicySnapshotRoute, body)) return;
         Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
         File.WriteAllText(marker, "");
     }

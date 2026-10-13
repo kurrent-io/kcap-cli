@@ -13,7 +13,7 @@ using Capacitor.Cli.Core.WorkItems;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// MCP tools for publishing artefacts — a self-contained HTML page the server hosts and hands back a
+/// MCP tools for publishing pages — a self-contained HTML page the server hosts and hands back a
 /// link to — and for waiting on the answers people give one.
 ///
 /// <para>The tool list is deliberately narrow. An agent's context pays for every schema it carries
@@ -69,7 +69,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
                 // paths from IO errors) and return a generic tool error, keeping the loop alive.
-                await Console.Error.WriteLineAsync($"kcap mcp artefacts: unexpected error handling tools/call: {ex}");
+                await Console.Error.WriteLineAsync($"kcap mcp pages: unexpected error handling tools/call: {ex}");
                 return BuildToolResult(callId, "Error: internal error handling the request.", isError: true);
             }
         }
@@ -86,7 +86,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 ok = McpTelemetry.ResponseOk(response);
                 return response;
             } finally {
-                mcp.ToolCalled("kcap-artefacts", tool, ok, CommandTiming.ElapsedMs(start, time));
+                mcp.ToolCalled("kcap-pages", tool, ok, CommandTiming.ElapsedMs(start, time));
             }
         }
 
@@ -141,16 +141,16 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         "Use these tools to publish a self-contained HTML page and get a shareable link back — a plan, " +
         "a report, a comparison, anything a person would rather read as a page than as terminal output. " +
         "The page is served under a sandbox that cannot reach the network: inline every style, script " +
-        "and image as a data URI, because an external URL will silently render as nothing. An artefact " +
+        "and image as a data URI, because an external URL will silently render as nothing. A page " +
         "is private to its owner until you say otherwise, so pass visibility (and grants, under " +
         "'scoped') when you mean other people to open it. Publishing a revision of something you " +
-        "already published is publish_artefact with update_id — it keeps the same URL, so a link you " +
+        "already published is publish_page with update_id — it keeps the same URL, so a link you " +
         "already gave someone stays good.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
             id,
-            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-artefacts", "1.0.0"), ServerInstructions),
+            new(McpProtocol.NegotiateVersion(request), new(new()), new("kcap-pages", "1.0.0"), ServerInstructions),
             McpJsonContext.Default.McpInitResult
         );
 
@@ -175,25 +175,25 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         // it had — never because this side gave up first and left the agent unable to tell a
         // timeout from a lost answer.
         using var budget = new CancellationTokenSource(
-            toolName == "await_artefact_responses" ? ClientWaitBudget : RequestBudget, time);
+            toolName == "await_page_responses" ? ClientWaitBudget : RequestBudget, time);
 
         var ct = budget.Token;
 
         try {
             using var httpResponse = toolName switch {
-                "publish_artefact" => await PublishAsync(client, baseUrl, arguments, ct),
+                "publish_page" => await PublishAsync(client, baseUrl, arguments, ct),
 
-                "list_my_artefacts" => await client.GetAsync($"{baseUrl}/api/artefacts", ct),
+                "list_my_pages" => await client.GetAsync($"{baseUrl}/api/artefacts", ct),
 
-                "set_artefact_visibility" => await client.PutAsync(
+                "set_page_visibility" => await client.PutAsync(
                     ArtefactUrl(baseUrl, arguments, "visibility"), ToJsonContent(BuildVisibilityBody(arguments)), ct),
 
-                "await_artefact_responses" => await client.GetAsync(WaitUrl(baseUrl, arguments), ct),
+                "await_page_responses" => await client.GetAsync(WaitUrl(baseUrl, arguments), ct),
 
-                "get_artefact_results" => await client.GetAsync(
+                "get_page_results" => await client.GetAsync(
                     $"{ArtefactUrl(baseUrl, arguments, "results")}{VersionQuery(arguments)}", ct),
 
-                "close_artefact_responses" => await client.PostAsync(
+                "close_page_responses" => await client.PostAsync(
                     ArtefactUrl(baseUrl, arguments, "responses/close"), ToJsonContent(BuildCloseBody(arguments)), ct),
 
                 _ => throw new ArgumentException($"Unknown tool: {toolName}")
@@ -209,18 +209,18 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
             // them apart on purpose (see IArtefactsApi), and "not found" over a 403 would send an
             // agent off re-publishing something that already exists.
             if (httpResponse.StatusCode == HttpStatusCode.Forbidden) {
-                return BuildToolResult(id, "Error: that artefact is not yours to change.", isError: true);
+                return BuildToolResult(id, "Error: that page is not yours to change.", isError: true);
             }
 
             if (httpResponse.StatusCode == HttpStatusCode.NotFound) {
-                return BuildToolResult(id, "Error: no such artefact, or it is not visible to this profile.", isError: true);
+                return BuildToolResult(id, "Error: no such page, or it is not visible to this profile.", isError: true);
             }
 
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            return BuildToolResult(id, body);
+            return BuildToolResult(id, PageResultKeys.Rename(body));
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -241,9 +241,9 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     }
 
     /// <summary>
-    /// A publish is either a new artefact or a new version of one, chosen by <c>update_id</c>.
+    /// A publish is either a new page or a new version of one, chosen by <c>update_id</c>.
     ///
-    /// <para>An <c>update_id</c> that is present must name an artefact: falling back to a create
+    /// <para>An <c>update_id</c> that is present must name a page: falling back to a create
     /// would hand the agent a second page and a second URL while it believes it revised the
     /// first. A version carries content and its own response schema only, so an audience passed
     /// alongside is refused rather than dropped.</para>
@@ -255,7 +255,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         if (args["visibility"] is not null || args["grants"] is not null)
             throw new ArgumentException(
-                "'visibility' and 'grants' are not read with 'update_id' — change the audience with set_artefact_visibility.");
+                "'visibility' and 'grants' are not read with 'update_id' — change the audience with set_page_visibility.");
 
         var body = new JsonObject { ["html"] = html };
 
@@ -311,7 +311,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         if (ReadResponseSchema(args) is { } schema) body["response_schema"] = schema;
 
-        // The session is cited without being asked for: an artefact published mid-session belongs
+        // The session is cited without being asked for: a page published mid-session belongs
         // with the session that produced it, and an agent that has to remember to say so mostly
         // won't. An explicit session_ids wins when the caller means a different set.
         if (ReadSessions(args) is { } sessions) body["sources"] = sessions;
@@ -342,7 +342,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// <summary>
     /// Reads the <c>grants</c> argument into the server's wire shape. Returns null when the caller
     /// did not supply the key at all — absence means "leave the audience to the visibility tier",
-    /// while an explicit empty array means "this artefact is granted to nobody", and the two must
+    /// while an explicit empty array means "this page is granted to nobody", and the two must
     /// not collapse into each other.
     /// </summary>
     internal static JsonArray? ReadGrants(JsonObject? args) {
@@ -397,14 +397,14 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         return result;
     }
 
-    /// <summary>Builds an artefact-scoped URL from a REQUIRED id. There is no ambient artefact to
+    /// <summary>Builds an artefact-scoped URL from a REQUIRED id. There is no ambient page to
     /// fall back to, and a default here would change the audience of the wrong page.</summary>
-    internal static string ArtefactUrl(string baseUrl, JsonObject? args, string suffix, string idKey = "artefact_id") {
+    internal static string ArtefactUrl(string baseUrl, JsonObject? args, string suffix, string idKey = "page_id") {
         var id = McpToolArguments.RequireString(args, idKey);
 
         // Escaping alone leaves "." and ".." to walk out of the route.
         if (id is "." or ".." || id.Contains('/') || id.Contains('\\'))
-            throw new ArgumentException($"'{idKey}' is not a valid artefact id.");
+            throw new ArgumentException($"'{idKey}' is not a valid page id.");
 
         return $"{baseUrl}/api/artefacts/{Escape(id)}/{suffix}";
     }
@@ -499,23 +499,23 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     }
 
     internal static McpTool[] BuildToolsList() => [
-        new("publish_artefact",
+        new("publish_page",
             "Publish a self-contained HTML page and get back a link anyone you grant access to can open. "
           + "The page runs sandboxed with no network access, so inline every style, script and image as a "
           + "data URI. Pass the page as 'html' or name a local file with 'path'. It is private to you "
-          + "unless you set visibility. Use update_id to publish a revision of an artefact you already "
+          + "unless you set visibility. Use update_id to publish a revision of a page you already "
           + "published — the URL stays the same.",
             new("object", new() {
-                ["title"]       = new("string", "What this artefact is called, shown in listings and in the browser tab."),
+                ["title"]       = new("string", "What this page is called, shown in listings and in the browser tab."),
                 ["html"]        = new("string", "The complete page. Use this or 'path', not both."),
                 ["path"]        = new("string", "A local HTML file to publish instead of inline 'html'."),
-                ["description"] = new("string", "One line saying what the artefact is for."),
+                ["description"] = new("string", "One line saying what the page is for."),
                 ["visibility"]  = new("string", "Who may open it: 'none' (only you, the default), 'org' (anyone in the organization), or 'scoped' (only the grants below)."),
                 ["grants"]      = new("array", "Under 'scoped', who may open it.",
                                       new("object", "One audience member: grant_type ('user', 'team' or 'project'), grantee_id, and an optional grantee_name.")),
-                ["session_ids"] = new("array", "Sessions this artefact came out of. Defaults to the current kcap-hooked session when omitted.",
+                ["session_ids"] = new("array", "Sessions this page came out of. Defaults to the current kcap-hooked session when omitted.",
                                       new("string", "A session id.")),
-                ["update_id"]   = new("string", "Publish a new version of this existing artefact instead of creating one. The URL does not change."),
+                ["update_id"]   = new("string", "Publish a new version of this existing page instead of creating one. The URL does not change."),
                 ["response_schema"] = new("object",
                     "Makes the page answerable. Declare the fields people may submit — each with an id and a type "
                   + "of 'choice' (one of options), 'multi' (any of options), 'score' (min..max) or 'text' — and the "
@@ -525,49 +525,49 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                   + "are an opaque blob only you can read.")
             }, ["title"]), McpToolAnnotations.Additive),
 
-        new("list_my_artefacts",
-            "List the artefacts you can see, newest change first — id, title, audience, latest version and URL.",
+        new("list_my_pages",
+            "List the pages you can see, newest change first — id, title, audience, latest version and URL.",
             new("object", new(), []), McpToolAnnotations.Read),
 
-        new("await_artefact_responses",
-            "Wait for people to answer an artefact you published, then read what they said. Blocks until "
+        new("await_page_responses",
+            "Wait for people to answer a page you published, then read what they said. Blocks until "
           + "min_respondents distinct people have answered the version, or you close it, or the timeout "
           + "elapses — a timeout is not an error, it returns what there is so far. This is the human "
           + "checkpoint: publish a plan or a decision, share it, then wait here for the answer.",
             new("object", new() {
-                ["artefact_id"]     = new("string", "The artefact to wait on."),
+                ["page_id"]         = new("string", "The page to wait on."),
                 ["version"]         = new("integer", "Which version's answers to wait for. Defaults to the latest."),
                 ["min_respondents"] = new("integer", "How many distinct people must have answered before this returns. Defaults to 1."),
                 ["timeout_s"]       = new("integer", "How long to wait, in seconds. Defaults to 300; the server caps one wait at 1500 and you may call again.")
-            }, ["artefact_id"]), McpToolAnnotations.Read),
+            }, ["page_id"]), McpToolAnnotations.Read),
 
-        new("get_artefact_results",
-            "Read an artefact's answers without waiting: per-field tallies, and each person's current "
+        new("get_page_results",
+            "Read a page's answers without waiting: per-field tallies, and each person's current "
           + "answer with their name. Every submit is kept, but this shows the latest per person — "
           + "someone who changed their mind counts once.",
             new("object", new() {
-                ["artefact_id"] = new("string", "The artefact to read."),
+                ["page_id"] = new("string", "The page to read."),
                 ["version"]     = new("integer", "Which version's answers to read. Defaults to the latest.")
-            }, ["artefact_id"]), McpToolAnnotations.Read),
+            }, ["page_id"]), McpToolAnnotations.Read),
 
-        new("close_artefact_responses",
+        new("close_page_responses",
             "Close a version to further answers, freezing its results. Reversible: pass closed=false to "
           + "reopen, which also clears any deadline that was set. Closing also releases anyone blocked "
-          + "in await_artefact_responses.",
+          + "in await_page_responses.",
             new("object", new() {
-                ["artefact_id"] = new("string", "The artefact to close."),
+                ["page_id"] = new("string", "The page to close."),
                 ["version"]     = new("integer", "Which version to close."),
                 ["closed"]      = new("boolean", "false reopens. Defaults to true.")
-            }, ["artefact_id", "version"]), McpToolAnnotations.Upsert),
+            }, ["page_id", "version"]), McpToolAnnotations.Upsert),
 
-        new("set_artefact_visibility",
-            "Change who may open an artefact. This replaces the whole audience: a grant left out is one "
+        new("set_page_visibility",
+            "Change who may open a page. This replaces the whole audience: a grant left out is one "
           + "being taken away.",
             new("object", new() {
-                ["artefact_id"] = new("string", "The artefact whose audience to change."),
+                ["page_id"] = new("string", "The page whose audience to change."),
                 ["visibility"]  = new("string", "'none' (only you), 'org' (anyone in the organization), or 'scoped' (only the grants below)."),
                 ["grants"]      = new("array", "Under 'scoped', the complete list of who may open it.",
                                       new("object", "One audience member: grant_type ('user', 'team' or 'project'), grantee_id, and an optional grantee_name."))
-            }, ["artefact_id", "visibility"]), McpToolAnnotations.Destructive)
+            }, ["page_id", "visibility"]), McpToolAnnotations.Destructive)
     ];
 }

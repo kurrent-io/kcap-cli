@@ -131,6 +131,11 @@ internal sealed record LauncherContext(
     /// <c>--permission-mode</c>. Non-null only for an interactive daemon-owned-worktree Claude launch
     /// that passed the orchestrator's <c>ClaudePermissionModePolicy</c> guard.</summary>
     public string? PermissionMode { get; init; }
+
+    /// <summary>Set when <see cref="Prompt"/> is too long for the command line: the launcher passes
+    /// <see cref="Services.PromptFile.Pointer"/> to this file in place of the prompt, and lets the agent
+    /// read the file's directory.</summary>
+    public string? PromptFile { get; init; }
 }
 
 internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);

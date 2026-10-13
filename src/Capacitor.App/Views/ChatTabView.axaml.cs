@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -95,6 +96,19 @@ public partial class ChatTabView : UserControl {
         if (_readerGesture) return;
         _readerGesture = true;
         Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+    }
+
+    async void OnCopyLinkClick(object? sender, RoutedEventArgs e) {
+        if (sender is not Control { Tag: string { Length: > 0 } url } control) return;
+        if (TopLevel.GetTopLevel(this)?.Clipboard is not { } clipboard) return;
+        try {
+            await clipboard.SetTextAsync(url);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: copy link failed: {ex.Message}");
+            return;
+        }
+        ToolTip.SetTip(control, "Copied");
+        ToolTip.SetIsOpen(control, true);
     }
 
     // Click is raised before the command flips the group, so a keyboard toggle (no pointer press

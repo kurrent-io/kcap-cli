@@ -37,11 +37,13 @@ public static class DriverVendor {
         return null;
     }
 
-    // The closed set of tokens that may name a driver: the stamped JSON harnesses plus the two
-    // env-inferred vendors. Validating here keeps a malformed or stale registration from echoing
-    // arbitrary text as driver_vendor to the model.
+    // The closed set of tokens that may name a driver: the stamped JSON harnesses, the two
+    // env-inferred vendors (claude/codex), and Vibe — a TOML harness outside DriverStampVendors that
+    // kcap nonetheless stamps, since it exports no distinctive env var. Validating here keeps a
+    // malformed or stale registration from echoing arbitrary text as driver_vendor to the model.
     static readonly HashSet<string> NameableVendors =
-        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex"), StringComparer.Ordinal);
+        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex").Append("mistral-vibe"),
+            StringComparer.Ordinal);
 
     static string? Normalize(string? v) =>
         !string.IsNullOrWhiteSpace(v) && NameableVendors.Contains(v.Trim()) ? v.Trim() : null;

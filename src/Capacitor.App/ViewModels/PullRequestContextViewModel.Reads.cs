@@ -126,7 +126,7 @@ public sealed partial class PullRequestContextViewModel {
             return () => {
                 if (read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale && read.Data is { } page && AcceptAccess(read)) {
                     var state = _sections.GetValueOrDefault(key) ?? new PullRequestSectionState(key);
-                    if (state.Snapshot is not null && state.Snapshot != page.SnapshotId && cursor is not null) { FailProtocol(); return; }
+                    if (state.Snapshot is not null && state.Snapshot != page.SnapshotId && cursor is not null) { FailProtocol(read.Reader); return; }
                     if (refresh || state.Snapshot != page.SnapshotId) { state.Pages.Clear(); state.Earlier.Clear(); }
                     var rows = page.Items.Select(item => project(item, choice.Subject)).ToArray();
                     var existing = state.Pages.FindIndex(item => item.Cursor == page.PageCursor);
@@ -135,7 +135,7 @@ public sealed partial class PullRequestContextViewModel {
                     else if (earlier) { state.Pages.Insert(0, saved); state.Earlier.Remove(page.PageCursor); }
                     else {
                         var known = state.Pages.SelectMany(p => p.Rows).Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
-                        if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(); return; }
+                        if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(read.Reader); return; }
                         state.Pages.Add(saved);
                     }
                     if (_headRestartSection == key) _headRestartSection = null;
@@ -254,5 +254,9 @@ public sealed partial class PullRequestContextViewModel {
         return true;
     }
     void ForgetChoices() { CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null; }
-    void FailProtocol() { ClearProtected(); SetNotice("The server returned an inconsistent PR response. Retry after updating the server and app."); }
+    void FailProtocol(string? reader) {
+        ClearProtected();
+        SetNotice(reader is null ? "The server returned an inconsistent PR response. Retry after updating the server and app."
+            : $"{reader} returned an inconsistent PR response. Refresh to reload it.");
+    }
 }

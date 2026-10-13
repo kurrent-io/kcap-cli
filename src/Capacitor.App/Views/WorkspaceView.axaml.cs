@@ -5,7 +5,6 @@ using Avalonia.Data.Converters;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
-using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Views;
 
@@ -34,16 +33,19 @@ public partial class WorkspaceView : UserControl {
         DataContextChanged += (_, _) => {
             _tabFocus?.Dispose();
             PullRequestHost.Content = null;
+            ArtefactsHost.Content = null;
             var model = DataContext as WorkspaceViewModel;
-            _tabFocus = model?
+            _tabFocus = model is null ? null : model
                 .WhenAnyValue(vm => vm.ActiveTab, vm => vm.Chat)
                 .Subscribe(pair => Dispatcher.UIThread.Post(() => {
-                    if (!ReferenceEquals(model, DataContext) || model?.ActiveTab != pair.Item1) return;
-                    if (pair.Item1 == WorkspaceTab.PullRequest && PullRequestHost.Content is null && model?.PullRequests is { } pullRequests)
+                    if (!ReferenceEquals(model, DataContext) || model?.ActiveTab != pair.Property1) return;
+                    if (pair.Property1 == WorkspaceTab.PullRequest && PullRequestHost.Content is null && model?.PullRequests is { } pullRequests)
                         PullRequestHost.Content = new PullRequestReader { DataContext = pullRequests };
-                    if (PullRequestHost.Content is PullRequestReader reader) reader.IsVisible = pair.Item1 == WorkspaceTab.PullRequest;
-                    if (pair.Item1 == WorkspaceTab.Chat && pair.Item2 is not null) ChatHost.FocusComposer();
-                    else if (pair.Item1 == WorkspaceTab.Terminal) TerminalHost.Focus();
+                    if (pair.Property1 == WorkspaceTab.Artefacts && ArtefactsHost.Content is null && model is not null)
+                        ArtefactsHost.Content = new ArtefactsView { DataContext = model.Artefacts };
+                    if (PullRequestHost.Content is PullRequestReader reader) reader.IsVisible = pair.Property1 == WorkspaceTab.PullRequest;
+                    if (pair.Property1 == WorkspaceTab.Chat && pair.Property2 is not null) ChatHost.FocusComposer();
+                    else if (pair.Property1 == WorkspaceTab.Terminal) TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));
         };
     }

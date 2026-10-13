@@ -62,7 +62,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             Func<string, string>? resolveRepoRoot = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
             IObservable<IReadOnlyDictionary<string, PullRequestTone>>? pullRequestTones = null,
-            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null) {
+            IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
+            IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null) {
         _directory = directory;
         var resolveRoot = resolveRepoRoot ?? GitRepository.ResolveMainRepoRoot;
         // Not disposed with the rest: same as RailCollapseState's Changes subject, a bare
@@ -93,7 +94,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Group(r => r.RepoGroupKey)
             .Transform(g => new RailRepoViewModel(
-                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones, answering))
+                g, _collapse, selected, pending, stale, resolveRoot, openLocalSession, openRemoteSession, time, tones, answering, agentsRunningCommands))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

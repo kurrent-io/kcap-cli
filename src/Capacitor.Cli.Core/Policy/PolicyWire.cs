@@ -25,7 +25,7 @@ public sealed record PolicyDecisionEventV1(
     string EvaluationMode, string RequestedOutcome, string EffectiveOutcome, PolicyActionV1 Action,
     PolicyMatchedRuleV1[] MatchedRules, bool Degraded, string? FailureClass,
     string? CorrelationId, bool CorrelationAmbiguous, string DecidedAt,
-    bool? PendingAskConsumed = null, string? FreshOutcome = null);
+    bool? PendingAskConsumed = null, string? FreshOutcome = null, PolicyJudgeConsultationV1? Judge = null);
 
 public sealed record PolicySnapshotUploadV1(
     string SessionId, string SnapshotId, string EngineVersion, bool Degraded, string[] Degradations,
@@ -47,13 +47,13 @@ public static class PolicyWire {
             string requestedOutcome, string effectiveOutcome,
             PolicyActionV1 action, PolicyMatchedRuleV1[] matchedRules, TimeProvider time,
             string? failureClass = null, string? correlationId = null, bool correlationAmbiguous = false,
-            bool? pendingAskConsumed = null, string? freshOutcome = null) =>
+            bool? pendingAskConsumed = null, string? freshOutcome = null, PolicyJudgeConsultationV1? judge = null) =>
         new(
             sessionId, agentId, vendor, seam, snapshot?.Id ?? "unknown", PolicyEngine.Version,
             mode == EvaluationMode.Full ? "full" : "tighten_only", requestedOutcome, effectiveOutcome,
             action, matchedRules, snapshot?.Degraded ?? false, failureClass,
             correlationId, correlationAmbiguous, time.GetUtcNow().ToString("O"),
-            pendingAskConsumed, freshOutcome);
+            pendingAskConsumed, freshOutcome, judge);
 
     public static PolicyActionV1 ToWire(CanonicalAction a) {
         var raw = a.RawPayloadJson;

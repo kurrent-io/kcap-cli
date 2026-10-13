@@ -35,15 +35,11 @@ public interface IFirstRunImportLane {
     /// report's counts were built from</b>, not today's — a user who reads the screen across UTC
     /// midnight would otherwise be shown a figure for one boundary and given an import against the
     /// next, silently missing the day between.</param>
-    /// <returns>
-    /// What the passes moved, or <b>null when a pass produced no accounting at all</b> — it threw, or
-    /// finished without reaching its own summary.
-    ///
-    /// <para>Null is not <c>(0,0,0)</c>, and the difference is the point: the sessions that pass was
-    /// uploading are unaccounted, and there is no way to say "some unknown number failed" in three
-    /// counts. Reporting the surviving pass's figures alone would state a clean import over a run that
-    /// lost one, so the caller reports <see cref="FirstRunImportOutcomeReasons.RunFailed"/> on three
-    /// zeroes instead.</para>
-    /// </returns>
-    Task<FirstRunImportTotals?> ImportAsync(FirstRunImportAnswer answer, DateOnly today, CancellationToken ct);
+    /// <returns>What the passes moved, with <see cref="FirstRunImportResult.Totals"/> null when a pass
+    /// produced no accounting at all — it threw, or finished without reaching its own summary. Null is
+    /// not <c>(0,0,0)</c>: there is no way to say "some unknown number failed" in three counts.</returns>
+    /// <param name="agents">The Agents answer, whose installs run after this leg: a harness it turns on
+    /// will carry the eval-watch skill by the time the prompt can be used.</param>
+    Task<FirstRunImportResult> ImportAsync(
+        FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null);
 }

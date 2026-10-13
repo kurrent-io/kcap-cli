@@ -31,11 +31,16 @@ public static class HostedHarnessCatalog {
         { "opencode",    "acp" },
         { "antigravity", "rpc" },
         { "pi",          "rpc" },
+        { "mistral-vibe", "pty" },
     };
 
     /// The vendors with an EXPLICIT family above — what the guard test reads, since Build's
     /// fallback makes an unmapped vendor indistinguishable from a mapped "rpc" one.
     internal static IReadOnlyCollection<string> MappedVendors => TransportFamilies.Keys;
+
+    /// Harnesses kcap records but no daemon hosts: listed only when a daemon advertises one, since
+    /// the server refuses their launch and an older daemon's silence must not offer them.
+    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe" };
 
     public static IReadOnlyList<HarnessOption> Build(string[]? supportedVendors) {
         // null = an older daemon that never sent the field: unknown, not empty.
@@ -44,6 +49,7 @@ public static class HostedHarnessCatalog {
             : new HashSet<string>(supportedVendors, StringComparer.OrdinalIgnoreCase);
 
         var options = HarnessRegistry.Identities
+            .Where(h => !RecordingOnly.Contains(h.VendorId) || advertised?.Contains(h.VendorId) == true)
             .Select(h => new HarnessOption(
                 h.VendorId,
                 h.Label,
@@ -91,7 +97,7 @@ public static class HostedHarnessCatalog {
     /// The effort ladder the daemon passes through verbatim (codex maps max→xhigh itself); the
     /// picker's Default entry (null on the wire) hands the choice back to the harness. Lives here
     /// beside the model catalog so the launch vocabularies have one authority.
-    public static readonly IReadOnlyList<string> EffortLadder = ["low", "medium", "high", "xhigh"];
+    public static readonly IReadOnlyList<string> EffortLadder = ["low", "medium", "high", "xhigh", "max"];
 
     /// Shared chip/flyout word for "omit from the wire — let the harness decide". Not "Auto":
     /// that label is Claude's permission mode, a different control.
@@ -103,7 +109,8 @@ public static class HostedHarnessCatalog {
         "low"      => "Low",
         "medium"   => "Medium",
         "high"     => "High",
-        "xhigh"    => "Max",
+        "xhigh"    => "Extra high",
+        "max"      => "Max",
         _          => token,
     };
 
@@ -117,13 +124,42 @@ public static class HostedHarnessCatalog {
         new(ClaudePermissionModes.BypassPermissions, "Bypass permissions"),
     ];
 
-    public static string PermissionModeLabelFor(string token) =>
-        PermissionModes.FirstOrDefault(m => string.Equals(m.Token, token, StringComparison.Ordinal))?.Label ?? token;
+    public static string PermissionModeLabelFor(string token) => LabelIn(PermissionModes, token);
 
     /// The daemon rejects a mode for any other vendor, so the chip is withheld rather than sent
     /// and refused.
     public static bool SupportsPermissionMode(string vendor) =>
         string.Equals(vendor, "claude", StringComparison.OrdinalIgnoreCase);
+
+    /// Codex CLI sandbox tokens, most → least contained. The daemon accepts exactly these.
+    public static readonly IReadOnlyList<PermissionModeChoice> CodexSandboxes = [
+        new("read-only", "Read only"),
+        new("workspace-write", "Workspace write"),
+        new("danger-full-access", "Full access"),
+    ];
+
+    /// Codex CLI approval tokens, most → least prompting. The daemon rejects on-failure, so it is
+    /// not offered.
+    public static readonly IReadOnlyList<PermissionModeChoice> CodexApprovals = [
+        new("untrusted", "Untrusted"),
+        new("on-request", "On request"),
+        new("never", "Never"),
+    ];
+
+    /// What the daemon applies to an interactive owned-worktree launch that names no posture.
+    public const string DefaultCodexSandbox = "workspace-write";
+    public const string DefaultCodexApproval = "on-request";
+
+    public static string CodexSandboxLabelFor(string token) => LabelIn(CodexSandboxes, token);
+
+    public static string CodexApprovalLabelFor(string token) => LabelIn(CodexApprovals, token);
+
+    static string LabelIn(IReadOnlyList<PermissionModeChoice> choices, string token) =>
+        choices.FirstOrDefault(m => string.Equals(m.Token, token, StringComparison.Ordinal))?.Label ?? token;
+
+    /// The daemon rejects a posture for any other vendor.
+    public static bool SupportsCodexPosture(string vendor) =>
+        string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase);
 
     // Monogram + tint per vendor: the glyph is the fallback where the view layer has no brand
     // mark (VendorIcons); the tint colors both. Monochrome brands render in the near-white text
@@ -139,6 +175,7 @@ public static class HostedHarnessCatalog {
         ["opencode"]    = ("Oc", "#F1F3F7"),
         ["antigravity"] = ("An", "#F4B860"),
         ["pi"]          = ("π", "#A994FF"),
+        ["mistral-vibe"] = ("Mv", "#FA520F"),
     };
 
     /// Glyph + tint for a vendor token; an unmapped token gets its first letter in neutral grey

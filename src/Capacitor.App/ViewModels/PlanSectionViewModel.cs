@@ -58,6 +58,11 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     public bool IsExpanded { get => _isExpanded; private set => this.RaiseAndSetIfChanged(ref _isExpanded, value); }
     public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
 
+    /// Whoever opens documents; the workspace points it at the Artefacts tab.
+    public Action<string>? OpenDocument { get; set; }
+    public ReactiveCommand<PlanDocumentRow, Unit> OpenDocumentCommand { get; }
+    string? _openPath;
+
     /// Test-only seam: the current lease's read, or the last one started.
     internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
 
@@ -65,6 +70,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         _source = source;
         _activity = activity;
         ToggleCommand = ReactiveCommand.Create(() => { IsExpanded = !IsExpanded; });
+        OpenDocumentCommand = ReactiveCommand.Create<PlanDocumentRow>(row => OpenDocument?.Invoke(row.Path));
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _activity.PlanWritten += OnPlanWritten;
         _activity.SessionOverChanged += OnSessionOverChanged;
@@ -145,6 +151,12 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         }
     }
 
+    /// Marks the row whose path matches; null clears the mark.
+    public void MarkOpen(string? path) {
+        _openPath = path;
+        foreach (var row in _documents) row.IsOpen = path is not null && DocumentPaths.Match(row.Path, path);
+    }
+
     void Show(SessionPlanDto? plan) {
         if (plan is null) { Clear(); return; }
 
@@ -156,9 +168,10 @@ public sealed class PlanSectionViewModel : ReactiveObject {
             .OrderBy(document => KindRank(document.Kind))
             .Select(document => new PlanDocumentRow(document.Kind, document.Path))
             .ToList();
-        if (!documents.SequenceEqual(_documents)) {
+        if (documents.Count != _documents.Count || documents.Where((row, i) => !row.Same(_documents[i])).Any()) {
             _documents.Clear();
             _documents.AddRange(documents);
+            MarkOpen(_openPath);
         }
         RaiseShape();
     }
@@ -219,6 +232,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         _activity.SessionOverChanged -= OnSessionOverChanged;
         _settle.Dispose();
         ToggleCommand.Dispose();
+        OpenDocumentCommand.Dispose();
         var leases = _outstanding.ToArray();
         foreach (var lease in leases) lease.Cts.Cancel();
         _current = null;

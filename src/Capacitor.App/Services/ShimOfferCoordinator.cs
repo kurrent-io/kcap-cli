@@ -11,21 +11,17 @@ namespace Capacitor.App.Services;
 /// dialogs use — its own `SemaphoreSlim(1,1)` already guarantees this offer never stacks over one
 /// of those, so no second serialization lives here.
 ///
-/// macOS-only, no-op elsewhere — off-macOS the target is forced null at construction,
-/// so this degrades exactly like "nothing to link" everywhere below.
+/// A no-op where the OS has no installer (<see cref="CliPathInstallers.Create"/> returned null):
+/// the target is forced null at construction, so this degrades exactly like "nothing to link"
+/// everywhere below.
 public sealed class ShimOfferCoordinator {
-    internal const string ShimDisclosure =
-        "This links /usr/local/bin/kcap to this app's CLI, so kcap works from any terminal. " +
-        "Installing it prompts once for your admin password.";
-
     readonly Task _phaseClosed;
     readonly ILoginShellProbe _probe;
-    readonly PathShimInstaller _installer;
+    readonly ICliPathInstaller? _installer;
     readonly IAppStateStore _store;
     readonly ILifecycleSurface _surface;
     readonly string? _target;
     readonly CancellationToken _lifetime;
-    readonly string _destination;
     // True only for a gate-Incomplete startup — Offerable/manual install still work, only the once-ever auto-offer DIALOG is skipped.
     readonly bool _autoOfferSuppressed;
 
@@ -37,36 +33,15 @@ public sealed class ShimOfferCoordinator {
     /// the whole run.
     /// </param>
     public ShimOfferCoordinator(
-            Task phaseClosed, ILoginShellProbe probe, PathShimInstaller installer, IAppStateStore store,
-            ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false)
-        : this(phaseClosed, probe, installer, store, surface, target, lifetime, PathShimInstaller.Destination, autoOfferSuppressed) { }
-
-    // Test seam mirroring PathShimInstaller.InstallAsync's own destination-override overload:
-    // lets tests drive real Preflight/InstallAsync taxonomy against a temp path instead
-    // of the real /usr/local/bin/kcap. Production always goes through the public constructor
-    // above, which pins `destination` to PathShimInstaller.Destination.
-    internal ShimOfferCoordinator(
-            Task phaseClosed, ILoginShellProbe probe, PathShimInstaller installer, IAppStateStore store,
-            ILifecycleSurface surface, string? target, CancellationToken lifetime, string destination,
-            bool autoOfferSuppressed = false)
-        : this(phaseClosed, probe, installer, store, surface, target, lifetime, destination, OperatingSystem.IsMacOS, autoOfferSuppressed) { }
-
-    // `isMacOs` is a test seam (off-macOS can't otherwise
-    // be exercised from macOS CI); production always resolves to the real OS check. Nulling
-    // `_target` off-macOS reuses every existing "nothing to link" no-op path below (RunAsync,
-    // RunInstallAsync) instead of adding a second guard.
-    internal ShimOfferCoordinator(
-            Task phaseClosed, ILoginShellProbe probe, PathShimInstaller installer, IAppStateStore store,
-            ILifecycleSurface surface, string? target, CancellationToken lifetime, string destination,
-            Func<bool> isMacOs, bool autoOfferSuppressed = false) {
+            Task phaseClosed, ILoginShellProbe probe, ICliPathInstaller? installer, IAppStateStore store,
+            ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false) {
         _phaseClosed          = phaseClosed;
         _probe                = probe;
         _installer            = installer;
         _store                = store;
         _surface              = surface;
-        _target               = isMacOs() ? target : null;
+        _target               = installer is null ? null : target;
         _lifetime             = lifetime;
-        _destination          = destination;
         _autoOfferSuppressed  = autoOfferSuppressed;
     }
 
@@ -99,7 +74,7 @@ public sealed class ShimOfferCoordinator {
             var state = await _store.LoadAsync().ConfigureAwait(false);
             if (state.ShimOffered || state.ShimDenied) return; // already resolved on a prior run
 
-            var preflight = PathShimInstaller.Preflight(_destination, _target);
+            var preflight = _installer!.Preflight(_target);
             if (preflight == ShimPreflight.Conflict) return; // no auto-offer; the menu item still lets the user try
             if (preflight == ShimPreflight.AlreadyInstalled) {
                 await ClaimOfferedAsync().ConfigureAwait(false);
@@ -111,7 +86,7 @@ public sealed class ShimOfferCoordinator {
             // run never re-checks AppState again, so there is nothing left here to re-offer.
             await ClaimOfferedAsync().ConfigureAwait(false);
 
-            var prompt = new LifecyclePrompt(LifecyclePrompt.KindShim, null, null, false, ShimDisclosure);
+            var prompt = new LifecyclePrompt(LifecyclePrompt.KindShim, null, null, false, _installer.Disclosure);
             var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
             if (!accepted) {
                 await ClaimDeniedAsync().ConfigureAwait(false);
@@ -128,8 +103,8 @@ public sealed class ShimOfferCoordinator {
 
     async Task RunInstallAsync() {
         try {
-            if (_target is null) return; // defensive — the menu item is never shown without one
-            var result = await _installer.InstallAsync(_target, _destination, _lifetime).ConfigureAwait(false);
+            if (_target is null || _installer is null) return; // defensive — the menu item is never shown without one
+            var result = await _installer.InstallAsync(_target, _lifetime).ConfigureAwait(false);
             await SurfaceResultAsync(result).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             // shutdown mid-install

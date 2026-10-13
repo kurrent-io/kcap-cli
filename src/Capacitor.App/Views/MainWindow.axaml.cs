@@ -5,6 +5,7 @@ using Avalonia.Controls.Notifications;
 using Avalonia.Input;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using ReactiveUI.Reactive;
 using ReactiveUI.Avalonia.Reactive;
 
@@ -19,6 +20,18 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     /// cancelled. Left null on a plainly-constructed window (tests), where a close is a real
     /// close.
     public Func<bool>? CloseInterceptor { get; set; }
+
+    /// The onboarding flow shown in place of the rail and launcher. Wizard-first mode builds this
+    /// window with no MainWindowViewModel, so the pane gets its own DataContext rather than the
+    /// window's; clearing it hands the window over to the main surface.
+    public OnboardingViewModel? Onboarding {
+        get => OnboardingPane.DataContext as OnboardingViewModel;
+        set {
+            OnboardingPane.DataContext = value;
+            OnboardingPane.IsVisible   = value is not null;
+            SessionsSurface.IsVisible  = value is null;
+        }
+    }
 
     WindowNotificationManager? _notifications;
     IDisposable? _notifierSubscription;
@@ -67,7 +80,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
 
         this.WhenActivated(disposables => {
-            ViewModel?.WhenAnyValue(x => x.CurrentWorkspace)
+            // Switched over the ViewModel, not read once: an onboarding window activates before
+            // the main surface hands it one.
+            Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
+                    .Select(vm => vm is null
+                        ? Observable.Return<ISessionWorkspace?>(null)
+                        : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
                     // A popup can't meaningfully survive the pane swapping under it — opening a
                     // workspace closes the feed; its Closed handler then turns the gate off.

@@ -31,7 +31,7 @@ public class McpFlowsServerStartAgentTests {
     JsonObject ToolCall(JsonObject? arguments = null) => new() {
         ["params"] = new JsonObject {
             ["name"]      = "start_agent",
-            ["arguments"] = arguments ?? new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["work_item"] = "none" }
+            ["arguments"] = arguments ?? new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry", ["work_item"] = "none" }
         }
     };
 
@@ -83,6 +83,23 @@ public class McpFlowsServerStartAgentTests {
         await Assert.That(body["caller_agent_id"]).IsNull();
         await Assert.That(body["model"]).IsNull();
         await Assert.That(body["daemon"]).IsNull();
+    }
+
+    [Test]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\"}", true)]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\" \" ,\"dispatch_state\":\"sent\"}", true)]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\"}", true)]
+    [Arguments("{\"status\":\"requested\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\",\"dispatch_state\":\"sent\"}", false)]
+    [Arguments("{\"status\":\"pending\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\",\"dispatch_state\":\"unknown\"}", false)]
+    [Arguments("{\"status\":\"pending\",\"agent_id\":\"agent\",\"loose_end_claim_id\":\"claim\",\"dispatch_state\":\"not_sent\"}", false)]
+    public async Task A_loose_end_start_requires_a_claim_receipt_and_never_retries(string answer, bool error) {
+        using var server = Answering(200, answer);
+        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry", ["work_item"] = "le:end" };
+        var (text, isError) = await CallAsync(server, arguments);
+        await Assert.That(isError).IsEqualTo(error);
+        await Assert.That(server.LogEntries.Count).IsEqualTo(1);
+        if (error) await Assert.That(text).IsEqualTo(StartAgentTool.UnreadableAnswer);
+        else await Assert.That(text).Contains("loose_end_claim_id: claim");
     }
 
     [Test]
@@ -150,7 +167,7 @@ public class McpFlowsServerStartAgentTests {
     [Test]
     public async Task A_call_that_is_refused_locally_sends_nothing() {
         using var server = Answering(200, Requested);
-        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry." };
+        var arguments = new JsonObject { ["cwd"] = Cwd(), ["prompt"] = "Fix the retry.", ["title"] = "Fix the retry" };
 
         var (text, isError) = await CallAsync(server, arguments);
 

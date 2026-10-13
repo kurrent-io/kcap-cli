@@ -44,7 +44,8 @@ public static class AuthFixtures {
             // defaulted here: a test that does not observe telemetry must not have to name it, and
             // one that does gets an empty sink rather than a silent pass if it forgets.
             CliTelemetry?                                               telemetry     = null,
-            TimeProvider?                                               time          = null) {
+            TimeProvider?                                               time          = null,
+            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
         var factory = new PlainHttpClientFactory(handler);
         var clock   = time ?? TimeProvider.System;
 
@@ -57,7 +58,8 @@ public static class AuthFixtures {
                 telemetry ?? CliTelemetry.Disabled(clock), AuthEndpoints.Defaults, clock, beforeCommit) {
             WorkOSOrglessLogin    = workosLogin,
             WorkOSBrowser         = workosBrowser,
-            WorkOSApiBaseOverride = workosApiBase
+            WorkOSApiBaseOverride = workosApiBase,
+            ProbeWorkspace        = probe
         };
     }
 

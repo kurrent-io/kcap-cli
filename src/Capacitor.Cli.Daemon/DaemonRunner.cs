@@ -11,6 +11,8 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -388,6 +390,8 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(sp => new PermissionDecisionLog(
             coverageStateDir, sp.GetRequiredService<ILogger<PermissionDecisionLog>>()));
         builder.Services.AddSingleton<PolicySnapshotProvider>();
+        builder.Services.AddSingleton(sp => PolicyJudgeGateway.ForHook(
+            sp.GetRequiredService<ICapacitorHttpClient>(), config.ServerUrl, time));
 
         // The DaemonStatus push: ONE notifier singleton shared by ServerConnection (pulses on hub
         // state transitions) and AgentOrchestrator (pulses on agent mutation) via their optional
@@ -479,7 +483,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -489,7 +494,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -499,7 +505,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -509,7 +516,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -519,7 +527,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
 

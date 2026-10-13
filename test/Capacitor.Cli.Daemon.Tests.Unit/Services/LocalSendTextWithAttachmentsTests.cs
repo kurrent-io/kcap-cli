@@ -131,8 +131,8 @@ public class LocalSendTextWithAttachmentsTests : IDisposable {
 
         await Assert.That((await Send(orch, Payload("a1", "hi", [Id(0)]))).Reason).IsEqualTo(SendTextReasons.NoSuchAgent);
 
-        AgentOrchestratorHarness.SeedAcpAgent(orch, "rev", new FakeAcpRuntime(), kind: LaunchKind.Review);
-        await Assert.That((await Send(orch, Payload("rev", "hi", [Id(0)]))).Reason).IsEqualTo(SendTextReasons.ProtectedKind);
+        AgentOrchestratorHarness.SeedAcpAgent(orch, "flow", new FakeAcpRuntime(), kind: LaunchKind.ReviewFlow);
+        await Assert.That((await Send(orch, Payload("flow", "hi", [Id(0)]))).Reason).IsEqualTo(SendTextReasons.ProtectedKind);
 
         AgentOrchestratorHarness.SeedAcpAgent(orch, "starting", new FakeAcpRuntime(), status: "Starting");
         await Assert.That((await Send(orch, Payload("starting", "hi", [Id(0)]))).Reason).IsEqualTo(SendTextReasons.NotRunning);

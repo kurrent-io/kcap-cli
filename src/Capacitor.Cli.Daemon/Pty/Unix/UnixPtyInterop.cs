@@ -151,6 +151,16 @@ internal static partial class UnixPtyInterop {
     public const short POLLIN   = 0x01;
     public const short POLLHUP  = 0x10;
     public const short POLLERR  = 0x08;
+    public const short POLLNVAL = 0x20;
+    public const int   EINTR    = 4;
+    public const int   EIO      = 5;
+    public const int   EBADF    = 9;
+
+    static readonly int EAGAIN = IsMacOS ? 35 : 11;
+
+    /// <summary>An errno after which the same <c>poll</c> or <c>read</c> may simply be issued again:
+    /// a handled signal, or (macOS <c>poll</c>) a failed kernel allocation under memory pressure.</summary>
+    public static bool IsTransient(int errno) => errno == EINTR || errno == EAGAIN;
     public const int   WNOHANG  = 1;
     public const int   SIGTERM = 15;
     public const int   SIGKILL = 9;

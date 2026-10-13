@@ -6,9 +6,11 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.App.Services;
 
 /// The subset of Capacitor.Cli.Commands.ServiceStatusJson the app reads; snake_case on the wire.
+/// `LoadedSpawnType` is launchd's word for the loaded job, null when the label is not loaded or the
+/// CLI predates the field; read it through SpawnTypes.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -30,7 +32,14 @@ public static class ServiceStateClassifier {
 
 public enum ImportScopeChoice { Everything, Org, Repo }
 
-public sealed record ImportRequest(ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags);
+/// <param name="Repos">With <see cref="ImportScopeChoice.Repo"/>, every repository to import; overrides
+/// <paramref name="OrgOrRepo"/>.</param>
+/// <param name="Since">Only sessions started on or after this day.</param>
+/// <param name="Private">Mark every imported session as visible to its owner only.</param>
+/// <param name="SkipTitle">Leave titling to the server rather than this machine's own agent.</param>
+public sealed record ImportRequest(
+    ImportScopeChoice Scope, string? OrgOrRepo, IReadOnlyList<string> VendorFlags,
+    IReadOnlyList<string>? Repos = null, DateOnly? Since = null, bool Private = false, bool SkipTitle = false);
 
 /// Typed facade over every CLI call the app shells out to — every daemon mutation goes through
 /// the CLI. Consumed by the lifecycle controller and faked in tests behind
@@ -50,23 +59,35 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
 
+    /// <c>daemon service refresh --name &lt;name&gt; --force</c>: reloads this daemon's launchd job to Standard, ending
+    /// whatever it hosts. One <c>refresh_outcome=&lt;token&gt;</c> line on stderr; exit 0 only for reloaded/current.
+    Task<ProcessResult> ServiceReloadAsync(CancellationToken ct);
+
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
     /// <c>daemon start -d --name &lt;name&gt;</c>, bounded + ProcessOnly-kill, stamped with a boot-attempt id
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
     Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct);
 
-    /// `plugin install` (+ vendorFlag, when non-null); null = the flagless Claude default.
-    Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct);
+    /// `plugin install` (+ vendorFlag, when non-null, then <paramref name="options"/>); null = the
+    /// flagless Claude default.
+    Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null);
 
     /// `import` with scope/vendor flags, streamed live via onLine — unbounded internal timeout
     /// (imports are long; ct cancellation is the only bound).
     Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct);
+
+    /// `import --discover --json` for these vendors; null when the run failed or printed no report.
+    Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
 }
 
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+    /// The forced refresh may wait 10 s for the service transaction lock before its own 55 s deadline starts.
+    static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(75);
+    // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
+    static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
     // acquire, then a 3s commit or abort) and the retire's own 20s forward budget — about 118s in all.
@@ -90,7 +111,7 @@ public sealed class KcapCli : IKcapCli {
     // Bound once at construction (one KcapCli per owned action); null is fine until a mutation runs.
     readonly string? _canonicalServer;
     // Lazy, not a static ctor value: the terminal PATH is only known once the async probe has run,
-    // and the probe itself caches — so resolving it per install call is cheap and always current.
+    // and the probe itself caches — so resolving it per spawn is cheap and always current.
     readonly Func<CancellationToken, Task<string?>>? _terminalPathAsync;
 
     public KcapCli(
@@ -113,7 +134,8 @@ public sealed class KcapCli : IKcapCli {
     public async Task<string?> VersionAsync(CancellationToken ct) {
         if (CliPath is not { } cliPath) return null;
 
-        var result = await Run(cliPath, ["--version", "--no-update-check"], new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct)
+        var result = await Run(cliPath, ["--version", "--no-update-check"],
+                new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: VersionTimeout), ct)
             .ConfigureAwait(false);
 
         return result.ExitCode == 0 && !result.TimedOut ? CliResolver.ParseVersion(result.Stdout) : null;
@@ -124,7 +146,7 @@ public sealed class KcapCli : IKcapCli {
 
         var result = await Run(cliPath,
                 ["daemon", "service", "status", "--name", _daemonName, "--json"],
-                new RunOptions(EnvOverlay: Env(), Timeout: StatusTimeout), ct)
+                new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: StatusTimeout), ct)
             .ConfigureAwait(false);
 
         if (result.ExitCode != 0 || result.TimedOut) return null;
@@ -140,17 +162,23 @@ public sealed class KcapCli : IKcapCli {
     public async Task<bool> SupportsServiceRetireAsync(CancellationToken ct) {
         if (CliPath is not { } cliPath) return false;
         var help = await Run(cliPath, ["daemon", "--help", "--no-update-check"],
-            new RunOptions(EnvOverlay: Env(), Timeout: VersionTimeout), ct).ConfigureAwait(false);
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: VersionTimeout), ct).ConfigureAwait(false);
         return !help.TimedOut && help.ExitCode == 0 &&
             (help.Stdout.Contains("--retire", StringComparison.Ordinal) || help.Stderr.Contains("--retire", StringComparison.Ordinal));
     }
 
-    public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {
+    public async Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
-        return CliPath is not { } cliPath
-            ? NoCliResult()
-            : Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
-                new RunOptions(EnvOverlay: env, Timeout: MutationTimeout), ct);
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        return await Run(cliPath, ["daemon", "service", "start", "--name", _daemonName, "--verify"],
+            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> ServiceReloadAsync(CancellationToken ct) {
+        var env = MutationEnv(); // throws before any spawn if the instance carries no server
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+        return await Run(cliPath, ["daemon", "service", "refresh", "--name", _daemonName, "--force"],
+            new RunOptions(EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: ReloadTimeout), ct).ConfigureAwait(false);
     }
 
     // The profile flag and environment overlay must agree with the identity the lane verifies.
@@ -172,33 +200,34 @@ public sealed class KcapCli : IKcapCli {
             Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
     }
 
-    public Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
+    public async Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {
         var env = MutationEnv(); // throws before any spawn if the instance carries no server
         env[BootAttemptVar] = bootAttemptId;
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
 
-        return CliPath is not { } cliPath
-            ? NoCliResult()
-            : Run(cliPath, ["daemon", "start", "-d", "--name", _daemonName],
-                new RunOptions(
-                    EnvOverlay: env, Timeout: DetachedStartTimeout,
-                    CancelMode: CancelMode.AbandonWait, TimeoutKill: TimeoutKillScope.ProcessOnly),
-                ct);
+        return await Run(cliPath, ["daemon", "start", "-d", "--name", _daemonName],
+            new RunOptions(
+                EnvOverlay: await EnvWithTerminalPathAsync(env, ct).ConfigureAwait(false), Timeout: DetachedStartTimeout,
+                CancelMode: CancelMode.AbandonWait, TimeoutKill: TimeoutKillScope.ProcessOnly),
+            ct).ConfigureAwait(false);
     }
 
     // Neither this nor ImportAsync overlays MutationEnv — non-daemon shelling keeps lenient
     // classification; the vendor flag itself is the caller's exclusive-flag choice.
-    public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct) {
-        if (CliPath is not { } cliPath) return NoCliResult();
+    public async Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
 
         List<string> args = ["plugin", "install"];
         if (vendorFlag is not null) args.Add(vendorFlag);
+        if (options is not null) args.AddRange(options);
 
-        return Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env(), Timeout: MutationTimeout), ct);
+        return await Run(cliPath, args.ToArray(),
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: MutationTimeout), ct).ConfigureAwait(false);
     }
 
-    public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {
+    public async Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) {
         if (CliPath is not { } cliPath)
-            return Task.FromResult(new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]));
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
         List<string> args = ["import"];
         args.Add(request.Scope switch {
@@ -207,11 +236,36 @@ public sealed class KcapCli : IKcapCli {
             ImportScopeChoice.Repo       => "--repo",
             _                            => throw new ArgumentOutOfRangeException(nameof(request)),
         });
-        if (request.Scope != ImportScopeChoice.Everything) args.Add(request.OrgOrRepo!);
+        if (request is { Scope: ImportScopeChoice.Repo, Repos: { Count: > 0 } repos }) {
+            args.Add(repos[0]);
+            foreach (var repo in repos.Skip(1)) {
+                args.Add("--repo");
+                args.Add(repo);
+            }
+        } else if (request.Scope != ImportScopeChoice.Everything) {
+            args.Add(request.OrgOrRepo!);
+        }
+        if (request.Since is { } since) {
+            args.Add("--since");
+            args.Add(since.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        if (request.Private) args.Add("--private");
+        if (request.SkipTitle) args.Add("--skip-title");
         args.Add("--yes");
         args.AddRange(request.VendorFlags);
 
-        return _runner.RunStreamingAsync(cliPath, args.ToArray(), new RunOptions(EnvOverlay: Env()), onLine, ct);
+        return await _runner.RunStreamingAsync(cliPath, args.ToArray(),
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, ct).ConfigureAwait(false);
+    }
+
+    public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {
+        if (CliPath is not { } cliPath) return null;
+
+        string[] args = ["import", "--discover", "--json", .. vendorFlags];
+        var result = await Run(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: DiscoverTimeout), ct).ConfigureAwait(false);
+
+        return result is { ExitCode: 0, TimedOut: false } ? ImportDiscoveryReport.Parse(result.Stdout) : null;
     }
 
     // Deterministic exit 127 ("command not found") rather than throwing on a null CliPath — a
@@ -228,6 +282,10 @@ public sealed class KcapCli : IKcapCli {
         [SpawnNoTelemetryVar] = "1",
     };
 
+    // The login shell can resolve kcap to a shim whose interpreter sits outside a GUI app's PATH, so
+    // every spawn carries the terminal's.
+    Task<Dictionary<string, string>> SpawnEnvAsync(CancellationToken ct) => EnvWithTerminalPathAsync(Env(), ct);
+
     // Null canonicalServer here is a construction bug (mutations are action-scoped) — fail loudly, don't spawn.
     Dictionary<string, string> MutationEnv() {
         if (_canonicalServer is not { } server)
@@ -239,15 +297,12 @@ public sealed class KcapCli : IKcapCli {
         return env;
     }
 
-    // PATH overlaid ONLY here: install is the sole unit-writing mutation, so it's
-    // the only call that needs the terminal's PATH baked into the launchd unit. Start-verify
-    // (bootstrap/kickstart of an already-installed unit) and every read-only query are exempt.
-    // Resolved lazily against the mutation's own token, never a detached one; an unknown probe
-    // result (null) leaves PATH out rather than overlaying a value that isn't actually the user's —
-    // ServiceEnvironment.Capture then honestly bakes whatever the app itself inherited.
+    // An unknown probe result (null) leaves PATH out rather than overlaying a value that is not the
+    // user's; install then bakes whatever the app itself inherited into the unit. Resolved against
+    // the spawn's own token, never a detached one.
     async Task<Dictionary<string, string>> EnvWithTerminalPathAsync(Dictionary<string, string> env, CancellationToken ct) {
         var terminalPath = _terminalPathAsync is null ? null : await _terminalPathAsync(ct).ConfigureAwait(false);
-        if (terminalPath is not null) env["PATH"] = terminalPath;
+        if (!string.IsNullOrWhiteSpace(terminalPath)) env["PATH"] = terminalPath; // an empty answer would unset PATH for the child
 
         return env;
     }

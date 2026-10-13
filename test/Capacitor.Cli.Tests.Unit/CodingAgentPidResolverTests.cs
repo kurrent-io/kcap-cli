@@ -204,6 +204,30 @@ public class CodingAgentPidResolverTests {
     }
 
     [Test]
+    public async Task Resolves_mistral_vibe_by_its_vibe_script_name() {
+        // The vendor token is `mistral-vibe`; the agent is a python console script whose comm is
+        // `vibe` while its argv[0] and exe are the interpreter.
+        // hook(100) -> sh(90) -> vibe(50) -> zsh(20)
+        var lookup = ProcTable.OfNames(
+            (90, 50, ["sh"]), (50, 20, ["/opt/vibe/bin/python3", "python3", "vibe"]), (20, 1, ["-zsh"]));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "mistral-vibe", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
+    public async Task Resolves_mistral_vibe_under_its_retitled_process_name() {
+        // Vibe sets its process title to "Vibe CLI", which replaces both comm and the cmdline.
+        // hook(100) -> sh(90) -> Vibe CLI(50) -> zsh(20)
+        var lookup = ProcTable.OfNames((90, 50, ["sh"]), (50, 20, ["Vibe CLI", "/opt/vibe/bin/python3"]), (20, 1, ["-zsh"]));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "mistral-vibe", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
     public async Task Resolves_kiro_when_process_is_kiro_cli_exe_on_windows() {
         var lookup = ProcTable.Of(
             (90, 50, @"C:\Windows\System32\cmd.exe"),

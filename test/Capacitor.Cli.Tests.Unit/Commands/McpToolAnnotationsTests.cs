@@ -15,7 +15,7 @@ public class McpToolAnnotationsTests {
         ("kcap-workitems",      McpWorkItemsServer.BuildToolsList()),
         ("kcap-plans",          McpPlansServer.BuildToolsList()),
         ("kcap-handoff",        McpHandoffServer.BuildToolsList()),
-        ("kcap-artefacts",      McpArtefactsServer.BuildToolsList()),
+        ("kcap-pages",          McpArtefactsServer.BuildToolsList()),
         ("kcap-knowledge",      McpKnowledgeServer.BuildToolsList()),
         ("kcap-flows",          McpFlowsServer.BuildToolsList()),
         ("kcap-flow-result",    McpFlowResultServer.BuildToolsList()),
@@ -50,6 +50,7 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-memory", "search_memories").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "list_reviewer_vendors").Annotations.ReadOnlyHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "list_flow_definitions").Annotations.ReadOnlyHint).IsTrue();
+        await Assert.That(Tool("kcap-flows", "get_flow_definition").Annotations.ReadOnlyHint).IsTrue();
 
         var declare = Tool("kcap-plans", "declare_plan_document").Annotations;
         await Assert.That(declare.ReadOnlyHint).IsFalse();

@@ -10,8 +10,8 @@ public class HandoffDecisionTests {
             Enumerable.Range(0, succeeded).Select(i => $"c{i}").ToList());
 
     static HandoffDecision Decide(ForegroundImportOutcome o, BackgroundImportStatus bg = BackgroundImportStatus.Running,
-                                  bool analytics = true, int eligible = 2, int detected = 2) =>
-        HandoffDecision.Decide(o, bg, analytics, eligible, detected);
+                                  int eligible = 2, int detected = 2) =>
+        HandoffDecision.Decide(o, bg, eligible, detected);
 
     [Test] public async Task Row1_incomplete_with_nothing_landed_is_import_failed() =>
         await Assert.That(Decide(O(ForegroundCertainty.Incomplete, succeeded: 0)).Reason).IsEqualTo(HandoffSuppressedReason.ImportFailed);
@@ -25,24 +25,21 @@ public class HandoffDecisionTests {
     [Test] public async Task Row4_all_skipped_with_nothing_left_is_nothing_landed() =>
         await Assert.That(Decide(O(succeeded: 0, skipped: 5, remainder: false), bg: BackgroundImportStatus.NotNeeded).Reason).IsEqualTo(HandoffSuppressedReason.NothingLanded);
 
-    [Test] public async Task Row5_cached_denial_over_a_good_pass_is_analytics_not_in_plan() =>
-        await Assert.That(Decide(O(), analytics: false).Reason).IsEqualTo(HandoffSuppressedReason.AnalyticsNotInPlan);
-
-    [Test] public async Task Row6_no_eligible_vendor_with_one_detected_is_skill_not_installed() =>
+    [Test] public async Task Row5_no_eligible_vendor_with_one_detected_is_skill_not_installed() =>
         await Assert.That(Decide(O(), eligible: 0, detected: 1).Reason).IsEqualTo(HandoffSuppressedReason.SkillNotInstalled);
 
-    [Test] public async Task Row7_no_vendor_detected_is_no_agent_detected() =>
+    [Test] public async Task Row6_no_vendor_detected_is_no_agent_detected() =>
         await Assert.That(Decide(O(), eligible: 0, detected: 0).Reason).IsEqualTo(HandoffSuppressedReason.NoAgentDetected);
 
-    [Test] public async Task Row8_offers_on_a_success_or_a_running_background() {
+    [Test] public async Task Row7_offers_on_a_success_or_a_running_background() {
         await Assert.That(Decide(O()).Offered).IsTrue();
         await Assert.That(Decide(O(succeeded: 0, skipped: 5), bg: BackgroundImportStatus.Running).Offered).IsTrue();
         await Assert.That(Decide(O(succeeded: 0, skipped: 5), bg: BackgroundImportStatus.ExitedZero).Offered).IsTrue();
     }
 
-    [Test] public async Task Import_outcome_outranks_the_plan_gate() {
-        await Assert.That(Decide(O(ForegroundCertainty.Incomplete, succeeded: 0), analytics: false).Reason).IsEqualTo(HandoffSuppressedReason.ImportFailed);
-        await Assert.That(Decide(O(selected: 0, succeeded: 0, candidates: 0), analytics: false).Reason).IsEqualTo(HandoffSuppressedReason.NoNewSessions);
+    [Test] public async Task Import_outcome_outranks_agent_eligibility() {
+        await Assert.That(Decide(O(ForegroundCertainty.Incomplete, succeeded: 0), eligible: 0, detected: 0).Reason).IsEqualTo(HandoffSuppressedReason.ImportFailed);
+        await Assert.That(Decide(O(selected: 0, succeeded: 0, candidates: 0), eligible: 0, detected: 1).Reason).IsEqualTo(HandoffSuppressedReason.NoNewSessions);
     }
 
     [Test] public async Task Unknown_candidates_with_a_running_background_are_offered() =>

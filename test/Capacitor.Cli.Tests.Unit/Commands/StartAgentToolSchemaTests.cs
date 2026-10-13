@@ -7,16 +7,16 @@ public class StartAgentToolSchemaTests {
     static McpTool Tool() => McpFlowsServer.BuildToolsList().Single(t => t.Name == "start_agent");
 
     [Test]
-    public async Task The_tool_requires_cwd_prompt_and_work_item_and_nothing_else() {
-        await Assert.That(Tool().InputSchema.Required).IsEquivalentTo(new[] { "cwd", "prompt", "work_item" });
+    public async Task The_tool_requires_cwd_prompt_title_and_work_item_and_nothing_else() {
+        await Assert.That(Tool().InputSchema.Required).IsEquivalentTo(new[] { "cwd", "prompt", "title", "work_item" });
     }
 
     [Test]
-    public async Task The_tool_offers_the_seven_arguments_and_each_is_a_string() {
+    public async Task The_tool_offers_the_eight_arguments_and_each_is_a_string() {
         var properties = Tool().InputSchema.Properties;
 
         await Assert.That(properties.Keys.ToArray())
-            .IsEquivalentTo(new[] { "cwd", "prompt", "work_item", "vendor", "model", "daemon", "session_id" });
+            .IsEquivalentTo(new[] { "cwd", "prompt", "title", "work_item", "vendor", "model", "daemon", "session_id" });
 
         foreach (var (name, property) in properties)
             await Assert.That(property.Type).IsEqualTo("string").Because(name);
@@ -63,17 +63,17 @@ public class StartAgentToolSchemaTests {
     [Test]
     public async Task The_request_is_snake_case_and_leaves_absent_options_off_the_wire() {
         var json = JsonSerializer.Serialize(
-            new StartAgentDto("s1", "/r/src", "/r", "Fix the retry.", "none", "claude"),
+            new StartAgentDto("s1", "/r/src", "/r", "Fix the retry.", "Fix the retry", "none", "claude"),
             McpJsonContext.Default.StartAgentDto);
 
         await Assert.That(json).IsEqualTo(
-            """{"session_id":"s1","cwd":"/r/src","repo_path":"/r","prompt":"Fix the retry.","work_item":"none","vendor":"claude"}""");
+            """{"session_id":"s1","cwd":"/r/src","repo_path":"/r","prompt":"Fix the retry.","title":"Fix the retry","work_item":"none","vendor":"claude"}""");
     }
 
     [Test]
     public async Task The_request_carries_every_option_that_is_set() {
         var json = JsonSerializer.Serialize(
-            new StartAgentDto("s1", "/r", "/r", "p", "none", "codex", "m-1", "a1b2c3d4", "gpt-5-codex", "mac-studio"),
+            new StartAgentDto("s1", "/r", "/r", "p", "t", "none", "codex", "m-1", "a1b2c3d4", "gpt-5-codex", "mac-studio"),
             McpJsonContext.Default.StartAgentDto);
 
         await Assert.That(json).Contains("\"machine_id\":\"m-1\"");

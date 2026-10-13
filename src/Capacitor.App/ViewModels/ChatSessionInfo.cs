@@ -16,6 +16,9 @@ public sealed record ChatSessionInfo(
     /// True when this session is waiting on the user. Independent of the status word.
     public bool WaitsOnUser { get; init; }
 
+    /// Both daemon lanes refuse attachments to anything but a plain agent.
+    public bool TakesAttachments { get; init; } = true;
+
     /// The daemon dropped the agent before this pane ever saw it.
     public static readonly ChatSessionInfo Gone = new("Completed", "Completed", "", null, null, null, true, "", null);
 
@@ -26,11 +29,13 @@ public sealed record ChatSessionInfo(
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
         ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath,
-        dto.LiveSubagents, dto.UsageLimit) { WaitsOnUser = SessionStatusDots.WaitsOnUser(dto) };
+        dto.LiveSubagents, dto.UsageLimit) {
+        WaitsOnUser = SessionStatusDots.WaitsOnUser(dto), TakesAttachments = dto.Kind == "agent",
+    };
 
     public static ChatSessionInfo FromRemote(AgentRow row, bool ended) => new(
         row.Status, SessionStatusDots.Label(row), row.Vendor, row.Model,
         row.RepoPath, row.AwaitingInput, ended || SessionStatusDots.IsTerminal(row.Status), "", row.SessionId) {
-        WaitsOnUser = SessionStatusDots.WaitsOnUser(row),
+        WaitsOnUser = SessionStatusDots.WaitsOnUser(row), TakesAttachments = row.Kind == "agent",
     };
 }

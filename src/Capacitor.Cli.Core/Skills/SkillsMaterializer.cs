@@ -86,7 +86,7 @@ public static class SkillsMaterializer {
 
         if (File.Exists(file) && new FileInfo(file).LinkTarget is not null) return false;
 
-        AtomicFile.Replace(file, content);
+        AtomicFile.Replace(file, content, followLink: false);
 
         return true;
     }

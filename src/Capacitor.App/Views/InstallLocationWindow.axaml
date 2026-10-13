@@ -12,7 +12,6 @@
                 PointerPressed="OnChromePointerPressed" />
 
         <StackPanel Margin="36,52,36,28" Spacing="0">
-            <!-- The move itself, drawn: this app, heading into the Applications folder. -->
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="14">
                 <Border Width="64" Height="64" CornerRadius="14" ClipToBounds="True"
                         BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
@@ -30,7 +29,7 @@
                 </Grid>
             </StackPanel>
 
-            <TextBlock Margin="0,24,0,0" Text="Move to Applications"
+            <TextBlock x:Name="Heading" Margin="0,24,0,0" Text="Move to Applications"
                        HorizontalAlignment="Center" TextAlignment="Center"
                        FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
                        Foreground="{StaticResource KcapTextBrush}" />

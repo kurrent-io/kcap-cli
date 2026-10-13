@@ -25,10 +25,12 @@ public class RailWorktreeViewModelTests {
             SourceCache<AgentRow, string> cache, RailCollapseState? collapse = null,
             string path = "/repo/.claude/worktrees/wt-a", string root = "/repo", bool showHeader = true,
             IObservable<string?>? selected = null, IObservable<IReadOnlySet<string>>? pending = null,
-            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? tones = null) =>
+            IObservable<IReadOnlyDictionary<string, PullRequestTone>>? tones = null,
+            IObservable<IReadOnlyDictionary<string, int>>? commands = null) =>
         new(path, _ => root, showHeader, cache.AsObservableCache(),
             collapse ?? new RailCollapseState(), selected ?? new BehaviorSubject<string?>(null),
-            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { }, TimeProvider.System, tones);
+            pending ?? new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>()), NotStale, _ => { }, _ => { }, TimeProvider.System, tones,
+            agentsRunningCommands: commands);
 
     static AgentRow SessionRow(string id, string sessionId) =>
         AgentRow.FromLocal(
@@ -209,6 +211,26 @@ public class RailWorktreeViewModelTests {
             pending.OnNext(new HashSet<string> { "somebody-else" });
             await Assert.That(wt.NeedsYou).IsFalse();
             await Assert.That(wt.ShowsHeaderBadge).IsFalse();
+        });
+    }
+
+    /// Folded, the worktree's header reads a waiting session as working while its background
+    /// command runs, the same as the session's own row.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Collapsed_worktree_reads_a_running_background_command_as_working() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var cache = new SourceCache<AgentRow, string>(r => r.Key);
+            var commands = new BehaviorSubject<IReadOnlyDictionary<string, int>>(new Dictionary<string, int>());
+            var collapse = new RailCollapseState();
+            collapse.Set("/repo/.claude/worktrees/wt-a", collapsed: true);
+            using var wt = Build(cache, collapse, commands: commands);
+            cache.AddOrUpdate(Row("a1", awaitingInput: true));
+            await Assert.That(wt.HeaderStatus!.Kind).IsEqualTo(AgentStatusKind.Idle);
+
+            commands.OnNext(new Dictionary<string, int> { ["local:a1"] = 1 });
+            await Assert.That(wt.HeaderStatus!.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(wt.Sessions.Single().Status.Kind).IsEqualTo(AgentStatusKind.Working);
         });
     }
 }

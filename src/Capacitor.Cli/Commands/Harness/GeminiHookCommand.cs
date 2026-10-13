@@ -187,9 +187,10 @@ sealed class GeminiHookCommand(
             string?    scopeRoot,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             string?    source,
             TimeSpan   budget) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -201,7 +202,7 @@ sealed class GeminiHookCommand(
             return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
                 LifecycleFor(sessionId, source),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled));
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled));
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
         }
@@ -337,6 +338,7 @@ sealed class GeminiHookCommand(
             scopeRoot: cwd is not null ? GitRepository.FindRoot(cwd) ?? cwd : null,
             disabled: activeProfile?.DisableMemoryIndex is true,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
+            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Gemini, harnesses),
             source: source,
             budget: budget.Remaining);
 

@@ -49,6 +49,7 @@ public class McpHandoffServerTests {
     public async Task Returns_the_outcome_as_json() {
         var handler = new Answers(req => req.RequestUri!.AbsolutePath switch {
             $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (200, """{"results":[]}"""),
             _                                   => (200, "[]"),
         });
 
@@ -56,6 +57,33 @@ public class McpHandoffServerTests {
 
         await Assert.That(IsError(response)).IsFalse();
         await Assert.That(JsonNode.Parse(Text(response))!["continued_from"]!.GetValue<string>()).IsEqualTo(Previous);
+    }
+
+    [Test]
+    public async Task Partial_claim_adoption_is_a_tool_error_with_the_failed_attempt_preserved() {
+        var handler = new Answers(req => req.RequestUri!.AbsolutePath switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (200, """{"results":[{"outcome":"ownership_lost","attempted_claim_id":"lost"}]}"""),
+            _ => (200, "[]")
+        });
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", handler);
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(Text(response)).Contains("ownership_lost");
+        await Assert.That(Text(response)).Contains("lost");
+    }
+
+    [Test]
+    [Arguments(404)]
+    [Arguments(405)]
+    public async Task Unsupported_claim_adoption_is_an_incomplete_takeover(int status) {
+        var handler = new Answers(req => req.RequestUri!.AbsolutePath switch {
+            $"/api/sessions/{Previous}/summary" => (200, """{"status":"ended"}"""),
+            "/api/loose-ends/adopt" => (status, ""),
+            _ => (200, "[]")
+        });
+        var response = await Call($$"""{"session_id":"{{Previous}}"}""", handler);
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(Text(response)).Contains("unsupported");
     }
 
     [Test]
@@ -82,6 +110,7 @@ public class McpHandoffServerTests {
             $"/api/sessions/{Previous}/summary"   => (200, """{"status":"ended"}"""),
             $"/api/work-items/session/{Previous}" => (200, """[{"work_item_id":"w1","label":"W1"}]"""),
             "/api/work-items/declare"             => (200, "{}"),
+            "/api/loose-ends/adopt"                => (200, """{"results":[]}"""),
             _                                     => (200, "[]"),
         };
     });
@@ -93,7 +122,8 @@ public class McpHandoffServerTests {
         var response = await Call($$"""{"session_id":"{{Previous}}","current_session_id":"CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"}""", EndedSession(posts), current: null);
 
         await Assert.That(IsError(response)).IsFalse();
-        await Assert.That(posts.Single()["session_id"]!.GetValue<string>()).IsEqualTo("cccccccccccccccccccccccccccccccc");
+        await Assert.That(posts.Count).IsEqualTo(2);
+        await Assert.That(posts.All(p => p["session_id"]!.GetValue<string>() == "cccccccccccccccccccccccccccccccc")).IsTrue();
     }
 
     [Test]
@@ -104,7 +134,8 @@ public class McpHandoffServerTests {
         var response = await Call($$"""{"session_id":"{{Previous}}","current_session_id":"{{Explicit}}"}""", EndedSession(posts));
 
         await Assert.That(IsError(response)).IsFalse();
-        await Assert.That(posts.Single()["session_id"]!.GetValue<string>()).IsEqualTo(Explicit);
+        await Assert.That(posts.Count).IsEqualTo(2);
+        await Assert.That(posts.All(p => p["session_id"]!.GetValue<string>() == Explicit)).IsTrue();
     }
 
     [Test]

@@ -63,7 +63,7 @@ internal static class UpdateNotice {
     /// (<see cref="FlushAsync"/>, <c>kcap status</c>) ask for the result.
     /// </summary>
     internal static Task<UpdateCommand.UpdateCheckResult?> GetSharedCheckAsync(
-            string channel, ConfigRoot root, NpmRegistryClient npm, TimeProvider time) {
+            string channel, ConfigRoot root, IReleaseFeed npm, TimeProvider time) {
         lock (_gate) {
             return _sharedCheck ??= UpdateCommand.CheckForUpdateWithBudgetAsync(root, channel, npm, time);
         }
@@ -78,7 +78,7 @@ internal static class UpdateNotice {
     /// the command it's attached to.
     /// </summary>
     public static async Task FlushAsync(
-            string command, string[] args, ProfileContext profiles, ConfigRoot config, Func<NpmRegistryClient> npm,
+            string command, string[] args, ProfileContext profiles, ConfigRoot config, Func<IReleaseFeed> npm,
             TimeProvider time) {
         try {
             if (_reported || !IsHumanFacing(command, args)) return;
@@ -86,7 +86,7 @@ internal static class UpdateNotice {
             var profile = profiles.Effective;
             if (profile?.UpdateCheck == false) return;
 
-            var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+            var channel  = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
             // Asked for only once the notice is going to happen: this runs on the way out of EVERY
             // invocation, and a registry client built for a suppressed one costs a handler chain the
             // command never sends on.

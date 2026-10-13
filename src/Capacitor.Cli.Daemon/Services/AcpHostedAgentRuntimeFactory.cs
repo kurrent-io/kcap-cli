@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Cursor;
 using Capacitor.Cli.Daemon.Harness.Gemini;
@@ -49,7 +50,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // it alongside the server's web card, first answer wins; null leaves every launch server-only.
         PermissionPromptBroker? permissionBroker = null,
         // Audit sink for locally-settled permissions; null (tests) skips the record.
-        PermissionDecisionLog? permissionDecisionLog = null
+        PermissionDecisionLog? permissionDecisionLog = null,
+        // The server's policy judge for a call the launch's policy leaves undecided; null never consults.
+        PolicyJudgeGateway? policyJudge = null
     ) : IHostedAgentRuntimeFactory {
     readonly Func<string, string?>? _resolveVendorVersion = resolveVendorVersion;
     readonly TimeProvider _timeProvider = timeProvider;
@@ -278,6 +281,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 // the file the agent will actually touch — an unresolvable one evaluates as Other and
                 // slips past every path rule.
                 policyCwd: ctx.Worktree.Path,
+                policyJudge: policyJudge,
                 journal: ctx.Journal
             );
 

@@ -10,15 +10,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/persist-session-id.sh",
-            "timeout": 3
-          }
-        ]
       }
     ],
     "SessionEnd": [
@@ -79,6 +70,16 @@
             "async": true
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --plan-read --no-update-check",
+            "timeout": 3
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -132,7 +133,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/set-title-prompt.sh",
+            "command": "kcap hook --claude --title-prompt --no-update-check",
             "timeout": 2
           }
         ]

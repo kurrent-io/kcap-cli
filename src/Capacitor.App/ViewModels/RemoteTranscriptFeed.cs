@@ -195,7 +195,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         if (payload is null) return null;
         var at = CanonicalEventTime.Of(payload) ?? timestamp ?? _time.GetUtcNow();
         var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, at), _rules);
-        return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 && projected.Subagents.Count == 0 ? null : new(projected, offset);
+        return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 && projected.Runs.Count == 0 ? null : new(projected, offset);
     }
 
     /// A verdict belongs to the attempt that reached it: one landing after its run was stopped

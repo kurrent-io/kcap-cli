@@ -22,7 +22,8 @@ public class SetupFacadeFactoryTests {
             Config.Root, AuthFixtures.NewTokenStore(Config.Root), http,
             new AuthProxyClient(http.CreateClient(CapacitorClients.Anonymous), TimeProvider.System),
             new GitHubOAuthClient(http), new WorkOSClient(http, TimeProvider.System), new RecordingBrowser(),
-            NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System);
+            NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System,
+            new TenantProvisioningClient(http.CreateClient(CapacitorClients.Anonymous)));
     }
 
     static AuthHttpScript TwoTenants() =>

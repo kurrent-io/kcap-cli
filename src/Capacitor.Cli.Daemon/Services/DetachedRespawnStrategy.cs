@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Install;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -37,7 +38,7 @@ internal sealed partial class DetachedRespawnStrategy(
     }
 
     public RestartOutcome Restart() {
-        var exe = Environment.ProcessPath;
+        var exe = Environment.ProcessPath is { } p ? ScriptInstallLayout.Stabilize(p) : null;
         if (exe is null) { LogNoProcessPath(logger); return RestartOutcome.Retry; }
 
         var psi = new ProcessStartInfo {

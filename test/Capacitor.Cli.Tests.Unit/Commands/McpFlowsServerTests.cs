@@ -445,6 +445,7 @@ public class McpFlowsServerTests {
             ["target_kind"]  = "pr",
             ["target_ref"]   = "123",
             ["target_title"] = "some PR",
+            ["session_title"] = "Review the thing",
             ["context"]      = "some context"
         };
         if (vendor is not null) args["vendor"] = vendor;
@@ -487,6 +488,42 @@ public class McpFlowsServerTests {
         await Assert.That(body["model"]!.GetValue<string>()).IsEqualTo("opus");
         await Assert.That(body["vendor"]!.GetValue<string>()).IsEqualTo("claude");
         await Assert.That(body["client_flow_protocol_version"]!.GetValue<int>()).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task StartFlowAsync_sends_the_drivers_session_title() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/flows/review/start/v4").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(V3RunningWithAck));
+        using var client = new HttpClient();
+
+        var arguments = ModelStartArguments("claude", model: null);
+        arguments["session_title"] = "  Review PR #1302: deliver flow results  ";
+
+        using var response = await Server().StartFlowAsync(
+            client, server.Url!, arguments,
+            cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, kindArgName: "kind", requestingSessionId: null);
+
+        var body = JsonNode.Parse(server.LogEntries.Single().RequestMessage.Body!)!.AsObject();
+        await Assert.That(body["session_title"]!.GetValue<string>()).IsEqualTo("Review PR #1302: deliver flow results");
+    }
+
+    /// <summary>Without a title the reviewer's session is named after the flow's generic opening
+    /// instruction, which says nothing about the work.</summary>
+    [Test]
+    public async Task StartFlowAsync_without_a_session_title_rejects_locally_without_posting() {
+        using var server = WireMockServer.Start();
+        using var client = new HttpClient();
+
+        var arguments = ModelStartArguments("claude", model: null);
+        arguments.Remove("session_title");
+
+        var ex = await Assert.That(async () => await Server().StartFlowAsync(
+            client, server.Url!, arguments,
+            cwd: "/tmp/cwd", repoRoot: null, repoInfo: null, kindArgName: "kind", requestingSessionId: null)).Throws<ArgumentException>();
+
+        await Assert.That(ex!.Message).IsEqualTo("'session_title' is required.");
+        await Assert.That(server.LogEntries.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -540,6 +577,7 @@ public class McpFlowsServerTests {
             ["target_kind"]     = "pr",
             ["target_ref"]      = "123",
             ["target_title"]    = "some PR",
+            ["session_title"] = "Review the thing",
             ["context"]         = "some context",
             ["vendor"]          = "claude",
             ["model"]           = "opus"

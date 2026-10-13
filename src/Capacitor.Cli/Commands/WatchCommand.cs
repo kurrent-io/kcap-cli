@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Capacitor.Cli.Capture;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
@@ -22,6 +23,7 @@ using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
@@ -35,8 +37,23 @@ namespace Capacitor.Cli.Commands;
 partial class WatchCommand(
         ConfigRoot config, ProfileContext profiles, HarnessRegistry harnesses,
         ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
-        GitProviderRouter router, TimeProvider time) {
+        GitProviderRouter router, TimeProvider time, AccountStore accounts, UserHome home) {
     readonly CursorMarkers  _markers  = new(config, time);
+    readonly Dictionary<(string, string?), HeldLineRedaction> _heldLines = [];
+
+    /// <summary>The clock redaction budgets read, when not <c>time</c>.</summary>
+    internal TimeProvider? RedactionClock { get; init; }
+
+    internal HeldLineRedaction HeldLineFor(string sessionId, string? agentId) {
+        lock (_heldLines) {
+            if (!_heldLines.TryGetValue((sessionId, agentId), out var held)) {
+                held = new(new HeldLineStore(config, sessionId, agentId), time, RedactionClock ?? time, message => Log(time, message));
+                _heldLines[(sessionId, agentId)] = held;
+            }
+
+            return held;
+        }
+    }
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -376,7 +393,7 @@ partial class WatchCommand(
         var state = new WatchState();
         state.LastActivityAt = time.GetUtcNow();
 
-        var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses);
+        var titleStore = HarnessTitleStores.For(vendor, agentId, sessionId, transcriptPath, harnesses, accounts.TryLoad(), home);
         if (titleStore is not null) state.TitleTracker = new HarnessTitleTracker(titleStore.RecordsChangeTime);
 
         // Task 11 (D0) — one runtime rewrite-guard instance for this watcher's whole
@@ -578,10 +595,20 @@ partial class WatchCommand(
         // exists, so it can never observe a half-applied reconnect rewind (see cursorRewindGate's
         // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
         // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
-        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) =>
-            GatedDrainNewLinesAsync(
+        var vibeSubagents = new List<MistralVibeSubagent>();
+
+        Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
+            // Vibe replaces journal segments as it publishes, so a refresh can race a file away;
+            // the next drain retries it.
+            if (vendor == "mistral-vibe") {
+                try { vibeSubagents.AddRange(MistralVibeLiveTranscript.Refresh(transcriptPath)); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+
+            return GatedDrainNewLinesAsync(
                 cursorRewindGate, hubConnection, sessionId, transcriptPath, agentId, state, vendor, drainCt,
                 isFinalDrain: isFinalDrainLocal, cursorGuard: cursorGuard, onCursorRewriteDetected: OnCursorRewriteDetected);
+        }
 
         // Register StopWatcher handler — server sends this to tell us to shut down
         hubConnection.On<string>(
@@ -864,6 +891,8 @@ partial class WatchCommand(
                         codexRolloutMtimes, spawnedChildWatcherKeys, cts.Token);
                 } else if (agentId is null && vendor == "antigravity") {
                     await ScanAntigravitySubagentLinks(sessionId, drained, state.PostedSubagentLinks, cts.Token);
+                } else if (agentId is null && vendor == "mistral-vibe") {
+                    await ScanMistralVibeSubagents(sessionId, transcriptPath, vibeSubagents, seenSubagents, spawnedChildWatcherKeys, cts.Token);
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -947,6 +976,14 @@ partial class WatchCommand(
             state.BufferedLineNumbers.Clear();
         }
 
+        // A held line stops the buffer short of the threshold however long the session is, so it
+        // must not read as a short session whose lines are dropped.
+        if (agentId is null && !state.ThresholdReached && HeldLineFor(sessionId, null).Held is not null) {
+            state.ThresholdReached = true;
+            state.BufferedLines.Clear();
+            state.BufferedLineNumbers.Clear();
+        }
+
         // Final drain before exit
         if (agentId is null && !state.ThresholdReached) {
             // Session watcher never reached threshold — short-lived session.
@@ -990,7 +1027,8 @@ partial class WatchCommand(
             // dedicated TranscriptSpool so the global drain (task 3) replays it after recovery,
             // instead of silently dropping it.
             await SpoolUndeliveredTranscriptTailAsync(
-                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None);
+                transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None,
+                ShutdownTailRedactionDeadline - time.GetElapsedTime(shutdownStarted));
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -1132,6 +1170,53 @@ partial class WatchCommand(
             spawnedChildKeys.Add($"{sessionId}-{agentId}");
 
             Log(time, $"Gemini subagent {agentId} ({agentType}) registered + child watcher spawned");
+        }
+    }
+
+    /// <summary>
+    /// Vibe fires no hooks for a subagent; the child runs in its own <c>child-&lt;hex&gt;</c> store
+    /// beside the parent's, named only by the parent's <c>subagent.spawn</c> effect. The parent
+    /// watcher registers each one (<c>subagent-start</c>, fail-closed), keeps a copy of its store, and
+    /// spawns a child watcher to stream that copy. A child whose store is not there yet, or whose
+    /// registration failed, is retried on the next tick.
+    /// </summary>
+    async Task ScanMistralVibeSubagents(
+            string                    sessionId,
+            string                    transcriptPath,
+            List<MistralVibeSubagent> found,
+            HashSet<string>           seen,
+            ICollection<string>       spawnedChildKeys,
+            CancellationToken         ct
+        ) {
+        if (found.Count == 0 || MistralVibeLiveTranscript.SourceOf(transcriptPath) is not { } source) return;
+        if (Path.GetDirectoryName(source.SessionDir) is not { } storeRoot) return;
+
+        // Every refresh re-reports each spawn the store holds, so one child arrives many times.
+        var pending = found.DistinctBy(s => s.ChildSessionId, StringComparer.Ordinal).ToList();
+        found.Clear();
+
+        foreach (var subagent in pending) {
+            if (ct.IsCancellationRequested) return;
+            if (subagent.AgentId is not { } agentId || seen.Contains(agentId)) continue;
+
+            var childDir = Path.Combine(storeRoot, subagent.ChildSessionId);
+            if (!Directory.Exists(childDir)) { found.Add(subagent); continue; }
+
+            var key       = $"{sessionId}-{agentId}";
+            var childCopy = MistralVibeLiveTranscript.PathFor(config, key);
+            MistralVibeLiveTranscript.Follow(childDir, childCopy, source.Model);
+
+            if (!await PostSubagentStartAsync(sessionId, agentId, subagent.AgentType ?? "subagent", childCopy, ct)) {
+                found.Add(subagent);
+                continue;
+            }
+
+            seen.Add(agentId);
+            await watchers.EnsureWatcherRunning(key: key, transcriptPath: childCopy,
+                agentId: agentId, sessionIdOverride: sessionId, vendor: "mistral-vibe");
+            spawnedChildKeys.Add(key);
+
+            Log(time, $"Mistral Vibe subagent {agentId} registered + child watcher spawned");
         }
     }
 
@@ -1403,7 +1488,7 @@ partial class WatchCommand(
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -1599,7 +1684,7 @@ partial class WatchCommand(
     /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
     /// <see cref="RunWatch"/>'s call site.
     /// </summary>
-    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor";
+    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe";
 
     /// <summary>
     /// the idle clock <see cref="ShouldEndOnIdle"/> measures against for
@@ -2079,9 +2164,20 @@ partial class WatchCommand(
                 }
             }
 
-            var newLineNumbers = drainRead.LineNumbers;
-            var newLines = TranscriptCapture.EncodeLines(drainRead.Lines,
+            // Cut the read itself at a held line: the raw-line consumers below must see what follows
+            // it once, on the poll that delivers it.
+            var captured = HeldLineFor(sessionId, agentId).Capture(drainRead.Lines, drainRead.LineNumbers,
                 (reason, count) => Log(time, $"Capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
+            if (captured.Consumed < drainRead.Lines.Count) {
+                drainRead = drainRead with {
+                    Lines        = drainRead.Lines.GetRange(0, captured.Consumed),
+                    LineNumbers  = drainRead.LineNumbers.GetRange(0, captured.Consumed),
+                    NextPosition = drainRead.LineNumbers[captured.Consumed]
+                };
+            }
+
+            var newLineNumbers = drainRead.LineNumbers;
+            var newLines       = captured.Lines;
             var linesRead      = drainRead.NextPosition;
 
             state.Commits = state.Commits.Collect();
@@ -2551,7 +2647,8 @@ partial class WatchCommand(
             string            vendor,
             int               linesProcessed,
             CommitObservation commits,
-            CancellationToken ct
+            CancellationToken ct,
+            TimeSpan?         redactionLimit = null
         ) {
         if (!File.Exists(transcriptPath)) return null;
 
@@ -2579,23 +2676,37 @@ partial class WatchCommand(
 
         if (tail.Lines.Count == 0 && commits.Pending is not { Length: > 0 }) return null;
 
-        var redacted = TranscriptCapture.EncodeLines(tail.Lines,
+        var limit    = redactionLimit is { } l && l > MinShutdownTailRedaction ? l : MinShutdownTailRedaction;
+        var redacted = TranscriptCapture.EncodeTail(tail.Lines, tail.LineNumbers, new RedactionBudget(RedactionClock ?? time, limit),
+            HeldLineFor(sessionId, agentId).Redacted,
             (reason, count) => Log(time, $"Shutdown capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
+        var unredacted = redacted.Consumed < tail.Lines.Count ? tail.LineNumbers[redacted.Consumed] : (int?)null;
         var batch = new TranscriptBatch {
             SessionId = sessionId, AgentId = agentId, Vendor = vendor,
-            Lines = [..redacted], LineNumbers = [..tail.LineNumbers], ObservedCommits = commits.Pending
+            Lines = [..redacted.Lines], LineNumbers = [..tail.LineNumbers.Take(redacted.Consumed)], ObservedCommits = commits.Pending
         };
         var result = TranscriptSpool.AppendResult.Appended;
-        foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
-            result = transcriptSpool.Append(sessionId,
-                BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
-            if (result != TranscriptSpool.AppendResult.Appended) break;
+        if (batch.Lines.Length > 0 || commits.Pending is { Length: > 0 }) {
+            foreach (var chunk in TranscriptBatchBuffer.Split(batch)) {
+                result = transcriptSpool.Append(sessionId,
+                    BuildTranscriptSpoolBatch(sessionId, agentId, vendor, chunk.Lines, chunk.LineNumbers!, chunk.ObservedCommits));
+                if (result != TranscriptSpool.AppendResult.Appended) break;
+            }
+        }
+
+        if (result == TranscriptSpool.AppendResult.Appended && unredacted is { } line) {
+            Log(time, $"Line {line} of {sessionId} still cannot be redacted in time; spooled the {batch.Lines.Length} line(s) before it");
+            transcriptSpool.MarkNeedsImport(sessionId, $"shutdown tail: redaction of line {line} timed out");
+            HeldLineFor(sessionId, agentId).ReleaseBelow(line + 1);
+
+            return TranscriptSpool.AppendResult.MarkedNeedsImport;
         }
 
         switch (result) {
             case TranscriptSpool.AppendResult.Appended:
+                HeldLineFor(sessionId, agentId).ReleaseBelow(tail.NextPosition);
                 Log(time, $"Spooled {tail.Lines.Count} undelivered transcript line(s) at shutdown for "
-                  + $"{sessionId} (hub down) — will replay on the next global drain");
+                  + $"{sessionId} — will replay on the next global drain");
 
                 break;
             case TranscriptSpool.AppendResult.MarkedNeedsImport:
@@ -3496,6 +3607,11 @@ partial class WatchCommand(
     // The watcher is killed 5s after it is told to stop. The final-line wait, the final drain and
     // the PR probe share this much of it, leaving the rest for the drain-complete signal.
     static readonly TimeSpan FinalSecondaryProbeDeadline = TimeSpan.FromSeconds(3);
+
+    // Inside the 5s a stop request allows before the kill, so the spool append or the needs-import
+    // marker is written before the process can be killed.
+    static readonly TimeSpan ShutdownTailRedactionDeadline = TimeSpan.FromSeconds(4);
+    static readonly TimeSpan MinShutdownTailRedaction = TimeSpan.FromSeconds(1);
 
     // A value the server has not settled is re-sent no sooner than this, however often the transcript drains.
     internal static readonly TimeSpan HarnessTitleRetryGap = TimeSpan.FromSeconds(30);

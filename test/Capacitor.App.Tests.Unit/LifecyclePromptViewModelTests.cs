@@ -156,4 +156,13 @@ public class LifecyclePromptViewModelTests {
             await Assert.That(vm.ShowDeclineButton).IsFalse();
         });
     }
+
+    [Test]
+    public async Task Reload_service_prompt_has_its_title_and_accept_label() {
+        var vm = new LifecyclePromptViewModel(
+            new LifecyclePrompt(LifecyclePrompt.KindReloadService, null, null, false, "disclosure"), new TaskCompletionSource<bool>());
+        await Assert.That(vm.Title).IsEqualTo("Reload the daemon service");
+        await Assert.That(vm.AcceptButtonText).IsEqualTo("Reload now");
+        await Assert.That(vm.ShowDeclineButton).IsTrue();
+    }
 }

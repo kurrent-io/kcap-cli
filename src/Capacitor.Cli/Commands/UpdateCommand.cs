@@ -2,17 +2,32 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Install;
 
 namespace Capacitor.Cli.Commands;
 
 public sealed class UpdateCommand(
         ConfigRoot root, ProfileContext profiles, NpmRegistryClient npm, CapacitorServer server, ICapacitorHttpClient http,
-        TimeProvider time, bool? appBundled = null) {
+        TimeProvider time, KcapReleaseClient? releases = null, ScriptUpdater? scriptUpdater = null, InstallKind? kind = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
         "This kcap is bundled with the Kurrent Capacitor desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
 
-    readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
+    readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
+
+    bool AppBundled => _kind == InstallKind.App;
+
+    /// <summary>The script install to update. A seam: production reads the running binary's layout.</summary>
+    internal ScriptInstallLayout? ScriptLayout { get; init; } = ScriptInstallLayout.OfRunningBinary();
+
+    /// <summary>The release this machine installs. A seam for the same reason as <see cref="ScriptLayout"/>.</summary>
+    internal string Rid { get; init; } = RuntimeRid.Current();
+
+    /// <summary>Runs <c>kcap refresh</c> with the newly installed binary, so its own refresh list applies.</summary>
+    internal Func<string, Task<int>> RunRefresh { get; init; } = RunRefreshAsync;
+
+    /// <summary>A script install checks the installer's channel manifest; anything else checks npm.</summary>
+    IReleaseFeed Feed => _kind == InstallKind.Script && releases is not null ? releases : npm;
 
     /// <summary>Valid npm dist-tags for the update channel (Phase 1).</summary>
     static readonly string[] KnownChannels = ["latest", "beta"];
@@ -37,6 +52,15 @@ public sealed class UpdateCommand(
     /// source-gen also doesn't apply the record default on deserialize, so a real
     /// profile can carry a null <c>UpdateChannel</c> — also handled here.
     /// </summary>
+    /// <summary>The channel a script install follows is the one its marker records, which the installer
+    /// and every channel switch write; the profile's applies to every other install.</summary>
+    internal static string? ConfiguredChannel(InstallKind kind, ScriptInstallLayout? layout, string? profileChannel) =>
+        kind == InstallKind.Script && layout?.RecordedChannel() is { } recorded ? recorded : profileChannel;
+
+    /// <inheritdoc cref="ConfiguredChannel(InstallKind, ScriptInstallLayout?, string?)"/>
+    internal static string? ConfiguredChannel(string? profileChannel) =>
+        ConfiguredChannel(InstallProvenance.Kind(), ScriptInstallLayout.OfRunningBinary(), profileChannel);
+
     internal static string ResolveChannel(string[] args, string? configuredChannel) {
         if (args.Contains("--stable")) return "latest";
         if (args.Contains("--beta"))   return "beta";
@@ -46,10 +70,10 @@ public sealed class UpdateCommand(
 
     public async Task<int> HandleAsync(string[] args) {
         var profile   = profiles.Effective;
-        var channel   = ResolveChannel(args, profile?.UpdateChannel);
+        var channel   = ResolveChannel(args, ConfiguredChannel(_kind, ScriptLayout, profile?.UpdateChannel));
         var checkOnly = args.Contains("--check");
 
-        if (_appBundled) {
+        if (AppBundled) {
             await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel) : BundledMessage);
 
             return 0;
@@ -60,6 +84,9 @@ public sealed class UpdateCommand(
         // the whole v2 config via ConfigMutator — NEVER write a flat
         // LegacyV1Config, which would overwrite the user's v2 profile config.
         if (args.Contains("--beta") || args.Contains("--stable")) {
+            if (_kind == InstallKind.Script && ScriptLayout is { } switched && switched.RecordedChannel() != channel)
+                ScriptUpdater.TryWriteMarker(switched, channel, Console.Error);
+
             // The startup snapshot: ConfigMutator below re-reads under its own lock.
             var pc = profiles.Snapshot;
 
@@ -84,7 +111,7 @@ public sealed class UpdateCommand(
         // The cap reads a cached server version that only an authenticated response refreshes, so a
         // server upgraded since the last one would otherwise hold this update back.
         var probe             = channel == "latest" ? ServerProbe.SendAsync(server, http, time) : Task.CompletedTask;
-        var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, npm, time);
+        var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, Feed, time);
         await probe;
         var advisory          = UpdateAdvisoryResolver.Resolve(checkResult, channel, profiles.Resolution.ServerUrl, root);
         var (latest, current) = (advisory.Target, advisory.Current);
@@ -114,6 +141,9 @@ public sealed class UpdateCommand(
             return 0;
         }
 
+        if (_kind == InstallKind.Script && ScriptLayout is { } layout && scriptUpdater is not null)
+            return await UpdateScriptInstallAsync(layout, scriptUpdater, current, latest, channel);
+
         // Reached only when the native binary is run WITHOUT the npm launcher
         // (e.g. invoking the platform binary directly). For npm-global installs
         // the launcher intercepts `update` and performs the upgrade itself.
@@ -123,6 +153,36 @@ public sealed class UpdateCommand(
         await Console.Out.WriteLineAsync($"  npm install -g @kurrent/kcap@{InstallTag(advisory, channel)}");
 
         return 0;
+    }
+
+    async Task<int> UpdateScriptInstallAsync(
+            ScriptInstallLayout layout, ScriptUpdater updater, string current, string target, string channel) {
+        await Console.Out.WriteLineAsync($"Updating kcap: {current} {Arrow} {target}");
+
+        if (!await updater.InstallAsync(layout, target, channel, Rid, Console.Out, Console.Error, CancellationToken.None))
+            return 1;
+
+        await Console.Out.WriteLineAsync("Refreshing hooks and skills…");
+        var exe = layout.CurrentBin(OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
+        if (await RunRefresh(exe) != 0)
+            await Console.Error.WriteLineAsync("Some agent integrations were not refreshed; run `kcap refresh` to retry.");
+
+        await Console.Out.WriteLineAsync($"kcap updated to {target}.");
+        await Console.Out.WriteLineAsync(OperatingSystem.IsWindows()
+            ? "Run `kcap daemon restart` if you run the daemon."
+            : "A running daemon restarts on the new version once it is idle.");
+
+        return 0;
+    }
+
+    static async Task<int> RunRefreshAsync(string exe) {
+        var result = await new ProcessRunner(TimeProvider.System).RunAsync(
+            exe, ["refresh"], new RunOptions(Timeout: TimeSpan.FromMinutes(15)), CancellationToken.None);
+
+        if (!string.IsNullOrWhiteSpace(result.Stdout)) await Console.Out.WriteAsync(result.Stdout);
+        if (!string.IsNullOrWhiteSpace(result.Stderr)) await Console.Error.WriteAsync(result.Stderr);
+
+        return result.TimedOut ? 1 : result.ExitCode;
     }
 
     /// <summary>
@@ -144,7 +204,7 @@ public sealed class UpdateCommand(
     internal static async Task<UpdateCheckResult?> CheckForUpdateWithBudgetAsync(
             ConfigRoot root,
             string channel,
-            NpmRegistryClient npm,
+            IReleaseFeed npm,
             TimeProvider time,
             TimeSpan? cacheFreshBudget = null,
             TimeSpan? networkCancelAfter = null,
@@ -277,7 +337,7 @@ public sealed class UpdateCommand(
     /// <see cref="WriteCacheRecordAsync"/>.
     /// </param>
     internal static async Task<UpdateCheckResult> CheckForUpdateAsync(
-            bool forceCheck, string channel, ConfigRoot root, NpmRegistryClient npm, TimeProvider time,
+            bool forceCheck, string channel, ConfigRoot root, IReleaseFeed npm, TimeProvider time,
             CancellationToken ct = default) {
         var current   = GetCurrentVersion();
         var cachePath = CachePathFor(channel, root);

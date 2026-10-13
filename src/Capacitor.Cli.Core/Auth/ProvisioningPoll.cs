@@ -22,4 +22,9 @@ public static class ProvisioningPoll {
         // 200 provisioning/reserved, 401 (token source refreshes next tick), 0 transport, 5xx: keep waiting.
         _                          => PollVerdict.Wait
     };
+
+    /// <summary>Only a status the server answered with says the workspace is still being built; a
+    /// transport error or a 5xx says nothing.</summary>
+    public static bool IsPending(int statusCode, string? state) =>
+        statusCode == 200 && state is not null && state is not ("active" or "failed");
 }

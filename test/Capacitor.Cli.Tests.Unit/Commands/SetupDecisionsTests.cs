@@ -63,6 +63,14 @@ public class SetupDecisionsTests {
         await Assert.That(summary).IsEqualTo("Claude Code, Codex");
     }
 
+    [Test]
+    public async Task DecideInstallAgents_OnlyVibeDetected_Installs() {
+        var detected = new CodingAgentsStep.DetectedAgents(Claude: false, Codex: false, Cursor: false, Copilot: false, Vibe: true);
+
+        await Assert.That(SetupDecisions.DetectedAgentsSummary(detected)).IsEqualTo("Mistral Vibe");
+        await Assert.That(SetupDecisions.DecideInstallAgents(detected, noPrompt: true, promptYesNo: _ => false)).IsTrue();
+    }
+
     // --- DecideImport (Step 6 — import past sessions) ---
 
     [Test]

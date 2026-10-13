@@ -27,6 +27,7 @@ internal static class SetupDecisions {
         if (d.Pi)          names.Add("Pi");
         if (d.OpenCode)    names.Add("OpenCode");
         if (d.Antigravity) names.Add("Antigravity");
+        if (d.Vibe)        names.Add("Mistral Vibe");
 
         return names.Count == 0 ? null : string.Join(", ", names);
     }
@@ -75,6 +76,7 @@ internal static class SetupDecisions {
             SkipPi          = Skip(HarnessId.Pi, options.SkipPi),
             SkipOpenCode    = Skip(HarnessId.OpenCode, options.SkipOpenCode),
             SkipAntigravity = Skip(HarnessId.Antigravity, options.SkipAntigravity),
+            SkipMistralVibe = Skip(HarnessId.MistralVibe, options.SkipMistralVibe),
 
             // The hooks flag counts against TOOLS as well. `--skip-<vendor>-hooks` is a whole-vendor
             // opt-out, and the browser's separate tools axis must not re-enable the half of it the
@@ -85,6 +87,7 @@ internal static class SetupDecisions {
             SkipPiMcp          = Tools(HarnessId.Pi, options.SkipPi || options.SkipPiMcp),
             SkipOpenCodeMcp    = Tools(HarnessId.OpenCode, options.SkipOpenCode || options.SkipOpenCodeMcp),
             SkipAntigravityMcp = Tools(HarnessId.Antigravity, options.SkipAntigravity || options.SkipAntigravityMcp),
+            SkipMistralVibeMcp = Tools(HarnessId.MistralVibe, options.SkipMistralVibe || options.SkipMistralVibeMcp),
 
             // Kiro is the exception, and stays one. `--skip-kiro-hooks` opts out of only the invasive
             // agent clone; the terminal path registers Kiro's MCP under it and says so. Carrying it

@@ -70,7 +70,7 @@ public class SpoolOutageRecoveryTests : IDisposable {
 
     // HandleCore takes a pre-built HttpClient so we bypass auth entirely.
     ClaudeHookCommand MakeCommand() =>
-        new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory));
+        new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
 
     Task<int> Invoke(HttpClient client, string payload) =>
         MakeCommand().HandleCore(client, AuthStatus.Ok, MakeSpool(), new StringReader(payload));
@@ -220,5 +220,25 @@ public class SpoolOutageRecoveryTests : IDisposable {
         // Spool file must be gone — the generate_whats_done branch must not
         // prevent the entry from being marked Delivered.
         await Assert.That(SpoolFiles.Any()).IsFalse();
+    }
+
+    /// <summary>The judge stops carrying the snapshot inline only once the server has accepted the
+    /// spooled upload; a refused delivery must leave it inline.</summary>
+    [Test, NotInParallel("SpoolDir")]
+    [Arguments(200, true)]
+    [Arguments(503, false)]
+    public async Task A_delivered_snapshot_upload_is_marked_delivered(int status, bool delivered) {
+        _server.Given(Request.Create().WithPath("/hooks/policy-snapshot").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(status));
+        var upload = $$"""
+            {"session_id":"{{Sid}}","snapshot_id":"abc123","engine_version":"1","degraded":false,"degradations":[],"documents":[]}
+            """;
+        MakeSpool().Append(Sid, "policy-snapshot", upload);
+
+        using var client = new HttpClient();
+        await MakeSpool().DrainAllAsync(Sid, MakeCommand().ClaudePoster(client, TimeSpan.FromSeconds(2)),
+            TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        await Assert.That(MakeSpool().IsPolicySnapshotDelivered(Sid, "abc123")).IsEqualTo(delivered);
     }
 }

@@ -26,7 +26,8 @@ static class SetupDaemonService {
 
     /// <param name="ladder">Test seam for the ensure ladder; production resolves the real service
     /// manager. Null return means the platform has no service manager at all.</param>
-    public static async Task RunAsync(
+    /// <returns>What the ensure did, or null when the browser asked for nothing.</returns>
+    public static async Task<FirstRunMachineActionResult?> RunAsync(
             IFirstRunFlowChannel             channel,
             string                           serverUrl,
             string                           flowId,
@@ -40,12 +41,12 @@ static class SetupDaemonService {
         // press can land after the leg returned and while the steps below are running.
         var poll = await channel.PollAsync(serverUrl, flowId, ct);
 
-        if (poll.Body is not { } view) return;
+        if (poll.Body is not { } view) return null;
 
         var outstanding = FirstRunFlowOutcomes.MachineActions(view)
             .FirstOrDefault(a => a.Capability == FirstRunMachineCapabilities.DaemonService);
 
-        if (outstanding.Capability is null) return;
+        if (outstanding.Capability is null) return null;
 
         AnsiConsole.MarkupLine(
             "  [dim]The browser asked to run the agent daemon as a service, so this machine stays "
@@ -64,8 +65,10 @@ static class SetupDaemonService {
                 },
                 ct);
 
-            if (reported.Recorded) return;
+            if (reported.Recorded) break;
         }
+
+        return result;
     }
 
     static async Task<FirstRunMachineActionResult> PerformAsync(

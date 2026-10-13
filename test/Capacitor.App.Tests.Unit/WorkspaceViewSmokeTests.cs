@@ -40,13 +40,13 @@ public class WorkspaceViewSmokeTests {
         WorkspaceFixtures.Agent(id, vendor, hasTerminal, "/repo/myproj");
 
     static (WorkspaceView View, WorkspaceViewModel Vm, FakeDaemonClientService Daemon, FakeTerminalAttachClientFactory Attach) Build(
-            string agentId = AgentId, Func<ITerminalSurface>? surface = null) {
+            string agentId = AgentId, Func<ITerminalSurface>? surface = null, IPlanArtifactSource? planArtifacts = null) {
         var daemon = new FakeDaemonClientService();
         var attach = new FakeTerminalAttachClientFactory();
         var vm = new WorkspaceViewModel(
             agentId, daemon, NewActions(), attach.Factory, surface ?? (() => new FakeTerminalSurface()),
             new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
-            new ScriptedLocalControlOps(), new NoAttachmentUploader());
+            new ScriptedLocalControlOps(), new NoAttachmentUploader(), planArtifacts: planArtifacts);
         return (new WorkspaceView { DataContext = vm }, vm, daemon, attach);
     }
 
@@ -639,5 +639,58 @@ public class WorkspaceViewSmokeTests {
             .ToArray();
         ToolTip.SetIsOpen(control, false);
         return lines;
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_position_shows_with_a_document_and_hosts_the_list_and_reader() {
+        await RunOnUiAsync(async () => {
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md") with { Source = "discovered" }));
+            var (view, vm, daemon, _) = Build(planArtifacts: source);
+            var window = new Window { Content = view, Width = 1000, Height = 640 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(Find<Button>(window, "ArtefactsTabButton")!.IsEffectivelyVisible).IsFalse();
+
+            daemon.Agents.AddOrUpdate(WorkspaceFixtures.Agent(AgentId, "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: AgentId));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<Button>(window, "ArtefactsTabButton")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<ContentControl>(window, "ArtefactsHost")!.Content).IsNull();
+
+            await vm.ShowArtefactsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<ContentControl>(window, "ArtefactsHost")!.Content).IsTypeOf<ArtefactsView>();
+            await Assert.That(Find<ItemsControl>(window, "DocumentList")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<ContentControl>(window, "DocumentReaderHost")!.IsEffectivelyVisible).IsTrue();
+
+            await vm.Artefacts.SelectCommand.Execute(vm.Artefacts.Documents[0]);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<ScrollViewer>(window, "DocumentScroll")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<Border>(window, "DocumentNotice")!.IsEffectivelyVisible).IsFalse();
+
+            window.Close();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The header's right side is icons: the segment is what grows.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_in_web_is_an_icon_button_with_a_tooltip() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, _, _) = await ShowPtyAsync();
+            var button = Find<Button>(window, "OpenInWebButton")!;
+            await Assert.That(button.Content).IsNotTypeOf<string>();
+            await Assert.That(ToolTip.GetTip(button)).IsEqualTo("Open in web");
+            await Assert.That(button.Classes.Contains("kcapIcon")).IsTrue();
+            window.Close();
+            await vm.TeardownAsync();
+        });
     }
 }

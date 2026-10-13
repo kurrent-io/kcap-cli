@@ -8,16 +8,56 @@ public class JsonMcpConfigWriterTests {
 
     static string TempConfig(TempDir tmp, string name = "mcp.json") => tmp.PathTo(name);
 
-    // In-memory marker double: treats an entry as kcap-owned iff its key starts with "kcap-".
-    sealed class FakeMarker : IMcpMarker {
+    // In-memory marker double: treats an entry as kcap-owned iff its key starts with "kcap-" and is not disowned.
+    sealed class FakeMarker(params string[] disowned) : IMcpMarker {
         readonly HashSet<string> _owned = [];
-        public bool Owns(string cfg, string name, JsonNode entry) => name.StartsWith("kcap-", StringComparison.Ordinal);
+        public bool Owns(string cfg, string name, JsonNode entry) =>
+            name.StartsWith("kcap-", StringComparison.Ordinal) && !disowned.Contains(name);
         public void Record(string cfg, IReadOnlyList<KeyValuePair<string, JsonNode?>> entries) { foreach (var (n, _) in entries) _owned.Add(n); }
+        public void Forget(string cfg, IReadOnlyCollection<string> names) => _owned.ExceptWith(names);
         public IEnumerable<string> Owned(string cfg) => _owned;
         public void Clear(string cfg) => _owned.Clear();
     }
 
     static JsonObject Read(string path) => (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+
+    [Test]
+    public async Task Register_removes_an_owned_entry_under_a_retired_name() {
+        using var tmp = new TempDir();
+        var path = tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-artefacts":{"command":"kcap","args":["mcp","artefacts"]},"other":{"command":"x"}}}""");
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new FakeMarker());
+
+        var servers = (JsonObject)Read(path)["mcpServers"]!;
+        await Assert.That(servers.ContainsKey("kcap-artefacts")).IsFalse();
+        await Assert.That(servers.ContainsKey("kcap-pages")).IsTrue();
+        await Assert.That(servers.ContainsKey("other")).IsTrue();
+    }
+
+    [Test]
+    public async Task Register_keeps_an_entry_under_a_retired_name_it_does_not_own() {
+        using var tmp = new TempDir();
+        var path = tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-artefacts":{"command":"kcap","args":["mcp","artefacts"]}}}""");
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, new FakeMarker("kcap-artefacts"));
+
+        await Assert.That(((JsonObject)Read(path)["mcpServers"]!).ContainsKey("kcap-artefacts")).IsTrue();
+    }
+
+    /// A claim left on a retired name would make a later hand-added entry under it read as kcap's.
+    [Test]
+    public async Task Register_drops_the_ownership_claim_on_a_retired_name() {
+        using var tmp = new TempDir();
+        var path = tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-artefacts":{"command":"kcap","args":["mcp","artefacts"]}}}""");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+        marker.Record(path, ["kcap-artefacts"]);
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, cwd: null, marker);
+
+        await Assert.That(((JsonObject)Read(path)["mcpServers"]!).ContainsKey("kcap-artefacts")).IsFalse();
+        await Assert.That(marker.Owned(path).Contains("kcap-artefacts")).IsFalse();
+        await Assert.That(marker.Owned(path).Contains("kcap-pages")).IsTrue();
+    }
 
     [Test]
     public async Task Register_on_missing_file_writes_all_servers_standard_shape() {
@@ -71,7 +111,7 @@ public class JsonMcpConfigWriterTests {
         await Assert.That((bool)servers["kcap-plans"]!["trust"]!).IsTrue();
         await Assert.That(servers["kcap-flows"]!["trust"]).IsNull();     // launches a paid hosted reviewer
         await Assert.That(servers["kcap-memory"]!["trust"]).IsNull();    // can widen a memory's audience
-        await Assert.That(servers["kcap-artefacts"]!["trust"]).IsNull(); // can widen a page's audience
+        await Assert.That(servers["kcap-pages"]!["trust"]).IsNull(); // can widen a page's audience
     }
 
     [Test]
@@ -339,6 +379,7 @@ public class JsonMcpConfigWriterTests {
         public bool Owns(string cfg, string name, JsonNode entry) => false;
         public void Record(string cfg, IReadOnlyList<KeyValuePair<string, JsonNode?>> entries) =>
             throw new IOException("marker volume is read-only");
+        public void Forget(string cfg, IReadOnlyCollection<string> names) { }
         public IEnumerable<string> Owned(string cfg) => [];
         public void Clear(string cfg) { }
     }

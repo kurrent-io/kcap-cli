@@ -105,9 +105,10 @@ sealed class CopilotHookCommand(
             string?    source,
             bool       disabled,
             bool       guidelinesDisabled,
+            bool       flowsDisabled,
             TimeSpan   budget,
             Func<CancellationToken, Task<bool>>? commitGate) {
-        if ((disabled && guidelinesDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
+        if ((disabled && guidelinesDisabled && flowsDisabled) || string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(scopeRoot)
          || budget <= TimeSpan.Zero
          || !HookHttp.IsPostable(Url))
             return null;
@@ -121,7 +122,7 @@ sealed class CopilotHookCommand(
                     IsTopLevel: true, ClassificationAuthoritative: true,
                     SessionStartMemoryHookSupport.ReasonFor(source), CallbackMayRepeat: false),
                 new SessionStartMemoryContextRequest(Url, scopeRoot, disabled, budget, CancellationToken.None,
-                    GuidelinesDisabled: guidelinesDisabled),
+                    GuidelinesDisabled: guidelinesDisabled, FlowsDisabled: flowsDisabled),
                 commitGate);
         } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
             return null;
@@ -289,6 +290,7 @@ sealed class CopilotHookCommand(
             // for every KCAP_URL user.
             activeProfile?.DisableMemoryIndex is true,
             activeProfile?.DisableSessionGuidelines is true,
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Copilot, harnesses),
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining,
             // Deliverability gate: the lease is committed only once the lifecycle POST has proved the

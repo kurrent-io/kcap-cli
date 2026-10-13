@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Install;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -85,7 +86,8 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         if (OperatingSystem.IsWindows()) return null;
 
         try {
-            var p = Environment.ProcessPath;
+            // A script install flips `current` rather than replacing this file, so watch the path through it.
+            var p = Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null;
             if (p is null) return null;
             var fi = new FileInfo(p);
             return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks) : null;

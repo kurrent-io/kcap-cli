@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -26,7 +27,7 @@ public class DaemonStatusReportTests {
         await Assert.That(report.Quarantined).IsEmpty(); // until D4/Task 8
     }
 
-    // Surface 3: a sent status report carries this machine's harness inventory (all nine vendors +
+    // Surface 3: a sent status report carries this machine's harness inventory (every vendor +
     // machine id). BuildStatusReport itself only reads the cache; the send path refreshes it first.
     [Test]
     public async Task Sent_status_report_carries_harness_inventory() {
@@ -38,7 +39,7 @@ public class DaemonStatusReportTests {
 
         var report = capture.StatusReports[^1];
         await Assert.That(report.HarnessInventory).IsNotNull();
-        await Assert.That(report.HarnessInventory!.Vendors.Count).IsEqualTo(9);
+        await Assert.That(report.HarnessInventory!.Vendors.Count).IsEqualTo(HarnessRegistry.Identities.Count);
         await Assert.That(string.IsNullOrEmpty(report.HarnessInventory!.MachineId)).IsFalse();
     }
 }

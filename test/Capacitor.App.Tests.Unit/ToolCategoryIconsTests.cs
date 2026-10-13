@@ -38,4 +38,13 @@ public class ToolCategoryIconsTests {
         await Assert.That(other).Contains("H20 V12");
         await Assert.That(edit).Contains("M13,7 L17,11");
     }
+
+    [Test]
+    public async Task Every_kcap_category_has_its_own_icon_distinct_from_the_generic_one() {
+        var generic = ToolCategoryIcons.ForCategory(ToolCategory.Other);
+        ToolCategory[] ours = [ToolCategory.Artefact, ToolCategory.Work, ToolCategory.Memory, ToolCategory.Session, ToolCategory.Flow];
+        var data = ours.Select(ToolCategoryIcons.ForCategory).ToList();
+        await Assert.That(data.All(d => d.Length > 0 && d != generic)).IsTrue();
+        await Assert.That(data.Distinct(StringComparer.Ordinal).Count()).IsEqualTo(data.Count);
+    }
 }
