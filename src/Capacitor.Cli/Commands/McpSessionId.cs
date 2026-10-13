@@ -11,7 +11,7 @@ namespace Capacitor.Cli.Commands;
 /// error. Both sources canonicalize alike (a GUID to its 32-hex form).</summary>
 static class McpSessionId {
     internal const string NoSessionIdMessage =
-        "No session id: pass session_id explicitly or run inside a harness session kcap can identify (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
+        "No session id: pass session_id explicitly or run inside a harness session kcap can identify (CLAUDE_CODE_SESSION_ID, GROK_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
 
     internal static string Resolve(JsonObject? args) => Resolve(args, Environment.GetEnvironmentVariable);
 

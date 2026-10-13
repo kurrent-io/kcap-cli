@@ -52,6 +52,11 @@ static class HarnessRequesterContext {
     /// means one harness is nested inside the other and neither is provably ours.</summary>
     internal const string CodexThreadIdVar = "CODEX_THREAD_ID";
 
+    /// <summary>Set by Grok on every process it starts, its MCP servers included, to its own session.
+    /// It is passed through to anything those processes start too, so it is trusted only when Grok is
+    /// the nearest harness above this process.</summary>
+    internal const string GrokSessionIdVar = "GROK_SESSION_ID";
+
     /// <param name="SessionId">
     /// The requesting session in the canonical form the server files it under (a GUID as its
     /// 32-hex form, an opaque vendor id unchanged). Null when no harness signal is available.
@@ -64,11 +69,19 @@ static class HarnessRequesterContext {
 
     internal static Resolved Resolve() => Resolve(Environment.GetEnvironmentVariable, Directory.Exists);
 
+    internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists) =>
+        Resolve(getEnv, directoryExists, ProcessHelpers.NearestCodingAgent);
+
     /// <summary>
     /// Env-injected overload so the precedence is unit-testable without mutating the process
     /// environment: pass a lookup that returns the values a real harness would export.
     /// </summary>
-    internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists) {
+    /// <param name="nearestHarness">The vendor of the nearest coding agent above this process, asked only
+    /// when a Grok session is in the environment.</param>
+    internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists, Func<string?> nearestHarness) {
+        if (getEnv(GrokSessionIdVar) is { } grokSessionId && !string.IsNullOrWhiteSpace(grokSessionId) && nearestHarness() == "grok")
+            return new(SessionIds.Canonical(grokSessionId), ProjectDir: null);
+
         var harnessSessionId = getEnv(ClaudeSessionIdVar);
         var nestedHarness    = getEnv(CodexThreadIdVar);
 

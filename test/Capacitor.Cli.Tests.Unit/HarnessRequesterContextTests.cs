@@ -145,4 +145,65 @@ public class HarnessRequesterContextTests {
         await Assert.That(resolved.SessionId).IsNull();
         await Assert.That(resolved.ProjectDir).IsNull();
     }
+
+    const string GrokSession = "01a1378d-a97a-7420-88e0-65e6248fe6d2";
+
+    /// <summary>Grok exports its own session to every MCP server it starts, but also passes through the
+    /// Claude and kcap ids of the shell that launched it; under Grok, Grok's id is the requester.</summary>
+    [Test]
+    public async Task Under_grok_the_grok_session_wins_over_inherited_claude_and_kcap_ids() {
+        var resolved = HarnessRequesterContext.Resolve(
+            Env(new() {
+                ["GROK_SESSION_ID"]        = GrokSession,
+                ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+                ["CLAUDE_PROJECT_DIR"]     = "/repos/claude-checkout",
+                ["KCAP_SESSION_ID"]        = InheritedParentSession,
+            }),
+            directoryExists: _ => true,
+            nearestHarness: () => "grok");
+
+        await Assert.That(resolved.SessionId).IsEqualTo("01a1378da97a742088e065e6248fe6d2");
+        await Assert.That(resolved.ProjectDir).IsNull();
+    }
+
+    /// <summary>A Claude Code session started from Grok's shell inherits Grok's id; its own wins.</summary>
+    [Test]
+    public async Task Under_claude_an_inherited_grok_session_is_ignored() {
+        var resolved = HarnessRequesterContext.Resolve(
+            Env(new() {
+                ["GROK_SESSION_ID"]        = GrokSession,
+                ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+            }),
+            directoryExists: _ => true,
+            nearestHarness: () => "claude");
+
+        await Assert.That(resolved.SessionId).IsEqualTo("11111111111111111111111111111111");
+    }
+
+    /// <summary>Any other harness between this process and Grok inherited Grok's id, so it is not ours.</summary>
+    [Test]
+    [Arguments("codex")]
+    [Arguments(null)]
+    public async Task Grok_session_is_trusted_only_when_grok_is_the_nearest_harness(string? nearest) {
+        var resolved = HarnessRequesterContext.Resolve(
+            Env(new() {
+                ["GROK_SESSION_ID"] = GrokSession,
+                ["KCAP_SESSION_ID"] = InheritedParentSession,
+            }),
+            directoryExists: _ => true,
+            nearestHarness: () => nearest);
+
+        await Assert.That(resolved.SessionId).IsEqualTo(InheritedParentSession);
+    }
+
+    [Test]
+    public async Task The_process_tree_is_not_walked_without_a_grok_session() {
+        var walks = 0;
+        HarnessRequesterContext.Resolve(
+            Env(new() { ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession }),
+            directoryExists: _ => true,
+            nearestHarness: () => { walks++; return "grok"; });
+
+        await Assert.That(walks).IsEqualTo(0);
+    }
 }
