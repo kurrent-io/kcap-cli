@@ -233,8 +233,6 @@ public class FlowsDriverSchemaConformanceTests {
         bool                            BareInstall = false,
         bool                            JsonProjected = true);
 
-    /// <summary>Every environment variable any kcap path resolver consults. Kept together so a new
-    /// override cannot be added without this list being the obvious place to add it.</summary>
     /// <summary>Deterministic native-binary path injected into every installer arm. Registration
     /// writes the resolved binary as the command (default: Environment.ProcessPath) — under the
     /// test host that default would be the test-runner executable, so the suite injects its own
@@ -357,12 +355,8 @@ public class FlowsDriverSchemaConformanceTests {
     /// server subset, the shape, or drops flows entirely — which is exactly the drift this suite
     /// claims to catch.</summary>
     static async Task<Projection> InstallAndRead(Arm arm) {
-        // EVERY known path override, cleared for EVERY arm — deliberately not a per-arm list. If any
-        // one is missed, the opt-in, the installer and the extractor all resolve OUTSIDE the fake
-        // home: the test then reads and rewrites the developer's real harness config, and can pass
-        // against a pre-existing entry. The names are easy to get individually wrong (GeminiPaths
-        // reads GEMINI_CLI_HOME, not GEMINI_HOME; OpenCode falls back to XDG_CONFIG_HOME; CodexPaths
-        // gives ambient CODEX_HOME precedence), which is exactly why the list is not per-arm.
+        // Hermetic: TestHarnesses.Under builds every harness's paths with explicit null overrides, so
+        // ambient *_HOME / XDG_* variables cannot move an arm outside the fake home.
         using var home      = new TempHome();
         var env = TestEnv(home.Path, arm.BareInstall ? PlantFakePlugin() : null);
 

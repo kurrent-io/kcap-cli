@@ -60,6 +60,38 @@ public class PluginCommandMuseTests {
     }
 
     [Test]
+    public async Task Refresh_completes_a_partial_install_even_when_the_marker_is_current() {
+        var env      = Env();
+        var settings = env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+        await Run(env, "plugin", "install", "--muse");
+        var root = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(settings))!;
+        root["hooks"]!.AsObject().Remove("Stop");
+        await File.WriteAllTextAsync(settings, root.ToJsonString());
+        await Assert.That(MuseHooksInstaller.ReadMarker(settings)).IsNotNull();
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse", "--if-installed")).IsEqualTo(0);
+
+        await Assert.That(MuseHooksInstaller.HasAllHooks(settings)).IsTrue();
+    }
+
+    [Test]
+    public async Task Refresh_that_cannot_complete_the_hooks_warns_skips_mcp_and_exits_zero() {
+        var stderr   = new StringWriter();
+        var env      = Env(stderr);
+        var settings = env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+        await Run(env, "plugin", "install", "--muse");
+        var root = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(settings))!;
+        root["hooks"]!["Stop"] = "nope";
+        root["mcp_servers"]!.AsObject().Remove("kcap-sessions");
+        await File.WriteAllTextAsync(settings, root.ToJsonString());
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse", "--if-installed")).IsEqualTo(0);
+
+        await Assert.That(stderr.ToString()).Contains("could not refresh Muse hooks");
+        await Assert.That(((JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(settings))!)["mcp_servers"]!["kcap-sessions"]).IsNull();
+    }
+
+    [Test]
     public async Task A_hooks_value_kcap_will_not_overwrite_fails_the_install_and_skips_mcp() {
         var stderr   = new StringWriter();
         var env      = Env(stderr);

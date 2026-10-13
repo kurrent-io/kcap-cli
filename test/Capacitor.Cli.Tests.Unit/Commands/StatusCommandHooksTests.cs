@@ -132,6 +132,15 @@ public class StatusCommandHooksTests {
     }
 
     [Test]
+    public async Task MuseHooksDetailLine_says_a_non_object_root_is_not_a_json_object() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        await File.WriteAllTextAsync(path, "[]");
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path)).Contains("is not a JSON object");
+    }
+
+    [Test]
     public async Task MuseHooksDetailLine_is_silent_when_every_event_is_installed() {
         using var tmp  = new TempDir();
         var       path = tmp.PathTo("settings.json");

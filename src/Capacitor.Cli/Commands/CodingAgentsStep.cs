@@ -790,7 +790,7 @@ internal static class CodingAgentsStep {
 
         if (installers.InstallMuseHooks is null || !installers.InstallMuseHooks(paths.MuseSettingsPath)) {
             // Hooks and MCP servers share settings.json, so a file that will not take one will not take the other.
-            writeLine("  [yellow]⚠[/] Could not install Muse hooks — fix settings.json so it is valid JSON with a hooks object of arrays (left untouched).");
+            writeLine("  [yellow]⚠[/] Could not install Muse hooks for every event — settings.json must be valid JSON with a hooks object of arrays.");
 
             return false;
         }

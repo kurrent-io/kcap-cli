@@ -2449,9 +2449,12 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         // A lone marker with settings.json gone is not "current": the hooks must be written again.
+        // The marker is written once any event is installed, so a current one proves nothing about the rest.
         var hooksCurrent = refreshOnly && File.Exists(settingsPath)
-                        && MuseHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
+                        && MuseHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current()
+                        && MuseHooksInstaller.HasAllHooks(settingsPath);
         var freshHookFailure = false;
+        var hooksIncomplete  = false;
         if (!toolsOnly && !hooksCurrent) {
             if (MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged
                 && MuseHooksInstaller.HasAllHooks(settingsPath)) {
@@ -2459,18 +2462,19 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                     refreshOnly ? $"Muse hooks refreshed ({settingsPath})" : $"Muse hooks installed ({settingsPath})");
             } else if (!refreshOnly) {
                 await env.Stderr.WriteLineAsync(
-                    $"Could not install Muse hooks. If {settingsPath} exists, make sure it is valid JSON and its hooks value is an object of arrays — "
-                  + "kcap leaves a settings.json it cannot merge into untouched rather than overwrite your settings. "
+                    $"Could not install Muse hooks for every event in {settingsPath}. Make sure it is valid JSON and its hooks value "
+                  + "is an object of arrays — kcap never overwrites a settings.json it cannot merge into. "
                   + "Fix or remove it, then re-run.");
                 freshHookFailure = true;
             } else {
                 await env.Stderr.WriteLineAsync(
-                    $"Warning: could not refresh Muse hooks ({settingsPath}); continuing with MCP registration.");
+                    $"Warning: could not refresh Muse hooks for every event in {settingsPath}; skipping MCP registration.");
+                hooksIncomplete = true;
             }
         }
 
         // Hooks and MCP share settings.json: a file the hooks could not be merged into is not written to here either.
-        if (!freshHookFailure && !args.Contains("--skip-muse-mcp"))
+        if (!freshHookFailure && !hooksIncomplete && !args.Contains("--skip-muse-mcp"))
             await RegisterMuseMcpServersAsync(settingsPath);
 
         if (!args.Contains("--skip-muse-skills"))

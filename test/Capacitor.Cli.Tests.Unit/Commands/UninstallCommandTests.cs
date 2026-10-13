@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Mcp;
 using TUnit.Core.Enums;
 
@@ -167,6 +168,24 @@ public class UninstallCommandTests {
         await Assert.That(File.Exists(kcapTs)).IsFalse();
         await Assert.That(File.Exists(markerPi)).IsFalse();
         await Assert.That(File.Exists(userExt)).IsTrue();
+    }
+
+    [Test]
+    public async Task User_level_uninstall_removes_muse_hooks_and_mcp_but_keeps_user_settings() {
+        await using var fixture = await Fixture.CreateAsync();
+        var museSettings = TestHarnesses.Under(fixture.UserHome).Of<MuseHarness>().Paths.SettingsJson;
+        Directory.CreateDirectory(Path.GetDirectoryName(museSettings)!);
+        await File.WriteAllTextAsync(museSettings, """{"schema_version":1,"theme":"keep-me"}""");
+        MuseHooksInstaller.Install(museSettings);
+        MuseSettingsJson.RegisterKcapMcpServers(museSettings, fixture.UserHome);
+
+        var exit = await new UninstallCommand(Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        var root = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(museSettings))!;
+        await Assert.That(MuseHooksParser.InstalledEvents(root)).IsEmpty();
+        await Assert.That(MuseSettingsJson.OwnsAnything(museSettings, fixture.UserHome)).IsFalse();
+        await Assert.That(root["theme"]!.GetValue<string>()).IsEqualTo("keep-me");
     }
 
     [Test]

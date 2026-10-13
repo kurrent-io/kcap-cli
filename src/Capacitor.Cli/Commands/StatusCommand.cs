@@ -434,11 +434,11 @@ public sealed class StatusCommand(
 
             return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
                 ? MuseHookGapLine(MuseHooksParser.InstalledEvents(root))
-                : $"{label}: {settingsPath} is not valid JSON, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+                : $"{label}: {settingsPath} is not a JSON object, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
         } catch (JsonException) {
             return $"{label}: {settingsPath} is not valid JSON, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            return null;
+            return $"{label}: {settingsPath} could not be read, so its hooks were not checked";
         }
     }
 
