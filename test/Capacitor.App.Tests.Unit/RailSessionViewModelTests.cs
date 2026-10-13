@@ -22,7 +22,7 @@ public class RailSessionViewModelTests {
             var items = new[] { new RailPullRequestMenuItem(PullRequestWire.Subject(FakePullRequestSource.Link(1)), "First", "Open"),
                 new RailPullRequestMenuItem(PullRequestWire.Subject(FakePullRequestSource.Link(2)), "Second", "Draft") };
             using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
-                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(2, Items: items) });
+                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(items) });
             var opened = new List<(string, AgentOrigin, PullRequestSubjectDto?)>();
             using var row = new RailSessionViewModel((remote ? RemoteRow("a1") : Row()) with { SessionId = "s1" },
                 new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
@@ -54,7 +54,7 @@ public class RailSessionViewModelTests {
             row.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
             await Assert.That(row.HasPullRequest).IsFalse();
             summaries.OnNext(new Dictionary<string, RailPullRequestSummary> {
-                ["s1"] = new(1, Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(FakePullRequestSource.Link(142)), "Draft"),
+                ["s1"] = new([new(PullRequestWire.Subject(FakePullRequestSource.Link(142)), null, "Draft")]),
             });
             await Assert.That(row.PullRequestLabel).IsEqualTo("PR #142");
             await Assert.That(row.PullRequestStatus!.Text).IsEqualTo("Draft");
@@ -64,7 +64,11 @@ public class RailSessionViewModelTests {
             row.OpenPullRequestCommand.Execute().Subscribe();
             await Assert.That(openedPrs).IsEquivalentTo(new[] { ("a1", AgentOrigin.Local, row.PullRequest!.Subject) });
             await Assert.That(openedSessions).IsEmpty();
-            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(3) });
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new([
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(1)), null, "Open"),
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(2)), null, "Open"),
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(3)), null, "Open"),
+                ]) });
             await Assert.That(row.PullRequestLabel).IsEqualTo("3 PRs");
             await Assert.That(row.HasPullRequestLifecycle).IsFalse();
             localReadable.OnNext(false);
@@ -83,7 +87,7 @@ public class RailSessionViewModelTests {
             using var row = new RailSessionViewModel(RemoteRow("a1") with { SessionId = "s1" },
                 new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
                 pullRequests: new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
-                    new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(FakePullRequestSource.Link(142))) }),
+                    new Dictionary<string, RailPullRequestSummary> { ["s1"] = new([new(PullRequestWire.Subject(FakePullRequestSource.Link(142)), null, "Unknown")]) }),
                 localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin, subject) => { opened = origin; openedSubject = subject; });
             row.OpenPullRequestCommand.Execute().Subscribe();
             await Assert.That(opened).IsEqualTo(AgentOrigin.Remote);

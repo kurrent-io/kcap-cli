@@ -593,10 +593,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (_navigation.ShutdownLatched) return;
         OpenSession(agentId, origin);
         if (CurrentWorkspace?.AgentId != agentId || Superseded(CurrentWorkspace, origin)) return;
-        switch (CurrentWorkspace) {
-            case WorkspaceViewModel local: local.OpenPullRequest(subject); break;
-            case RemoteSessionViewModel remote: remote.OpenPullRequest(subject); break;
-        }
+        CurrentWorkspace.OpenPullRequest(subject);
     }
 
     static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
@@ -715,19 +712,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
-        var subject = open switch {
-            WorkspaceViewModel local => local.PullRequests?.Selected?.Subject,
-            RemoteSessionViewModel remote => remote.PullRequests?.Selected?.Subject,
-            _ => null,
-        };
+        var subject = open.PullRequests?.Selected?.Subject;
         OpenSessionCore(open.AgentId, origin, revealInRail: false);
         if (ReferenceEquals(CurrentWorkspace, open)) return;
-        switch (CurrentWorkspace) {
-            case WorkspaceViewModel local when terminal: local.ShowTerminalCommand.Execute().Subscribe(); break;
-            case RemoteSessionViewModel remote when terminal: remote.ShowTerminalCommand.Execute().Subscribe(); break;
-            case WorkspaceViewModel local when pullRequest: local.OpenPullRequest(subject); break;
-            case RemoteSessionViewModel remote when pullRequest: remote.OpenPullRequest(subject); break;
-        }
+        if (terminal) {
+            switch (CurrentWorkspace) {
+                case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
+                case RemoteSessionViewModel remote: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+            }
+        } else if (pullRequest) CurrentWorkspace?.OpenPullRequest(subject);
     }
 
     // A VM built without a tracker (a test, or any caller predating workspaces) must still not

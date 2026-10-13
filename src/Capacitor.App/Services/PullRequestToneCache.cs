@@ -131,10 +131,7 @@ public sealed class PullRequestToneCache : IDisposable {
                     if (_disposed || _versions.GetValueOrDefault(session) != version) return;
                     if (items.Length == 0) { _summaries.Remove(session); _summaryAccess.Remove(session); }
                     else if (reads.All(read => read.CanReveal(_time))) {
-                        var summary = new RailPullRequestSummary(items.Length,
-                            items.Length == 1 ? PullRequestWire.Subject(items[0]) : null,
-                            items.Length == 1 ? LifecycleLabel(reads[0].Data!) : "Unknown",
-                            items.Select((link, i) => new RailPullRequestMenuItem(PullRequestWire.Subject(link),
+                        var summary = new RailPullRequestSummary(items.Select((link, i) => new RailPullRequestMenuItem(PullRequestWire.Subject(link),
                                 reads[i].Data!.Title ?? link.Title, LifecycleLabel(reads[i].Data!))).ToArray());
                         if (!_summaries.TryGetValue(session, out var previous) || !SameSummary(previous, summary))
                             _summaries[session] = summary;
@@ -182,8 +179,7 @@ public sealed class PullRequestToneCache : IDisposable {
     }
 
     static bool SameSummary(RailPullRequestSummary left, RailPullRequestSummary right) =>
-        left.Count == right.Count && left.Subject == right.Subject && left.Lifecycle == right.Lifecycle
-        && left.MenuItems.SequenceEqual(right.MenuItems);
+        left.MenuItems.SequenceEqual(right.MenuItems);
 
     void Set(string session, PullRequestTone tone, long version) {
         lock (_lock) {

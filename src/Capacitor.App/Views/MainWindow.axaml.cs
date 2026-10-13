@@ -151,11 +151,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void UpdateActivityVisibility() {
         if (DataContext is MainWindowViewModel vm) {
             vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.CurrentWorkspace is null);
-            var pullRequests = vm.CurrentWorkspace switch {
-                WorkspaceViewModel local => local.PullRequests,
-                RemoteSessionViewModel remote => remote.PullRequests,
-                _ => null,
-            };
+            var pullRequests = vm.CurrentWorkspace?.PullRequests;
             if (_foregroundPullRequests != pullRequests) _foregroundPullRequests?.SetForeground(false);
             _foregroundPullRequests = pullRequests;
             pullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);

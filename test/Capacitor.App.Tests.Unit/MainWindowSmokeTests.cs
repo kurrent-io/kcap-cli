@@ -650,7 +650,7 @@ public class MainWindowSmokeTests {
         var source = new FakePullRequestSource(new FakeTimeProvider());
         var items = source.Links.Select(link => new RailPullRequestMenuItem(PullRequestWire.Subject(link), $"Change {link.Number}", "Open")).ToArray();
         using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
-            new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(2, Items: items) });
+            new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(items) });
         var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source);
         try {
             var pr = window.GetVisualDescendants().OfType<Button>().Single(b => b.IsVisible && b.Classes.Contains("railPr"));
@@ -661,7 +661,7 @@ public class MainWindowSmokeTests {
             await Assert.That(vm.CurrentWorkspace).IsNull();
             summaries.OnNext(new Dictionary<string, RailPullRequestSummary> {
                 ["s1"] = summaries.Value["s1"],
-                ["s2"] = new(1, PullRequestWire.Subject(source.Links[1]), "Draft"),
+                ["s2"] = new([new(PullRequestWire.Subject(source.Links[1]), null, "Draft")]),
             });
             Dispatcher.UIThread.RunJobs();
             await Assert.That(flyout.IsOpen).IsTrue();
@@ -713,7 +713,7 @@ public class MainWindowSmokeTests {
             var time = new FakeTimeProvider();
             var source = new FakePullRequestSource(time) { Links = [FakePullRequestSource.Link(142), FakePullRequestSource.Link(143)] };
             using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
-                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, PullRequestWire.Subject(source.Links[0]), "Open") });
+                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new([new(PullRequestWire.Subject(source.Links[0]), null, "Open")]) });
             var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source,
                 firstCreatedAt: DateTime.UtcNow.AddMinutes(-90));
             try {
@@ -757,7 +757,7 @@ public class MainWindowSmokeTests {
                 await Assert.That(workspace.PullRequests!.Selected!.Subject.Number).IsEqualTo(142);
                 foreach (var lifecycle in new[] { "Draft", "Merged", "Closed", "Open" }) {
                     summaries.OnNext(new Dictionary<string, RailPullRequestSummary> {
-                        ["s1"] = new(1, PullRequestWire.Subject(source.Links[0]), lifecycle),
+                        ["s1"] = new([new(PullRequestWire.Subject(source.Links[0]), null, lifecycle)]),
                     });
                     Dispatcher.UIThread.RunJobs();
                     window.UpdateLayout();
@@ -770,7 +770,11 @@ public class MainWindowSmokeTests {
                     var brush = lifecycle == "Merged" ? "KcapSuccessBrush" : lifecycle == "Closed" ? "KcapDangerBrush" : "KcapMutedBrush";
                     await Assert.That((stateText.Foreground as ISolidColorBrush)!.Color).IsEqualTo(((ISolidColorBrush)window.FindResource(brush)!).Color);
                 }
-                summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(3) });
+                summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new([
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(1)), null, "Open"),
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(2)), null, "Open"),
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(3)), null, "Open"),
+                ]) });
                 Dispatcher.UIThread.RunJobs();
                 window.UpdateLayout();
                 var updatedPr = window.GetVisualDescendants().OfType<Button>().Single(b => b.IsVisible && b.Classes.Contains("railPr"));
