@@ -17,6 +17,6 @@ public sealed class MuseHarness : IHarness<MuseHarness> {
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary),
         UserDataSignal = Paths.HasUserData,
-        Wired          = () => false,
+        Wired          = () => MuseHooksInstaller.IsInstalled(Paths.SettingsJson),
     };
 }

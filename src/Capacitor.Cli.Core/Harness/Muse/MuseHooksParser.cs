@@ -27,9 +27,13 @@ public static class MuseHooksParser {
     public static bool EntryReferencesCapacitorMuseHook(JsonNode? group) {
         if (group is not JsonObject g) return false;
         if (g["hooks"] is JsonArray hooks)
-            return hooks.Any(h => h is JsonObject ho && IsCapacitorMuseHookCommand(ho["command"]?.GetValue<string>()));
-        return IsCapacitorMuseHookCommand(g["command"]?.GetValue<string>());
+            return hooks.Any(h => h is JsonObject ho && IsCapacitorMuseHookCommand(CommandOf(ho["command"])));
+        return IsCapacitorMuseHookCommand(CommandOf(g["command"]));
     }
+
+    // A user's own hook may carry a non-string command; that is simply not ours.
+    static string? CommandOf(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<string>(out var command) ? command : null;
 
     public static bool IsCapacitorMuseHookCommand(string? command) {
         if (command is null) return false;

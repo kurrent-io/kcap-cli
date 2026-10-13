@@ -29,4 +29,12 @@ public class MuseHooksParserTests {
         await Assert.That(MuseHooksParser.InstalledEvents(root)).IsEquivalentTo(new[] { "SessionStart" });
         await Assert.That(MuseHooksParser.HasCapacitorHooksFor(root, MuseHooksParser.MuseHookEvents)).IsFalse();
     }
+
+    [Test]
+    [Arguments("""{"hooks":[{"type":"command","command":42}]}""")]
+    [Arguments("""{"hooks":[{"type":"command","command":["kcap","hook","--muse"]}]}""")]
+    [Arguments("""{"command":42}""")]
+    [Arguments("""{"command":["kcap","hook","--muse"]}""")]
+    public async Task A_non_string_command_is_not_ours(string group) =>
+        await Assert.That(MuseHooksParser.EntryReferencesCapacitorMuseHook(JsonNode.Parse(group))).IsFalse();
 }
