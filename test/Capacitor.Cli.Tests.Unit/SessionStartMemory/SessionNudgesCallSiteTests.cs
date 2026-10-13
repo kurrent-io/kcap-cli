@@ -7,8 +7,9 @@ namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 /// its output is valid either way.</summary>
 public class SessionNudgesCallSiteTests {
     /// <summary>Mistral Vibe's hooks have no session-start event and inject context only into a
-    /// tool result, so there is nowhere for a session nudge to go.</summary>
-    static readonly HashSet<HarnessId> NoSessionStartChannel = [HarnessId.MistralVibe];
+    /// tool result; Grok reads only a user-facing <c>systemMessage</c> from its session-start hook. Neither
+    /// has anywhere for a session nudge to go.</summary>
+    static readonly HashSet<HarnessId> NoSessionStartChannel = [HarnessId.MistralVibe, HarnessId.Grok];
 
     public static IEnumerable<Func<HarnessId>> Harnesses() {
         foreach (var harness in Enum.GetValues<HarnessId>().Where(h => !NoSessionStartChannel.Contains(h)))

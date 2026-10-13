@@ -417,6 +417,10 @@ public class DaemonConfig {
     /// <c>kcap config</c> a slot for the binary path; it is not read by any launcher.</summary>
     public string MistralVibePath { get; set; } = Core.Harness.MistralVibe.MistralVibeHarness.CliBinary;
 
+    /// <summary>Path or bare command for Grok Build. Overridable via <c>KCAP_GROK_PATH</c>. Grok is
+    /// recording-only until the daemon hosts it, so no launcher reads this yet.</summary>
+    public string GrokPath { get; set; } = Core.Harness.Grok.GrokHarness.CliBinary;
+
     /// <summary>
     /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When
     /// <see langword="false"/> (the default), the ACP layers (<c>AcpEventTranslator</c>,

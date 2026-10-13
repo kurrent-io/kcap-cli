@@ -146,6 +146,7 @@ public sealed class UninstallCommand(
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--pi"])          != 0) hadFailures = true; // Pi extension (~/.pi/agent/extensions/kcap.ts)
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--opencode"])    != 0) hadFailures = true; // OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--antigravity"]) != 0) hadFailures = true; // Antigravity kcap plugin (~/.gemini/config/plugins/kcap/)
+        if (await pluginCommand.HandleAsync(["plugin", "remove", "--grok"])        != 0) hadFailures = true; // ~/.grok/hooks/kcap.json
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and

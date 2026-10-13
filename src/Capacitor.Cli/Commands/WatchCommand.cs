@@ -1488,7 +1488,7 @@ partial class WatchCommand(
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe", "grok" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -1684,7 +1684,7 @@ partial class WatchCommand(
     /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
     /// <see cref="RunWatch"/>'s call site.
     /// </summary>
-    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe";
+    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe" or "grok";
 
     /// <summary>
     /// the idle clock <see cref="ShouldEndOnIdle"/> measures against for
@@ -2740,6 +2740,7 @@ partial class WatchCommand(
             "pi"       => TryExtractPiAssistantText(line),
             "opencode" => TryExtractOpenCodeText(line, "assistant"),
             "antigravity" => TryExtractAntigravityText(line, "assistant"),
+            "grok"     => TryExtractGrokText(line, "agent_message_chunk"),
             _          => TryExtractClaudeAssistantText(line)
         };
 
@@ -2874,6 +2875,9 @@ partial class WatchCommand(
                 };
             }
 
+            if (vendor == "grok") return TryExtractGrokText(line, "user_message_chunk") is not null
+                                      || TryExtractGrokText(line, "agent_message_chunk") is not null;
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -2888,8 +2892,24 @@ partial class WatchCommand(
             "pi"       => TryExtractPiUserText(line),
             "opencode" => TryExtractOpenCodeText(line, "user"),
             "antigravity" => TryExtractAntigravityText(line, "user"),
+            "grok"     => TryExtractGrokText(line, "user_message_chunk"),
             _          => TryExtractClaudeUserText(line, time)
         };
+
+    // Grok's updates.jsonl lines are ACP session/update notifications, each text run whole.
+    static string? TryExtractGrokText(string line, string sessionUpdate) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("method") != "session/update") return null;
+            if (root.Obj("params")?.Obj("update") is not { } update || update.Str("sessionUpdate") != sessionUpdate) return null;
+
+            return update.Obj("content")?.Str("text")?.Trim() is { Length: > 0 } text ? text : null;
+        } catch {
+            return null;
+        }
+    }
 
     // ── OpenCode extractors ───────────────────────────────────────────
     //
