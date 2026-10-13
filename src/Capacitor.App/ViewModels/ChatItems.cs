@@ -22,9 +22,16 @@ public sealed class AssistantThinkingItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
-/// System-attributed text — a finished background task, a reconnect note — never anyone's speech.
-public sealed class SystemNoteItem(string text) : ChatItemViewModel {
+/// System-attributed text — a finished background task, a reconnect note, another agent's message
+/// — never the user's speech.
+public sealed class SystemNoteItem(string text, string label = SystemNoteItem.NoteLabel) : ChatItemViewModel {
+    public const string NoteLabel = "Note";
+    public const string AgentReportLabel = "Subagent report";
+    public const string AgentMessageLabel = "Agent message";
+
     public string Text { get; } = text;
+    public string Label { get; } = label;
+    public string IconData => Label == NoteLabel ? ToolCategoryIcons.NoteIcon : ToolCategoryIcons.ForCategory(ToolCategory.Agent);
 }
 
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
