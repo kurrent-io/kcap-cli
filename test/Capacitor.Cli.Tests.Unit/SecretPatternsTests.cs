@@ -26,16 +26,56 @@ public partial class SecretPatternsTests {
     [GeneratedRegex(NameFirstEnvVarSecret, RegexOptions.IgnoreCase)]
     private static partial Regex GeneratedEnvVarSecret();
 
+    // The watcher's own instances carry a wall-clock deadline that a starved runner can trip on
+    // a harmless input, so the comparison runs the same generated patterns without one.
+    [GeneratedRegex(SecretRedactor.VendorTokenPattern)]
+    private static partial Regex UntimedWatcherVendorToken();
+
+    [GeneratedRegex(SecretRedactor.EnvVarSecretPattern, RegexOptions.IgnoreCase)]
+    private static partial Regex UntimedWatcherEnvVarSecret();
+
+    static SecretPatterns UntimedWatcherPatterns() {
+        var watcher = SecretRedactor.WatcherPatterns;
+        return new() {
+            SecretKeyNameRegex       = watcher.SecretKeyNameRegex,
+            PemBlockRegex            = watcher.PemBlockRegex,
+            AwsUniqueIdRegex         = watcher.AwsUniqueIdRegex,
+            VendorTokenRegex         = UntimedWatcherVendorToken(),
+            JsonKeySecretRegex       = watcher.JsonKeySecretRegex,
+            EnvVarSecretRegex        = UntimedWatcherEnvVarSecret(),
+            YamlStyleSecretRegex     = watcher.YamlStyleSecretRegex,
+            ConnectionStringPwdRegex = watcher.ConnectionStringPwdRegex,
+            AuthHeaderRegex          = watcher.AuthHeaderRegex,
+            LabeledSecretRegex       = watcher.LabeledSecretRegex,
+            UrlQuerySecretRegex      = watcher.UrlQuerySecretRegex,
+            UrlUserinfoRegex         = watcher.UrlUserinfoRegex
+        };
+    }
+
+    [Test]
+    public async Task UntimedWatcherPatterns_AreTheWatcherPatterns_WithoutADeadline() {
+        (Regex Untimed, Regex Watcher)[] pairs = [
+            (UntimedWatcherVendorToken(), SecretRedactor.WatcherPatterns.VendorTokenRegex),
+            (UntimedWatcherEnvVarSecret(), SecretRedactor.WatcherPatterns.EnvVarSecretRegex)
+        ];
+
+        foreach (var (untimed, watcher) in pairs) {
+            await Assert.That(untimed.ToString()).IsEqualTo(watcher.ToString());
+            await Assert.That(untimed.Options).IsEqualTo(watcher.Options);
+            await Assert.That(untimed.MatchTimeout).IsEqualTo(Regex.InfiniteMatchTimeout);
+        }
+    }
+
     // Generated code and the runtime engine disagree on IgnoreCase sets (U+0130 is in [A-Z] only at
     // runtime), so each reshaped set is compared against the old shapes built the same way.
     [Test]
     public async Task ReshapedWatcherPatterns_RedactWhatTheUnanchoredScansDid() =>
-        await Assert.That(Diverging(SecretRedactor.WatcherPatterns, GeneratedVendorToken(), GeneratedEnvVarSecret())).IsEmpty();
+        await Assert.That(Diverging(UntimedWatcherPatterns(), GeneratedVendorToken(), GeneratedEnvVarSecret())).IsEmpty();
 
     [Test]
     public async Task ReshapedRebuiltPatterns_RedactWhatTheUnanchoredScansDid() =>
         await Assert.That(Diverging(
-            SecretRedactor.OutOfProcessPatterns.Value,
+            SecretRedactor.WatcherPatterns.WithMatchTimeout(Regex.InfiniteMatchTimeout),
             new Regex(UnanchoredVendorToken, RegexOptions.Compiled),
             new Regex(NameFirstEnvVarSecret, RegexOptions.IgnoreCase | RegexOptions.Compiled))).IsEmpty();
 
