@@ -850,6 +850,33 @@ public class MainWindowSmokeTests {
         });
     }
 
+    /// F11 on Windows: full screen, then back to the state it left, maximized included.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Full_screen_shortcut_toggles_and_restores_the_previous_state_on_Windows() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (bound, entered, restored) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                window.WindowState = WindowState.Maximized;
+                var binding = window.KeyBindings.SingleOrDefault(k => k.Gesture is { Key: Key.F11, KeyModifiers: KeyModifiers.None });
+                binding?.Command.Execute(null);
+                var inFullScreen = window.WindowState;
+                binding?.Command.Execute(null);
+                var after = window.WindowState;
+                window.Close();
+                return (binding is not null, inFullScreen, after);
+            });
+
+            await Assert.That(bound).IsEqualTo(OperatingSystem.IsWindows());
+            if (!bound) return;
+            await Assert.That(entered).IsEqualTo(WindowState.FullScreen);
+            await Assert.That(restored).IsEqualTo(WindowState.Maximized);
+        });
+    }
+
     /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
     /// which drops an open workspace back to the launcher (the new-session empty state).
     [Test]
