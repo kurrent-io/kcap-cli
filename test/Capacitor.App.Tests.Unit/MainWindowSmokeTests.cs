@@ -496,14 +496,14 @@ public class MainWindowSmokeTests {
             bool awaitingInput = false, int? liveSubagents = null, string? model = null, string? siblingWorktree = null,
             string? firstStatus = null, IReadOnlySet<string>? pendingIds = null, PendingLaunchDto? pending = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequestSummaries = null,
-            IPullRequestSource? pullRequests = null) {
+            IPullRequestSource? pullRequests = null, DateTime? firstCreatedAt = null) {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
         if (pending is not null) service.Pending.AddOrUpdate(pending);
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a1", "agent", "claude", "/dev/alpha/wt/feature-x", firstStatus ?? "Running",
-            null, null, null, DateTime.UtcNow, model, null, Title: "Fix the flaky test",
+            null, null, null, firstCreatedAt ?? DateTime.UtcNow, model, null, Title: "Fix the flaky test",
             AwaitingInput: awaitingInput ? true : null, LiveSubagents: liveSubagents, SessionId: "s1"));
         service.Agents.AddOrUpdate(new AgentStatusDto(
             "a2", "agent", "claude", "/dev/alpha/wt/feature-x", "Running",
@@ -650,7 +650,8 @@ public class MainWindowSmokeTests {
             var source = new FakePullRequestSource(time) { Links = [FakePullRequestSource.Link(142)] };
             using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
                 new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(1, PullRequestWire.Subject(source.Links[0]), "Open") });
-            var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source);
+            var (vm, window) = RailWindow(pullRequestSummaries: summaries, pullRequests: source,
+                firstCreatedAt: DateTime.UtcNow.AddMinutes(-90));
             try {
                 var session = RailRow(window, "Fix the flaky test");
                 var pr = window.GetVisualDescendants().OfType<Button>().Single(b => b.IsVisible && b.Classes.Contains("railPr"));
@@ -667,6 +668,15 @@ public class MainWindowSmokeTests {
                 await Assert.That(ToolTip.GetTip(pr) as string).Contains("Open");
                 await Assert.That((pr.Background as ISolidColorBrush)!.Color.A).IsEqualTo((byte)0);
                 await Assert.That(pr.Bounds.Width).IsLessThan(card.Bounds.Width / 2);
+                var age = session.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("railMeta"));
+                var prLabel = pr.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "PR #142");
+                double Baseline(TextBlock text) => text.TranslatePoint(new Point(0, text.TextLayout.Baseline), card)!.Value.Y;
+                await Assert.That(Math.Abs(Baseline(age) - Baseline(prLabel))).IsLessThan(2);
+                await Assert.That(age.Text).IsEqualTo("1h 30m");
+                await Assert.That(age.Bounds.Width).IsGreaterThanOrEqualTo(NaturalWidth(age) - 1);
+                var ageRight = age.TranslatePoint(new Point(age.Bounds.Width, 0), card)!.Value.X;
+                var prLeft = pr.TranslatePoint(default, card)!.Value.X;
+                await Assert.That(ageRight).IsLessThan(prLeft);
                 await Assert.That(ToolTip.GetTip(pr) as string).Contains("Linked to this session: Fix the flaky test");
                 await Assert.That(AutomationProperties.GetName(pr)).Contains("Fix the flaky test");
                 pr.Command!.Execute(null);
@@ -914,7 +924,8 @@ public class MainWindowSmokeTests {
                     VendorName: AutomationProperties.GetName(vendor),
                     VendorLeft: Left(vendor),
                     MarkLeft: Left(mark),
-                    MetaGap: row.Bounds.Width - Right(meta),
+                    MarkRight: Right(mark),
+                    MetaLeft: Left(meta),
                     ModelInRow: row.GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text == "opus"),
                     ChildTips: row.GetVisualDescendants().Count(v => v is Control c && c.IsEffectivelyVisible && ToolTip.GetTip(c) is not null),
                     RowTipIsStatus: ToolTip.GetTip(row) is StackPanel tip && tip.Children.OfType<AgentStatusTip>().Any(),
@@ -931,7 +942,7 @@ public class MainWindowSmokeTests {
             await Assert.That(seen.RowTip).Contains("Claude Code\nHarness");
             await Assert.That(seen.RowTip).Contains("opus\nModel");
             await Assert.That(seen.VendorLeft).IsLessThan(seen.MarkLeft);
-            await Assert.That(seen.MetaGap).IsLessThan(16);
+            await Assert.That(seen.MarkRight).IsLessThan(seen.MetaLeft);
             await Assert.That(seen.ModelInRow).IsFalse();
             await Assert.That(seen.HasMark).IsTrue();
             await Assert.That(Math.Abs(seen.WordBaseline - seen.MetaBaseline)).IsLessThan(1);

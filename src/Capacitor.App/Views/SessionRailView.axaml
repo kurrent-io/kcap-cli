@@ -30,8 +30,8 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="CornerRadius" Value="4" />
-            <Setter Property="Padding" Value="4,2" />
-            <Setter Property="MinHeight" Value="22" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="MinHeight" Value="20" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style Selector="Button.railPr /template/ ContentPresenter#PART_ContentPresenter">
@@ -316,7 +316,7 @@
                                                 <DataTemplate x:DataType="vm:RailSessionViewModel">
                                                     <Border Classes="railSession" Classes.selected="{Binding IsSelected}" Margin="0,2,0,0"
                                                             Opacity="{Binding IsStale, Converter={x:Static views:StaleOpacityConverter.Instance}}">
-                                                        <StackPanel>
+                                                        <Grid>
                                                             <Button Command="{Binding OpenCommand}" HorizontalAlignment="Stretch"
                                                                     HorizontalContentAlignment="Stretch" Padding="8,6"
                                                                     AutomationProperties.Name="{Binding SessionAccessibleName}"
@@ -338,7 +338,7 @@
                                                                     <TextBlock Text="{Binding Primary}" FontSize="14.5" LineHeight="20"
                                                                                Classes="rowTitle" IsVisible="{Binding HasTitle}"
                                                                                Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                                                    <!-- WrapPanel children are measured unconstrained; cap labels so the age retains room. -->
+                                                                    <!-- Reserve the measured PR link width so machine and age never paint beneath its hit target. -->
                                                                     <Grid ColumnDefinitions="*,Auto">
                                                                         <WrapPanel VerticalAlignment="Center">
                                                                             <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
@@ -355,19 +355,21 @@
                                                                             <TextBlock Text="{Binding MachineLabel}" Classes="railChipLabel" TextTrimming="CharacterEllipsis"
                                                                                        Foreground="{StaticResource KcapMutedBrush}" />
                                                                         </Border>
-                                                                    </WrapPanel>
-                                                                    <TextBlock Grid.Column="1" Text="{Binding Meta}" Classes="railMeta" MaxWidth="180"
+                                                                    <TextBlock Text="{Binding Meta}" Classes="railMeta" MaxWidth="180"
                                                                                IsVisible="{Binding Meta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                                                                               TextTrimming="CharacterEllipsis" Margin="8,0,0,0" HorizontalAlignment="Right"
+                                                                               TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"
                                                                                Foreground="{StaticResource KcapFaintBrush}" />
+                                                                    </WrapPanel>
+                                                                    <Border Grid.Column="1" Width="{Binding #SessionPullRequestLink.Bounds.Width}" Margin="8,0,0,0"
+                                                                            IsVisible="{Binding HasPullRequest}" />
                                                                 </Grid>
                                                             </StackPanel>
                                                         </Button>
-                                                        <Button Classes="railPr" Command="{Binding OpenPullRequestCommand}"
+                                                            <Button x:Name="SessionPullRequestLink" Classes="railPr" Command="{Binding OpenPullRequestCommand}"
                                                                 IsVisible="{Binding HasPullRequest}"
                                                                 AutomationProperties.Name="{Binding PullRequestAccessibleName}"
                                                                 ToolTip.Tip="{Binding PullRequestTooltip}"
-                                                                HorizontalAlignment="Left" HorizontalContentAlignment="Left" Margin="4,0,8,4"
+                                                                HorizontalAlignment="Right" HorizontalContentAlignment="Left" VerticalAlignment="Bottom" Margin="4,0,4,4"
                                                                 FontSize="11" Foreground="{StaticResource KcapMutedBrush}">
                                                             <StackPanel Orientation="Horizontal" Spacing="6">
                                                                 <views:PullRequestStatusLabel Classes="railPrMark" DataContext="{Binding PullRequestStatus}"
@@ -378,7 +380,7 @@
                                                                            VerticalAlignment="Center" />
                                                             </StackPanel>
                                                         </Button>
-                                                    </StackPanel>
+                                                        </Grid>
                                                     </Border>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
