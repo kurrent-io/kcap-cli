@@ -20,6 +20,18 @@ public static class MuseHooksInstaller {
         catch (UnauthorizedAccessException) { return false; }
     }
 
+    /// <summary>Whether every lifecycle event carries kcap's hook. <see cref="Install"/> reports
+    /// Unchanged for a <c>hooks</c> value it will not overwrite, so only the file says whether the
+    /// install took.</summary>
+    public static bool HasAllHooks(string settingsPath) {
+        try {
+            return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
+                && MuseHooksParser.HasCapacitorHooksFor(root, MuseHooksParser.MuseHookEvents);
+        } catch (JsonException) { return false; }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
     public static SettingsEdit Install(string settingsPath) {
         var outcome = JsonSettingsFile.Edit(settingsPath, root => {
             if (root["hooks"] is not null and not JsonObject) return false;

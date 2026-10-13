@@ -2453,13 +2453,14 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                         && MuseHooksInstaller.ReadMarker(settingsPath) == CapacitorVersion.Current();
         var freshHookFailure = false;
         if (!toolsOnly && !hooksCurrent) {
-            if (MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged) {
+            if (MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged
+                && MuseHooksInstaller.HasAllHooks(settingsPath)) {
                 await env.Stdout.WriteLineAsync(
                     refreshOnly ? $"Muse hooks refreshed ({settingsPath})" : $"Muse hooks installed ({settingsPath})");
             } else if (!refreshOnly) {
                 await env.Stderr.WriteLineAsync(
-                    $"Could not install Muse hooks. If {settingsPath} exists, make sure it is valid JSON — "
-                  + "kcap leaves an unparseable settings.json untouched rather than overwrite your settings. "
+                    $"Could not install Muse hooks. If {settingsPath} exists, make sure it is valid JSON and its hooks value is an object of arrays — "
+                  + "kcap leaves a settings.json it cannot merge into untouched rather than overwrite your settings. "
                   + "Fix or remove it, then re-run.");
                 freshHookFailure = true;
             } else {
@@ -2468,7 +2469,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             }
         }
 
-        if (!args.Contains("--skip-muse-mcp"))
+        // Hooks and MCP share settings.json: a file the hooks could not be merged into is not written to here either.
+        if (!freshHookFailure && !args.Contains("--skip-muse-mcp"))
             await RegisterMuseMcpServersAsync(settingsPath);
 
         if (!args.Contains("--skip-muse-skills"))

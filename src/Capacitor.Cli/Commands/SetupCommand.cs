@@ -964,7 +964,7 @@ sealed class SetupCommand(
             InstallVibeHooks:         p => MistralVibeHooksInstaller.Install(p) != TomlConfigFile.Outcome.Failed,
             RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml),
             // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
-            InstallMuseHooks:         p => MuseHooksInstaller.Install(p) is SettingsEdit.Changed or SettingsEdit.Unchanged,
+            InstallMuseHooks:         p => (MuseHooksInstaller.Install(p) is SettingsEdit.Changed or SettingsEdit.Unchanged) && MuseHooksInstaller.HasAllHooks(p),
             RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);

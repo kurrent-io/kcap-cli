@@ -118,6 +118,28 @@ public class StatusCommandHooksTests {
         await Assert.That(line).DoesNotContain("SessionStart,");
     }
 
+    [Test]
+    public async Task MuseHooksDetailLine_says_an_unparseable_settings_json_is_not_valid_json() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        await File.WriteAllTextAsync(path, "{ \"hooks\": ");
+
+        var line = StatusCommand.MuseHooksDetailLine(path);
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("is not valid JSON");
+        await Assert.That(line).DoesNotContain("hooks missing");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_is_silent_when_every_event_is_installed() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        MuseHooksInstaller.Install(path);
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path)).IsNull();
+    }
+
     /// Every harness the build knows appears on the line — a tenth would too, since the line is
     /// built from the registry rather than a parameter per vendor.
     [Test]

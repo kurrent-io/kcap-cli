@@ -67,7 +67,7 @@ public sealed class StatusCommand(
                 $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
 
         if (harnesses.Any(h => h.Id == HarnessId.Muse && h.Signals.IsWired)
-            && MuseHookGapLine(ReadMuseInstalledEvents(harnesses.Of<MuseHarness>().Paths.SettingsJson)) is { } museGap)
+            && MuseHooksDetailLine(harnesses.Of<MuseHarness>().Paths.SettingsJson) is { } museGap)
             await Console.Out.WriteLineAsync($"           {museGap}");
 
         if (new GitHookInstaller(home).IsInstalled() && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
@@ -424,13 +424,21 @@ public sealed class StatusCommand(
             : $"{HarnessRegistry.LabelOf(HarnessId.Muse)}: hooks missing for {string.Join(", ", missing)}. Run `kcap plugin install --muse`";
     }
 
-    static IReadOnlySet<string> ReadMuseInstalledEvents(string settingsPath) {
+    /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
+    /// claim every event is missing, and re-running the install cannot fix it.</summary>
+    internal static string? MuseHooksDetailLine(string settingsPath) {
+        var label = HarnessRegistry.LabelOf(HarnessId.Muse);
+
         try {
+            if (!File.Exists(settingsPath)) return MuseHookGapLine(System.Collections.Frozen.FrozenSet<string>.Empty);
+
             return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
-                ? MuseHooksParser.InstalledEvents(root)
-                : System.Collections.Frozen.FrozenSet<string>.Empty;
-        } catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) {
-            return System.Collections.Frozen.FrozenSet<string>.Empty;
+                ? MuseHookGapLine(MuseHooksParser.InstalledEvents(root))
+                : $"{label}: {settingsPath} is not valid JSON, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+        } catch (JsonException) {
+            return $"{label}: {settingsPath} is not valid JSON, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
         }
     }
 

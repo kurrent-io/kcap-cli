@@ -16,6 +16,7 @@ public class HandoffLaunchRecipeTests {
     [Arguments(HarnessId.Pi,          new[] { P })]
     [Arguments(HarnessId.OpenCode,    new[] { "--prompt", P })]
     [Arguments(HarnessId.Antigravity, new[] { "-i", P })]
+    [Arguments(HarnessId.Muse,        new[] { P })]
     public async Task Every_vendor_has_a_recipe_and_the_prompt_is_one_argument(HarnessId vendor, string[] expected) {
         var argv = HandoffLaunchRecipe.All[vendor].Argv(P).ToList();
 

@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
@@ -68,6 +69,7 @@ public sealed class UninstallCommand(
         await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<PiHarness>().Paths.KcapExtension}");
         await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin}");
         await Console.Out.WriteLineAsync($"  • Remove the kcap plugin from {harnesses.Of<AntigravityHarness>().Paths.PluginDir}");
+        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MuseHarness>().Paths.SettingsJson}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {agents.UserSkillsDir}");
 
         if (projectRoot is not null) {
@@ -146,6 +148,7 @@ public sealed class UninstallCommand(
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--pi"])          != 0) hadFailures = true; // Pi extension (~/.pi/agent/extensions/kcap.ts)
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--opencode"])    != 0) hadFailures = true; // OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--antigravity"]) != 0) hadFailures = true; // Antigravity kcap plugin (~/.gemini/config/plugins/kcap/)
+        if (await pluginCommand.HandleAsync(["plugin", "remove", "--muse"])        != 0) hadFailures = true; // Muse hooks + MCP in settings.json
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and

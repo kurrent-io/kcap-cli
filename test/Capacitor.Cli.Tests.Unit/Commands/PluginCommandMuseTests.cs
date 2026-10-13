@@ -33,6 +33,14 @@ public class PluginCommandMuseTests {
     public async Task Install_writes_hooks_and_mcp_servers_into_settings_json_and_remove_undoes_both() {
         var env      = Env();
         var settings = env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+        Directory.CreateDirectory(Path.GetDirectoryName(settings)!);
+        await File.WriteAllTextAsync(settings, """
+            {
+              "theme": "dark",
+              "hooks": { "SessionStart": [ { "hooks": [ { "type": "command", "command": "my-hook", "timeout": 5 } ] } ] },
+              "mcp_servers": { "my-tool": { "transport": "stdio", "command": "my-tool" } }
+            }
+            """);
 
         await Assert.That(await Run(env, "plugin", "install", "--muse")).IsEqualTo(0);
 
@@ -45,6 +53,25 @@ public class PluginCommandMuseTests {
         var after = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(settings))!;
         await Assert.That(MuseHooksParser.InstalledEvents(after)).IsEmpty();
         await Assert.That(MuseSettingsJson.OwnsAnything(settings, env.Home)).IsFalse();
+        await Assert.That(after["theme"]!.GetValue<string>()).IsEqualTo("dark");
+        await Assert.That(after["hooks"]!["SessionStart"]!.AsArray().Single()!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("my-hook");
+        await Assert.That(after["mcp_servers"]!["my-tool"]).IsNotNull();
+        await Assert.That(after["mcp_servers"]!["kcap-sessions"]).IsNull();
+    }
+
+    [Test]
+    public async Task A_hooks_value_kcap_will_not_overwrite_fails_the_install_and_skips_mcp() {
+        var stderr   = new StringWriter();
+        var env      = Env(stderr);
+        var settings = env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+        Directory.CreateDirectory(Path.GetDirectoryName(settings)!);
+        const string content = "{\"schema_version\":1,\"hooks\":\"nope\"}";
+        await File.WriteAllTextAsync(settings, content);
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse")).IsEqualTo(1);
+
+        await Assert.That(await File.ReadAllTextAsync(settings)).IsEqualTo(content);
+        await Assert.That(stderr.ToString()).Contains("Could not install Muse hooks");
     }
 
     [Test]
