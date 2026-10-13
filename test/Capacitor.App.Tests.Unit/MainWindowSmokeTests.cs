@@ -1153,6 +1153,38 @@ public class MainWindowSmokeTests {
         }
     });
 
+    /// A help item closes the flyout from its Click handler, which runs before the button's command.
+    /// The command must still run: a flyout that detached its content first would leave every item dead.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_help_items_run_their_command_when_clicked() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var opener = new RecordingOpener();
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            appMenuInWindow: true, opener: opener);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var onClick = typeof(Button).GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            foreach (var name in new[] { "RailHelpDocsButton", "RailHelpChangelogButton" }) {
+                help.Flyout!.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                onClick.Invoke(rail.FindControl<Button>(name)!, null);
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl, AppMenuBar.ChangelogUrl]);
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// Windows has no native About panel, so the rail's help flyout opens the app's own, and a
     /// second click brings that one forward rather than stacking another.
     [Test]
