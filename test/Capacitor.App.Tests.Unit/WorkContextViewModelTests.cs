@@ -1459,9 +1459,12 @@ public class WorkContextViewModelTests {
     public async Task Only_a_github_requester_id_gets_an_avatar(string requester) {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "Ada", Requester = requester });
-            await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
-            await h.Vm.TeardownAsync();
+            try {
+                await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "Ada", Requester = requester });
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
         });
     }
 
