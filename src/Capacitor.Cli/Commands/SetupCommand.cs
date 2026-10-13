@@ -2580,22 +2580,6 @@ sealed class SetupCommand(
     //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)), so the wall-clock bound holds
     //     independently of what HttpClient does internally. If the delay wins, disposal on
     //     method-exit cancels the in-flight POST.
-    /// <summary>
-    /// The cli-setup ping body, hand-built on purpose. A typed DTO here would inherit
-    /// CapacitorJsonContext's global SnakeCaseLower policy and serialise <c>cli_version</c>,
-    /// silently breaking an endpoint that works today — the mirror image of why
-    /// <c>ProvisionRequest.JoinId</c> needs an explicit attribute. So both names stay literal
-    /// camelCase, and <c>joinId</c> is omitted entirely rather than sent as null when telemetry is
-    /// off. Both inputs are ours — an assembly version and 32 hex chars — so neither can carry a
-    /// quote that would break the literal.
-    /// </summary>
-    internal static string CliSetupPingBody(string? version, string? joinId) {
-        var versionJson = version is null ? "null" : $"\"{version}\"";
-        var joinJson    = joinId is null ? "" : $",\"joinId\":\"{joinId}\"";
-
-        return $$"""{"cliVersion":{{versionJson}}{{joinJson}}}""";
-    }
-
     async Task PingCliSetupAsync(string serverUrl, string profile, string provider) {
         // The ping is intentionally silent (see method-doc), which also hides why the
         // dashboard welcome modal never flips when it fails — e.g. a token the server
@@ -2637,11 +2621,11 @@ sealed class SetupCommand(
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
-                CliSetupPingBody(version, telemetry.Join.Current),
+                CliSetupReport.Body(version, telemetry.Join.Current),
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            var pingTask = client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
+            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload);
             var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
 
             if (winner == pingTask) {
