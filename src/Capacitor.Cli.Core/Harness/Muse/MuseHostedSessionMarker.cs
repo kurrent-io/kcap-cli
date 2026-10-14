@@ -52,14 +52,21 @@ public sealed partial record MuseHostedSessionMarker(
         var cutoff = time.GetUtcNow() - olderThan;
 
         try {
-            foreach (var file in Directory.EnumerateFiles(dir, "*.json")) {
-                try {
-                    var marker  = JsonSerializer.Deserialize(File.ReadAllText(file), MarkerJsonCtx.Default.MuseHostedSessionMarker);
-                    var written = marker?.WrittenAt ?? File.GetLastWriteTimeUtc(file);
-                    if (written < cutoff) File.Delete(file);
-                } catch (JsonException) {
-                    if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
-                }
+            foreach (var file in Directory.EnumerateFiles(dir, "*.json")) SweepOne(file, cutoff);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            /* the directory itself is unreadable */
+        }
+    }
+
+    /// <summary>One unreadable or undeletable marker is skipped, never the rest of the sweep.</summary>
+    static void SweepOne(string file, DateTimeOffset cutoff) {
+        try {
+            try {
+                var marker  = JsonSerializer.Deserialize(File.ReadAllText(file), MarkerJsonCtx.Default.MuseHostedSessionMarker);
+                var written = marker?.WrittenAt ?? File.GetLastWriteTimeUtc(file);
+                if (written < cutoff) File.Delete(file);
+            } catch (JsonException) {
+                if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
             }
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             /* best-effort */

@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Capacitor.Cli.Core.Harness.Muse;
 using Microsoft.Extensions.Time.Testing;
 
@@ -66,6 +67,32 @@ public class MuseHostedSessionMarkerTests {
 
         await Assert.That(MuseHostedSessionMarker.TryRead(Config.Root, Dashed)).IsNull();
         await Assert.That(MuseHostedSessionMarker.TryRead(Config.Root, other)).IsNotNull();
+    }
+
+    /// <summary>Several unreadable files are interleaved with the stale markers so that, in whatever
+    /// order the directory enumerates, some stale marker follows an unreadable one.</summary>
+    [Test, ExcludeOn(TUnit.Core.Enums.OS.Windows)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Sweep_skips_an_unreadable_marker_and_removes_the_rest() {
+        var time  = new FakeTimeProvider(Now);
+        var stale = Enumerable.Range(0, 8).Select(i => $"01a13694-b0ad-7ae2-8bf5-2af6357a09{i:D2}").ToArray();
+
+        foreach (var id in stale) MuseHostedSessionMarker.Write(Config.Root, MarkerWrittenAt(Now - TimeSpan.FromHours(25), id));
+
+        var unreadable = Enumerable.Range(0, 8).Select(i => Config.Root.Path("muse-hosted", $"unreadable-{i}.json")).ToArray();
+        foreach (var path in unreadable) {
+            await File.WriteAllTextAsync(path, "{}");
+            File.SetUnixFileMode(path, UnixFileMode.None);
+        }
+
+        try {
+            MuseHostedSessionMarker.Sweep(Config.Root, time, TimeSpan.FromHours(24));
+
+            foreach (var id in stale)
+                await Assert.That(File.Exists(MuseHostedSessionMarker.PathFor(Config.Root, id))).IsFalse();
+        } finally {
+            foreach (var path in unreadable.Where(File.Exists)) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     [Test]
