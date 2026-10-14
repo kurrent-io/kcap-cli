@@ -124,7 +124,7 @@ public class StatusCommandHooksTests {
         var       path = tmp.PathTo("settings.json");
         await File.WriteAllTextAsync(path, "{ \"hooks\": ");
 
-        var line = StatusCommand.MuseHooksDetailLine(path);
+        var line = StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true);
 
         await Assert.That(line).IsNotNull();
         await Assert.That(line!).Contains("is not valid JSON");
@@ -137,7 +137,7 @@ public class StatusCommandHooksTests {
         var       path = tmp.PathTo("settings.json");
         await File.WriteAllTextAsync(path, "[]");
 
-        await Assert.That(StatusCommand.MuseHooksDetailLine(path)).Contains("is not a JSON object");
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).Contains("is not a JSON object");
     }
 
     [Test]
@@ -146,7 +146,21 @@ public class StatusCommandHooksTests {
         var       path = tmp.PathTo("settings.json");
         MuseHooksInstaller.Install(path);
 
-        await Assert.That(StatusCommand.MuseHooksDetailLine(path)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).IsNull();
+    }
+
+    /// <summary>An unparseable file with no marker reads as unwired, so this is the case the line must
+    /// still reach; a valid file with no hooks leaves it to the not-configured line.</summary>
+    [Test]
+    public async Task MuseHooksDetailLine_reports_an_unparseable_file_for_an_installed_but_unwired_muse() {
+        using var tmp     = new TempDir();
+        var       broken  = tmp.CreateFile("broken/settings.json", "{ \"hooks\": ");
+        var       hookless = tmp.CreateFile("hookless/settings.json", "{\"schema_version\":1}");
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: true, wired: false)).Contains("is not valid JSON");
+        await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: false, wired: false)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(hookless, detected: true, wired: false)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(tmp.PathTo("absent/settings.json"), detected: true, wired: false)).IsNull();
     }
 
     /// Every harness the build knows appears on the line — a tenth would too, since the line is
