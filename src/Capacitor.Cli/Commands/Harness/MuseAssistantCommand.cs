@@ -1,0 +1,65 @@
+using Capacitor.Cli.Harness.MuseAssistant;
+
+namespace Capacitor.Cli.Commands.Harness;
+
+/// <summary><c>kcap muse-assistant</c>: the recorder Muse's cron runs on its own VM, and the consent
+/// commands the recording skill runs in the user's turn.</summary>
+public sealed class MuseAssistantCommand(MuseAssistantIngest ingest, MuseAssistantScope scope) {
+    internal const string UsageText =
+        "Usage: kcap muse-assistant ingest <dir>\n" +
+        "       kcap muse-assistant scope add --chat <id> (--after-seq <seq> | --empty-chat | --include-history)\n" +
+        "       kcap muse-assistant scope remove --chat <id>\n" +
+        "       kcap muse-assistant scope reset | scope show\n" +
+        "       kcap muse-assistant sweep";
+
+    public async Task<int> HandleAsync(string[] args) {
+        using var cts = new CancellationTokenSource();
+
+        void Cancel(object? _, ConsoleCancelEventArgs e) { e.Cancel = true; cts.Cancel(); }
+
+        Console.CancelKeyPress += Cancel;
+
+        // Outside exit codes 0 to 4 the cron and the skill have no reading, and a stack trace is not one.
+        // A removal that dies unexpectedly reports "nothing revoked": retrying is always safe, and
+        // claiming it stopped would be the one wrong answer.
+        var failure = args is [_, "scope", "remove" or "reset", ..] ? MuseAssistantExitCodes.NotRevoked : MuseAssistantExitCodes.Server;
+
+        try {
+            return (args.Length > 1 ? args[1] : null) switch {
+                "ingest" when args.Length == 3 => await ingest.RunAsync(args[2], cts.Token),
+                "sweep"  when args.Length == 2 => await scope.SweepAsync(cts.Token),
+                "scope"                        => await HandleScopeAsync(args, cts.Token),
+                _                              => Usage()
+            };
+        } catch (Exception ex) {
+            var reason = cts.IsCancellationRequested ? "interrupted" : $"{ex.GetType().Name}: {ex.Message.ReplaceLineEndings(" ")}";
+            Console.Error.WriteLine($"kcap muse-assistant {args[1]}: {reason}");
+
+            return failure;
+        } finally {
+            Console.CancelKeyPress -= Cancel;
+        }
+    }
+
+    async Task<int> HandleScopeAsync(string[] args, CancellationToken ct) {
+        var chat = Option(args, "--chat");
+
+        return (args.Length > 2 ? args[2] : null) switch {
+            "add"    when chat is not null => await scope.AddAsync(chat, args, ct),
+            "remove" when chat is not null && args.Length == 5 => await scope.RemoveAsync(chat, ct),
+            "reset"  when args.Length == 3 => await scope.ResetAsync(ct),
+            "show"   when args.Length == 3 => await scope.ShowAsync(ct),
+            _                              => Usage()
+        };
+    }
+
+    static int Usage() {
+        Console.Error.WriteLine(UsageText);
+        return MuseAssistantExitCodes.Malformed;
+    }
+
+    static string? Option(string[] args, string name) {
+        var i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+    }
+}

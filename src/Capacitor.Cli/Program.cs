@@ -445,6 +445,8 @@ switch (command) {
         return await Run<AgentCommand>().HandleAsync(args, baseUrl);
     case "setup":
         return await Run<SetupCommand>().HandleAsync(args);
+    case "muse-assistant":
+        return await Run<MuseAssistantCommand>().HandleAsync(args);
     case "plugin":
         return await Run<PluginCommand>().HandleAsync(args);
     case "accounts":

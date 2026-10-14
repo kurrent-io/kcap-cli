@@ -13,6 +13,7 @@ public class CommandEventsTests {
     [Arguments("copilot-finalize")]
     [Arguments("cursor-verify-appendonly")]
     [Arguments("refresh-token")]
+    [Arguments("muse-assistant")]
     public async Task Machine_driven_verbs_are_not_reportable(string command) {
         await Assert.That(CommandEvents.IsReportable(command)).IsFalse();
     }
@@ -43,6 +44,14 @@ public class CommandEventsTests {
         await Assert.That(CommandEvents.Subcommand("plugin", ["plugin", "install"])).IsEqualTo("install");
         await Assert.That(CommandEvents.Subcommand("config", ["config", "set", "server_url", "https://acme.kcap.ai"])).IsEqualTo("set");
         await Assert.That(CommandEvents.Subcommand("curate", ["curate", "apply"])).IsEqualTo("apply");
+    }
+
+    [Test]
+    public async Task Muse_assistant_is_a_known_verb_with_its_literal_subcommands() {
+        await Assert.That(CommandEvents.ReportableCommand("muse-assistant")).IsEqualTo("muse-assistant");
+        await Assert.That(CommandEvents.Subcommand("muse-assistant", ["muse-assistant", "scope", "add"])).IsEqualTo("scope");
+        await Assert.That(CommandEvents.Subcommand("muse-assistant", ["muse-assistant", "ingest", "/tmp/walk"])).IsEqualTo("ingest");
+        await Assert.That(CommandEvents.Subcommand("muse-assistant", ["muse-assistant", "chat-123"])).IsNull();
     }
 
     [Test]

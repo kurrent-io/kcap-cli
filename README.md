@@ -22,7 +22,7 @@
   - Sessions: [recap](#session-recap) · [validate-plan](#plan-validation) · [hide](#hide-session) · [disable](#disable-recording) · [errors](#error-extraction) · [eval](#session-evaluation-llm-as-judge)
   - Reviewing: [review](#pr-review-with-full-context) · [curate](#curate-guidelines)
   - MCP servers: [overview](#mcp-servers-for-agents) · [sessions](#sessions-mcp-server-for-agents) · [flows](#flows-mcp-server-for-agents) · [flow-result](#flow-result-mcp-server-hosted-reviewers) · [memory](#memory-mcp-server-for-agents)
-  - Importing: [import](#loading-historical-sessions) · [remap](#renamed-repo-directories-kcap-remap)
+  - Importing: [import](#loading-historical-sessions) · [remap](#renamed-repo-directories-kcap-remap) · [muse-assistant](#muse-assistant)
   - Agents & daemon: [daemon](#daemon) · [agent](#local-agents-kcap-agent) · [repos](#repository-paths)
   - Account: [projects](#projects) · [profiles](#profiles) · [config](#configuration) · [telemetry](#telemetry) · [uninstall](#uninstalling) · [other](#other-commands)
 - [Troubleshooting](#troubleshooting)
@@ -168,6 +168,7 @@ At a glance — each links to its section below:
 | [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
+| [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
 | [`kcap recap`](#session-recap) | AI summary + per-turn outline of a session |
 | [`kcap sessions`](#listing-sessions-on-a-repository) | List the sessions you can see, on one repo or all, optionally within a period |
 | [`kcap validate-plan`](#plan-validation) | Check that every planned item was completed |
@@ -971,6 +972,17 @@ Non-interactive runs (no TTY, e.g. CI) must pass both a scope flag and `--yes`. 
 `--private` also covers sessions the run only *revisits*. Agents that record subagents (Cursor, Antigravity, Gemini) can attach a previously-missed subagent to a session that was already fully imported, so for those a `--private` re-run marks every session it touched private — not just the ones with brand-new top-level content. That is deliberate: a session's visibility can't be left to whether a re-run happened to find new content, and re-running with `--private` is the supported way to privatize sessions an earlier non-private import made visible.
 
 After discovery, the import surfaces a one-shot report of any transcript working directories that no longer exist on disk. Sessions whose cwd was an ephemeral worktree (e.g. `~/dev/my-repo/.claude/worktrees/<slug>` or `~/dev/my-repo/.capacitor/worktrees/<slug>`) are transparently attributed to their parent project when that project still exists, so deleted-worktree paths drop out of the missing-cwds list. kcap's own background helper runs (the headless `claude -p` calls behind title generation and "what's done" summaries) record their transcripts in a throwaway temp directory that is removed the moment the run ends; these are never imported, and they're also excluded from the missing-cwds report so its dead temp paths don't drown out real ones. What remains is typically local repo dirs that have been renamed — those won't match an `--org` / `--repo` scope until you tell kcap how their old paths map to the new ones. See [Renamed repo directories (`kcap remap`)](#renamed-repo-directories-kcap-remap) below for the fix.
+
+### Muse Assistant
+
+Muse Assistant (Meta's consumer agent) runs in a Meta-hosted VM with no transcript file, no local gateway and no lifecycle hook; its chat store is reachable only by Muse itself, through `chat.list` and `chat.read_messages`. `kcap muse-assistant` records it from inside that VM with Muse as the recorder: the `capacitor-recording` skill (`kcap/muse-assistant/capacitor-recording/SKILL.md`, installed by the connect-capacitor skill when the user asks to record) states the consent scope, grants it with `kcap muse-assistant scope add` in the user's own turn, and installs a 15-minute cron that pages each granted chat into files and runs `kcap muse-assistant ingest` on them.
+
+- **What is recorded.** `user`, `assistant` and `commentary` items (Muse narrating its own work, shown as thinking), verbatim, as private sessions owned by the signed-in kcap user. `developer` items — runtime instructions — are never sent. Tool calls, browser actions and files are not in `chat.read_messages` and are not recorded. No model or usage is available, so cost stays empty.
+- **Sessions.** A new session starts at every gap of two hours or more between recorded items; an idle session is closed only by an ingest whose walk was fetched at least 2 h 30 m after the last item, at that item's time. A VM clock more than 30 minutes ahead of Muse's store can close early, splitting one conversation in two; nothing is lost.
+- **Consent is a kcap-side grant.** `scope add` writes a grant bounded in the chat's own order (`--after-seq`, `--empty-chat` or `--include-history`); nothing from an interval without a grant is ever sent, and `scope remove` closes the open session in the same step it revokes. Grants, watermarks and open sessions live under `~/.config/kcap/muse-assistant/`, in a directory per tenant and user, so two accounts never share a file.
+- **Nothing lost, nothing twice.** Each walk is validated whole — Muse's own cursor chain, complete pages, every recorded item intact — before anything is posted; the watermark advances only after the server accepts each call; every lifecycle post is recorded as an intent first and replayed by the next run or by `sweep`; a failed ingest keeps its directory for the next tick. One ingest per chat at a time, held by a lock the kernel releases.
+- **Exit codes.** `0` done; `1` server, network or sign-in failure; `2` malformed input or a wrong argument shape; `3` chat out of scope; `4` from `scope remove` or `scope reset` only: nothing was revoked, so recording has **not** stopped and the command should be retried.
+- **Requires** a server that knows the `muse-assistant` vendor: against an older server the ingest exits 1 and advances nothing.
 
 ### Daemon
 

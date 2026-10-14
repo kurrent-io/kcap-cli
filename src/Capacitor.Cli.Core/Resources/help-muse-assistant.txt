@@ -1,0 +1,43 @@
+kcap muse-assistant — Record Muse Assistant chats
+
+Usage: kcap muse-assistant ingest <dir>
+       kcap muse-assistant scope add --chat <id> (--after-seq <seq> | --empty-chat | --include-history)
+       kcap muse-assistant scope remove --chat <id>
+       kcap muse-assistant scope reset
+       kcap muse-assistant scope show
+       kcap muse-assistant sweep
+
+Runs inside a Muse Assistant VM, driven by Muse: the capacitor-recording skill
+runs `scope` in the turn where the user grants or withdraws recording, and a
+15-minute cron pages each granted chat with chat.read_messages into a fresh
+directory and runs `ingest` on it. Only user, assistant and commentary items
+are recorded, as private sessions owned by the signed-in kcap user; developer
+items are never sent. A session ends after two hours of quiet.
+
+ingest <dir>   One walk of one chat: manifest.json plus page-000.json, page-001.json, …
+               in walk order, each page a complete chat.read_messages result and the
+               manifest naming the cursor each page was fetched with. Validated whole
+               before anything is posted; the per-chat watermark advances only after
+               the server accepts each call, so a rerun resends nothing and loses nothing.
+               The directory is never deleted here — the cron deletes it on exit 0.
+scope add      Grant one chat: --after-seq <seq> records items newer than the newest
+               seq read in the granting turn, --empty-chat every future item of a chat
+               with none yet, --include-history the whole chat. Idempotent.
+scope remove   Withdraw a chat: closes its open session and sends nothing further.
+scope reset    Withdraw every chat.
+scope show     Every chat with its status, boundary, watermark and open session.
+sweep          Replay interrupted lifecycle posts, reconcile the files, and print one
+               line per active chat for the cron:
+               key=<chat_key> watermark=<n|none> boundary=<…> after_seq=<n|none> chat=<id>
+
+Exit codes: 0 done or nothing to do (also: another ingest holds the chat);
+            1 server, network or sign-in failure (a 401 means `kcap login --device`),
+              or an unexpected local failure such as a state file that cannot be written;
+            2 malformed or incomplete input, or a wrong argument shape;
+            3 chat not in scope, revoked, no grant recorded, or state from another
+              tenant or account;
+            4 scope remove or scope reset only: nothing was revoked, so recording has
+              NOT stopped — retry.
+
+State: ~/.config/kcap/muse-assistant/<sha256(server\nuser)>/ — scope.json, one
+<sha256(chat_id)>.json per chat, and the lock files beside them.
