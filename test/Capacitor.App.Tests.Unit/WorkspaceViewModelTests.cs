@@ -94,6 +94,82 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_empty_session_does_not_flash_the_artefacts_tab_while_loading() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            var gate = source.Gate();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Artefacts.IsLoading).IsTrue();
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+
+            gate.SetResult(Ready());
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_tab_stays_while_a_visible_session_reloads() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await vm.ShowArtefactsCommand.Execute();
+
+            var gate = source.Gate();
+            const string next = "fedcba9876543210fedcba9876543210";
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: next));
+            await Assert.That(vm.Artefacts.IsLoading).IsTrue();
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+
+            gate.SetResult(Ready());
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsFalse();
+            await Assert.That(vm.ActiveTab).IsEqualTo(WorkspaceTab.Chat);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Settling_ready_documents_keeps_an_active_artefacts_tab() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/a.md")));
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), planArtifacts: source);
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: Session));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await vm.ShowArtefactsCommand.Execute();
+
+            var gate = source.Gate();
+            const string next = "fedcba9876543210fedcba9876543210";
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo/x", sessionId: next));
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+
+            gate.SetResult(Ready(Doc("docs/b.md")));
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.ShowsArtefactsTab).IsTrue();
+            await Assert.That(vm.IsArtefactsActive).IsTrue();
+            await Assert.That(vm.Artefacts.Documents.Single().Path).IsEqualTo("docs/b.md");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A card's Open: a document goes to the tab, a page to the browser.
     [Test]
     [NotInParallel("AvaloniaSession")]

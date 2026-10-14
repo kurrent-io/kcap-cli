@@ -224,10 +224,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
-        Artefacts.WhenAnyValue(a => a.HasAny).Subscribe(has => {
-            ShowsArtefactsTab = has;
-            if (!has && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
-        }).DisposeWith(_disposables);
+        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
+            .Subscribe(show => {
+                ShowsArtefactsTab = show;
+                if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
+            }).DisposeWith(_disposables);
         _sessionIds.DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(sid => Artefacts.SwitchSession(sid, null)).DisposeWith(_disposables);

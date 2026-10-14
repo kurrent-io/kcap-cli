@@ -44,10 +44,10 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
     static readonly IReadOnlyList<HarnessOption> DefaultHarnessOptions = HostedHarnessCatalog.Build(null);
 
-    internal const string WaitingNote      = "Waiting for the session to register…";
-    internal const string LoadingNote      = "Loading work context…";
-    internal const string NoWorkItemNote   = "No work item attached yet. The agent's declare tool attaches one.";
-    internal const string NoRepositoryNote = "This session has no repository. A work item cannot attach until the work lands in one.";
+    internal const string WaitingNote      = "Waiting for session…";
+    internal const string LoadingNote      = "Loading…";
+    internal const string NoWorkItemNote   = "No work item yet — the agent can attach one with declare.";
+    internal const string NoRepositoryNote = "No repository on this session, so a work item cannot attach.";
     internal const string SignedOutNote    = "Sign in to see the work context.";
     internal const string NotInPlanNote    = "Work items are not in this workspace's plan.";
     internal const string UnreachableNote  = "Couldn't reach the server.";

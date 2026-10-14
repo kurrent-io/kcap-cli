@@ -24,6 +24,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         public CancellationTokenSource Cts { get; } = new();
         public Task? Pending;
         public bool RefreshPending;
+        public bool Settled;
         public bool IsReading => Pending is { IsCompleted: false };
     }
 
@@ -44,6 +45,9 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     public IAvaloniaReadOnlyList<PlanDocumentRow> Documents => _documents;
 
     public bool HasPlan       => HasTasks || HasDocuments;
+    /// Keeps the section chrome while a session switch's first read is in flight.
+    public bool IsLoading => _current is { Settled: false };
+    public bool ShowsPlan => HasPlan || IsLoading;
     public bool HasTasks      => _tasks.Count > 0;
     public bool HasInProgress => _inProgress.Count > 0;
     public bool HasDocuments  => _documents.Count > 0;
@@ -81,6 +85,8 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         var old = _current;
         _current = new ReadLease(sessionId);
         old?.Cts.Cancel();
+        // Raise IsLoading before Clear so HasPlan || IsLoading does not briefly go false.
+        RaiseLoading();
         Clear();
         StartRead(_current);
     }
@@ -130,6 +136,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         if (!current) { lease.Cts.Dispose(); return; }
         try {
             if (read is not null) Apply(read);
+            else { lease.Settled = true; RaiseLoading(); }
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
         }
@@ -139,14 +146,22 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     void Apply(SessionPlansRead read) {
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
+                if (_current is { } ready) ready.Settled = true;
                 // The server lists most recently touched first, which stands in for a continued
                 // session that has not written to its predecessor's plan yet.
+                // Show before RaiseLoading so HasPlan || IsLoading does not briefly go false.
                 Show(read.Plans.FirstOrDefault(plan => plan.IsCurrent) ?? (read.Plans.Count > 0 ? read.Plans[0] : null));
+                RaiseLoading();
                 return;
             case SessionPlansReadKind.Unreachable:
+                // Keep last good rows (a mid-session refresh); after a switch Clear already ran.
+                if (_current is { } unreachable) unreachable.Settled = true;
+                RaiseLoading();
                 return;
             default:
+                if (_current is { } done) done.Settled = true;
                 Clear();
+                RaiseLoading();
                 return;
         }
     }
@@ -208,11 +223,17 @@ public sealed class PlanSectionViewModel : ReactiveObject {
             this.RaisePropertyChanged(nameof(Counts));
         }
         this.RaisePropertyChanged(nameof(HasPlan));
+        this.RaisePropertyChanged(nameof(ShowsPlan));
         this.RaisePropertyChanged(nameof(HasTasks));
         this.RaisePropertyChanged(nameof(HasInProgress));
         this.RaisePropertyChanged(nameof(HasDocuments));
         this.RaisePropertyChanged(nameof(DoneCount));
         this.RaisePropertyChanged(nameof(HeaderText));
+    }
+
+    void RaiseLoading() {
+        this.RaisePropertyChanged(nameof(IsLoading));
+        this.RaisePropertyChanged(nameof(ShowsPlan));
     }
 
     PlanTaskCount[] CountStates() {

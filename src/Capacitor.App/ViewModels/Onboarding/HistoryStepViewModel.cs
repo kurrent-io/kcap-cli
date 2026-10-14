@@ -72,13 +72,13 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     /// The one line an empty arm says instead of a list.
     public string? EmptyMessage => State switch {
         HistoryState.NoHarness =>
-            "No recording connections were added in this setup. Go back to connect a harness, or use kcap import in your terminal to import history later.",
+            "No harnesses were connected in this setup. Go back to connect one, or run kcap import later.",
         HistoryState.NoHistory =>
-            $"There is no history on {MachineName} to bring over, so there is nothing to do here. Everything from now on is recorded as it happens.",
+            $"No history on {MachineName} to import. New sessions will record as they happen.",
         HistoryState.OnlyUnmatched =>
-            $"We found {SessionCount(_unmatched)} on {MachineName}, but could not match any of them to a repository — so there is nothing here to choose between. kcap remap in your terminal links them up, and then kcap import will bring them in.",
+            $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Run kcap remap, then kcap import.",
         HistoryState.Unreadable =>
-            $"We could not read the history on {MachineName}. Run kcap import --discover in your terminal to see why, and kcap import to bring it over later.",
+            $"Could not read history on {MachineName}. Try kcap import --discover, then kcap import.",
         _ => null,
     };
 

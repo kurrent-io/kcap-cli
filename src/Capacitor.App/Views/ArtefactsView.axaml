@@ -67,7 +67,7 @@
                     </DataTemplate>
                 </ContentControl.ContentTemplate>
             </ContentControl>
-            <TextBlock Text="Select a document to read it." FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
+            <TextBlock Text="{Binding EmptyReaderNote}" FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding Reader, Converter={x:Static ObjectConverters.IsNull}}" />
         </Panel>

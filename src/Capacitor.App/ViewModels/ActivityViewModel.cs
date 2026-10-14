@@ -40,8 +40,30 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
     bool _isEmpty = true;
     public bool IsEmpty {
         get => _isEmpty;
-        private set => this.RaiseAndSetIfChanged(ref _isEmpty, value);
+        private set {
+            if (_isEmpty == value) return;
+            this.RaiseAndSetIfChanged(ref _isEmpty, value);
+            this.RaisePropertyChanged(nameof(ShowsEmpty));
+            this.RaisePropertyChanged(nameof(ShowsRows));
+        }
     }
+
+    bool _hasLoaded;
+    /// False until the first log read applies — so the flyout does not flash the empty copy first.
+    public bool HasLoaded {
+        get => _hasLoaded;
+        private set {
+            if (_hasLoaded == value) return;
+            this.RaiseAndSetIfChanged(ref _hasLoaded, value);
+            this.RaisePropertyChanged(nameof(IsLoading));
+            this.RaisePropertyChanged(nameof(ShowsEmpty));
+            this.RaisePropertyChanged(nameof(ShowsRows));
+        }
+    }
+
+    public bool IsLoading => !HasLoaded;
+    public bool ShowsEmpty => HasLoaded && IsEmpty;
+    public bool ShowsRows => HasLoaded && !IsEmpty;
 
     bool _visible;
     int _tickCount;
@@ -118,8 +140,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    // Gated (OnTick): re-reads only when the stat key changed since the previous check — the key
-    // still advances even if the read that follows throws.
+    // Gated (OnTick): re-reads only when the stat key changed since the previous check.
     // PrimeAndRead (OnTabVisibleChanged true) always reads and always primes the baseline.
     // ReadOnly (RequestRefresh) never touches the stat key at all.
     (string? key, ConsentLogReadResult? result) ComputeOffUiThread(RefreshMode mode, string? previousKey) {
@@ -137,8 +158,16 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
     void ApplyOutcome(string? key, ConsentLogReadResult? result) {
         if (_disposed) return;
-        if (key is not null) _lastStatKey = key;
-        if (result is not null) Apply(result);
+        if (result is not null) {
+            // Prime the baseline only for a successful read — a throw leaves the key alone so the
+            // next gated tick can retry instead of treating the failed attempt as settled content.
+            if (key is not null) _lastStatKey = key;
+            Apply(result);
+            return;
+        }
+        // First open threw: leave Loading forever would be worse than the empty copy. Settle the
+        // gate without inventing rows; the next gated tick still retries (key was not primed).
+        if (!HasLoaded) HasLoaded = true;
     }
 
     /// Display rule keyed off Complete: a Complete read replaces the rows, including
@@ -150,6 +179,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
         _rowsSource.Load(result.Records.Select(ToRow));
         IsEmpty = _rowsSource.Count == 0;
+        HasLoaded = true;
     }
 
     static ActivityRow ToRow(ConsentDecisionRecord r) {

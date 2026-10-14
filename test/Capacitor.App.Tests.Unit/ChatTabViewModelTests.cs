@@ -117,7 +117,7 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var h = Claude();
             await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Waiting);
-            await Assert.That(h.Chat.PhaseNote).IsEqualTo("Waiting for the transcript…");
+            await Assert.That(h.Chat.PhaseNote).IsEqualTo("Waiting for chat…");
 
             await h.PushAsync(Dto(transcriptPath: null));
             await Assert.That(h.Chat.Phase).IsEqualTo(ChatTabPhase.Waiting);

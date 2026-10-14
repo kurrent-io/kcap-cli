@@ -612,8 +612,11 @@
                 </Button>
 
                 <!-- Plan: read from the server, so unlike AGENTS & COMMANDS it shows nothing while signed out. -->
-                <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.HasPlan}" Margin="0,18,0,0">
-                    <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable">
+                <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.ShowsPlan}" Margin="0,18,0,0">
+                    <TextBlock Text="Loading plan…" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
+                               Margin="0,4,0,0" IsVisible="{Binding Plan.IsLoading}" />
+                    <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable"
+                            IsVisible="{Binding Plan.HasPlan}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="PLAN" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -656,7 +659,13 @@
                             </StackPanel>
                         </Grid>
                     </Button>
-                    <Border x:Name="PlanBody" Classes="sectionBody" IsVisible="{Binding Plan.IsExpanded}">
+                    <Border x:Name="PlanBody" Classes="sectionBody">
+                        <Border.IsVisible>
+                            <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                <Binding Path="Plan.IsExpanded" />
+                                <Binding Path="Plan.HasPlan" />
+                            </MultiBinding>
+                        </Border.IsVisible>
                         <StackPanel Spacing="12">
                             <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}" IsVisible="{Binding Plan.HasDocuments}">
                                 <ItemsControl.ItemsPanel>

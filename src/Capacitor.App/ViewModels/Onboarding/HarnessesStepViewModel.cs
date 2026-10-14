@@ -97,6 +97,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     public string? NotFoundLine { get; private set; }
 
     public bool NoneFound => _detected && Rows.Count == 0;
+    /// Detection in flight — table chrome must wait; Busy alone also covers install.
+    public bool IsDetecting => Busy && !_detected;
+    public bool ShowsTable => _detected && Rows.Count > 0;
 
     public PathFixViewModel? PathFix { get; }
 
@@ -140,6 +143,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(ChoicesEditable));
             this.RaisePropertyChanged(nameof(CanContinue));
             this.RaisePropertyChanged(nameof(CanSkip));
+            this.RaisePropertyChanged(nameof(IsDetecting));
         }
     }
 
@@ -215,6 +219,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(Rows));
             this.RaisePropertyChanged(nameof(NotFoundLine));
             this.RaisePropertyChanged(nameof(NoneFound));
+            this.RaisePropertyChanged(nameof(IsDetecting));
+            this.RaisePropertyChanged(nameof(ShowsTable));
             RestateSelection();
 
             await ReadProviderKeysAsync(ct).ConfigureAwait(true);

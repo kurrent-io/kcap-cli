@@ -58,7 +58,12 @@
                                         FlyoutPresenterClasses="kcapPanel">
                                     <Border Width="460" MaxHeight="420" Padding="14,12">
                                         <Grid>
-                                            <StackPanel IsVisible="{Binding Activity.IsEmpty}"
+                                            <TextBlock Text="Loading…" Foreground="{StaticResource KcapMutedBrush}"
+                                                       FontSize="13.5" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       Margin="0,28"
+                                                       IsVisible="{Binding Activity.IsLoading}" />
+
+                                            <StackPanel IsVisible="{Binding Activity.ShowsEmpty}"
                                                         Spacing="6" Margin="0,28"
                                                         HorizontalAlignment="Center" VerticalAlignment="Center">
                                                 <TextBlock x:Name="ActivityEmptyText" Text="No launches decided yet"
@@ -70,7 +75,7 @@
                                                            TextAlignment="Center" HorizontalAlignment="Center" />
                                             </StackPanel>
 
-                                            <DockPanel IsVisible="{Binding !Activity.IsEmpty}">
+                                            <DockPanel IsVisible="{Binding Activity.ShowsRows}">
                                                 <TextBlock DockPanel.Dock="Top" Text="Launch approvals"
                                                            FontSize="12.5" FontWeight="SemiBold"
                                                            Foreground="{StaticResource KcapMutedBrush}"

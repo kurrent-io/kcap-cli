@@ -42,7 +42,13 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// The last applied read was not a Ready one, so the pane's poll retries it even with the tab hidden.
     internal bool LastReadFailed { get; private set; }
     public bool HasAny => _documents.Count > 0;
+    /// True while a session lease is open and has not yet applied a result — distinct from a settled empty list.
+    public bool IsLoading => _current is { Settled: false };
     public string SummaryText => _documents.Count == 1 ? "1 document" : $"{_documents.Count} documents";
+    /// Right-pane prompt when nothing is open: loading, settled empty, or pick a row.
+    public string EmptyReaderNote => IsLoading ? "Loading documents…"
+        : HasAny ? "Select a document to read it."
+        : "No documents yet.";
 
     DocumentRow? _selected;
     public DocumentRow? Selected { get => _selected; private set => this.RaiseAndSetIfChanged(ref _selected, value); }
@@ -81,6 +87,9 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         old?.Cts.Cancel();
         _pendingPath = null;
         LastReadFailed = false;
+        // Raise IsLoading before Clear so observers that combine HasAny || IsLoading see loading
+        // true while HasAny falls — otherwise a stale IsLoading=false hides a sticky tab.
+        RaiseLoading();
         Clear();
         if (_current is not null) StartRead(_current);
     }
@@ -182,16 +191,19 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     void Apply(PlanArtifactsRead read) {
         LastReadFailed = read.Kind == SessionPlansReadKind.Unreachable;
         if (_current is { } lease) lease.Settled = true;
+        // Populate (or clear) before RaiseLoading so HasAny || IsLoading never dips to false
+        // between settlement and content — that flicker hides the tab and forces Chat.
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
                 Show(read.Body?.Artifacts ?? []);
-                return;
+                break;
             case SessionPlansReadKind.Unreachable:
-                return;
+                break;
             default:
                 Clear();
-                return;
+                break;
         }
+        RaiseLoading();
     }
 
     static int KindRank(string kind) => kind switch { "plan" => 0, "spec" => 1, "design" => 2, _ => 3 };
@@ -239,6 +251,12 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     void RaiseShape() {
         this.RaisePropertyChanged(nameof(HasAny));
         this.RaisePropertyChanged(nameof(SummaryText));
+        this.RaisePropertyChanged(nameof(EmptyReaderNote));
+    }
+
+    void RaiseLoading() {
+        this.RaisePropertyChanged(nameof(IsLoading));
+        this.RaisePropertyChanged(nameof(EmptyReaderNote));
     }
 
     /// Shared-read so an agent still writing the file on Windows is not refused.
