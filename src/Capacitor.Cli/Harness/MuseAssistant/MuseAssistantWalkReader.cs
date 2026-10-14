@@ -9,6 +9,9 @@ namespace Capacitor.Cli.Harness.MuseAssistant;
 /// Nothing is read as data until everything has been checked, so a changed Muse shape stops recording
 /// instead of recording gaps.</summary>
 public static class MuseAssistantWalkReader {
+    /// The server never advances a line high-water mark for a line number at or above this.
+    const long MaxTrackableSeq = 1_000_000_000;
+
     public static string? ReadChatId(string dir) {
         var path = Path.Join(dir, "manifest.json");
         if (!File.Exists(path)) return null;
@@ -104,8 +107,10 @@ public static class MuseAssistantWalkReader {
                         foreach (var item in turnItems.EnumerateArray()) {
                             if (!item.IsObject) return (null, $"{file} turn {turnId} has an item that is not an object");
                             if (item.Str("role") is not { Length: > 0 } role) return (null, $"{file} turn {turnId}: an item has no role");
-                            if (item.Num("seq") is not { } seq || seq < 0 || seq > int.MaxValue)
-                                return (null, $"{file} turn {turnId}: seq must be an integer between 0 and {int.MaxValue}");
+                            if (item.Num("seq") is not { } seq || seq < 0)
+                                return (null, $"{file} turn {turnId}: seq must be a non-negative integer");
+                            if (seq >= MaxTrackableSeq)
+                                return (null, $"{file} turn {turnId}: seq {seq} is at or above {MaxTrackableSeq}, which the server cannot track");
                             if (item.Num("occurred_at_ms") is not { } at) return (null, $"{file} turn {turnId} seq {seq}: occurred_at_ms must be an integer");
 
                             if (item.Prop("chat_id") is not null || item.Prop("turn_id") is not null)

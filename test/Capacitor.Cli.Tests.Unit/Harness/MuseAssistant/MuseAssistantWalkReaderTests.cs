@@ -141,12 +141,16 @@ public class MuseAssistantWalkReaderTests {
     }
 
     [Test]
-    public async Task A_seq_that_is_not_an_integer_or_exceeds_int_range_is_refused() {
+    public async Task A_seq_that_is_not_an_integer_or_reaches_the_untrackable_range_is_refused() {
         var huge = new WalkBuilder(Tmp).AddPage(null, null, false, User(3_000_000_000L, T0)).Write("huge");
+        var atCeiling = new WalkBuilder(Tmp).AddPage(null, null, false, User(1_000_000_000L, T0)).Write("ceiling");
+        var belowCeiling = new WalkBuilder(Tmp).AddPage(null, null, false, User(999_999_999L, T0)).Write("below");
         var frac = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write("frac", d => Rewrite(d, "page-000.json", p => p["turns"]![0]!["items"]![0]!["seq"] = 1.5));
         var text = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write("text", d => Rewrite(d, "page-000.json", p => p["turns"]![0]!["items"]![0]!["seq"] = "12"));
 
         await Assert.That(MuseAssistantWalkReader.Load(huge).Problem).Contains("seq");
+        await Assert.That(MuseAssistantWalkReader.Load(atCeiling).Problem).Contains("is at or above 1000000000, which the server cannot track");
+        await Assert.That(MuseAssistantWalkReader.Load(belowCeiling).Problem).IsNull();
         await Assert.That(MuseAssistantWalkReader.Load(frac).Problem).Contains("seq");
         await Assert.That(MuseAssistantWalkReader.Load(text).Problem).Contains("seq");
     }
