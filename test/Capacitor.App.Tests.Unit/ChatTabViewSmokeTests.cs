@@ -434,13 +434,12 @@ public class ChatTabViewSmokeTests {
             await Assert.That(card.Margin.Right).IsEqualTo(0);
             var title = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardTitle");
             var name = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardName");
-            var meta = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardMeta");
             await Assert.That(title.Text).IsEqualTo("Published page");
             await Assert.That(name.Text).IsEqualTo("Retention brief");
-            await Assert.That(title.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
-            await Assert.That(name.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
-            await Assert.That(title.TranslatePoint(default, host.Window)!.Value.X)
-                .IsEqualTo(meta.TranslatePoint(default, host.Window)!.Value.X);
+            await Assert.That(name.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
+            await Assert.That(title.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
+            await Assert.That(name.TranslatePoint(default, host.Window)!.Value.X)
+                .IsEqualTo(title.TranslatePoint(default, host.Window)!.Value.X);
             await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen").IsEffectivelyVisible).IsTrue();
             await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink").IsEffectivelyVisible).IsTrue();
             await Assert.That(ToolRows(host.View).Any(r => r.IsEffectivelyVisible)).IsFalse();
