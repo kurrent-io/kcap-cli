@@ -17,7 +17,10 @@ public sealed class MuseAssistantScope(
         TimeProvider                   time
     ) {
     static readonly TimeSpan LockWait = TimeSpan.FromSeconds(60);
-    const string Busy = "ingest in progress, retry";
+    // Every scope command and sweep holds the scope lock before any chat lock, so a chat lock another
+    // process holds there is an ingest's; the scope lock itself is only ever another scope command's.
+    const string Busy      = "ingest in progress, retry";
+    const string ScopeBusy = "another scope command or sweep is running, retry";
 
     /// <summary>The add as the command line states it: a boundary that does not parse is refused before
     /// anything is resolved or written.</summary>
@@ -76,7 +79,22 @@ public sealed class MuseAssistantScope(
             Unlist(store, chatId);
             Console.Out.WriteLine($"removed chat={chatId}");
             return MuseAssistantExitCodes.Ok;
-        }, ct);
+        }, ct, whenChatBusy: store => RevokedWhileBusy(store, chatId));
+
+    /// <summary>A removal that cannot get the chat lock may still find its work already done: the state
+    /// file is replaced atomically, so reading it unlocked is safe. Null when the grant is not revoked.</summary>
+    static int? RevokedWhileBusy(MuseAssistantStateStore store, string chatId) {
+        if (store.LoadState(chatId).State is not { Grant.Revoked: true } state) return null;
+
+        if (state.Open is not null) {
+            Console.Error.WriteLine($"kcap muse-assistant scope remove: {Busy} chat={chatId}; revoked; the end is still being delivered, and `kcap muse-assistant sweep` finishes it");
+            return MuseAssistantExitCodes.Server;
+        }
+
+        Unlist(store, chatId);
+        Console.Error.WriteLine($"kcap muse-assistant scope remove: {Busy} chat={chatId}; already revoked and nothing is left to deliver");
+        return MuseAssistantExitCodes.Ok;
+    }
 
     /// <summary>Revokes every chat it can lock. One it cannot stays granted and listed — dropping it from
     /// the list alone would be undone by the next sweep — and the exit says recording has not stopped.</summary>
@@ -185,18 +203,19 @@ public sealed class MuseAssistantScope(
     /// the chat lock when <paramref name="chatId"/> names one. Failing to get either — or the identity — is
     /// reported with <paramref name="unavailable"/>, before anything is written.</summary>
     async Task<int> UnderLocksAsync(
-            string verb, string? chatId, int unavailable, Func<MuseAssistantPrincipal, MuseAssistantStateStore, Task<int>> body, CancellationToken ct) {
+            string verb, string? chatId, int unavailable, Func<MuseAssistantPrincipal, MuseAssistantStateStore, Task<int>> body, CancellationToken ct,
+            Func<MuseAssistantStateStore, int?>? whenChatBusy = null) {
         var (principal, problem) = await identity.ResolveAsync(ct);
         if (principal is null) return Fail(verb, unavailable, problem!);
 
         var store = stores.Create(MuseAssistantPaths.ScopeDir(config, principal), principal);
 
         using var scopeLock = await LockAsync(MuseAssistantPaths.ScopeLock(store.ScopeDir), ct);
-        if (scopeLock is null) return Fail(verb, unavailable, Busy);
+        if (scopeLock is null) return Fail(verb, unavailable, ScopeBusy);
         if (chatId is null) return await body(principal, store);
 
         using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, chatId), ct);
-        if (chatLock is null) return Fail(verb, unavailable, $"{Busy} chat={chatId}");
+        if (chatLock is null) return whenChatBusy?.Invoke(store) ?? Fail(verb, unavailable, $"{Busy} chat={chatId}");
 
         return await body(principal, store);
     }

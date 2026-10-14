@@ -22,8 +22,8 @@ public class MuseAssistantScopeTests {
     MuseAssistantStateStore Store(MuseAssistantPrincipal? p = null) => new(MuseAssistantPaths.ScopeDir(Config.Root, p ?? Acme), p ?? Acme);
     MuseAssistantChatState State(string chat = "chat-main") => Store().LoadState(chat).State!;
 
-    // The fake clock freezes grant timestamps; a test whose commands contend for a lock passes the system
-    // clock instead, because the lock wait polls through Task.Delay on the clock it is given.
+    // The fake clock freezes grant timestamps. A test that waits on a lock either passes the system clock
+    // and lets the wait run in real time, or drives the fake clock to the timeout with TimedOut.
     async Task<MuseAssistantScope> ScopeAsync(RecordingPoster poster, string userId = "user_01HXYZ", TimeProvider? time = null, string serverUrl = "https://acme.kcap.ai") =>
         new(Config.Root, await MuseAssistantTestIdentity.SignedInAsync(Config.Root, serverUrl, userId), new(), new MuseAssistantActionRunner(poster, time ?? _time), time ?? _time);
 
@@ -317,6 +317,62 @@ public class MuseAssistantScopeTests {
         await Assert.That(State().Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.Started);
         await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
         await Assert.That(poster.Ends).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Remove_of_a_chat_already_revoked_and_closing_while_an_ingest_holds_the_lock_exits_1_not_4() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        var unreachable = new RecordingPoster { Refuse = (_, _) => "cannot reach https://acme.kcap.ai" };
+        await Assert.That(await (await ScopeAsync(unreachable)).RemoveAsync("chat-main", default)).IsEqualTo(1);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+
+        using var stderr = ConsoleOutput.StartErrorCapture();
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-main")))
+            await Assert.That(await TimedOut((await ScopeAsync(poster)).RemoveAsync("chat-main", default))).IsEqualTo(1);
+
+        await Assert.That(stderr.GetCapturedError()).Contains("revoked; the end is still being delivered");
+        await Assert.That(State().Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.PendingEnd);
+        await Assert.That(poster.Ends).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Remove_of_a_chat_already_revoked_with_nothing_left_to_deliver_exits_0_while_an_ingest_holds_the_lock() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        await Assert.That(await (await ScopeAsync(poster)).RemoveAsync("chat-main", default)).IsEqualTo(0);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+
+        using var stderr = ConsoleOutput.StartErrorCapture();
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-main")))
+            await Assert.That(await TimedOut((await ScopeAsync(poster)).RemoveAsync("chat-main", default))).IsEqualTo(0);
+
+        await Assert.That(stderr.GetCapturedError()).Contains("already revoked");
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task A_busy_chat_lock_names_the_ingest_and_a_busy_scope_lock_names_the_other_scope_command() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        var dir    = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+
+        using (var stderr = ConsoleOutput.StartErrorCapture()) {
+            using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-main")))
+                await Assert.That(await TimedOut((await ScopeAsync(poster)).AddAsync("chat-main", History, default))).IsEqualTo(1);
+
+            await Assert.That(stderr.GetCapturedError()).Contains("ingest in progress, retry chat=chat-main");
+        }
+
+        using (var stderr = ConsoleOutput.StartErrorCapture()) {
+            using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ScopeLock(dir)))
+                await Assert.That(await TimedOut((await ScopeAsync(poster)).AddAsync("chat-main", History, default))).IsEqualTo(1);
+
+            await Assert.That(stderr.GetCapturedError()).Contains("another scope command or sweep is running, retry");
+            await Assert.That(stderr.GetCapturedError()).DoesNotContain("ingest");
+        }
     }
 
     [Test]
