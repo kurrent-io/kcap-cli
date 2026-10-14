@@ -162,7 +162,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
-    public async Task Reviewer_plan_has_read_only_deny_unmatched_and_required_mcp() {
+    public async Task Reviewer_plan_has_read_only_on_request_and_required_mcp() {
         var rig = NewRig();
 
         var start = await StartAsync(rig, Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"]));
@@ -170,7 +170,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         var session = Params(await rig.Host.WaitForWriteAsync("session/start"));
         await Assert.That((string?)session["permissionProfile"]).IsEqualTo(":read-only");
-        await Assert.That((string?)session["approvalMode"]).IsEqualTo("denyUnmatched");
+        await Assert.That((string?)session["approvalMode"]).IsEqualTo("onRequest");
 
         var servers = session["config"]!["mcpServers"]!.AsObject();
         await Assert.That(servers.Count).IsEqualTo(2);

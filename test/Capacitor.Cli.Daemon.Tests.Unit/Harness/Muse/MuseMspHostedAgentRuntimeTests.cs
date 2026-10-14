@@ -28,7 +28,7 @@ public class MuseMspHostedAgentRuntimeTests {
             IReadOnlySet<string>? admitted = null) =>
         new(isReviewer,
             isReviewer ? ":read-only" : ":ask-me",
-            isReviewer ? "denyUnmatched" : "onRequest",
+            "onRequest",
             mcpServers,
             resume,
             admitted ?? FrozenSet<string>.Empty,
@@ -159,7 +159,7 @@ public class MuseMspHostedAgentRuntimeTests {
             await Assert.That((string?)p["modelId"]).IsEqualTo("muse-spark-1.3");
             await Assert.That((string?)p["providerId"]).IsEqualTo("meta");
             await Assert.That((string?)p["permissionProfile"]).IsEqualTo(":read-only");
-            await Assert.That((string?)p["approvalMode"]).IsEqualTo("denyUnmatched");
+            await Assert.That((string?)p["approvalMode"]).IsEqualTo("onRequest");
             await Assert.That((string?)p["commandId"]).IsNotNull();
             await Assert.That((string?)p["config"]!["mcpServers"]!["kcap-flow-result"]!["mode"]).IsEqualTo("required");
 

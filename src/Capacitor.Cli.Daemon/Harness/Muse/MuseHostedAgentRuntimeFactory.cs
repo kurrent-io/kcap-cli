@@ -276,7 +276,9 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
         var servers = AcpReviewFlowMcp.Build(ctx, ids);
 
-        return new MuseLaunchPlan(true, ":read-only", "denyUnmatched", RenderMcpServers(servers),
+        // Under denyUnmatched Muse resolves an MCP approval by policy before the daemon can answer it,
+        // so the result channel could never be allowed; the daemon decides every approval itself.
+        return new MuseLaunchPlan(true, ":read-only", "onRequest", RenderMcpServers(servers),
             ctx.ResumeSessionId is null ? null : minted, MuseUnattendedApprovals.AdmittedFor(servers, identity), minted);
     }
 
