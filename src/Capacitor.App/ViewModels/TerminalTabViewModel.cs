@@ -355,8 +355,6 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         DetachCommand = ReactiveCommand.CreateFromTask(RunDetachAsync);
         RetryResolveCommand = ReactiveCommand.CreateFromTask(RetryResolveAsync);
 
-        // Alive for the VM's whole lifetime until TeardownAsync -- including after a resolve
-        // timeout, so a late Agents-cache push can still recover from NotFound.
         _agentsSub = daemon.Agents.Connect()
             .Filter(dto => dto.Id == _agentId)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
