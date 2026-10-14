@@ -345,6 +345,46 @@ public class MuseMspHostedAgentRuntimeTests {
         await logger.WaitForAsync(e => e.Message.Contains("refused after its deadline", StringComparison.Ordinal)).WaitAsync(HangGuard);
     }
 
+    /// <summary>A stdin write still in flight at the deadline cannot be withdrawn and may yet land, so the
+    /// input is reported delivered and the lane freed; a write that later fails is logged.</summary>
+    [Test]
+    public async Task A_write_unfinished_at_the_deadline_is_reported_delivered_and_releases_the_lane() {
+        var logger = new CaptureLogger();
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var starts = 0;
+        await using var rig = await ReadyRig(logger: logger);
+        rig.Process.WriteOverride = line =>
+            line.Contains("\"turn/start\"", StringComparison.Ordinal) && Interlocked.Increment(ref starts) == 1 ? parked.Task : Task.CompletedTask;
+
+        rig.Host.Silent.Add("turn/start");
+
+        try {
+            var first = rig.Runtime.SendUserInputAsync("first");
+            await rig.Host.WaitForWriteAsync("turn/start");
+            rig.Time.Advance(MuseMspHostedAgentRuntime.DefaultReadyDeadline + TimeSpan.FromSeconds(1));
+
+            await first.WaitAsync(HangGuard);
+
+            rig.Host.Silent.Remove("turn/start");
+            await rig.Runtime.SendUserInputAsync("second").WaitAsync(HangGuard);
+            await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
+        } finally {
+            // The fake ignores the owner token, so a write left parked would hold dispose's join.
+            parked.TrySetException(new IOException("stdin is gone"));
+        }
+
+        await logger.WaitForAsync(e => e.Message.Contains("failed to write after its deadline", StringComparison.Ordinal)).WaitAsync(HangGuard);
+    }
+
+    /// <summary>The twin: a write that fails within the deadline never reached the host, so the input fails.</summary>
+    [Test]
+    public async Task A_write_that_fails_within_the_deadline_fails_the_input() {
+        await using var rig = await ReadyRig();
+        rig.Process.FailWrites = true;
+
+        await Assert.ThrowsAsync<IOException>(async () => await rig.Runtime.SendUserInputAsync("first").WaitAsync(HangGuard));
+    }
+
     /// <summary>Only an explicit refusal falls a steer back to a new turn: an unanswered steer may have
     /// landed, and a fallback would run the input a second time.</summary>
     [Test]
@@ -684,6 +724,61 @@ public class MuseMspHostedAgentRuntimeTests {
 
         await Assert.That(rig.Host.WritesOf("approval/decide")).Count().IsEqualTo(2);
         await Assert.That(rig.Runtime.ReadVerdict()!.Reason).StartsWith("muse_reviewer_approval_refused: ");
+    }
+
+    /// <summary>An unanswered decision may have left the approval open, so the interactive lane forgets it
+    /// once the deadline passes and decides a later update for the same requirement again.</summary>
+    [Test]
+    public async Task An_unanswered_interactive_decision_is_decided_again_on_the_next_update() {
+        var logger = new CaptureLogger();
+        await using var rig = await ReadyRig(
+            interact: (_, _) => Task.FromResult(new AcpInteractionDecision("allow", "allow_once", null, null, null, null)),
+            configure: h => h.Silent.Add("approval/decide"),
+            logger: logger);
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+        await rig.Host.WaitForWriteAsync("approval/decide");
+        await AdvanceUntilAsync(rig, () => logger.Entries.Any(e => e.Message.Contains("was not taken", StringComparison.Ordinal)));
+
+        rig.Process.Push(ApprovalUpdated(sourceIndex: 0));
+
+        await rig.Host.WaitForWriteAsync("approval/decide", 2);
+        await Assert.That(rig.Runtime.ReadVerdict()).IsNull();
+    }
+
+    /// <summary>A reviewer whose decisions a live host never answers would wait forever; it retries with
+    /// abort once and then ends with the coded verdict.</summary>
+    [Test]
+    public async Task A_reviewer_whose_decisions_go_unanswered_is_a_coded_verdict_and_stops() {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var rig = await ReadyRig(
+            Plan(isReviewer: true, admitted: new HashSet<string> { SearchTool }.ToFrozenSet()),
+            configure: h => {
+                h.Silent.Add("approval/decide");
+                h.Process.ExitsOnInputClose = true;
+                h.Process.OnInputClose      = () => closed.TrySetResult();
+            });
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+        await rig.Host.WaitForWriteAsync("approval/decide");
+        await AdvanceUntilAsync(rig, () => closed.Task.IsCompleted);
+
+        var decides = rig.Host.WritesOf("approval/decide");
+        await Assert.That(decides).Count().IsEqualTo(2);
+        await Assert.That((string?)Params(decides[1])["choiceId"]).IsEqualTo("abort");
+        await Assert.That(rig.Runtime.ReadVerdict()!.Reason).StartsWith("muse_reviewer_approval_refused: ");
+    }
+
+    /// <summary>A deadline's timer is armed off the pump, after the write a test observes, so time is advanced
+    /// in steps until the condition holds.</summary>
+    static async Task AdvanceUntilAsync(Rig rig, Func<bool> done) {
+        using var guard = new CancellationTokenSource(HangGuard);
+
+        while (!done()) {
+            guard.Token.ThrowIfCancellationRequested();
+            rig.Time.Advance(TimeSpan.FromSeconds(5));
+            await Task.Delay(20, guard.Token);
+        }
     }
 
     [Test]

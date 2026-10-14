@@ -182,23 +182,6 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             TaskCompletionSource?     written   = null,
             Action<MuseMspFrame>?     onPump    = null,
             Func<TimeSpan>?           remaining = null) {
-        var (id, response) = await WriteRequestAsync(build, written, onPump, remaining).ConfigureAwait(false);
-
-        try {
-            return remaining is null
-                ? await response.ConfigureAwait(false)
-                : await response.WaitAsync(remaining(), _time).ConfigureAwait(false);
-        } finally {
-            _pending.TryRemove(id, out _);
-        }
-    }
-
-    /// <summary>Registers and writes one request, returning its id and the pending response.</summary>
-    async Task<(long Id, Task<MuseMspFrame> Response)> WriteRequestAsync(
-            Func<long, string>    build,
-            TaskCompletionSource? written,
-            Action<MuseMspFrame>? onPump,
-            Func<TimeSpan>?       remaining) {
         var id     = Interlocked.Increment(ref _requestSeq);
         var waiter = RegisterPending(id, onPump);
 
@@ -221,27 +204,44 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             throw;
         }
 
-        return (id, waiter.Task);
+        try {
+            return remaining is null
+                ? await waiter.Task.ConfigureAwait(false)
+                : await waiter.Task.WaitAsync(remaining(), _time).ConfigureAwait(false);
+        } finally {
+            _pending.TryRemove(id, out _);
+        }
     }
 
-    /// <summary>An input request's response, or null when it was written but went unanswered past the
-    /// deadline. The host may still run that input, so it must not be reported dropped; the request stays
-    /// pending, so a late answer still applies and a late refusal is logged. A failed or timed-out write
-    /// throws. With <paramref name="requireAnswer"/>, an unanswered request throws too.</summary>
+    /// <summary>An input request's response, or null when the deadline passed with its write unfinished or
+    /// its answer missing. Either way the line may still reach the host and run, so the input must not be
+    /// reported dropped: a stdin write cannot be withdrawn, since cancelling it mid-line would corrupt the
+    /// line-delimited stream. The request stays pending, so a late answer still applies, and a late write
+    /// failure or refusal is logged. Only a write that fails or a refusal that arrives within the deadline
+    /// throws. With <paramref name="requireAnswer"/>, the deadline throws too.</summary>
     async Task<MuseMspFrame?> RequestInputAsync(
             Func<long, string>    build,
             string                what,
             bool                  requireAnswer,
             Action<MuseMspFrame>? onPump = null) {
-        var remaining      = InputDeadline();
-        var (id, response) = await WriteRequestAsync(build, written: null, onPump, remaining).ConfigureAwait(false);
+        var remaining = RequestDeadline();
+        var id        = Interlocked.Increment(ref _requestSeq);
+        var waiter    = RegisterPending(id, onPump);
+        var write     = Task.CompletedTask;
 
         try {
-            return await response.WaitAsync(remaining(), _time).ConfigureAwait(false);
-        } catch (TimeoutException) when (!requireAnswer) {
-            _logger.LogWarning("Muse: the host did not answer {What} within {Seconds}s; its acceptance is unconfirmed, so the "
-                             + "input is reported delivered (agentId={AgentId}).", what, _readyDeadline.TotalSeconds, _agentId);
-            Track(LogLateRefusalAsync(response, what));
+            if (Volatile.Read(ref _terminal) != 0)
+                throw new InputNotAdmittedException("Muse: the hosted session has ended.");
+
+            write = _process.WriteLineAsync(build(id), _ownerToken);
+            ObserveFault(write);
+            await write.WaitAsync(remaining(), _time).ConfigureAwait(false);
+
+            return await waiter.Task.WaitAsync(remaining(), _time).ConfigureAwait(false);
+        } catch (TimeoutException) when (!requireAnswer && Volatile.Read(ref _terminal) == 0) {
+            _logger.LogWarning("Muse: {What} was not written and answered within {Seconds}s; its acceptance is unconfirmed, so "
+                             + "the input is reported delivered (agentId={AgentId}).", what, _readyDeadline.TotalSeconds, _agentId);
+            Track(LogLateOutcomeAsync(id, write, waiter.Task, what));
             return null;
         } catch {
             _pending.TryRemove(id, out _);
@@ -249,7 +249,16 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         }
     }
 
-    async Task LogLateRefusalAsync(Task<MuseMspFrame> response, string what) {
+    async Task LogLateOutcomeAsync(long id, Task write, Task<MuseMspFrame> response, string what) {
+        try {
+            await write.ConfigureAwait(false);
+        } catch (Exception ex) {
+            _pending.TryRemove(id, out _);
+            _logger.LogWarning(ex, "Muse: {What} failed to write after its deadline, so its input was not run (agentId={AgentId}).",
+                what, _agentId);
+            return;
+        }
+
         using var frame = await response.ConfigureAwait(false);
         if (ErrorMessage(frame) is { } error)
             _logger.LogWarning("Muse: {What} was refused after its deadline, so its input was not run: {Error} (agentId={AgentId}).",
@@ -680,8 +689,9 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         }
     }
 
-    /// <summary>A fresh deadline for one input request, so a host that never answers cannot hold the input lane.</summary>
-    Func<TimeSpan> InputDeadline() {
+    /// <summary>A fresh deadline for one request, so a host that never answers cannot hold the input lane
+    /// or an approval.</summary>
+    Func<TimeSpan> RequestDeadline() {
         var started = _time.GetTimestamp();
 
         return () => {
@@ -809,28 +819,29 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             return;
         }
 
-        if (await DecideAsync(approvalId, view, requirement, decision).ConfigureAwait(false) is not false) return;
+        if (await DecideAsync(approvalId, view, requirement, decision).ConfigureAwait(false)) return;
 
         // An unattended reviewer's turn waits on the approval, and nobody else will resolve it.
         if (!_plan.IsReviewer || ct.IsCancellationRequested) return;
 
-        if (await DecideAsync(approvalId, view, requirement, Declined(view)).ConfigureAwait(false) is not false) return;
+        if (await DecideAsync(approvalId, view, requirement, Declined(view)).ConfigureAwait(false)) return;
 
         _gate.TryStartReap(
-            $"muse_reviewer_approval_refused: the Muse host refused every decision on approval {approvalId}, so the reviewer cannot continue.",
+            $"muse_reviewer_approval_refused: the Muse host did not take any decision on approval {approvalId}, so the reviewer cannot continue.",
             RunSelfStopAsync);
     }
 
-    /// <summary>True when the host took the decision or had already resolved the approval, false when it
-    /// refused it, null when it was not delivered. A refusal leaves the approval open, so its requirement
-    /// is forgotten and a later update for it is decided again.</summary>
-    async Task<bool?> DecideAsync(string approvalId, JsonElement view, JsonElement requirement, MuseApprovalDecision decision) {
+    /// <summary>True when the host took the decision or had already resolved the approval; false when it
+    /// refused it, left it unanswered past the deadline, or it could not be sent. The approval may then
+    /// still be open, so its requirement is forgotten and a later update for it is decided again.</summary>
+    async Task<bool> DecideAsync(string approvalId, JsonElement view, JsonElement requirement, MuseApprovalDecision decision) {
         // Recorded before the write: the update our own decision provokes can arrive before its response.
         _decidedRequirements[approvalId] = requirement;
 
         try {
             using var response = await RequestAsync(id => MuseMsp.ApprovalDecide(
-                id, MuseMsp.NewId(), SessionIdOr(view), approvalId, requirement, decision.ChoiceId, decision.Feedback)).ConfigureAwait(false);
+                    id, MuseMsp.NewId(), SessionIdOr(view), approvalId, requirement, decision.ChoiceId, decision.Feedback),
+                remaining: RequestDeadline()).ConfigureAwait(false);
 
             if (ErrorMessage(response) is not { } error) return true;
 
@@ -846,8 +857,13 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             return false;
         } catch (Exception ex) {
             _decidedRequirements.TryRemove(approvalId, out _);
-            _logger.LogDebug(ex, "Muse: the decision on approval {ApprovalId} was not delivered (agentId={AgentId}).", approvalId, _agentId);
-            return null;
+
+            if (Volatile.Read(ref _terminal) != 0)
+                _logger.LogDebug(ex, "Muse: the decision on approval {ApprovalId} was not delivered (agentId={AgentId}).", approvalId, _agentId);
+            else
+                _logger.LogWarning(ex, "Muse: the {Choice} decision on approval {ApprovalId} was not taken (agentId={AgentId}).",
+                    decision.ChoiceId, approvalId, _agentId);
+            return false;
         }
     }
 
