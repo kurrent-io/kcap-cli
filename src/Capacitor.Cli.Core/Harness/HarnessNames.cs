@@ -20,6 +20,7 @@ public static class HarnessNames {
             HarnessId.OpenCode    => "opencode",
             HarnessId.Antigravity => "antigravity",
             HarnessId.MistralVibe => "mistral-vibe",
+            HarnessId.Grok        => "grok",
             HarnessId.Muse        => "muse",
         };
 
@@ -46,6 +47,7 @@ public static class HarnessNames {
             "opencode"    => HarnessId.OpenCode,
             "antigravity" => HarnessId.Antigravity,
             "mistral-vibe" => HarnessId.MistralVibe,
+            "grok"        => HarnessId.Grok,
             "muse"        => HarnessId.Muse,
             _             => null,
         };

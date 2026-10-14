@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
@@ -28,6 +29,7 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
@@ -592,6 +594,7 @@ sealed class SetupCommand(
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
         var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
         var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
+        var skipGrokFlag     = args.Contains("--skip-grok-hooks");
         var skipMuseFlag     = args.Contains("--skip-muse-hooks");
         var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
         var skipImport       = args.Contains("--skip-import");
@@ -726,6 +729,7 @@ sealed class SetupCommand(
         var gemini   = harnesses.Of<GeminiHarness>().Paths;
         var agy      = harnesses.Of<AntigravityHarness>().Paths;
         var vibe     = harnesses.Of<MistralVibeHarness>().Paths;
+        var grok     = harnesses.Of<GrokHarness>().Paths;
         var muse     = harnesses.Of<MuseHarness>().Paths;
 
         var stepPaths = new CodingAgentsStep.Paths(
@@ -760,6 +764,7 @@ sealed class SetupCommand(
             PiAgentsMdPath:       pi.AgentsMd,
             VibeHooksPath:        vibe.HooksToml,
             VibeConfigPath:       vibe.ConfigToml,
+            GrokHooksPath:        grok.KcapHooksJson,
             MuseSettingsPath:     muse.SettingsJson);
 
         // The browser leg, where the tenant serves one. Unnumbered because it is not a step: the
@@ -837,6 +842,7 @@ sealed class SetupCommand(
             OpenCode:    harnesses.Detected(HarnessId.OpenCode),
             Antigravity: harnesses.Detected(HarnessId.Antigravity),
             Vibe:        harnesses.Detected(HarnessId.MistralVibe),
+            Grok:        harnesses.Detected(HarnessId.Grok),
             Muse:        harnesses.Detected(HarnessId.Muse));
 
         bool PromptYesNo(string text) =>
@@ -896,6 +902,7 @@ sealed class SetupCommand(
             InstallAgents: installAgents,
             SkipMistralVibe: skipVibeFlag,
             SkipMistralVibeMcp: skipVibeMcpFlag,
+            SkipGrok: skipGrokFlag,
             SkipMuse: skipMuseFlag,
             SkipMuseMcp: skipMuseMcpFlag);
 
@@ -963,6 +970,7 @@ sealed class SetupCommand(
             // Vibe's hooks.toml and MCP config.toml are TOML (not the JSON writer / Codex map).
             InstallVibeHooks:         p => MistralVibeHooksInstaller.Install(p) != TomlConfigFile.Outcome.Failed,
             RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml),
+            InstallGrokHooks:         GrokHooksInstaller.Install,
             // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
             InstallMuseHooks:         p => {
                 var installed = (MuseHooksInstaller.Install(p) is SettingsEdit.Changed or SettingsEdit.Unchanged) && MuseHooksInstaller.HasAllHooks(p);
@@ -1011,6 +1019,7 @@ sealed class SetupCommand(
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
         OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
+        OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
         OfferedIf(detected.Muse,        skipMuseFlag,        HarnessId.Muse);
         new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
@@ -1336,7 +1345,7 @@ sealed class SetupCommand(
             installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
             installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
-            installResult.VibeHooksInstalled, installResult.MuseHooksInstalled,
+            installResult.VibeHooksInstalled, installResult.GrokHooksInstalled, installResult.MuseHooksInstalled,
         }.Count(installed => installed);
 
         telemetry.Funnel.Succeeded(agentsConfigured);
@@ -1829,6 +1838,7 @@ sealed class SetupCommand(
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
             new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
+            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time),
             new MuseImportSource(harnesses.Of<MuseHarness>().Paths, time)
         ];
 

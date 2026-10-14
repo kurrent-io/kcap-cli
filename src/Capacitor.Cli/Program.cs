@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Core.Http;
@@ -92,8 +93,18 @@ if (InteractiveLifetime.IsInteractiveCommand(command) && detachedImport is null)
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe") || args.Contains("--muse"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe") || args.Contains("--grok") || args.Contains("--muse"))) {
     return 0;
+}
+
+// Another vendor's kcap hook run by Grok would record Grok's payload as that vendor's session.
+if (command == "hook" && !args.Contains("--grok") && GrokHookEnvironment.IsGrokHook(Environment.GetEnvironmentVariable)) {
+    string body;
+    try { body = await Console.In.ReadToEndAsync(); } catch { body = ""; }
+
+    if (GrokHookEnvironment.IsGrokPayload(body, Environment.GetEnvironmentVariable)) return 0;
+
+    Console.SetIn(new StringReader(body));
 }
 
 // Anchored here, before dispatch: every hook ceiling is relative to it, and anchoring inside a
@@ -969,11 +980,14 @@ switch (command) {
         if (args.Contains("--mistral-vibe")) {
             return await Run<MistralVibeHookCommand>().Handle(Console.In);
         }
+        if (args.Contains("--grok")) {
+            return await Run<GrokHookCommand>().Handle(Console.In);
+        }
         if (args.Contains("--muse")) {
             return await Run<MuseHookCommand>().Handle(Console.In);
         }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --muse");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --grok, --muse");
         return 1;
     }
     case "cursor":

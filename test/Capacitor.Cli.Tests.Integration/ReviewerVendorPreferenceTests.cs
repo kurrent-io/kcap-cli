@@ -233,7 +233,7 @@ public class ReviewerVendorPreferenceTests : IDisposable {
         await Assert.That(stderr).Contains("'kodex' is not a vendor this kcap version knows");
         // The tokens the user can choose from, so the warning is actionable on its own.
         await Assert.That(stderr).Contains(
-            "claude, codex, copilot, cursor, gemini, kiro, opencode, pi, antigravity");
+            "claude, codex, copilot, cursor, gemini, kiro, opencode, pi, antigravity, grok");
         await Assert.That(stderr).Contains("the server has the authoritative list");
 
         // Warned, not refused: the value really is on disk.

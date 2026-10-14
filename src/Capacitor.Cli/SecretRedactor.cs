@@ -223,7 +223,10 @@ public static partial class SecretRedactor {
     private static partial Regex AwsUniqueIdRx();
 
     // Anchored: SecretPatterns finds candidates by prefix and confirms each one here.
-    [GeneratedRegex(@"\G(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}", RegexOptions.None, matchTimeoutMilliseconds: 100)]
+    internal const string VendorTokenPattern =
+        @"\G(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}";
+
+    [GeneratedRegex(VendorTokenPattern, RegexOptions.None, matchTimeoutMilliseconds: 100)]
     private static partial Regex VendorTokenRx();
 
     [GeneratedRegex(
@@ -234,7 +237,10 @@ public static partial class SecretRedactor {
 
     // The match starts at `=` and finds the name behind it, so letters without one cost nothing;
     // the name is the whole [A-Za-z_] run before it, so a digit ends it, as in OAUTH2_TOKEN.
-    [GeneratedRegex(@"(?<=(?<![A-Za-z_])[A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*)=([^\s""\\]+)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
+    internal const string EnvVarSecretPattern =
+        @"(?<=(?<![A-Za-z_])[A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*)=([^\s""\\]+)";
+
+    [GeneratedRegex(EnvVarSecretPattern, RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
     private static partial Regex EnvVarSecretRx();
 
     [GeneratedRegex("""((?:""" + SecretKeywords + """)[\w.\-]*:[ \t]+)([^\s"\\]{8,})""", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]

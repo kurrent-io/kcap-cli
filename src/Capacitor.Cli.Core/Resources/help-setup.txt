@@ -121,6 +121,8 @@ Options:
                               Antigravity (the shared ~/.gemini/GEMINI.md).
   --skip-antigravity-skills   Skip copying the kcap skills into ~/.gemini/skills
                               (where Antigravity reads them, not ~/.agents/skills).
+  --skip-grok-hooks           Don't install the Grok hooks even if Grok is
+                              detected (~/.grok/ or grok on PATH).
   --skip-muse-hooks           Don't install the Muse Code hooks even if Muse is
                               detected (~/.config/muse/ or muse on PATH).
   --skip-muse-mcp             Skip registering the kcap MCP servers for Muse Code

@@ -45,7 +45,7 @@ public class RefreshCommandTests {
         var vendors = RefreshCommand.Steps.Where(s => s[0] == "plugin").Select(s => s.Length == 4 ? s[2] : "claude").ToArray();
 
         await Assert.That(vendors).IsEquivalentTo(
-            ["--skills", "--codex", "--cursor", "--copilot", "--pi", "--opencode", "--gemini", "--kiro", "--antigravity", "--muse", "claude"]);
+            ["--skills", "--codex", "--cursor", "--copilot", "--pi", "--opencode", "--gemini", "--kiro", "--antigravity", "--grok", "--muse", "claude"]);
         await Assert.That(RefreshCommand.Steps.Where(s => s[0] == "plugin").All(s => s[^1] == "--if-installed")).IsTrue();
     }
 

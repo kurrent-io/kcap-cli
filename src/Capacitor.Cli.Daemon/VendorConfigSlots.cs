@@ -22,7 +22,8 @@ internal static class VendorConfigSlots {
             HarnessId.Pi          => new(() => config.PiPath,          v => config.PiPath          = v),
             HarnessId.OpenCode    => new(() => config.OpenCodePath,    v => config.OpenCodePath    = v),
             HarnessId.Antigravity => new(() => config.AntigravityPath, v => config.AntigravityPath = v),
-            HarnessId.MistralVibe => new(() => config.MistralVibePath, v => config.MistralVibePath = v),
+            HarnessId.MistralVibe => new(() => config.MistralVibePath,        v => config.MistralVibePath        = v),
+            HarnessId.Grok        => new(() => config.GrokPath,        v => config.GrokPath        = v),
             HarnessId.Muse        => new(() => config.MusePath,        v => config.MusePath        = v),
         };
 
@@ -37,7 +38,7 @@ internal static class VendorConfigSlots {
             HarnessId.Antigravity => new(() => config.AntigravityModel, v => config.AntigravityModel = v),
 
             HarnessId.Claude or HarnessId.Codex or HarnessId.Copilot or HarnessId.Gemini
-                or HarnessId.MistralVibe or HarnessId.Muse => null,
+                or HarnessId.MistralVibe or HarnessId.Grok or HarnessId.Muse => null,
         };
     }
 }

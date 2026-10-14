@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
 using Capacitor.Cli.Core.Harness.Muse;
@@ -61,6 +62,7 @@ public static class TestHarnesses {
             OpenCodeHarness.Over(new OpenCodePaths(home, null, null, null)),
             AntigravityHarness.Over(gemini),
             MistralVibeHarness.Over(new MistralVibePaths(home, null)),
+            GrokHarness.Over(new GrokPaths(home, null)),
             MuseHarness.Over(new MusePaths(home, null, null)));
     }
 

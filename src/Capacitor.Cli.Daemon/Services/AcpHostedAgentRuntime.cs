@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
@@ -297,6 +298,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// <summary>Recorded from <see cref="EmitEnvelope"/>, opened by the factory before construction. Null
     /// for every launch/test that carries no journal.</summary>
     readonly TranscriptJournal? _journal;
+    readonly Func<bool, JsonObject>? _sessionNewMeta;
 
     readonly ReapVerdictGate _gate;
 
@@ -508,8 +510,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             Action<PolicyDecisionEventV1>?                                                  notifyPolicyDecision = null,
             string?                                                                         policyCwd = null,
             TranscriptJournal?                                                              journal = null,
-            PolicyJudgeGateway?                                                             policyJudge = null
+            PolicyJudgeGateway?                                                             policyJudge = null,
+            Func<bool, JsonObject>?                                                         sessionNewMeta = null,
+            Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null
         ) {
+        _sessionNewMeta = sessionNewMeta;
         _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
@@ -561,7 +566,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 vendor,
                 notifyPolicyDecision,
                 policyCwd,
-                policyJudge);
+                policyJudge,
+                admissionMatcher: admissionMatcher);
         }
 
         // The original launch's incarnation. Every later candidate goes through the same wiring
@@ -899,7 +905,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
             var sessionNewParams = JsonSerializer.SerializeToElement(
-                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers),
+                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke(_isReviewFlow)),
                 CapacitorJsonContext.Default.SessionNewParams);
 
             sessionNewResult = await RunHandshakeStageAsync(

@@ -670,6 +670,7 @@ public class FlowsDriverSchemaConformanceTests {
         var covered = Arms.Select(a => a.Flag)
             .Append("--claude")   // bundled kcap/.mcp.json, covered by the static-config test
             .Append("--pi")       // no MCP config at all, covered by the bridge test
+            .Append("--grok")     // writes no MCP config: Grok loads Claude's, covered by the static-config test
             .ToHashSet(StringComparer.Ordinal);
 
         foreach (var flag in VendorSelection.KnownVendorFlags)

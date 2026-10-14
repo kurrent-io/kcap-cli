@@ -30,10 +30,10 @@ internal static class CodingAgentsStep {
             // `--no-prompt` gives them no consent moment in which to be told otherwise. Turning a
             // skip flag into something that writes MCP config would be a silent reversal.
             bool ToolsIndependentOfCapture = false,
-            bool SkipMistralVibe = false, bool SkipMistralVibeMcp = false,
+            bool SkipMistralVibe = false, bool SkipMistralVibeMcp = false, bool SkipGrok = false,
             bool SkipMuse = false, bool SkipMuseMcp = false);
 
-    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false, bool Vibe = false, bool Muse = false);
+    internal record DetectedAgents(bool Claude, bool Codex, bool Cursor, bool Copilot, bool Gemini = false, bool Kiro = false, bool Pi = false, bool OpenCode = false, bool Antigravity = false, bool Vibe = false, bool Grok = false, bool Muse = false);
 
     internal record Paths(
             string  ClaudeSettingsPath,
@@ -67,6 +67,7 @@ internal static class CodingAgentsStep {
             string  PiAgentsMdPath = "",
             string  VibeHooksPath = "",
             string  VibeConfigPath = "",
+            string  GrokHooksPath = "",
             string  MuseSettingsPath = ""
         );
 
@@ -101,6 +102,7 @@ internal static class CodingAgentsStep {
             Func<KiroCrewHookInstaller.Outcome>?                     InstallKiroCrewHook = null,
             Func<string /*hooksTomlPath*/, bool>?                    InstallVibeHooks = null,
             Func<TomlConfigFile.Outcome>?                           RegisterVibeMcp = null,
+            Func<string /*hooksJsonPath*/, bool>?                    InstallGrokHooks = null,
             Func<string /*settingsPath*/, bool>?                     InstallMuseHooks = null,
             Func<JsonMcpConfigWriter.Change>?                        RegisterMuseMcp = null
         );
@@ -136,6 +138,7 @@ internal static class CodingAgentsStep {
             bool KiroCrewSkillsInstalled = false,
             bool VibeHooksInstalled = false,
             bool VibeMcpRegistered = false,
+            bool GrokHooksInstalled = false,
             bool MuseHooksInstalled = false,
             bool MuseMcpRegistered = false
         ) {
@@ -147,7 +150,7 @@ internal static class CodingAgentsStep {
         /// as agents are added (consumers like SetupCommand's restart tip key off this).
         /// </summary>
         internal bool AnyHooksInstalled =>
-            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || KiroCrewHookInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled || VibeHooksInstalled || MuseHooksInstalled;
+            ClaudeInstalled || CodexHooksInstalled || CursorHooksInstalled || CopilotHooksInstalled || GeminiHooksInstalled || KiroHooksInstalled || KiroCrewHookInstalled || PiExtensionInstalled || OpenCodeExtensionInstalled || AntigravityHooksInstalled || VibeHooksInstalled || GrokHooksInstalled || MuseHooksInstalled;
     }
 
     /// <summary>
@@ -194,6 +197,7 @@ internal static class CodingAgentsStep {
         Add(r.AntigravitySkillsInstalled, p.AntigravitySkillsDir);
         Add(r.VibeHooksInstalled, p.VibeHooksPath);
         Add(r.VibeMcpRegistered, p.VibeConfigPath);
+        Add(r.GrokHooksInstalled, p.GrokHooksPath);
         Add(r.MuseHooksInstalled || r.MuseMcpRegistered, p.MuseSettingsPath);
 
         return paths;
@@ -215,8 +219,8 @@ internal static class CodingAgentsStep {
         // Ordered early-returns — BEFORE any Handle*/HandleAgentSkills/selected work — so a
         // decline (or a no-agents machine) guarantees zero artifact mutations. See
         // SetupDecisions.DecideInstallAgents for how SetupCommand derives InstallAgents.
-        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false, Vibe: false, Muse: false }) {
-            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, Antigravity, Mistral Vibe, or Muse Code to start capturing sessions.");
+        if (detected is { Claude: false, Codex: false, Cursor: false, Copilot: false, Gemini: false, Kiro: false, Pi: false, OpenCode: false, Antigravity: false, Vibe: false, Grok: false, Muse: false }) {
+            writeLine("  [yellow]⚠ No supported agent CLI detected.[/] Install Claude Code, Codex CLI, Cursor, Copilot CLI, Gemini CLI, Kiro CLI, Pi, OpenCode, Antigravity, Mistral Vibe, Grok, or Muse Code to start capturing sessions.");
 
             return Task.FromResult(new Result(false, false, false, false, false));
         }
@@ -270,6 +274,7 @@ internal static class CodingAgentsStep {
         var antigravitySkillsInstalled = HandleAntigravitySkills(options, paths, installers, writeLine, antigravitySelected);
         var vibeHooksInstalled    = HandleVibeHooks(options, detected, paths, installers, writeLine, out var vibeTools);
         var vibeMcpRegistered     = HandleVibeMcp(options, paths, installers, writeLine, vibeTools);
+        var grokHooksInstalled    = HandleGrokHooks(options, detected, paths, installers, writeLine);
         var museHooksInstalled    = HandleMuseHooks(options, detected, paths, installers, writeLine, out var museTools);
         var museMcpRegistered     = HandleMuseMcp(options, paths, installers, writeLine, museTools);
 
@@ -318,6 +323,7 @@ internal static class CodingAgentsStep {
                 KiroCrewSkillsInstalled: kiroCrewSkillsInstalled,
                 VibeHooksInstalled: vibeHooksInstalled,
                 VibeMcpRegistered: vibeMcpRegistered,
+                GrokHooksInstalled: grokHooksInstalled,
                 MuseHooksInstalled: museHooksInstalled,
                 MuseMcpRegistered: museMcpRegistered
             )
@@ -716,6 +722,47 @@ internal static class CodingAgentsStep {
 
         writeLine($"  [green]✓[/] Vibe hooks installed ({Markup.Escape(paths.VibeHooksPath)})");
         writeLine("  [dim]  Note: Vibe loads hook config at startup — restart any running vibe session to pick them up.[/]");
+
+        return true;
+    }
+
+    static bool HandleGrokHooks(
+            Options            options,
+            DetectedAgents     detected,
+            Paths              paths,
+            Installers         installers,
+            Action<string>     writeLine
+        ) {
+        if (!detected.Grok) {
+            writeLine("  [dim]· Grok not detected — skipping[/]");
+
+            return false;
+        }
+
+        writeLine("  [green]✓[/] Grok detected");
+
+        if (options.SkipGrok) {
+            writeLine("  [dim]· Grok hooks skipped by flag[/]");
+
+            return false;
+        }
+
+        // The hook file names the bare "kcap hook --grok" command, so Grok must find kcap on PATH.
+        if (!installers.CapacitorOnPath()) {
+            writeLine("  [yellow]⚠[/] Grok hooks not installed — 'kcap' is not on PATH.");
+            writeLine("    [dim]Re-install kcap: [/][cyan]" + InstallProvenance.ReinstallCommand() + "[/]");
+
+            return false;
+        }
+
+        if (installers.InstallGrokHooks is null || !installers.InstallGrokHooks(paths.GrokHooksPath)) {
+            writeLine($"  [yellow]⚠[/] Could not write Grok hooks to {Markup.Escape(paths.GrokHooksPath)}.");
+
+            return false;
+        }
+
+        writeLine($"  [green]✓[/] Grok hooks installed ({Markup.Escape(paths.GrokHooksPath)})");
+        writeLine("  [dim]  Note: Grok loads hooks at startup — restart any running grok session to pick them up.[/]");
 
         return true;
     }
@@ -1230,6 +1277,7 @@ internal static class CodingAgentsStep {
             Pi       = Wanted(detected.Pi, options.SkipPi, options.SkipPiMcp),
             OpenCode = Wanted(detected.OpenCode, options.SkipOpenCode, options.SkipOpenCodeMcp),
             Vibe     = Wanted(detected.Vibe, options.SkipMistralVibe, options.SkipMistralVibeMcp),
+            Grok     = Wanted(detected.Grok, options.SkipGrok, options.SkipGrok),
             Muse     = Wanted(detected.Muse, options.SkipMuse, options.SkipMuseMcp)
         };
     }
@@ -1246,7 +1294,7 @@ internal static class CodingAgentsStep {
         // install they can't see.
         var anyNonClaudeDetected =
             detected.Codex || detected.Cursor || detected.Copilot || detected.Gemini
-         || detected.Pi    || detected.OpenCode || detected.Vibe || detected.Muse;
+         || detected.Pi    || detected.OpenCode || detected.Vibe || detected.Grok || detected.Muse;
 
         // Nothing that reads ~/.agents/skills/ is present (Claude-only or nothing) — the
         // Claude plugin install handles Claude's skills, so there's nothing to do here.

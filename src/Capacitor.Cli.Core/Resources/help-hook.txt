@@ -12,7 +12,7 @@ Description:
   dispatch is argument-driven (no stdin payload) — see --pi / --opencode below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--muse]',
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--muse]',
   which writes the appropriate hook configuration (or, for Pi/OpenCode/Antigravity,
   the plugin/hooks-block) for the vendor.
 
@@ -60,6 +60,12 @@ Options:
               (vendor=mistral-vibe) and POSTs session-start; later hooks are
               no-ops. Always exits 0 with empty stdout (a passthrough under
               Vibe's hook contract).
+  --grok
+              Dispatch a Grok Build hook event (session_start / stop, from the
+              payload's hookEventName). session_start POSTs session-start and
+              spawns the watcher on the session's updates.jsonl (vendor=grok);
+              stop restarts a watcher that has gone. Always exits 0 with empty
+              stdout.
   --muse      Dispatch a Muse Code hook event. Self-routes on the payload's
               hook_event_name (SessionStart/UserPromptSubmit/SubagentStart/
               SubagentStop/Stop/SessionEnd). Muse payloads carry no transcript
