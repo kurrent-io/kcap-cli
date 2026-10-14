@@ -1,0 +1,431 @@
+using System.Diagnostics;
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Muse;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Daemon.Harness.Muse;
+using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
+
+/// <summary>Turns a launch request into a running Muse runtime on the right lane, against a scripted
+/// <c>muse serve</c>. Every spawned process is the fake; the marker store and the reviewer version
+/// store are per-test directories.</summary>
+public class MuseHostedAgentRuntimeFactoryTests {
+    static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(10);
+
+    const string Kcap = "/usr/local/bin/kcap";
+    const string SearchTool = "mcp__kcap_sessions__search_sessions";
+
+    [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
+    [TempConfigRoot]  public required TempConfigRoot  KcapConfig { get; init; }
+    [TempHome]        public required TempHome        Home { get; init; }
+
+    sealed record Relay(string CapacitorPath, JsonObject Payload, string SessionId, string AgentId, string? ServerUrl, string DaemonId, string DaemonEpoch);
+
+    sealed class Rig {
+        public required MuseScriptedHost Host { get; init; }
+        public required MuseHostedAgentRuntimeFactory Factory { get; init; }
+        public List<ProcessStartInfo> Spawned { get; } = [];
+        public List<Relay> Relays { get; } = [];
+        public List<string[]> MarkerFilesAtSpawn { get; } = [];
+    }
+
+    DaemonConfig Config(bool reviewerEnabled = true) => new() {
+        Name                          = "test-daemon",
+        ServerUrl                     = "http://127.0.0.1:1",
+        MusePath                      = "/opt/muse/bin/muse",
+        MuseUnattendedReviewerEnabled = reviewerEnabled,
+        Store                         = Daemons.Store,
+        ConfigRoot                    = KcapConfig.Root,
+        Version                       = "9.9.9",
+    };
+
+    string MarkerDir => KcapConfig.Root.Path("muse-hosted");
+
+    static RuntimeStartContext Ctx(
+            bool         isReviewFlow     = false,
+            bool         isReview         = false,
+            WorkLocation work             = WorkLocation.OwnedWorktree,
+            bool         borrowedSnapshot = false,
+            string?      prompt           = "do work",
+            string[]?    allowlist        = null,
+            string?      model            = null,
+            string?      resume           = null) => new(
+        AgentId: "agent-1", Vendor: "muse", SourceRepoPath: "/repo",
+        Worktree: new WorktreeInfo(Path: "/abs/wt", Branch: "b", SourceRepo: "/repo"), Prompt: prompt,
+        Model: model, Effort: null, Tools: null,
+        IsReview: isReview, IsReviewFlow: isReviewFlow, Review: null,
+        Cols: 80, Rows: 24,
+        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: Kcap,
+        McpAllowlist: allowlist, Work: work, DaemonId: "daemon-1", DaemonEpoch: "epoch-1",
+        IsBorrowedSnapshot: borrowedSnapshot, ResumeSessionId: resume);
+
+    Rig NewRig(
+            DaemonConfig?     config         = null,
+            bool              hooksInstalled = true,
+            MuseSandboxProbe? sandbox        = null,
+            string?           installed      = "1.4.7",
+            string?           affirmed       = "1.4.7",
+            bool              binary         = true,
+            Action<MuseScriptedHost>? configure = null) {
+        config ??= Config();
+        if (affirmed is not null) new ReviewerVersionStore(config.Store.StateDirectory(config.Name), DaemonRunner.MuseVendor).Affirm(affirmed);
+
+        var host = new MuseScriptedHost();
+        configure?.Invoke(host);
+
+        Rig? rig = null;
+        var connection = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+
+        var factory = new MuseHostedAgentRuntimeFactory(
+            config, NullLoggerFactory.Instance, TimeProvider.System, connection,
+            new MusePaths(Home, null, null),
+            processSource: (psi, _) => {
+                rig!.Spawned.Add(psi);
+                rig.MarkerFilesAtSpawn.Add(Directory.Exists(MarkerDir) ? Directory.GetFiles(MarkerDir) : []);
+                return Task.FromResult<IMuseMspProcess>(host.Process);
+            },
+            binaryExists: _ => binary,
+            resolveVersion: _ => installed,
+            posixHost: true,
+            sandbox: sandbox ?? new MuseSandboxProbe(() => true),
+            hooksInstalled: _ => hooksInstalled,
+            hookRelay: (kcap, payload, sessionId, agentId, url, daemonId, epoch, _, _) => {
+                lock (rig!.Relays) rig.Relays.Add(new Relay(kcap, payload, sessionId, agentId, url, daemonId, epoch));
+                return Task.CompletedTask;
+            });
+
+        rig = new Rig { Host = host, Factory = factory };
+        return rig;
+    }
+
+    static JsonObject Params(JsonObject request) => request["params"]!.AsObject();
+
+    static async Task<HostedRuntimeStart> StartAsync(Rig rig, RuntimeStartContext ctx) =>
+        await rig.Factory.StartAsync(ctx, CancellationToken.None).WaitAsync(HangGuard);
+
+    [Test]
+    public async Task IsAvailable_follows_the_binary() {
+        await Assert.That(NewRig(binary: true).Factory.IsAvailable()).IsTrue();
+        await Assert.That(NewRig(binary: false).Factory.IsAvailable()).IsFalse();
+    }
+
+    [Test]
+    public async Task The_factory_advertises_muse_with_an_independent_snapshot_for_borrowed_review() {
+        var factory = NewRig().Factory;
+
+        await Assert.That(factory.Vendor).IsEqualTo("muse");
+        await Assert.That(factory.CliPath).IsEqualTo("/opt/muse/bin/muse");
+        await Assert.That(factory.SupportsUnattended).IsTrue();
+        await Assert.That(factory.SupportsBorrowedReviewFlow).IsTrue();
+        await Assert.That(factory.BorrowedReviewContainment).IsEqualTo("independent-snapshot");
+        await Assert.That(factory.BorrowedReviewRequiresIndependentSnapshot).IsTrue();
+        await Assert.That(factory.SupportsPrReview).IsFalse();
+        await Assert.That(factory.SupportsModelSelection).IsTrue();
+        await Assert.That(await factory.ProbeModelsAsync(CancellationToken.None)).IsNull();
+        await Assert.That(factory.CatalogFingerprintPaths).IsEquivalentTo(new[] {
+            Home.PathTo(".config", "muse", "settings.json"), Home.PathTo(".config", "muse", "auth.json") });
+    }
+
+    [Test]
+    public async Task Interactive_plan_asks_me_on_request_and_no_mcp() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx(model: "muse-spark-1.3"));
+        await using var _ = start.Runtime;
+
+        var session = Params(await rig.Host.WaitForWriteAsync("session/start"));
+        await Assert.That((string?)session["permissionProfile"]).IsEqualTo(":ask-me");
+        await Assert.That((string?)session["approvalMode"]).IsEqualTo("onRequest");
+        await Assert.That(session["config"]).IsNull();
+        await Assert.That((string?)session["modelId"]).IsEqualTo("muse-spark-1.3");
+
+        var turn = Params(await rig.Host.WaitForWriteAsync("turn/start"));
+        await Assert.That((string?)turn["input"]![0]!["text"]).IsEqualTo("do work");
+
+        await Assert.That(start.Transcript).IsNull();
+        await Assert.That(start.McpConfigPath).IsNull();
+
+        var psi = rig.Spawned.Single();
+        await Assert.That(psi.FileName).IsEqualTo("/opt/muse/bin/muse");
+        await Assert.That(string.Join(" ", psi.ArgumentList))
+            .IsEqualTo("serve --provider meta --model muse-spark-1.3 --trust-workspace --sandbox-network proxy-only");
+        await Assert.That(psi.WorkingDirectory).IsEqualTo("/abs/wt");
+        await Assert.That(psi.Environment["KCAP_AGENT_ID"]).IsEqualTo("agent-1");
+        await Assert.That(psi.Environment["KCAP_DAEMON_ID"]).IsEqualTo("daemon-1");
+        await Assert.That(psi.Environment["KCAP_DAEMON_EPOCH"]).IsEqualTo("epoch-1");
+        await Assert.That(psi.Environment["KCAP_URL"]).IsEqualTo("http://kcap.test");
+        await Assert.That(psi.RedirectStandardInput && psi.RedirectStandardOutput && psi.RedirectStandardError).IsTrue();
+    }
+
+    [Test]
+    public async Task Reviewer_plan_has_read_only_deny_unmatched_and_required_mcp() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"]));
+        await using var _ = start.Runtime;
+
+        var session = Params(await rig.Host.WaitForWriteAsync("session/start"));
+        await Assert.That((string?)session["permissionProfile"]).IsEqualTo(":read-only");
+        await Assert.That((string?)session["approvalMode"]).IsEqualTo("denyUnmatched");
+
+        var servers = session["config"]!["mcpServers"]!.AsObject();
+        await Assert.That(servers.Count).IsEqualTo(2);
+
+        foreach (var (_, server) in servers) {
+            await Assert.That((string?)server!["transport"]).IsEqualTo("stdio");
+            await Assert.That((string?)server["command"]).IsEqualTo(Kcap);
+            await Assert.That((string?)server["mode"]).IsEqualTo("required");
+        }
+
+        var channel = servers.Single(s => s.Key.StartsWith("kcap_flow_result_", StringComparison.Ordinal)).Value!;
+        await Assert.That(channel["args"]!.AsArray().Select(a => (string)a!)).IsEquivalentTo(new[] { "mcp", "flow-result" });
+        await Assert.That((string?)channel["env"]!["KCAP_FLOW_AGENT_ID"]).IsEqualTo("agent-1");
+        await Assert.That((string?)channel["env"]!["KCAP_URL"]).IsEqualTo("http://kcap.test");
+
+        var sessions = servers.Single(s => s.Key.StartsWith("kcap_sessions_", StringComparison.Ordinal)).Value!;
+        await Assert.That(sessions["args"]!.AsArray().Select(a => (string)a!)).IsEquivalentTo(new[] { "mcp", "sessions" });
+
+        await Assert.That(string.Join(" ", rig.Spawned.Single().ArgumentList))
+            .IsEqualTo("serve --provider meta --trust-workspace --sandbox-network restricted --disable-write");
+
+        var turn = Params(await rig.Host.WaitForWriteAsync("turn/start"));
+        await Assert.That((string?)turn["input"]![0]!["text"]).IsEqualTo("review this");
+    }
+
+    /// <summary>A workspace that declares an MCP server under a kcap server's canonical name must not
+    /// have its tools approved: the reviewer admits only this launch's aliased names.</summary>
+    [Test]
+    public async Task Reviewer_admits_its_servers_under_their_per_launch_alias_only() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"]));
+        await using var _ = start.Runtime;
+
+        var servers = Params(await rig.Host.WaitForWriteAsync("session/start"))["config"]!["mcpServers"]!.AsObject();
+        var aliased = servers.Single(s => s.Key.StartsWith("kcap_sessions_", StringComparison.Ordinal)).Key;
+        await Assert.That(aliased).IsNotEqualTo("kcap_sessions");
+
+        rig.Host.Process.Push(MuseMspWire.ApprovalRequested.Replace(SearchTool, $"mcp__{aliased}__search_sessions"));
+        var first = Params(await rig.Host.WaitForWriteAsync("approval/decide"));
+        await Assert.That((string?)first["choiceId"]).IsEqualTo("allow_once");
+
+        rig.Host.Process.Push(MuseMspWire.ApprovalRequested.Replace("01a13695-6ad8-7313-9d2b-57f03aebbb24", "01a13695-6ad8-7313-9d2b-57f03aebbb25"));
+        var second = Params(await rig.Host.WaitForWriteAsync("approval/decide", 2));
+        await Assert.That((string?)second["choiceId"]).IsEqualTo("abort");
+    }
+
+    [Test]
+    public async Task Failed_bubblewrap_probe_refuses_reviewer_only() {
+        var rig = NewRig(sandbox: new MuseSandboxProbe(() => false));
+
+        var support = rig.Factory.DescribeUnattendedSupport();
+        await Assert.That(support.Supported).IsFalse();
+        await Assert.That(support.WithheldReason).StartsWith("muse_reviewer_sandbox_unavailable");
+
+        var reviewer = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None));
+        await Assert.That(reviewer!.Message).StartsWith("muse_reviewer_sandbox_unavailable");
+        await Assert.That(rig.Spawned).IsEmpty();
+
+        var start = await StartAsync(rig, Ctx());
+        await using var _ = start.Runtime;
+        await Assert.That(start.Runtime.Vendor).IsEqualTo("muse");
+    }
+
+    [Test]
+    public async Task Host_reporting_sandbox_unavailable_refuses_the_reviewer() {
+        var rig = NewRig(configure: h => h.Process.AutoInitializeResult = MuseMspWire.InitializeResult
+            .Replace("\"sandboxAvailability\":\"available\"", "\"sandboxAvailability\":\"unavailable\""));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None).WaitAsync(HangGuard));
+
+        await Assert.That(ex!.Message).StartsWith("muse_reviewer_sandbox_unavailable");
+        await Assert.That(rig.Host.Process.DisposeCalls).IsGreaterThanOrEqualTo(1);
+        await Assert.That(rig.Host.WritesOf("turn/start")).IsEmpty();
+    }
+
+    [Test]
+    public async Task Host_reporting_sandbox_unavailable_still_starts_an_interactive_agent() {
+        var rig = NewRig(configure: h => h.Process.AutoInitializeResult = MuseMspWire.InitializeResult
+            .Replace("\"sandboxAvailability\":\"available\"", "\"sandboxAvailability\":\"unavailable\""));
+
+        var start = await StartAsync(rig, Ctx());
+        await using var _ = start.Runtime;
+
+        await Assert.That(rig.Host.WritesOf("turn/start").Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Marker_is_written_before_spawn_and_carries_the_minted_id() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx());
+        await using var _ = start.Runtime;
+
+        var atSpawn = rig.MarkerFilesAtSpawn.Single();
+        await Assert.That(atSpawn.Length).IsEqualTo(1);
+
+        var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
+        var marker = MuseHostedSessionMarker.TryRead(KcapConfig.Root, minted);
+
+        await Assert.That(marker).IsNotNull();
+        await Assert.That(Path.GetFileName(atSpawn[0])).IsEqualTo(Guid.Parse(minted).ToString("N") + ".json");
+        await Assert.That(marker!.AgentId).IsEqualTo("agent-1");
+        await Assert.That(marker.DaemonId).IsEqualTo("daemon-1");
+        await Assert.That(marker.DaemonEpoch).IsEqualTo("epoch-1");
+        await Assert.That(Guid.Parse(minted).Version).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task A_resumed_session_is_reopened_under_its_own_id() {
+        const string resumed = "01a13695-0736-75d0-8f4e-f121585b8453";
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx(resume: resumed.Replace("-", "")));
+        await using var _ = start.Runtime;
+
+        var resume = Params(await rig.Host.WaitForWriteAsync("session/resume"));
+        await Assert.That((string?)resume["sessionId"]).IsEqualTo(resumed);
+        await Assert.That(rig.Host.WritesOf("session/start")).IsEmpty();
+        await Assert.That(MuseHostedSessionMarker.TryRead(KcapConfig.Root, resumed)?.AgentId).IsEqualTo("agent-1");
+    }
+
+    [Test]
+    public async Task Relay_runs_when_hooks_are_not_installed_and_not_when_they_are() {
+        var relayed = NewRig(hooksInstalled: false);
+        var start = await StartAsync(relayed, Ctx());
+
+        var minted = (string)Params(await relayed.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
+        var sessionStart = relayed.Relays.Single();
+        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(Kcap);
+        await Assert.That(sessionStart.SessionId).IsEqualTo(minted);
+        await Assert.That(sessionStart.AgentId).IsEqualTo("agent-1");
+        await Assert.That(sessionStart.ServerUrl).IsEqualTo("http://kcap.test");
+        await Assert.That(sessionStart.DaemonId).IsEqualTo("daemon-1");
+        await Assert.That(sessionStart.DaemonEpoch).IsEqualTo("epoch-1");
+        await Assert.That((string?)sessionStart.Payload["hook_event_name"]).IsEqualTo("SessionStart");
+        await Assert.That((string?)sessionStart.Payload["source"]).IsEqualTo("startup");
+        await Assert.That((string?)sessionStart.Payload["session_id"]).IsEqualTo(minted);
+        await Assert.That((string?)sessionStart.Payload["cwd"]).IsEqualTo("/abs/wt");
+        await Assert.That((string?)sessionStart.Payload["model_provider"]).IsEqualTo("meta");
+        await Assert.That((string?)sessionStart.Payload["transcript_path"]).EndsWith("session.jsonl");
+
+        await start.Runtime.DisposeAsync();
+
+        await Assert.That(relayed.Relays.Count).IsEqualTo(2);
+        await Assert.That((string?)relayed.Relays[1].Payload["hook_event_name"]).IsEqualTo("SessionEnd");
+        await Assert.That((string?)relayed.Relays[1].Payload["session_id"]).IsEqualTo(minted);
+
+        var hooked = NewRig(hooksInstalled: true);
+        var quiet  = await StartAsync(hooked, Ctx());
+        await quiet.Runtime.DisposeAsync();
+
+        await Assert.That(hooked.Relays).IsEmpty();
+    }
+
+    [Test]
+    public async Task Pr_review_is_refused() {
+        var rig = NewRig();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Factory.StartAsync(Ctx(isReview: true), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("muse_pr_review_unsupported");
+        await Assert.That(rig.Spawned).IsEmpty();
+    }
+
+    [Test]
+    public async Task Borrowed_workspace_without_snapshot_is_refused() {
+        var rig = NewRig();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(work: WorkLocation.BorrowedCwd), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("muse_requires_owned_worktree");
+        await Assert.That(rig.Spawned).IsEmpty();
+        await Assert.That(Directory.Exists(MarkerDir) && Directory.GetFiles(MarkerDir).Length > 0).IsFalse();
+    }
+
+    [Test]
+    public async Task A_borrowed_snapshot_is_refused_on_the_interactive_lane() {
+        var rig = NewRig();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(work: WorkLocation.BorrowedCwd, borrowedSnapshot: true), CancellationToken.None));
+
+        await Assert.That(ex!.Message).IsEqualTo("borrowed_snapshot_containment_mismatch");
+    }
+
+    [Test]
+    public async Task A_disabled_reviewer_is_refused_before_anything_spawns() {
+        var rig = NewRig(config: Config(reviewerEnabled: false));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(isReviewFlow: true), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("muse_reviewer_disabled");
+        await Assert.That(rig.Spawned).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_build_below_the_floor_withholds_the_reviewer() =>
+        await Assert.That(NewRig(installed: "1.4.6").Factory.DescribeUnattendedSupport().WithheldReason)
+            .StartsWith("muse_reviewer_below_verified_floor");
+
+    [Test]
+    public async Task A_missing_binary_withholds_the_reviewer() =>
+        await Assert.That(NewRig(binary: false).Factory.DescribeUnattendedSupport().WithheldReason)
+            .StartsWith("muse_reviewer_binary_missing");
+
+    [Test]
+    [Arguments("")]
+    [Arguments("   ")]
+    [Arguments("/review")]
+    public async Task A_reviewer_without_a_plain_first_prompt_is_refused(string prompt) {
+        var rig = NewRig();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(isReviewFlow: true, prompt: prompt), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("muse_reviewer_");
+        await Assert.That(rig.Spawned).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_reviewer_allowlist_naming_a_writing_server_is_refused() {
+        var rig = NewRig();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(isReviewFlow: true, allowlist: ["kcap-memory"]), CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("muse_reviewer_allowlist_rejected");
+    }
+
+    [Test]
+    public async Task A_launch_whose_session_never_opens_is_disposed_and_leaves_no_marker() {
+        var rig = NewRig(configure: h => h.Override = request =>
+            (string?)request["method"] == "session/start"
+                ? MuseScriptedHost.ErrorResponse((long)request["id"]!, "no")
+                : null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => rig.Factory.StartAsync(Ctx(), CancellationToken.None).WaitAsync(HangGuard));
+
+        await Assert.That(rig.Host.Process.DisposeCalls).IsGreaterThanOrEqualTo(1);
+        await Assert.That(Directory.GetFiles(MarkerDir)).IsEmpty();
+    }
+
+    [Test]
+    public async Task Construction_sweeps_stale_markers() {
+        MuseHostedSessionMarker.Write(KcapConfig.Root, new(
+            "01a13695-0736-75d0-8f4e-f121585b8453", "old", "d", "e", TimeProvider.System.GetUtcNow() - TimeSpan.FromDays(3)));
+
+        _ = NewRig();
+
+        await Assert.That(Directory.GetFiles(MarkerDir)).IsEmpty();
+    }
+}
