@@ -1,22 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <!-- Shared section headers and indented bodies for the work context and session rail. -->
-    <!-- Neutral metadata badge (document kind, chat card verb) shared across the reader, sidebar, and chat. -->
-    <Style Selector="Border.kcapKindBadge">
-        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="999" />
-        <Setter Property="Padding" Value="7,1" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
-    <Style Selector="Border.kcapKindBadge > TextBlock">
-        <Setter Property="FontSize" Value="10" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LetterSpacing" Value="0.4" />
-        <Setter Property="LineHeight" Value="14" />
-        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-    </Style>
     <Style Selector="TextBlock.eyebrow">
         <Setter Property="FontSize" Value="11.5" />
         <Setter Property="FontWeight" Value="Bold" />
