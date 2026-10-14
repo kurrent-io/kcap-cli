@@ -44,7 +44,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     /// What the expanded header says; collapsed, the header shows Counts.
     public string HeaderText => $"{DoneCount} of {_tasks.Count} done";
     /// Pending, in progress, done: one entry per state something is in, so the numbers add up
-    /// to the list. The instance changes only when a number does.
+    /// to the list.
     public IReadOnlyList<PlanTaskCount> Counts => _counts;
 
     bool _isExpanded;
@@ -99,6 +99,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     void OnSessionOverChanged() {
         foreach (var task in _tasks) task.Present(_activity.SessionOver);
+        SyncCounts();
     }
 
     void Apply(SessionPlansRead read) {
@@ -165,11 +166,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     void RaiseShape() {
         StableRows.Sync(_inProgress, _tasks.Where(task => task.IsInProgress));
-        var counts = CountStates();
-        if (!counts.SequenceEqual(_counts)) {
-            _counts = counts;
-            this.RaisePropertyChanged(nameof(Counts));
-        }
+        SyncCounts();
         this.RaisePropertyChanged(nameof(HasPlan));
         this.RaisePropertyChanged(nameof(ShowsPlan));
         this.RaisePropertyChanged(nameof(HasTasks));
@@ -177,6 +174,14 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(HasDocuments));
         this.RaisePropertyChanged(nameof(DoneCount));
         this.RaisePropertyChanged(nameof(HeaderText));
+    }
+
+    void SyncCounts() {
+        var counts = CountStates();
+        if (!counts.SequenceEqual(_counts)) {
+            _counts = counts;
+            this.RaisePropertyChanged(nameof(Counts));
+        }
     }
 
     void RaiseLoading() {
@@ -188,7 +193,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         var done = DoneCount;
         PlanTaskCount[] states = [
             new(PlanTaskState.Pending, _tasks.Count - _inProgress.Count - done),
-            new(PlanTaskState.InProgress, _inProgress.Count),
+            new(PlanTaskState.InProgress, _inProgress.Count, _inProgress.Count > 0 && !_activity.SessionOver),
             new(PlanTaskState.Completed, done),
         ];
         return [.. states.Where(state => state.Count > 0)];

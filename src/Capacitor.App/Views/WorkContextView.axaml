@@ -51,14 +51,36 @@
         <Style Selector="Button.copyValue:pressed">
             <Setter Property="RenderTransform" Value="scale(1)" />
         </Style>
-        <Style Selector="Button.copyValue.open /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+        <Style Selector="Button.copyValue.planDocRow">
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="Margin" Value="-6,0,0,0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+        </Style>
+        <Style Selector="Button.copyValue.planDocRow /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="CornerRadius" Value="6" />
+        </Style>
+        <Style Selector="Button.copyValue.planDocRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.copyValue.planDocRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
         </Style>
         <Style Selector="Button.copyValue TextBlock.docName">
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <Style Selector="Button.copyValue.open TextBlock.docName">
-            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="Path.openArrow">
+            <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="StrokeThickness" Value="1.5" />
+            <Setter Property="StrokeLineCap" Value="Round" />
+            <Setter Property="StrokeJoin" Value="Round" />
+            <Setter Property="Data" Value="M3.5,8.5 L8.5,3.5 M5,3.5 H8.5 V7" />
+        </Style>
+        <Style Selector="Button.copyValue.open Path.openArrow">
+            <Setter Property="Stroke" Value="{StaticResource KcapInfoBrush}" />
         </Style>
         <Style Selector="Border.pill.shipped">
             <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
@@ -219,7 +241,7 @@
             <Panel Width="12" Height="12">
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5"
                          IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Pending}}" />
-                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
                          IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.InProgress}}" />
                 <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Completed}}">
                     <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" />
@@ -239,9 +261,9 @@
                      ring stays so the task still reads as started. -->
                 <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
-                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}"
-                            views:PulseClock.IsActive="{Binding IsActive}" />
+                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
+                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
+                            IsVisible="{Binding IsActive}" views:PulseClock.IsActive="{Binding IsActive}" />
                 </Panel>
                 <StackPanel Grid.Column="1" Spacing="2">
                     <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
@@ -598,19 +620,6 @@
                     </Border>
                 </StackPanel>
 
-                <!-- The Artefacts tab's summary; the tab itself lives in the centre. -->
-                <Button x:Name="ArtefactsSummaryRow" Classes="copyValue" Margin="0,18,0,0" HorizontalAlignment="Stretch"
-                        Command="{Binding OpenArtefactsCommand}"
-                        IsVisible="{Binding Artefacts.HasAny, FallbackValue=False}">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                        <TextBlock Text="ARTEFACTS" Classes="eyebrow" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
-                            <Path Classes="prChevron" />
-                        </StackPanel>
-                    </Grid>
-                </Button>
-
                 <!-- Plan: read from the server, so unlike AGENTS & COMMANDS it shows nothing while signed out. -->
                 <StackPanel x:Name="PlanSection" IsVisible="{Binding Plan.ShowsPlan}" Margin="0,18,0,0">
                     <TextBlock Text="Loading plan…" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
@@ -644,8 +653,12 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:PlanTaskCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
-                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center"
-                                                                RenderTransform="translateY(-1.5px)" />
+                                                <Panel Width="12" Height="12" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
+                                                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
+                                                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
+                                                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
+                                                            IsVisible="{Binding IsActive}" views:PulseClock.IsActive="{Binding IsActive}" />
+                                                </Panel>
                                                 <TextBlock Text="{Binding Count}" Classes="sectionMeta" />
                                             </StackPanel>
                                         </DataTemplate>
@@ -666,23 +679,24 @@
                             </MultiBinding>
                         </Border.IsVisible>
                         <StackPanel Spacing="12">
-                            <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}" IsVisible="{Binding Plan.HasDocuments}">
+                            <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}"
+                                          IsVisible="{Binding Plan.HasDocuments}" ClipToBounds="False">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
-                                        <StackPanel Spacing="6" />
+                                        <StackPanel Spacing="4" />
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PlanDocumentRow">
-                                        <Button Classes="copyValue" Classes.open="{Binding IsOpen}" HorizontalAlignment="Stretch"
+                                        <Button Classes="copyValue planDocRow" Classes.open="{Binding IsOpen}"
                                                 Command="{Binding $parent[ItemsControl].((vm:WorkContextViewModel)DataContext).Plan.OpenDocumentCommand}"
                                                 CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
-                                            <Grid ColumnDefinitions="46,*,Auto" ColumnSpacing="6">
-                                                <TextBlock Text="{Binding Kind}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}" />
-                                                <TextBlock Grid.Column="1" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <Path Grid.Column="2" Width="8" Height="8" Stretch="None" VerticalAlignment="Center"
-                                                      Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5" Data="M2,1 L5,4 L2,7" />
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                                <TextBlock Grid.Column="0" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"
+                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                <Panel Grid.Column="1" Classes="chevronBox" Width="12" Height="12" VerticalAlignment="Center">
+                                                    <Path Classes="openArrow" />
+                                                </Panel>
                                             </Grid>
                                         </Button>
                                     </DataTemplate>

@@ -49,19 +49,25 @@
                          Border.shellOutput > StackPanel > SelectableTextBlock">
             <Setter Property="Margin" Value="22,0,22,0" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="ClipToBounds" Value="False" />
         </Style>
-        <Style Selector="SelectableTextBlock.toolLine">
+        <Style Selector="SelectableTextBlock.toolLine,
+                         TextBlock.toolLine">
             <Setter Property="FontSize" Value="13.5" />
             <Setter Property="LineHeight" Value="18" />
             <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
             <Setter Property="TextTrimming" Value="{x:Static views:ChatTrimming.MiddleEllipsis}" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <!-- Must stay after .toolLine: same specificity, so the later rule is the one that wins. -->
         <Style Selector="SelectableTextBlock.toolLine.prose">
             <Setter Property="TextTrimming" Value="None" />
             <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style Selector="SelectableTextBlock.toolLine.labelled">
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
         <Style Selector="ContentControl.pendingCard">
             <Setter Property="Margin" Value="0,8,0,12" />
@@ -156,12 +162,13 @@
                                 <ColumnDefinition Width="*" MinWidth="0" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <!-- The verb phrase of a kcap or foreign MCP row, muted so the detail stays the bright bit. -->
                             <TextBlock x:Name="ToolRowLabel" Grid.Column="0" Classes="toolLine" Text="{Binding Label}"
-                                       Foreground="{StaticResource KcapMutedBrush}" Margin="0,0,8,0"
+                                       Foreground="{StaticResource KcapTextBrush}" Margin="0,0,8,0"
                                        IsVisible="{Binding HasLabel}" />
-                            <SelectableTextBlock Grid.Column="1" Classes="toolLine" Classes.prose="{Binding DetailIsProse}"
-                                       Text="{Binding Detail}" Foreground="{StaticResource KcapTextBrush}"
+                            <SelectableTextBlock Grid.Column="1" Classes="toolLine"
+                                       Classes.prose="{Binding DetailIsProse}"
+                                       Classes.labelled="{Binding HasLabel}"
+                                       Text="{Binding Detail}"
                                        IsVisible="{Binding HasDetail}" />
                             <!-- A bare name is fallback chrome only; a label already names the call, so the raw
                                  identifier never shows beside one. -->
@@ -190,18 +197,28 @@
                             </Panel>
                         </Grid>
                         <Border x:Name="ToolCard" Classes="toolCard" IsVisible="{Binding HasCard}">
-                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="2">
-                                <TextBlock x:Name="ToolCardTitle" Classes="toolLine" Text="{Binding Card.Title}" Foreground="{StaticResource KcapMutedBrush}" />
-                                <TextBlock x:Name="ToolCardName" Grid.Row="1" Text="{Binding Card.Name}" FontWeight="SemiBold" FontSize="13.5"
-                                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="ToolCardMeta" Grid.Row="1" Grid.Column="0" Margin="0,20,0,0" Classes="toolLine"
-                                           Text="{Binding Card.Meta}" Foreground="{StaticResource KcapFaintBrush}" />
-                                <StackPanel Grid.Column="1" Grid.RowSpan="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                    <Button x:Name="ToolCardOpen" Content="Open" Classes="kcapGhost kcapQuiet"
-                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <Grid ColumnDefinitions="Auto,*">
+                                        <TextBlock x:Name="ToolCardTitle" Classes="toolLine" Text="{Binding Card.Title}"
+                                                   Foreground="{StaticResource KcapTextBrush}" Margin="0,0,8,0" />
+                                        <TextBlock x:Name="ToolCardName" Grid.Column="1" Classes="toolLine" Text="{Binding Card.Name}"
+                                                   Foreground="{StaticResource KcapMutedBrush}" />
+                                    </Grid>
+                                    <TextBlock x:Name="ToolCardMeta" Classes="toolLine" FontSize="12" Text="{Binding Card.Meta}"
+                                               Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding Card.HasDistinctMeta}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                     <Button x:Name="ToolCardCopyLink" Content="Copy link" Classes="kcapGhost kcapQuiet"
                                             Tag="{Binding Card.Url}" Click="OnCopyLinkClick"
                                             IsVisible="{Binding Card.Url, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    <Button x:Name="ToolCardOpen" Classes="kcapGhost kcapQuiet" Margin="0,0,-8,0"
+                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <TextBlock Text="Open" VerticalAlignment="Center" />
+                                            <Path Classes="toolCardOpenArrow" />
+                                        </StackPanel>
+                                    </Button>
                                 </StackPanel>
                             </Grid>
                         </Border>

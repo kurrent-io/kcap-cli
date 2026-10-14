@@ -604,6 +604,15 @@ public class WorkspaceViewSmokeTests {
             await vm.Artefacts.SelectCommand.Execute(vm.Artefacts.Documents[0]);
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
+            var docPath = Find<TextBlock>(window, "DocumentPath")!;
+            var docKind = Find<TextBlock>(window, "DocumentKind")!;
+            var docMeta = Find<TextBlock>(window, "DocumentMeta")!;
+            await Assert.That(docPath.Text).IsEqualTo("docs/x-design.md");
+            await Assert.That(docKind.Text).IsEqualTo("Design");
+            await Assert.That(docKind.TranslatePoint(default, window)!.Value.X)
+                .IsGreaterThan(docPath.TranslatePoint(default, window)!.Value.X);
+            await Assert.That(docMeta.TranslatePoint(default, window)!.Value.Y)
+                .IsEqualTo(docPath.TranslatePoint(default, window)!.Value.Y).Within(2.0);
             await Assert.That(Find<ScrollViewer>(window, "DocumentScroll")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(Find<Border>(window, "DocumentNotice")!.IsEffectivelyVisible).IsFalse();
 

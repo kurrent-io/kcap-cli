@@ -63,8 +63,8 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     public string Name { get; } = name;
     public string Detail { get; } = detail;
     public ToolCategory Category { get; } = category;
-    /// The verb phrase a kcap or foreign MCP row opens with ("Attached work item"); null for a
-    /// built-in tool, whose row is the detail alone.
+    /// The verb phrase a row opens with; null when a built-in call carries its own prose
+    /// description or is a question, whose row is the detail alone.
     public string? Label { get; } = label;
     public bool HasLabel => !string.IsNullOrEmpty(Label);
     public ToolCardKind CardKind { get; } = cardKind;

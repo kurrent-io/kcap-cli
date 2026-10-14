@@ -107,6 +107,35 @@ public static class ToolSummary {
         _                      => "Tool",
     };
 
+    /// Human verb for a built-in tool row whose input carries no prose description of its own.
+    public static string? RowLabel(string name, ToolCategory category, string? inputJson) {
+        if (category == ToolCategory.Question || ToolDetail.RawForKey(inputJson, "description").Length > 0) return null;
+        switch (name.ToLowerInvariant()) {
+            case "write" or "write_file":                       return "Wrote file";
+            case "ls":                                          return "Listed files";
+            case "bashoutput":                                  return "Read shell output";
+            case "killshell":                                   return "Stopped shell";
+            case "write_stdin" or "send_input" or "send_message": return "Sent input";
+            case "taskoutput":                                  return "Read agent output";
+            case "taskstop" or "interrupt_agent" or "close_agent": return "Stopped agent";
+            case "wait_agent":                                  return "Waited on agent";
+            case "resume_agent":                                return "Resumed agent";
+            case "list_agents":                                 return "Listed agents";
+        }
+        return category switch {
+            ToolCategory.Read      => "Read file",
+            ToolCategory.Edit      => "Edited file",
+            ToolCategory.Command   => "Ran command",
+            ToolCategory.Search    => "Searched files",
+            ToolCategory.WebSearch => "Searched the web",
+            ToolCategory.Fetch     => "Fetched page",
+            ToolCategory.Skill     => "Loaded skill",
+            ToolCategory.Agent     => "Ran agent",
+            ToolCategory.Plan      => "Updated the plan",
+            _                      => null,
+        };
+    }
+
     static bool IsSkillFile(string? path) =>
         path is not null && (path == "SKILL.md" || path.EndsWith("/SKILL.md", StringComparison.Ordinal));
 }
