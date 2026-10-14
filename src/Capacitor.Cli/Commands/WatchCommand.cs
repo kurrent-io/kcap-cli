@@ -1325,18 +1325,25 @@ partial class WatchCommand(
             if (children.ShouldHold(childLog, announced: labels.ContainsKey(childGuid.ToString("D")))) continue;
 
             var label = MuseSubagentDiscovery.LabelFor(childSessionId, labels);
+            var key   = $"{sessionId}-{label.AgentId}";
+            var now   = time.GetUtcNow();
+
+            if (!children.ShouldAttemptSpawn(key, now)) continue;
 
             // Fail-closed: register before streaming; a refused registration is retried next tick.
-            if (!await PostSubagentStartAsync(sessionId, label.AgentId, label.AgentType, childLog, ct)) continue;
+            if (!children.IsRegistered(key)) {
+                if (!await PostSubagentStartAsync(sessionId, label.AgentId, label.AgentType, childLog, ct)) continue;
 
-            var key = $"{sessionId}-{label.AgentId}";
+                children.Registered(key);
+            }
+
             await watchers.EnsureWatcherRunning(key: key, transcriptPath: childLog, agentId: label.AgentId,
                 sessionIdOverride: sessionId, vendor: "muse");
 
-            // EnsureWatcherRunning returns normally when it could not start one; the re-posted
-            // subagent-start is idempotent, so an unconfirmed child is retried whole next tick.
+            // EnsureWatcherRunning returns normally when it could not start one.
             if (!watchers.IsWatcherAlive(key)) {
-                Log(time, $"Muse subagent {label.AgentId} child watcher did not start; retrying next scan");
+                var delay = children.SpawnFailed(key, now);
+                Log(time, $"Muse subagent {label.AgentId} child watcher did not start; retrying in {delay.TotalSeconds:0}s");
                 continue;
             }
 
@@ -1363,7 +1370,9 @@ partial class WatchCommand(
         if (drained.Any(l => l.Contains("subagent.control.result_ready", StringComparison.Ordinal))) children.RecheckPending = true;
 
         try {
-            foreach (var key in children.Reengaged(File.GetLastWriteTimeUtc, time.GetUtcNow())) {
+            var reengagedAt = time.GetUtcNow();
+
+            foreach (var key in children.Reengaged(File.GetLastWriteTimeUtc, reengagedAt)) {
                 var started = false;
 
                 try {
@@ -1375,9 +1384,11 @@ partial class WatchCommand(
                 }
 
                 if (started) {
+                    children.SpawnSucceeded(key);
                     Log(time, $"Muse subagent {key} resumed; child watcher restarted");
                 } else {
-                    children.RestartFailed(key);
+                    var delay = children.RestartFailed(key, reengagedAt);
+                    Log(time, $"Muse subagent {key} child watcher did not restart; retrying in {delay.TotalSeconds:0}s");
                 }
             }
 

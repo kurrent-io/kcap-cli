@@ -15,7 +15,16 @@ internal sealed class MuseChildWatchers {
     /// its first drain; a stop sooner than that kills it with its content unread.</summary>
     internal static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(10);
 
+    /// <summary>First wait after a failed spawn: past the one-second scan so a persistent failure stops
+    /// hammering the server, short enough that a transient one recovers within a few seconds.</summary>
+    internal static readonly TimeSpan SpawnRetryInitial = TimeSpan.FromSeconds(5);
+
+    /// <summary>Longest wait between spawn attempts, which bounds how long a recovered child goes unrecorded.</summary>
+    internal static readonly TimeSpan SpawnRetryCap = TimeSpan.FromMinutes(1);
+
     sealed record Child(string Log, DateTimeOffset SpawnedAt);
+
+    sealed record Backoff(int Failures, DateTimeOffset NextAttempt);
 
     readonly Dictionary<string, Child>    _spawned   = new(StringComparer.Ordinal);
     readonly Dictionary<string, int>      _handled   = new(StringComparer.Ordinal);
@@ -23,7 +32,9 @@ internal sealed class MuseChildWatchers {
     readonly Dictionary<string, int>      _held      = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTime> _logMtimes = new(StringComparer.Ordinal);
 
-    readonly HashSet<string> _unconfirmed = new(StringComparer.Ordinal);
+    readonly HashSet<string>             _unconfirmed = new(StringComparer.Ordinal);
+    readonly HashSet<string>             _registered  = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Backoff> _backoff     = new(StringComparer.Ordinal);
 
     bool _recheck;
 
@@ -45,8 +56,33 @@ internal sealed class MuseChildWatchers {
         return true;
     }
 
+    /// <summary>Whether the server has acknowledged this child's registration. It is posted once, however
+    /// many times the spawn is retried.</summary>
+    internal bool IsRegistered(string key) => _registered.Contains(key);
+
+    internal void Registered(string key) => _registered.Add(key);
+
+    /// <summary>Whether a spawn may be attempted now: always for a child that has not failed, otherwise
+    /// only once its backoff has elapsed.</summary>
+    internal bool ShouldAttemptSpawn(string key, DateTimeOffset now) =>
+        !_backoff.TryGetValue(key, out var backoff) || now >= backoff.NextAttempt;
+
+    /// <summary>Records a failed spawn and returns the wait before the next attempt: doubling from
+    /// <see cref="SpawnRetryInitial"/>, capped at <see cref="SpawnRetryCap"/>.</summary>
+    internal TimeSpan SpawnFailed(string key, DateTimeOffset now) {
+        var failures = _backoff.TryGetValue(key, out var previous) ? previous.Failures + 1 : 1;
+        var delay    = TimeSpan.FromTicks(Math.Min(SpawnRetryCap.Ticks, SpawnRetryInitial.Ticks << Math.Min(failures - 1, 16)));
+
+        _backoff[key] = new Backoff(failures, now + delay);
+        return delay;
+    }
+
+    /// <summary>Clears a child's backoff once its watcher is running.</summary>
+    internal void SpawnSucceeded(string key) => _backoff.Remove(key);
+
     internal void Spawned(string key, string log, DateTimeOffset now) {
         _spawned[key]  = new Child(log, now);
+        _backoff.Remove(key);
         RecheckPending = true;
     }
 
@@ -104,6 +140,8 @@ internal sealed class MuseChildWatchers {
         List<string>? back = null;
 
         foreach (var key in _stopped.ToArray()) {
+            if (!ShouldAttemptSpawn(key, now)) continue;
+
             var log = _spawned[key].Log;
             if (!WatchCommand.ChildRolloutAdvanced(_logMtimes, log, mtimeOf(log))) continue;
 
@@ -116,9 +154,11 @@ internal sealed class MuseChildWatchers {
     }
 
     /// <summary>Puts a child <see cref="Reengaged"/> returned back to stopped when its watcher did not
-    /// start, and forgets the log's recorded mtime so the next <see cref="Reengaged"/> returns it again.</summary>
-    internal void RestartFailed(string key) {
+    /// start, and forgets the log's recorded mtime so <see cref="Reengaged"/> returns it again once the
+    /// returned backoff has elapsed.</summary>
+    internal TimeSpan RestartFailed(string key, DateTimeOffset now) {
         _stopped.Add(key);
         _logMtimes.Remove(_spawned[key].Log);
+        return SpawnFailed(key, now);
     }
 }

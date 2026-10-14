@@ -223,9 +223,113 @@ public class MuseChildWatchersTests {
 
         await Assert.That(children.Reengaged(_ => grown, stopAt.AddSeconds(2))).IsEquivalentTo(new[] { "s-a" });
 
-        children.RestartFailed("s-a");
+        var failedAt = stopAt.AddSeconds(2);
+        children.RestartFailed("s-a", failedAt);
+        var due = failedAt + MuseChildWatchers.SpawnRetryInitial;
 
-        await Assert.That(children.Reengaged(_ => grown, stopAt.AddSeconds(4))).IsEquivalentTo(new[] { "s-a" });
-        await Assert.That(children.Reengaged(_ => grown, stopAt.AddSeconds(6))).IsEmpty();
+        await Assert.That(children.Reengaged(_ => grown, due)).IsEquivalentTo(new[] { "s-a" });
+        await Assert.That(children.Reengaged(_ => grown, due.AddSeconds(2))).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_restart_that_keeps_failing_is_not_offered_before_its_backoff_elapses() {
+        var children = new MuseChildWatchers();
+        children.Spawned("s-a", "/a/session.jsonl", T0);
+        var stopAt = T0 + MuseChildWatchers.StopGrace;
+        Stop(children, Ready("s-a"), stopAt);
+        var m0 = new DateTime(2026, 10, 13, 12, 0, 5, DateTimeKind.Utc);
+        children.RecordLogMtime("s-a", m0);
+        var grown    = m0.AddSeconds(3);
+        var failedAt = stopAt.AddSeconds(2);
+        children.Reengaged(_ => grown, failedAt);
+        children.RestartFailed("s-a", failedAt);
+
+        await Assert.That(children.Reengaged(_ => grown, failedAt.AddSeconds(1))).IsEmpty();
+        await Assert.That(children.Reengaged(_ => grown, failedAt + MuseChildWatchers.SpawnRetryInitial - TimeSpan.FromMilliseconds(1))).IsEmpty();
+        await Assert.That(children.Reengaged(_ => grown, failedAt + MuseChildWatchers.SpawnRetryInitial)).IsEquivalentTo(new[] { "s-a" });
+    }
+
+    [Test]
+    public async Task A_child_registration_is_acknowledged_once_and_survives_spawn_failures() {
+        var children = new MuseChildWatchers();
+
+        await Assert.That(children.IsRegistered("s-a")).IsFalse();
+
+        children.Registered("s-a");
+        children.SpawnFailed("s-a", T0);
+        children.SpawnFailed("s-a", T0.AddMinutes(1));
+
+        await Assert.That(children.IsRegistered("s-a")).IsTrue();
+        await Assert.That(children.IsRegistered("s-b")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_child_that_has_not_failed_may_always_be_spawned() {
+        var children = new MuseChildWatchers();
+
+        await Assert.That(children.ShouldAttemptSpawn("s-a", T0)).IsTrue();
+    }
+
+    [Test]
+    public async Task Failed_spawn_attempts_back_off_by_doubling() {
+        var children = new MuseChildWatchers();
+        var now      = T0;
+        var delays   = new List<TimeSpan>();
+
+        for (var i = 0; i < 3; i++) {
+            delays.Add(children.SpawnFailed("s-a", now));
+
+            await Assert.That(children.ShouldAttemptSpawn("s-a", now)).IsFalse();
+            await Assert.That(children.ShouldAttemptSpawn("s-a", now + delays[i] - TimeSpan.FromMilliseconds(1))).IsFalse();
+            await Assert.That(children.ShouldAttemptSpawn("s-a", now + delays[i])).IsTrue();
+
+            now += delays[i];
+        }
+
+        await Assert.That(delays[0]).IsEqualTo(MuseChildWatchers.SpawnRetryInitial);
+        await Assert.That(delays[1]).IsEqualTo(MuseChildWatchers.SpawnRetryInitial * 2);
+        await Assert.That(delays[2]).IsEqualTo(MuseChildWatchers.SpawnRetryInitial * 4);
+    }
+
+    [Test]
+    public async Task The_spawn_backoff_is_capped() {
+        var children = new MuseChildWatchers();
+        var last     = TimeSpan.Zero;
+
+        for (var i = 0; i < 40; i++) last = children.SpawnFailed("s-a", T0);
+
+        await Assert.That(last).IsEqualTo(MuseChildWatchers.SpawnRetryCap);
+    }
+
+    [Test]
+    public async Task Spawn_backoff_is_kept_per_child() {
+        var children = new MuseChildWatchers();
+        children.SpawnFailed("s-a", T0);
+
+        await Assert.That(children.ShouldAttemptSpawn("s-a", T0)).IsFalse();
+        await Assert.That(children.ShouldAttemptSpawn("s-b", T0)).IsTrue();
+        await Assert.That(children.SpawnFailed("s-b", T0)).IsEqualTo(MuseChildWatchers.SpawnRetryInitial);
+    }
+
+    [Test]
+    public async Task A_successful_spawn_clears_the_backoff() {
+        var children = new MuseChildWatchers();
+        children.SpawnFailed("s-a", T0);
+        children.SpawnFailed("s-a", T0.AddSeconds(5));
+
+        children.SpawnSucceeded("s-a");
+
+        await Assert.That(children.ShouldAttemptSpawn("s-a", T0)).IsTrue();
+        await Assert.That(children.SpawnFailed("s-a", T0)).IsEqualTo(MuseChildWatchers.SpawnRetryInitial);
+    }
+
+    [Test]
+    public async Task Spawning_a_child_clears_its_backoff() {
+        var children = new MuseChildWatchers();
+        children.SpawnFailed("s-a", T0);
+
+        children.Spawned("s-a", "/a/session.jsonl", T0.AddSeconds(5));
+
+        await Assert.That(children.ShouldAttemptSpawn("s-a", T0)).IsTrue();
     }
 }
