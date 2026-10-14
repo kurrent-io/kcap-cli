@@ -42,6 +42,9 @@ public sealed class MuseAssistantScope(
                 state = new(chatId, principal.ServerUrl, principal.UserId, NewGrant(boundary, now), null, null, null);
                 store.SaveState(state);
             } else if (state.Grant.Revoked) {
+                if (boundary.Kind == MuseAssistantGrantBoundaries.EmptyChat && state.Watermark is not null)
+                    return Fail("scope add", MuseAssistantExitCodes.Malformed, "--empty-chat cannot re-grant a chat that has already been recorded: items written while recording was off would be sent; use --after-seq <seq> or --include-history");
+
                 if (await runner.ExecuteAsync(store, MuseAssistantPlanner.Closure(state), chatId, ct) is { } refused)
                     return Fail("scope add", MuseAssistantExitCodes.Server, refused);
 
@@ -106,9 +109,15 @@ public sealed class MuseAssistantScope(
             foreach (var found in store.EnumerateStates().ToList()) {
                 using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, found.ChatId), ct);
                 if (chatLock is null) {
-                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy} chat={found.ChatId}");
-                    if (!found.Grant.Revoked) unrevoked.Add(found.ChatId);
-                    else if (found.Open is not null) failed = true;
+                    if (!found.Grant.Revoked) {
+                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy} chat={found.ChatId}");
+                        unrevoked.Add(found.ChatId);
+                    } else {
+                        // Already revoked, so recording is stopped; `chat=` is kept for the chats that may still record.
+                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy}; already revoked, recording is stopped for \"{found.ChatId}\"");
+                        if (found.Open is not null) failed = true;
+                    }
+
                     continue;
                 }
 
@@ -166,7 +175,9 @@ public sealed class MuseAssistantScope(
                     continue;
                 }
 
-                using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, chatId), ct);
+                // A wait here would hold the scope lock against a user-turn scope command. An ingest holding
+                // the chat replays its own intents; a revoked closure is left for the next sweep.
+                using var chatLock = MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(store.ScopeDir, chatId));
                 if (chatLock is null) {
                     Console.Error.WriteLine($"kcap muse-assistant sweep: {Busy} chat={chatId}");
                     if (!state.Grant.Revoked) active.Add(Describe(state));

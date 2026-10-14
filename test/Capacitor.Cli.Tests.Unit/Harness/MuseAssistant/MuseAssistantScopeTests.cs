@@ -15,6 +15,7 @@ public class MuseAssistantScopeTests {
     const long Minute = 60_000, Hour = 3_600_000, T0 = 1_760_000_000_000;
     static readonly MuseAssistantPrincipal Acme = new("https://acme.kcap.ai", "user_01HXYZ");
     static readonly MuseAssistantBoundary History = new(MuseAssistantGrantBoundaries.History, null);
+    static readonly MuseAssistantBoundary EmptyChat = new(MuseAssistantGrantBoundaries.EmptyChat, null);
     static MuseAssistantBoundary After(long seq) => new(MuseAssistantGrantBoundaries.AfterSeq, seq);
 
     readonly FakeTimeProvider _time = new(DateTimeOffset.FromUnixTimeMilliseconds(T0 + 4 * Hour));
@@ -302,6 +303,71 @@ public class MuseAssistantScopeTests {
         // The same entry writes once the boundary is well formed, so the absence above is the refusal's doing.
         await Assert.That(await scope.AddAsync("chat-main", ["--chat", "chat-main", "--empty-chat"], default)).IsEqualTo(0);
         await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Add_empty_chat_on_a_revoked_chat_that_has_a_watermark_is_refused_and_leaves_the_revocation_alone() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        var scope = await ScopeAsync(poster);
+        await scope.RemoveAsync("chat-main", default);
+        var revoked = State();
+        using var stderr = ConsoleOutput.StartErrorCapture();
+
+        await Assert.That(await scope.AddAsync("chat-main", EmptyChat, default)).IsEqualTo(2);
+
+        await Assert.That(stderr.GetCapturedError()).Contains("--empty-chat");
+        await Assert.That(State()).IsEqualTo(revoked);
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+    }
+
+    [Test]
+    public async Task Add_empty_chat_on_a_revoked_chat_that_never_recorded_anything_is_granted() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-main", History, default);
+        await scope.RemoveAsync("chat-main", default);
+
+        await Assert.That(await scope.AddAsync("chat-main", EmptyChat, default)).IsEqualTo(0);
+
+        await Assert.That(State().Grant.Revoked).IsFalse();
+        await Assert.That(State().Grant.Boundary).IsEqualTo(MuseAssistantGrantBoundaries.EmptyChat);
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Sweep_does_not_wait_on_a_busy_chat_lock_and_still_prints_the_busy_chat_only_while_it_is_granted() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); await scope.AddAsync("chat-c", History, default); });
+        await (await ScopeAsync(poster)).RemoveAsync("chat-b", default);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        using var output = ConsoleOutput.StartFullCapture();
+
+        // The system clock would let a waiting sweep run for the full lock wait; the test bounds it far below.
+        var sweeping = await ScopeAsync(poster, time: TimeProvider.System);
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-a")))
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b")))
+            await Assert.That(await sweeping.SweepAsync(default).WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(0);
+
+        var lines = output.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines.Select(l => l[(l.IndexOf("chat=", StringComparison.Ordinal) + 5)..])).IsEquivalentTo(["chat-a", "chat-c"]);
+        await Assert.That(output.GetCapturedError()).Contains("chat=chat-a");
+        await Assert.That(output.GetCapturedError()).Contains("chat=chat-b");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Reset_names_only_the_still_granted_chats_on_its_busy_lines() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); });
+        await (await ScopeAsync(poster)).RemoveAsync("chat-b", default);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        using var stderr = ConsoleOutput.StartErrorCapture();
+
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-a")))
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b")))
+            await Assert.That(await TimedOut((await ScopeAsync(poster)).ResetAsync(default))).IsEqualTo(4);
+
+        await Assert.That(stderr.GetCapturedError()).Contains("chat=chat-a");
+        await Assert.That(stderr.GetCapturedError()).DoesNotContain("chat=chat-b");
     }
 
     [Test]
