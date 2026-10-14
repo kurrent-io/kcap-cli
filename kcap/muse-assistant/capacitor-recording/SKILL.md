@@ -63,7 +63,8 @@ once a walk finds two and a half hours of quiet.
    > `kcap muse-assistant ingest`, run by a cron on this VM every 15 minutes, as
    > private Capacitor sessions owned by your signed-in kcap user. Nothing with role
    > `developer` is sent. [Only messages from now on are recorded. | Your earlier
-   > messages in these chats are recorded too.] Say "stop recording" at any time;
+   > messages in these chats are recorded too; for a chat Capacitor recorded before,
+   > only those since its recording last stopped.] Say "stop recording" at any time;
    > `kcap muse-assistant scope remove` ends it and nothing further is sent. What was
    > already sent stays in Capacitor.
 
@@ -78,7 +79,11 @@ once a walk finds two and a half hours of quiet.
      `kcap muse-assistant scope add --chat "<id>" --include-history`
 
    Exit 0 prints `granted key=… chat=<id>`; a repeat of the same grant prints
-   `already granted key=… chat=<id>` and changes nothing. Any other exit: show the
+   `already granted key=… chat=<id>` and changes nothing. Exit 2 with `already
+   granted … after_seq=<n> …` on stderr means the chat is already recording under a
+   grant that leaves its earlier messages out, and that grant cannot be widened: tell
+   the user the chat is still recording, but only messages after `seq` `<n>`, so the
+   earlier messages promised above are not recorded. Any other exit: show the
    user the stderr line, tell them that chat may not be recording and that they can
    ask again to confirm, and stop; do not retry on your own. Always quote the chat id
    (`--chat "<id>"`, right after the verb): an id may contain spaces.
@@ -113,7 +118,8 @@ Tell the user what the exit code says, and nothing more hopeful:
   stopped. Show the stderr line.
 
 Re-granting later starts a new session; the interval without a grant is never sent
-unless the user asks for history.
+unless the user asks for history, and even then nothing an earlier grant of the chat
+left out is sent.
 
 ## The cron: `capacitor-recording`, every 15 minutes
 

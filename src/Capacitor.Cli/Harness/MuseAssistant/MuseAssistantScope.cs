@@ -50,6 +50,9 @@ public sealed class MuseAssistantScope(
 
                 state = store.LoadState(chatId).State! with { Grant = NewGrant(boundary, now) };
                 store.SaveState(state);
+            } else if (Widens(boundary, state.Grant)) {
+                // Exit 0 here would confirm a consent read-back that promised items this grant never selects.
+                return Fail("scope add", MuseAssistantExitCodes.Malformed, $"already granted {Describe(state)}; an active grant cannot be widened, so the items it leaves out are not recorded");
             } else if (store.LoadScope().Chats.Contains(chatId, StringComparer.Ordinal)) {
                 Console.Out.WriteLine($"already granted {Describe(state)}");
                 return MuseAssistantExitCodes.Ok;
@@ -240,6 +243,13 @@ public sealed class MuseAssistantScope(
     }
 
     Task<FileStream?> LockAsync(string path, CancellationToken ct) => MuseAssistantChatLock.AcquireAsync(path, LockWait, time, ct);
+
+    /// <summary>Whether <paramref name="requested"/> would select an item <paramref name="grant"/> does not.</summary>
+    static bool Widens(MuseAssistantBoundary requested, MuseAssistantGrant grant) {
+        var floor = requested.Kind == MuseAssistantGrantBoundaries.AfterSeq ? requested.AfterSeq : null;
+
+        return grant.Floor is { } granted && (floor is null || floor < granted);
+    }
 
     static MuseAssistantGrant NewGrant(MuseAssistantBoundary boundary, long now) =>
         new(RandomNumberGenerator.GetHexString(32, lowercase: true), boundary.Kind, boundary.AfterSeq, now, null);

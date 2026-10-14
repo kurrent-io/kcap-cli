@@ -54,8 +54,33 @@ public class MuseAssistantScopeTests {
         await Assert.That(state.Watermark).IsNull();
         await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
 
-        await Assert.That(await scope.AddAsync("chat-main", History, default)).IsEqualTo(0);
+        await Assert.That(await scope.AddAsync("chat-main", After(41), default)).IsEqualTo(0);
+        await Assert.That(await scope.AddAsync("chat-main", After(45), default)).IsEqualTo(0);   // already inside the grant
         await Assert.That(State().Grant).IsEqualTo(state.Grant);                         // no new grant, so no new session id
+    }
+
+    [Test]
+    [NotInParallel]
+    [Arguments("history")]
+    [Arguments("empty_chat")]
+    [Arguments("after_seq")]
+    public async Task Add_that_would_widen_an_active_grant_exits_2_and_changes_nothing(string kind) {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-main", After(41), default);
+        var granted = State().Grant;
+        var wider   = kind == MuseAssistantGrantBoundaries.AfterSeq ? After(30) : new MuseAssistantBoundary(kind, null);
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await scope.AddAsync("chat-main", wider, default)).IsEqualTo(2);
+
+        await Assert.That(State().Grant).IsEqualTo(granted);
+        await Assert.That(output.GetCapturedOutput()).IsEmpty();
+        await Assert.That(output.GetCapturedError()).Contains("already granted").And.Contains("after_seq=41").And.Contains("cannot be widened");
+
+        var store = Store();                                                              // granted, but the list write was lost
+        store.SaveScope(store.LoadScope() with { Chats = [] });
+        await Assert.That(await scope.AddAsync("chat-main", wider, default)).IsEqualTo(2);
+        await Assert.That(State().Grant).IsEqualTo(granted);
     }
 
     [Test]
