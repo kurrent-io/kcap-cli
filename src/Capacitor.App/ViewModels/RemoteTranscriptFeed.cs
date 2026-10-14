@@ -9,8 +9,7 @@ namespace Capacitor.App.ViewModels;
 /// The chat rows of a session on another machine: a seed from the session detail route, then a
 /// live tail of the session's stream from the position the seed ended at. Every access
 /// establishment restarts the tail from the last position seen; the seed is fetched only until
-/// one lands, so a reconnect resumes rather than replays. Rows queue here and the pane's poll
-/// drains them.
+/// one lands, so a reconnect resumes rather than replays. Changes wake the pane to drain rows.
 internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     /// Gaps between tails that ended while access still stood; each further one is the next entry.
     internal static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10)];
@@ -27,11 +26,11 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     readonly IDisposable _access;
     readonly CancellationTokenSource _lifetime = new();
     FeedStatus _pendingStatus = FeedStatus.Ok;
-    /// The current attempt's Missing/Failed verdict, held apart from the seed's own rows so a
-    /// refusal landing after a successful seed never displaces the seed's still-undrained Reset,
-    /// and answered on every read with nothing else to deliver: the pane polls, and a verdict it
-    /// saw once would be gone by the next poll. A new attempt, or a seed, retires it.
+    /// A refusal cannot displace an undrained seed Reset. It repeats on subsequent reads until a
+    /// new attempt or seed retires it.
     (FeedStatus Status, string? Failure)? _verdict;
+    // A refusal behind a Reset needs another drain, without repeatedly waking for a held verdict.
+    bool _verdictRead;
     /// The last event number applied; null until the seed lands.
     long? _position;
     /// How many pending lines the seed committed, and the position it ended at. A live event that
@@ -43,6 +42,9 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     CancellationTokenSource? _tailCts;
     volatile bool _waitingToRetry;
     bool _disposed;
+
+    internal event Action? Changed;
+    internal bool HasPendingChanges { get { lock (_lock) return _pending.Count > 0 || _pendingStatus == FeedStatus.Reset || _verdict is not null && !_verdictRead; } }
 
     internal Task? PendingRunForTesting { get; private set; }
     internal bool WaitingToRetryForTesting => _waitingToRetry;
@@ -82,7 +84,10 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 _pending.Clear();
                 return new(FeedStatus.Ok, lines);
             }
-            if (_verdict is { } verdict) return new(verdict.Status, [], null, verdict.Failure);
+            if (_verdict is { } verdict) {
+                _verdictRead = true;
+                return new(verdict.Status, [], null, verdict.Failure);
+            }
             return new(FeedStatus.Ok, []);
         }
     }
@@ -103,6 +108,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 cts.Dispose();
             }, TaskScheduler.Default);
         }
+        Changed?.Invoke();
     }
 
     void StopTail() {
@@ -169,6 +175,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
             _resetCount = lines.Count;
             _seedBoundary = CurrentOffsetLocked();
         }
+        Changed?.Invoke();
         return true;
     }
 
@@ -186,6 +193,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                 _position = (long)envelope.StreamPosition;
                 if (line is { } l) _pending.Add(l);
             }
+            Changed?.Invoke();
         }
         return received;
     }
@@ -201,7 +209,12 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     /// A verdict belongs to the attempt that reached it: one landing after its run was stopped
     /// must not become the current run's.
     void Enqueue(int attempt, FeedStatus status, string? failure = null) {
-        lock (_lock) { if (_attempt == attempt) _verdict = (status, failure); }
+        lock (_lock) {
+            if (_attempt != attempt) return;
+            _verdict = (status, failure);
+            _verdictRead = false;
+        }
+        Changed?.Invoke();
     }
 
     void LogOnce(string reason) {

@@ -282,7 +282,7 @@ public class MainWindowViewModelTests {
     public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
             AttachState state, string? reason, string daemonConnection, string expectedHex) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (SolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
     }
 
@@ -292,7 +292,7 @@ public class MainWindowViewModelTests {
     public async Task StatusBrushFor_signed_out_uses_the_disrupted_color(
             AttachState state, string? reason, string daemonConnection) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (SolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
     }
 
@@ -318,7 +318,7 @@ public class MainWindowViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
-            var brush = (SolidColorBrush)vm.StatusBrush;
+            var brush = (ISolidColorBrush)vm.StatusBrush;
             await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
         });
     }

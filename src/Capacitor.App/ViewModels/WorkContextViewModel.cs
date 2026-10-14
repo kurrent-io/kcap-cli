@@ -54,6 +54,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     readonly bool _isRemote;
     readonly IWorkContextSource _source;
     readonly SingleFlightReader<string, WorkContextRead> _reader;
+    readonly SingleFlightReader<(string? Path, string? Reported), string> _branchReader;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly Action<string>? _openWorkItem;
@@ -173,9 +174,18 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     string? _reportedBranch;
     // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
-    void ResolveBranch() {
-        var branch = (_isRemote ? null : GitRepository.CurrentBranch(WorktreePath)) ?? _reportedBranch;
-        Branch = string.IsNullOrWhiteSpace(branch) ? "—" : branch;
+    void ResolveBranch(bool refresh = false) {
+        if (_isRemote) {
+            Branch = string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch;
+            return;
+        }
+        var state = (Path: WorktreePath, Reported: _reportedBranch);
+        if (_branchReader.HasCurrent && _branchReader.CurrentState == state) {
+            if (refresh) _branchReader.Refresh();
+            return;
+        }
+        Branch = string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch;
+        _branchReader.Switch(state);
     }
 
     bool _isStale;
@@ -242,6 +252,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ArtefactsTabViewModel? artefacts = null, bool isRemote = false) {
         _isRemote = isRemote;
         _source = source;
+        _branchReader = new SingleFlightReader<(string? Path, string? Reported), string>(
+            (state, ct) => Task.Run(() => {
+                var branch = GitRepository.CurrentBranch(state.Path) ?? state.Reported;
+                return string.IsNullOrWhiteSpace(branch) ? "—" : branch;
+            }, ct),
+            _ => string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch,
+            branch => Branch = branch,
+            "checkout branch");
         _reader = new SingleFlightReader<string, WorkContextRead>(
             _source.ReadAsync,
             ex => WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message),
@@ -265,7 +283,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         // the click with no feedback.
         RefreshCommand = ReactiveCommand.Create(
             () => {
-                ResolveBranch();
+                ResolveBranch(refresh: true);
                 PullRequests?.Refresh();
                 Plan.Refresh();
                 Artefacts?.Refresh();
@@ -350,6 +368,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     void OnTick() {
         if (_tornDown) return;
+        if (_dto is not null) ResolveBranch(refresh: true);
         Plan.Refresh();
         if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
         _reader.StartIfIdle();
@@ -403,6 +422,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _timer = null;
         _disposables.Dispose();
         await _reader.TeardownAsync();
+        await _branchReader.TeardownAsync();
         await Plan.TeardownAsync();
     }
 }

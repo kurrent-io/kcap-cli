@@ -16,6 +16,8 @@ namespace Capacitor.App.ViewModels;
 public sealed class ArtefactsTabViewModel : ReactiveObject {
     readonly IPlanArtifactSource? _source;
     readonly SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead> _reads;
+    sealed record DriftRead(DriftState State);
+    readonly SingleFlightReader<(DocumentRow Row, string? Root), DriftRead> _driftReads;
     readonly PlanActivity _activity;
     readonly TimeProvider _time;
     const long MaxHashedBytes = 4 * 1024 * 1024;
@@ -37,6 +39,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         : HasAny ? "Select a document to read it."
         : "No documents yet.";
 
+    (string Path, string? Hash, DriftState State)? _lastDrift;
     DocumentRow? _selected;
     public DocumentRow? Selected { get => _selected; private set => this.RaiseAndSetIfChanged(ref _selected, value); }
 
@@ -54,6 +57,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     /// Test-only seam: the current lease's read, or the last one started.
     internal Task? PendingReadForTesting => _reads.PendingReadForTesting;
+    internal Task? PendingDriftForTesting => _driftReads.PendingReadForTesting;
 
     public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, Stream?>? openWorkingCopy = null,
             IUrlOpener? opener = null) {
@@ -70,6 +74,11 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         _activity = activity;
         _time = time;
         _openWorkingCopy = openWorkingCopy ?? OpenFile;
+        _driftReads = new SingleFlightReader<(DocumentRow Row, string? Root), DriftRead>(
+            (state, ct) => Task.Run(() => new DriftRead(Drift(state.Row, state.Root)), ct),
+            _ => new DriftRead(DriftState.Unknown),
+            ApplyDrift,
+            "document drift");
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
         OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
@@ -120,13 +129,22 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         _documents.FirstOrDefault(d => DocumentPaths.Exact(d.Path, path)) ?? _documents.FirstOrDefault(d => d.MatchesPath(path));
 
     void Select(DocumentRow row) {
+        if (_tornDown) return;
         foreach (var document in _documents) document.IsSelected = ReferenceEquals(document, row);
         Selected = row;
-        Reader = DocumentReaderViewModel.For(row, Drift(row), _time.GetUtcNow());
+        var drift = _lastDrift is { } last && last.Path == row.Path && last.Hash == row.ContentHash
+            ? last.State : DriftState.Unknown;
+        Reader = DocumentReaderViewModel.For(row, drift, _time.GetUtcNow());
+        var root = _reads.CurrentState.Root;
+        var current = _driftReads.CurrentState;
+        if (_driftReads.HasCurrent && current.Root == root && current.Row.Path == row.Path
+            && current.Row.ContentHash == row.ContentHash && current.Row.Source == row.Source)
+            _driftReads.Refresh();
+        else _driftReads.Switch((row, root));
     }
 
-    DriftState Drift(DocumentRow row) {
-        if (_reads.CurrentState.Root is not { Length: > 0 } root || row.Source != "declared") return DriftState.Unknown;
+    DriftState Drift(DocumentRow row, string? root) {
+        if (root is not { Length: > 0 } || row.Source != "declared") return DriftState.Unknown;
         var relative = row.Path.Replace('\\', '/');
         if (relative.Length == 0 || relative.StartsWith('/') || System.IO.Path.IsPathRooted(relative)
             || (relative.Length >= 2 && char.IsAsciiLetter(relative[0]) && relative[1] == ':')
@@ -140,6 +158,13 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
             if (stream.Length > MaxHashedBytes) return DriftState.Unknown;
             return Convert.ToHexStringLower(SHA256.HashData(stream)) == row.ContentHash ? DriftState.Same : DriftState.Changed;
         } catch (Exception) { return DriftState.Unknown; }
+    }
+
+    void ApplyDrift(DriftRead read) {
+        // Coalesced reads can own an older row; notices follow the current reader metadata.
+        if (Selected is not { } row) return;
+        _lastDrift = (row.Path, row.ContentHash, read.State);
+        Reader?.UpdateDrift(row, read.State);
     }
 
     void OnPlanWritten() {
@@ -189,7 +214,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
         var reopened = openPath is null ? null : _documents.FirstOrDefault(d => d.Path == openPath);
         if (reopened is not null) Select(reopened);
-        else { Selected = null; Reader = null; }
+        else { ClearSelection(); }
 
         var pending = _pendingPath;
         _pendingPath = null;
@@ -199,9 +224,15 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         }
     }
 
-    void Clear() {
+    void ClearSelection() {
+        _driftReads.ClearCurrent();
+        _lastDrift = null;
         Selected = null;
         Reader = null;
+    }
+
+    void Clear() {
+        ClearSelection();
         if (_documents.Count == 0) return;
         _documents.Clear();
         RaiseShape();
@@ -229,5 +260,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         SelectCommand.Dispose();
         OpenLinkCommand.Dispose();
         await _reads.TeardownAsync();
+        await _driftReads.TeardownAsync(waitForPending: false);
     }
 }

@@ -35,6 +35,7 @@ public partial class ChatTabView : UserControl {
     /// changes its height. VirtualizingStackPanel otherwise drops its anchor and re-places every
     /// row from the average size, which jumps the reader off that bubble.
     object? _anchorItem;
+    Button? _anchorSummary;
     double _anchorY;
     bool _restoringAnchor;
     int _anchorPasses;
@@ -127,6 +128,7 @@ public partial class ChatTabView : UserControl {
         if (_scroll is null || ToolSummaryOf(source) is not { } summary) return;
         if (summary.TranslatePoint(new Point(0, 0), _scroll) is not { } point) return;
         _anchorItem = summary.DataContext;
+        _anchorSummary = summary;
         _anchorY = point.Y;
     }
 
@@ -188,6 +190,7 @@ public partial class ChatTabView : UserControl {
     void DropToggleAnchor() {
         if (_scroll is not null) _scroll.LayoutUpdated -= OnAnchorLayout;
         _anchorItem = null;
+        _anchorSummary = null;
         _anchorPasses = 0;
         _anchorLaidOut = false;
     }
@@ -205,9 +208,13 @@ public partial class ChatTabView : UserControl {
         }
     }
 
-    Button? ToolSummaryFor(object item) =>
-        ChatItems.GetVisualDescendants().OfType<Button>()
-            .FirstOrDefault(b => b.Classes.Contains("toolSummary") && ReferenceEquals(b.DataContext, item));
+    Button? ToolSummaryFor(object item) {
+        if (_anchorSummary is { } cached && ReferenceEquals(cached.DataContext, item)
+            && cached.GetVisualAncestors().Any(ancestor => ReferenceEquals(ancestor, ChatItems))) return cached;
+        _anchorSummary = ChatItems.ContainerFromItem(item)?.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(button => button.Classes.Contains("toolSummary") && ReferenceEquals(button.DataContext, item));
+        return _anchorSummary;
+    }
 
     static Button? ToolSummaryOf(object? source) {
         if (source is Button button && button.Classes.Contains("toolSummary")) return button;

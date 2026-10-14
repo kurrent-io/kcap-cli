@@ -64,14 +64,19 @@ public sealed partial class PullRequestContextViewModel {
     public string FreshnessDetail => !IsOverview && CanDisplayReader && CurrentSection?.Head is { Length: >= 7 } head
         ? "Checks ran on commit " + head[..7] : "When GitHub last sent what this tab shows";
 
-    static readonly string[] NotifiedProperties = [
-        nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(ShowsRefreshing), nameof(FetchedLabel), nameof(AccessLabel),
-        nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved), nameof(IsSelectionLoading), nameof(ShowsLoading),
-        nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
-        nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(FreshnessDetail),
-        nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel),
-    ];
+    readonly Dictionary<string, object?> _notified = new(StringComparer.Ordinal);
+
+    void NotifyValue<T>(T value, [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(value))] string property = "") {
+        if (_notified.TryGetValue(property, out var previous) && EqualityComparer<T>.Default.Equals((T)previous!, value)) return;
+        _notified[property] = value;
+        this.RaisePropertyChanged(property);
+    }
+
+    void NotifyRows(IReadOnlyList<PullRequestRow> rows, string property) {
+        if (_notified.TryGetValue(property, out var previous) && ((PullRequestRow[])previous!).SequenceEqual(rows)) return;
+        _notified[property] = rows.ToArray();
+        this.RaisePropertyChanged(property);
+    }
 
     void Notify() {
         if (!IsReading) _userRefresh = false;
@@ -81,8 +86,51 @@ public sealed partial class PullRequestContextViewModel {
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
         ReconcileRows(rows);
         if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
-        foreach (var property in NotifiedProperties) this.RaisePropertyChanged(property);
+        NotifyValue(Notice);
+        NotifyValue(IsReading);
+        NotifyValue(HasChoice);
+        NotifyValue(HasPullRequest);
+        NotifyValue(HasListed);
+        NotifyValue(IsLegacy);
+        NotifyValue(CanOpenReader);
+        NotifyValue(Section);
+        NotifyValue(CanReveal);
+        NotifyValue(CanDisplay);
+        NotifyValue(Title);
+        NotifyValue(Branches);
+        NotifyValue(HasBranches);
+        NotifyValue(EmptyNote);
+        NotifyValue(HasEmptyNote);
+        NotifyValue(IsSectionLoading);
+        NotifyValue(LoadingNote);
+        NotifyValue(ShowsRefreshing);
+        NotifyValue(FetchedLabel);
+        NotifyValue(AccessLabel);
+        NotifyValue(Description);
+        NotifyValue(DescriptionTruncated);
+        NotifyValue(DescriptionNote);
+        NotifyValue(IsOverview);
+        NotifyValue(IsThreads);
+        NotifyValue(IsThreadComments);
+        NotifyValue(IncludeResolved);
+        NotifyValue(IsSelectionLoading);
+        NotifyValue(ShowsLoading);
+        NotifyValue(HasNotice);
+        NotifyValue(ShowsSignIn);
+        NotifyValue(ShowsLinkGitHub);
+        NotifyValue(ShowReaderContent);
+        NotifyRows(Rows, nameof(Rows));
+        NotifyValue(HasMore);
+        NotifyValue(CanReloadEarlier);
+        NotifyValue(PageNote);
+        NotifyValue(SnapshotLabel);
+        NotifyValue(FreshnessDetail);
+        NotifyValue(ReaderNote);
+        NotifyValue(HasReaderNote);
+        NotifyValue(ShowsInstallTool);
+        NotifyValue(InstallToolLabel);
         NotifyPresentation();
+        ScheduleTick();
     }
 
     /// Edits the visible list in place rather than replacing it: a row's control holds state its

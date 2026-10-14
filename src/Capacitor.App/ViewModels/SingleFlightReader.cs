@@ -4,7 +4,8 @@ namespace Capacitor.App.ViewModels;
 
 /// Single-flight async reader keyed by a lease state. A result applies on the UI thread only when
 /// its lease is still current; superseded and torn-down leases are retained until their tasks
-/// complete so TeardownAsync can cancel, await, and dispose every CancellationTokenSource.
+/// complete so teardown can cancel and, by default, await every read. Each lease disposes its
+/// CancellationTokenSource after it settles and is released.
 internal sealed class SingleFlightReader<TState, TResult>(
         Func<TState, CancellationToken, Task<TResult>> readAsync,
         Func<Exception, TResult> onReadError,
@@ -103,7 +104,7 @@ internal sealed class SingleFlightReader<TState, TResult>(
         onReadingChanged?.Invoke(false);
     }
 
-    public async Task TeardownAsync() {
+    public async Task TeardownAsync(bool waitForPending = true) {
         if (_tornDown) return;
         _tornDown = true;
         var old = _current;
@@ -111,6 +112,8 @@ internal sealed class SingleFlightReader<TState, TResult>(
         Release(old);
         var leases = _outstanding.ToArray();
         foreach (var lease in leases) lease.Cts.Cancel();
+        // Uninterruptible filesystem reads settle and dispose their leases after teardown returns.
+        if (!waitForPending) return;
         foreach (var lease in leases)
             if (lease.Pending is { } pending) {
                 try { await pending; } catch (Exception) { }

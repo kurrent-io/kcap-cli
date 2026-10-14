@@ -1,13 +1,19 @@
 using System.Globalization;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.PullRequests.Readers;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
-internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullRequestSource {
+internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullRequestSource, IPullRequestReaders {
+    public readonly List<(string Session, PullRequestRepository? Repository, string? Branch)> Descriptions = [];
+    public void DescribeSession(string sessionId, PullRequestRepository? repository, string? branch) => Descriptions.Add((sessionId, repository, branch));
+    public PullRequestReaderNote? NoteFor(string provider, string host) => null;
+    public string? PrLink(string? url, PullRequestSubjectDto subject) => PullRequestWire.PrLink(url, subject);
     public PullRequestLinkDto[] Links = [Link(1), Link(2)];
     public int AccessSeconds = 30;
     public int Lists;
+    public TaskCompletionSource? ListGate;
     public int Resets;
     public string? ListFailure;
     public int Overviews;
@@ -32,11 +38,11 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(Capability, 1));
     public void ResetSession(string sessionId) { Resets++; }
-    public Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
+    public async Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
         Lists++;
-        if (ListFailure is { } reason) return Task.FromResult(new PullRequestRead<PullRequestLinkListDto>(
-            PullRequestReadKind.SubjectUnavailable, Reason: reason));
-        return Task.FromResult(new PullRequestRead<PullRequestLinkListDto>(PullRequestReadKind.Ready, new() { Items = Links }));
+        if (ListGate is { } gate) await gate.Task.WaitAsync(ct);
+        if (ListFailure is { } reason) return new(PullRequestReadKind.SubjectUnavailable, Reason: reason);
+        return new(PullRequestReadKind.Ready, new() { Items = Links });
     }
     public Task<PullRequestRead<PullRequestLinkListDto>> LegacyLinksAsync(string sessionId, CancellationToken ct) => ListAsync(sessionId, ct);
     public Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
