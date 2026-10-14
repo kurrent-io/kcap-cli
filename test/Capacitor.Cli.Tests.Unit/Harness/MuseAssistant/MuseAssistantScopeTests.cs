@@ -599,14 +599,17 @@ public class MuseAssistantScopeTests {
         File.Delete(MuseAssistantPaths.ChatState(dir, "chat-b"));
         using var output = ConsoleOutput.StartFullCapture("\n");
 
+        var clock = new TimerSignallingTimeProvider(_time.GetUtcNow());
         Task<int> reset;
         using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b"))) {
-            reset = (await ScopeAsync(poster)).ResetAsync(default);
-            await Task.Delay(300);   // the fake clock is frozen, so reset is parked on the lock after its snapshot
+            reset = (await ScopeAsync(poster, time: clock)).ResetAsync(default);
+            await clock.Waiting.WaitAsync(TimeSpan.FromSeconds(10));   // reset has taken its snapshot and is waiting on the chat lock
             Store().SaveState(saved);
         }
 
-        await Assert.That(await TimedOut(reset)).IsEqualTo(0);
+        for (var i = 0; !reset.IsCompleted && i++ < 1000;) { clock.Advance(TimeSpan.FromMilliseconds(250)); await Task.Delay(1); }
+
+        await Assert.That(await reset.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(0);
 
         await Assert.That(State("chat-b").Grant.Revoked).IsTrue();
         await Assert.That(Store().LoadScope().Chats).IsEmpty();
