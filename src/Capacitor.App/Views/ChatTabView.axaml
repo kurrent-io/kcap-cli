@@ -140,8 +140,7 @@
                         </Button>
                         <Border Classes="thinkingBody" IsVisible="{Binding IsExpanded}">
                             <views:MarkdownView Classes="thinking" Text="{Binding Text}"
-                                                OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
-                                                RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                                                OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}" />
                         </Border>
                     </StackPanel>
                 </DataTemplate>

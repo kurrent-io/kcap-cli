@@ -53,10 +53,13 @@ public sealed class AssistantThinkingItem : ChatItemViewModel {
     static string? PeekFirstLine(string text) {
         foreach (var raw in text.AsSpan().EnumerateLines()) {
             var line = raw.Trim().TrimStart("#>-* ").Trim();
-            if (line.IsEmpty) continue;
+            // A fence marker is not a preview: ``` becomes empty, ```python becomes the language.
+            if (line.IsEmpty || line.StartsWith("```")) continue;
             var cleaned = line.ToString()
                 .Replace("`", "", StringComparison.Ordinal)
-                .Replace("**", "", StringComparison.Ordinal);
+                .Replace("**", "", StringComparison.Ordinal)
+                .Trim();
+            if (cleaned.Length == 0) continue;
             return TextElision.End(cleaned, 56);
         }
         return null;

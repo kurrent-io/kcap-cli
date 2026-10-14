@@ -910,6 +910,25 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A bang fence in reasoning offers copy and no Run it. The same fence in the reply still does.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_thinking_bang_fence_has_no_run_button() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            const string thinking = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"```bash\n! kcap agent ls\n```"}]}}""";
+            const string reply = """{"type":"assistant","message":{"content":[{"type":"text","text":"```bash\n! kcap agent ls\n```"}]}}""";
+            await host.LoadAsync(Tmp.CreateFile("think-run.jsonl", [thinking, reply]));
+
+            var body = host.View.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("thinkingBody"));
+            await Assert.That(body.GetVisualDescendants().OfType<Button>().Count(b => b.Classes.Contains("markdown-code-copy"))).IsEqualTo(1);
+            await Assert.That(body.GetVisualDescendants().OfType<Button>().Any(b => b.Classes.Contains("markdown-code-run"))).IsFalse();
+            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Count(b => b.Classes.Contains("markdown-code-run"))).IsEqualTo(1);
+            await host.CloseAsync();
+        });
+    }
+
     /// A live row that is not waiting on permission shows the pulsing status pill.
     [Test]
     [NotInParallel("AvaloniaSession")]
