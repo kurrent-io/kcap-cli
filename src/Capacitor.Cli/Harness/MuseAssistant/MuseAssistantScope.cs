@@ -161,17 +161,21 @@ public sealed class MuseAssistantScope(
     }
 
     /// <summary>Replays recorded intents and reconciles the two files; prints every active chat for the
-    /// cron. Never idle-closes: that needs the chat's current head, which only the ingest has seen.</summary>
+    /// cron. Never idle-closes: that needs the chat's current head, which only the ingest has seen. A listed
+    /// chat with no usable state is not printed, so the cron would otherwise read the run as clean:
+    /// it exits 3 naming each such chat on stderr.</summary>
     public Task<int> SweepAsync(CancellationToken ct) =>
         UnderLocksAsync("sweep", null, MuseAssistantExitCodes.Server, async (_, store) => {
             var listed = store.LoadScope().Chats.ToHashSet(StringComparer.Ordinal);
             var states = store.EnumerateStates().ToDictionary(s => s.ChatId, StringComparer.Ordinal);
             var failed = false;
+            var stateless = false;
             var active = new List<string>();
 
             foreach (var chatId in listed.Union(states.Keys).Order(StringComparer.Ordinal)) {
                 if (!states.TryGetValue(chatId, out var state)) {
-                    Console.Error.WriteLine($"kcap muse-assistant sweep: listed chat has no recorded grant; re-grant it with `scope add` chat={chatId}");
+                    stateless = true;
+                    Console.Error.WriteLine($"kcap muse-assistant sweep: no usable state; run `scope remove` then `scope add` chat={chatId}");
                     continue;
                 }
 
@@ -207,7 +211,7 @@ public sealed class MuseAssistantScope(
 
             foreach (var line in active) Console.Out.WriteLine(line);
 
-            return failed ? MuseAssistantExitCodes.Server : MuseAssistantExitCodes.Ok;
+            return failed ? MuseAssistantExitCodes.Server : stateless ? MuseAssistantExitCodes.OutOfScope : MuseAssistantExitCodes.Ok;
         }, ct);
 
     /// <summary>Resolves the profile's store and runs <paramref name="body"/> holding the scope lock, then

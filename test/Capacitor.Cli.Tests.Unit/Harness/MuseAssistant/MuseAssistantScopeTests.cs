@@ -188,10 +188,10 @@ public class MuseAssistantScopeTests {
         await Assert.That(State("chat-a").Grant.Id).IsEqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         await Assert.That(Store().LoadScope().Chats).Contains("chat-a");
 
-        // Listed, no state: sweep reports it and replays nothing; add grants it.
+        // Listed, no state: sweep reports it (exit 3) and replays nothing; add grants it.
         store.SaveScope(store.LoadScope() with { Chats = [.. store.LoadScope().Chats, "chat-b"] });
         var poster = new RecordingPoster();
-        await Assert.That(await (await ScopeAsync(poster)).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(await (await ScopeAsync(poster)).SweepAsync(default)).IsEqualTo(3);
         await Assert.That(poster.Accepted).IsEmpty();
         await Assert.That(Store().LoadState("chat-b").State).IsNull();
         await scope.AddAsync("chat-b", After(7), default);
@@ -241,6 +241,25 @@ public class MuseAssistantScopeTests {
         await Assert.That(sweeping.Accepted).IsEmpty();
         await Assert.That(stdout.GetCapturedOutput().Trim())
             .IsEqualTo($"key={MuseAssistantPaths.ChatKey("chat-main")} watermark=1 boundary=after_seq after_seq=0 chat=chat-main");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Sweep_exits_3_naming_each_listed_chat_without_usable_state_and_still_prints_the_active_ones() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); });
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        File.WriteAllText(MuseAssistantPaths.ChatState(dir, "chat-b"), "{ not json");
+        var store = Store();
+        store.SaveScope(store.LoadScope() with { Chats = [.. store.LoadScope().Chats, "chat-c d"] });
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await (await ScopeAsync(new RecordingPoster())).SweepAsync(default)).IsEqualTo(3);
+
+        await Assert.That(output.GetCapturedOutput().Trim()).IsEqualTo(
+            $"key={MuseAssistantPaths.ChatKey("chat-a")} watermark=none boundary=history after_seq=none chat=chat-a");
+        await Assert.That(output.GetCapturedError()).Contains("no usable state; run `scope remove` then `scope add` chat=chat-b");
+        await Assert.That(output.GetCapturedError()).Contains("chat=chat-c d");
+        await Assert.That(output.GetCapturedError()).DoesNotContain("chat=chat-a");
     }
 
     [Test]

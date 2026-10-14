@@ -31,13 +31,14 @@ scope show     Every chat with its status, boundary, watermark and open session.
 sweep          Replay interrupted lifecycle posts, reconcile the files, and print one
                line per active chat for the cron:
                key=<chat_key> watermark=<n|none> boundary=<…> after_seq=<n|none> chat=<id>
+               A listed chat with no usable state is named on stderr and makes it exit 3.
 
 Exit codes: 0 done or nothing to do (also: another ingest holds the chat);
             1 server, network or sign-in failure (a 401 means `kcap login --device`),
               or an unexpected local failure such as a state file that cannot be written;
             2 malformed or incomplete input, or a wrong argument shape;
             3 chat not in scope, revoked, no grant recorded, or state from another
-              tenant or account;
+              tenant or account (sweep: a listed chat is in that condition);
             4 scope remove or scope reset only: recording could not be confirmed
               stopped (nothing revoked, or an unexpected error) — retry; retrying
               is safe.

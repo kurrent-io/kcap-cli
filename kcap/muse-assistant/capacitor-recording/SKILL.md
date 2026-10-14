@@ -131,10 +131,18 @@ nothing. Runs that overlap are safe; the instruction handles them.
 >
 > 1. Run `KCAP muse-assistant sweep`. Each stdout line names one chat to record:
 >    `key=<chat_key> watermark=<n|none> boundary=<after_seq|empty_chat|history> after_seq=<n|none> chat=<chat_id>`
->    (the chat id is everything after `chat=`). If it exits non-zero, remember its
->    last stderr line for the user's next turn and carry on with the lines it printed.
->    If it exits 0, guarded-delete every directory directly under `ROOT` whose name is
->    not a printed key: those chats are no longer recorded. No lines: stop here.
+>    (the chat id is everything after `chat=`). If it exits 3, a listed chat has no
+>    usable recording state and is not printed: remember each stderr line that says
+>    "no usable state" (it ends with `chat=<chat_id>`), still process the printed
+>    chats, and do NOT delete any directory under `ROOT` in this step — a chat missing
+>    from the output may still own kept walks. For the user's next turn, tell them
+>    once (not again for the same chat since the last successful run) that Capacitor
+>    cannot record chat `<chat_id>` and that saying "stop recording" for it, then
+>    granting it again, restores recording. If it exits with any other non-zero code,
+>    remember its last stderr line for the user's next turn and carry on with the
+>    lines it printed. If it exits 0, guarded-delete every directory directly under
+>    `ROOT` whose name is not a printed key: those chats are no longer recorded. No
+>    lines: stop here.
 > 2. Call `chat.list {"include_archived": true}` once and note each chat's `is_main`.
 >    Run `node -e 'console.log(Date.now())'` once and call the number NOW.
 > 3. For each sweep line, in order:
