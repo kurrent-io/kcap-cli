@@ -64,10 +64,10 @@ public sealed class ClaudeHookCommand(
         );
     }
 
-    /// <summary>The <c>timeout</c> <c>kcap/hooks/hooks.json</c> gives the plan-read entry: it blocks the
-    /// agent's Read, so it is shorter than the other events', and <see cref="HookBudget.Safety"/> comes
+    /// <summary>The <c>timeout</c> <c>kcap/hooks/hooks.json</c> gives the synchronous PostToolUse entries: they block the
+    /// agent's tool call, so it is shorter than the other events', and <see cref="HookBudget.Safety"/> comes
     /// out of it.</summary>
-    static readonly TimeSpan PlanReadCeiling = TimeSpan.FromSeconds(3);
+    static readonly TimeSpan ToolHookCeiling = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// <c>kcap hook --claude --plan-read</c>: a synchronous PostToolUse on <c>Read</c>, separate from
@@ -102,7 +102,7 @@ public sealed class ClaudeHookCommand(
             var ledger = new PlanReadNudgeLedger(config);
             if (ledger.WasNudged(read.SessionId, read.Path)) return 0;
 
-            var budget = clock.Budget(PlanReadCeiling);
+            var budget = clock.Budget(ToolHookCeiling);
             if (await ShouldSuppressCaptureAsync(read.SessionId, body, "post-tool-use", profile, budget)) return 0;
 
             if (await clientWithin(budget.Remaining) is not { } client) return 0;
@@ -118,6 +118,61 @@ public sealed class ClaudeHookCommand(
             return 0;
         } catch {
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// <c>kcap hook --claude --task-list</c>: a synchronous PostToolUse on Claude's own task tools, on
+    /// writes that may touch a workflow ledger, on subagent dispatches, and on the kcap-plans writes.
+    /// While the session has written no kcap plan tasks it reminds the agent to keep them, once when the
+    /// list or ledger is started and once when a task is first recorded finished; once it has, each
+    /// ledger line or dispatch the plan's last reported state lags is pointed out once. Local only: it
+    /// blocks the agent's tool call, so it never waits on the server.
+    /// </summary>
+    public async Task<int> HandleTaskList(TextReader stdin, TextWriter? stdout = null) {
+        try {
+            var body = await stdin.ReadToEndAsync();
+            if (ClaudeTaskListEvent.Parse(body) is not { } evt) return 0;
+
+            var profile = profiles.Effective;
+            if (await ShouldSuppressCaptureAsync(evt.SessionId, body, "post-tool-use", profile, clock.Budget(ToolHookCeiling))) return 0;
+
+            var ledger = new TaskListNudgeLedger(config);
+            if (evt.Kind == ClaudeTaskListEvent.Moment.PlanWritten) {
+                ledger.RecordPlan(evt.SessionId);
+                ledger.SaveTasks(evt.SessionId, evt.PlanTasks, evt.PlanTasksAreWhole);
+                return 0;
+            }
+
+            if (profile?.DisablePlansNudge is true) return 0;
+            if (!McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, harnesses, "kcap-plans")) return 0;
+
+            if (ledger.HasPlan(evt.SessionId)) {
+                var lagging = evt.Lagging(ledger.LoadTasks(evt.SessionId))
+                    .Where(l => ledger.TryClaimPairing(evt.SessionId, l.Task, l.Move.Status))
+                    .ToList();
+                if (ClaudeTaskListEvent.PairingNudge(lagging) is not { } pairing) return 0;
+
+                if (!await TryEmitAsync(pairing))
+                    foreach (var (move, task) in lagging) ledger.ReleasePairing(evt.SessionId, task, move.Status);
+                return 0;
+            }
+
+            if (evt.Nudge() is not { } nudge) return 0;
+            if (!ledger.TryClaimNudge(evt.SessionId, evt.Kind)) return 0;
+            if (!await TryEmitAsync(nudge)) ledger.ReleaseNudge(evt.SessionId, evt.Kind);
+            return 0;
+        } catch {
+            return 0;
+        }
+
+        async Task<bool> TryEmitAsync(string context) {
+            try {
+                await (stdout ?? Console.Out).WriteLineAsync(ClaudeTaskListEvent.RenderHookOutput(context));
+                return true;
+            } catch {
+                return false;
+            }
         }
     }
 
@@ -938,6 +993,7 @@ public sealed class ClaudeHookCommand(
             if (sessionId is not null) {
                 EvictPolicyState(sessionId);
                 new PlanReadNudgeLedger(config).Evict(sessionId.Replace("-", ""));
+                new TaskListNudgeLedger(config).Evict(sessionId.Replace("-", ""));
             }
 
             // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh
