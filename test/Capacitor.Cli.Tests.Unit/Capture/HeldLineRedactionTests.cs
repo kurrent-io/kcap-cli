@@ -152,10 +152,14 @@ public class HeldLineRedactionTests {
         var redaction = NewRedaction();
         // Regex deadlines still use wall time even with a frozen record-budget clock.
         // If a loaded host times out the first scan, let the normal retry settle it.
-        var captured = await CaptureUntil(() => {
-            _time.Advance(TimeSpan.FromMinutes(5));
-            return Capture(redaction, [raw], [3]);
-        }, c => c.Consumed == 1);
+        var captured = Capture(redaction, [raw], [3]);
+        if (captured.Consumed == 0) {
+            await Assert.That(Store.Load()!.Reason).IsEqualTo("regex_timeout");
+            captured = await CaptureUntil(() => {
+                _time.Advance(TimeSpan.FromMinutes(5));
+                return Capture(redaction, [raw], [3]);
+            }, c => c.Consumed == 1);
+        }
 
         using var marker = JsonDocument.Parse(captured.Lines.Single());
         await Assert.That(marker.RootElement.GetProperty("type").GetString()).IsEqualTo("kcap_capture_loss");

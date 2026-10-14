@@ -169,8 +169,10 @@ dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests
 ```
 
 CI caps concurrency at three assemblies with four tests each on Linux/macOS, and two assemblies
-with two tests each on Windows. To reproduce CI locally, pass `--max-parallel-test-modules 3`
-and `-- --maximum-parallel-tests 4`. Tests touching shared state still need their own exclusion;
+with two tests each on Windows. To reproduce CI locally on Linux/macOS, pass
+`--max-parallel-test-modules 3` and `-- --maximum-parallel-tests 4`; on Windows, pass
+`--max-parallel-test-modules 2` and `-- --maximum-parallel-tests 2`.
+Tests touching shared state still need their own exclusion;
 the concurrency cap only limits resource contention.
 
 The installed Codex schema certification is opt-in: set `KCAP_CODEX_SCHEMA_CHECK=1` to compare

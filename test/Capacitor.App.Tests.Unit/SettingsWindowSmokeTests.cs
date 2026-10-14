@@ -77,7 +77,7 @@ public class SettingsWindowSmokeTests {
     });
 
     [Test]
-    public Task Profiles_tab_lists_rows_with_chip_actions_and_purple_marks() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Profiles_tab_lists_rows_with_chip_actions_and_profile_marks() => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with {
             ActiveProfile = "work",
             Profiles = new() {
@@ -113,6 +113,13 @@ public class SettingsWindowSmokeTests {
             var chips = tabs.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("kcapChip")).ToList();
             await Assert.That(chips.Any(b => b.Content as string == "Sign in")).IsTrue();
             await Assert.That(chips.Any(b => b.Content as string == "Remove" && b.IsVisible)).IsTrue();
+
+            var marks = tabs.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("profileMark") && t.IsEffectivelyVisible)
+                .Select(t => t.Text).ToList();
+            await Assert.That(marks.Count).IsEqualTo(2);
+            await Assert.That(marks).Contains("Active");
+            await Assert.That(marks).Contains("This app");
 
             var statuses = tabs.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("profileStatus")).Select(t => t.Text).ToList();
             await Assert.That(statuses).Contains("Signed out");
