@@ -107,8 +107,10 @@ public class ClaudeTaskListEventTests {
     }
 
     [Test]
-    public async Task A_rejected_plan_write_is_not_a_plan() {
-        var hook = JsonNode.Parse(Payload("mcp__kcap-plans__set_plan_tasks"))!.AsObject();
+    [Arguments("mcp__kcap-plans__set_plan_tasks", "")]
+    [Arguments("Bash", "echo 'Task 1: complete' >> progress.md")]
+    public async Task A_failed_call_is_ignored(string tool, string command) {
+        var hook = JsonNode.Parse(Payload(tool, new JsonObject { ["command"] = command }))!.AsObject();
         hook["tool_response"] = new JsonObject { ["isError"] = true };
 
         await Assert.That(ClaudeTaskListEvent.Parse(hook.ToJsonString())).IsNull();

@@ -35,4 +35,13 @@ public class TaskListNudgeLedgerTests {
 
         await Assert.That(ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Created)).IsTrue();
     }
+
+    [Test]
+    public async Task An_unwritable_marker_is_no_claim() {
+        var ledger = new TaskListNudgeLedger(Config.Root);
+        Directory.CreateDirectory(Config.Root.Path("task-list"));
+        File.WriteAllText(Config.Root.Path("task-list", "s1"), "");
+
+        await Assert.That(ledger.TryClaimNudge("s1", ClaudeTaskListEvent.Moment.Created)).IsFalse();
+    }
 }

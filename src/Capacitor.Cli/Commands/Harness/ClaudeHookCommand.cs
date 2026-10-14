@@ -133,6 +133,9 @@ public sealed class ClaudeHookCommand(
             var body = await stdin.ReadToEndAsync();
             if (ClaudeTaskListEvent.Parse(body) is not { } evt) return 0;
 
+            var profile = profiles.Effective;
+            if (await ShouldSuppressCaptureAsync(evt.SessionId, body, "post-tool-use", profile, clock.Budget(ToolHookCeiling))) return 0;
+
             var ledger = new TaskListNudgeLedger(config);
             if (evt.Kind == ClaudeTaskListEvent.Moment.PlanWritten) {
                 ledger.RecordPlan(evt.SessionId);
@@ -140,11 +143,8 @@ public sealed class ClaudeHookCommand(
             }
 
             if (ledger.HasPlan(evt.SessionId)) return 0;
-
-            var profile = profiles.Effective;
             if (profile?.DisablePlansNudge is true) return 0;
             if (!McpServerNudgeAvailability.IsRegisteredFor(HarnessId.Claude, harnesses, "kcap-plans")) return 0;
-            if (await ShouldSuppressCaptureAsync(evt.SessionId, body, "post-tool-use", profile, clock.Budget(ToolHookCeiling))) return 0;
             if (evt.Nudge() is not { } nudge) return 0;
             if (!ledger.TryClaimNudge(evt.SessionId, evt.Kind)) return 0;
 

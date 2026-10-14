@@ -15,14 +15,14 @@ sealed partial record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.
     /// name, usually appended from the same Bash call as the commit.</summary>
     internal const string LedgerFileName = "progress.md";
 
-    /// <summary>Null for anything else, and for a subagent's call: the coordinating session owns the
-    /// plan, so a subagent's task list is not one to mirror. The session id comes back dashless, the
+    /// <summary>Null for anything else, for a call that failed, and for a subagent's call: the
+    /// coordinating session owns the plan, so a subagent's task list is not one to mirror. The session id comes back dashless, the
     /// form the disabled-session markers are keyed by.</summary>
     public static ClaudeTaskListEvent? Parse(string body) {
         JsonObject? hook;
         try { hook = JsonNode.Parse(body) as JsonObject; } catch { return null; }
         if (hook is null || Text(hook["hook_event_name"]) != "PostToolUse") return null;
-        if (!string.IsNullOrEmpty(Text(hook["agent_id"]))) return null;
+        if (!string.IsNullOrEmpty(Text(hook["agent_id"])) || IsError(hook["tool_response"])) return null;
 
         var sessionId = Text(hook["session_id"])?.Replace("-", "");
         if (string.IsNullOrWhiteSpace(sessionId)) return null;
@@ -37,7 +37,7 @@ sealed partial record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.
             "TaskCreate"                       => Moment.Created,
             "TaskUpdate"                       => Text(input?["status"]) == "completed" ? Moment.Completed : null,
             "TodoWrite"                        => AnyCompleted(input?["todos"]) ? Moment.Completed : Moment.Created,
-            _ when WritesTasks(tool)           => IsError(hook["tool_response"]) ? null : Moment.PlanWritten,
+            _ when WritesTasks(tool)           => Moment.PlanWritten,
             _                                  => null
         };
 

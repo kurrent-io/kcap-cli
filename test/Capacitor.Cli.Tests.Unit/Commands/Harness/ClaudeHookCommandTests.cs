@@ -839,6 +839,18 @@ public class ClaudeHookCommandTests {
     }
 
     [Test]
+    public async Task task_list_records_nothing_for_a_disabled_session() {
+        using var fx = new Fixture(Config.Root);
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+        DisabledSessions.Mark(sid.Replace("-", ""), Config.Root);
+
+        await TaskListOnce(fx, TaskListPayload(sid, "mcp__kcap-plans__set_plan_tasks"));
+
+        await Assert.That(new TaskListNudgeLedger(Config.Root).HasPlan(sid.Replace("-", ""))).IsFalse();
+    }
+
+    [Test]
     public async Task task_list_stays_silent_when_kcap_plans_is_not_registered() {
         using var fx = new Fixture(Config.Root);
 

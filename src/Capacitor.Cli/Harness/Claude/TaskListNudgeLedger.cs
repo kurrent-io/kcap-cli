@@ -4,7 +4,7 @@ using Capacitor.Cli.Core.Policy;
 namespace Capacitor.Cli.Harness.Claude;
 
 /// <summary>Per session: whether it has written a kcap plan, and which task-list reminders it already
-/// got. Best effort throughout: a lost marker costs one repeated reminder, never the hook.</summary>
+/// got. Best effort throughout: a storage failure costs a reminder, never the hook.</summary>
 sealed class TaskListNudgeLedger(ConfigRoot config) {
     const string PlanWritten = "plan-written";
 
@@ -13,17 +13,16 @@ sealed class TaskListNudgeLedger(ConfigRoot config) {
     public void RecordPlan(string sessionId) => Mark(sessionId, PlanWritten);
 
     /// <summary>Claims a reminder by creating its marker, so concurrent hooks for one parallel tool batch
-    /// cannot all emit it. False only when another hook holds the claim.</summary>
+    /// cannot all emit it. False when another hook holds the claim or the marker cannot be written:
+    /// without a marker every later event would repeat the reminder.</summary>
     public bool TryClaimNudge(string sessionId, ClaudeTaskListEvent.Moment moment) {
         var marker = Path.Combine(SessionDir(sessionId), moment.ToString());
         try {
             Directory.CreateDirectory(SessionDir(sessionId));
             using (new FileStream(marker, FileMode.CreateNew, FileAccess.Write)) { }
             return true;
-        } catch (IOException) when (File.Exists(marker)) {
-            return false;
         } catch {
-            return true;
+            return false;
         }
     }
 
