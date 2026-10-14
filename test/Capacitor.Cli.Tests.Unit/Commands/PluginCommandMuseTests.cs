@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -10,7 +11,7 @@ public class PluginCommandMuseTests {
     [TempHome] public required TempHome Home   { get; init; }
     [TempDir]  public required TempDir  BinDir { get; init; }
 
-    PluginEnvironment Env(StringWriter? stderr = null) {
+    PluginEnvironment Env(StringWriter? stderr = null, MusePaths? muse = null) {
         var binaries = TestBinaries.Searching(BinDir, "kcap");
 
         return new PluginEnvironment(
@@ -20,7 +21,7 @@ public class PluginCommandMuseTests {
             Stdout:            TextWriter.Null,
             Stderr:            stderr ?? TextWriter.Null
         ) {
-            Harnesses            = TestHarnesses.Under(new(Home.Path), binaries),
+            Harnesses            = muse is null ? TestHarnesses.Under(new(Home.Path), binaries) : HarnessRegistry.Over(binaries, MuseHarness.Over(muse)),
             Binaries             = binaries,
             ResolveMcpBinaryPath = () => "/opt/kcap-test/bin/kcap"
         };
@@ -119,6 +120,29 @@ public class PluginCommandMuseTests {
 
         await Assert.That(await File.ReadAllTextAsync(settings)).IsEqualTo(broken);
         await Assert.That(stderr.ToString()).Contains("Could not install Muse hooks");
+    }
+
+    /// <summary>Muse's hooks run with no <c>XDG_DATA_HOME</c>, so a custom data root reaches them only
+    /// through the file the install writes.</summary>
+    [Test]
+    public async Task Install_under_a_custom_data_root_persists_it_and_remove_clears_it() {
+        string data = Home.CreateDir("custom-data");
+        var env  = Env(muse: new MusePaths(Home, null, data));
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse", "--skip-muse-skills")).IsEqualTo(0);
+
+        await Assert.That(MuseHarness.FromEnvironment(Home, _ => null).Paths.DataRoot).IsEqualTo(Path.Combine(data, "muse"));
+
+        await Assert.That(await Run(env, "plugin", "remove", "--muse")).IsEqualTo(0);
+
+        await Assert.That(File.Exists(MuseHookRoots.PathFor(Home))).IsFalse();
+    }
+
+    [Test]
+    public async Task Install_under_the_default_roots_persists_nothing() {
+        await Assert.That(await Run(Env(), "plugin", "install", "--muse", "--skip-muse-skills")).IsEqualTo(0);
+
+        await Assert.That(File.Exists(MuseHookRoots.PathFor(Home))).IsFalse();
     }
 
     [Test]

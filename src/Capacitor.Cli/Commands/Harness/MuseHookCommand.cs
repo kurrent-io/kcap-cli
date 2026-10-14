@@ -142,6 +142,7 @@ sealed class MuseHookCommand(
             ["source"]          = source,
             ["home_dir"]        = home.Path,
             ["cwd"]             = cwd ?? "",
+            ["started_at"]      = clock.Time.GetUtcNow().ToString("O"),
         };
 
         if (log is not null) forwarded["transcript_path"] = log;
@@ -159,8 +160,8 @@ sealed class MuseHookCommand(
             flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses),
             source, budget.Remaining);
 
-        // The SessionStart record requires a transcript path; without a log, Stop re-arms capture later.
-        if (log is not null) await PostInOrderAsync("session-start/muse", enriched, sessionId, budget);
+        // Posted with or without a log: Stop starts a missing watcher but never posts the start.
+        await PostInOrderAsync("session-start/muse", enriched, sessionId, budget);
 
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var nudge = HarnessNudgeEmitter.Combine(

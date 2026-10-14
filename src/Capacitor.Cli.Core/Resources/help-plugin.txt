@@ -159,8 +159,10 @@ Options:
                       the agent skills. A settings.json that does not parse is left
                       untouched and the install fails. Writes the bare
                       `kcap hook --muse --no-update-check` command, so kcap must be
-                      on PATH. Muse loads hooks at startup — restart any running
-                      `muse` session.
+                      on PATH. Muse runs hooks without $XDG_*, so a custom
+                      $XDG_DATA_HOME or $XDG_CONFIG_HOME is saved for them here;
+                      re-run after changing either. Muse loads hooks at startup —
+                      restart any running `muse` session.
   --skip-muse-mcp     With --muse: skip registering the kcap MCP servers in
                       settings.json (the mcp_servers block).
   --skip-muse-skills  With --muse: skip installing the kcap skills into

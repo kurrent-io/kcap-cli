@@ -2473,6 +2473,11 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             }
         }
 
+        if (!toolsOnly && MuseHooksInstaller.IsInstalled(settingsPath)
+            && !MuseHookRoots.Persist(env.Home, env.Harnesses.Of<MuseHarness>().Paths))
+            await env.Stderr.WriteLineAsync(
+                $"Warning: could not write {MuseHookRoots.PathFor(env.Home)}; Muse hooks will look for sessions under the default data root.");
+
         // Hooks and MCP share settings.json: a file the hooks could not be merged into is not written to here either.
         if (!freshHookFailure && !hooksIncomplete && !args.Contains("--skip-muse-mcp"))
             await RegisterMuseMcpServersAsync(settingsPath);
@@ -2515,6 +2520,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 hooksFailed = true;
                 break;
         }
+
+        if (!hooksFailed) MuseHookRoots.Clear(env.Home);
 
         var mcpChange = MuseSettingsJson.UnregisterKcapMcpServers(settingsPath, env.Home);
         var mcpFailed = mcpChange == JsonMcpConfigWriter.Change.Failed;

@@ -64,9 +64,11 @@ Options:
               hook_event_name (SessionStart/UserPromptSubmit/SubagentStart/
               SubagentStop/Stop/SessionEnd). Muse payloads carry no transcript
               path, so kcap resolves ~/.local/share/muse/sessions/YYYY/MM/DD/<id>/
-              session.jsonl (honours $XDG_DATA_HOME) and spawns the watcher
-              tailing it (vendor=muse). Always exits 0; the only stdout is the
-              memory fragment Muse appends to the model's context on SessionStart.
+              session.jsonl and spawns the watcher tailing it (vendor=muse).
+              Muse runs hooks without $XDG_DATA_HOME, so a custom data root is
+              the one saved by `kcap setup` or `kcap plugin install --muse`.
+              Always exits 0; the only stdout is the memory fragment Muse
+              appends to the model's context on SessionStart.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.PrDetection;
 using WireMock.RequestBuilders;
@@ -103,6 +104,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(body.GetProperty("transcript_path").GetString()).IsEqualTo(log);
         await Assert.That(body.GetProperty("source").GetString()).IsEqualTo("startup");
         await Assert.That(body.GetProperty("hook_event_name").GetString()).IsEqualTo("SessionStart");
+        await Assert.That(DateTimeOffset.TryParse(body.GetProperty("started_at").GetString(), out _)).IsTrue();
 
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
         await Assert.That(_spawner.Spawned[0].Key).IsEqualTo(ParentDashless);
@@ -110,17 +112,44 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
     }
 
-    /// <summary>When no log is found the hook must not record a path Muse has not written, and leaves
-    /// the start to a later hook.</summary>
+    /// <summary>Stop only starts a watcher, so this is the start's one chance: it is posted without a
+    /// path Muse has not written, and no watcher starts until the log exists.</summary>
     [Test]
-    public async Task SessionStart_when_no_log_is_found_posts_nothing_and_exits_zero() {
+    public async Task SessionStart_when_no_log_is_found_posts_the_start_without_a_transcript_path() {
         StubHooks();
 
         var exit = await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(HookPosts("/hooks/").Count).IsEqualTo(0);
+        var posts = HookPosts("/hooks/session-start/muse");
+        await Assert.That(posts.Count).IsEqualTo(1);
+
+        var body = JsonDocument.Parse(posts[0]).RootElement;
+        await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo(ParentDashless);
+        await Assert.That(body.TryGetProperty("transcript_path", out _)).IsFalse();
+        await Assert.That(DateTimeOffset.TryParse(body.GetProperty("started_at").GetString(), out _)).IsTrue();
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(0);
+    }
+
+    /// <summary>Muse runs hooks with no <c>XDG_DATA_HOME</c>; the data root persisted at install is
+    /// what finds a log under a custom root.</summary>
+    [Test]
+    public async Task SessionStart_with_a_cleared_environment_finds_the_log_under_the_persisted_data_root() {
+        StubHooks();
+        string data = Tmp.CreateDir("custom-data");
+        MuseHookRoots.Persist(Home, new MusePaths(Home, null, data));
+        var log = new MusePaths(Home, null, data).SessionLogPath(ParentId, Today)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        await File.WriteAllTextAsync(log, "{}\n");
+        var harnesses = HarnessRegistry.Over(TestBinaries.None, MuseHarness.FromEnvironment(Home, _ => null));
+
+        var exit = await Command(harnesses: harnesses).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
+        await Assert.That(_spawner.Spawned[0].TranscriptPath).IsEqualTo(log);
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-start/muse").Single()).RootElement;
+        await Assert.That(body.GetProperty("transcript_path").GetString()).IsEqualTo(log);
     }
 
     /// <summary>The watcher starts before the session-start POST is attempted, so a server that
@@ -360,11 +389,11 @@ public class MuseHookCommandTests : IDisposable {
 
     static string? ParentEnv(string key) => key == "MUSE_SESSION_ID" ? ParentId : null;
 
-    MuseHookCommand Command(FakeWatcherSpawner? spawner = null) {
+    MuseHookCommand Command(FakeWatcherSpawner? spawner = null, HarnessRegistry? harnesses = null) {
         var profiles = Resolutions.At(_server.Url!, Config.Root);
         var http     = new FixedCapacitorHttpClient();
 
-        return new MuseHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
+        return new MuseHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, harnesses ?? TestHarnesses.Under(Home),
             HostedAgent.Terminal, http, TestWatchers.For(Config.Root, profiles, http, spawner ?? _spawner), new GitProviderRouter(),
             new WorkingDirectory(AppContext.BaseDirectory));
     }
