@@ -27,7 +27,7 @@ public sealed class MuseAssistantIngest(
 
         using var held = MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(scopeDir, chatId));
         if (held is null) {
-            Console.Error.WriteLine($"{time.GetUtcNow():O} another ingest holds the chat; nothing done");
+            Console.Error.WriteLine($"{time.GetUtcNow():O} another ingest holds the chat (or a scope command is changing it); nothing done");
             return MuseAssistantExitCodes.Ok;
         }
 

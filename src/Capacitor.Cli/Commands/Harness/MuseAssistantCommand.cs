@@ -20,8 +20,8 @@ public sealed class MuseAssistantCommand(MuseAssistantIngest ingest, MuseAssista
         Console.CancelKeyPress += Cancel;
 
         // Outside exit codes 0 to 4 the cron and the skill have no reading, and a stack trace is not one.
-        // A removal that dies unexpectedly reports "nothing revoked": retrying is always safe, and
-        // claiming it stopped would be the one wrong answer.
+        // A removal that dies unexpectedly reports that recording could not be confirmed stopped:
+        // retrying is always safe, and claiming it stopped would be the one wrong answer.
         var failure = args is [_, "scope", "remove" or "reset", ..] ? MuseAssistantExitCodes.NotRevoked : MuseAssistantExitCodes.Server;
 
         try {

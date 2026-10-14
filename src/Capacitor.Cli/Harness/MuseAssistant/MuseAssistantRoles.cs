@@ -5,5 +5,5 @@ namespace Capacitor.Cli.Harness.MuseAssistant;
 public static class MuseAssistantRoles {
     public static readonly string[] Selected = ["user", "assistant", "commentary"];
 
-    public static bool IsSelected(string role) => role is "user" or "assistant" or "commentary";
+    public static bool IsSelected(string role) => Array.IndexOf(Selected, role) >= 0;
 }
