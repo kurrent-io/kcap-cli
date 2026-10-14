@@ -445,12 +445,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         // Keep _agentsSub: a daemon that links the Claude session after this budget still pushes
         // an Agents-cache update, and HandleDtoObserved must see it to leave NotFound.
 
-        // The timer callback fires off-thread in production and synchronously on the CALLING
-        // thread under FakeTimeProvider.Advance -- Schedule (not a raw write) is what keeps this
-        // on the UI scheduler either way, and synchronous under WithImmediateRxScheduler's
-        // ImmediateScheduler so a test can assert right after Advance() returns. Re-check
-        // timeout-won inside the scheduled action: a late DTO can claim dto-won and publish
-        // Connecting before this hop runs, and must not be overwritten with NotFound.
+        // Schedule keeps the publish on the UI scheduler. Re-check timeout-won inside it: a late
+        // DTO may claim dto-won before this hop runs, and NotFound must not overwrite that.
         RxSchedulers.MainThreadScheduler.Schedule(() => {
             if (Volatile.Read(ref _resolveState) != ResolveTimeoutWon) return;
             Publish(TerminalSessionState.NotFound, null);
