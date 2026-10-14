@@ -1329,11 +1329,18 @@ partial class WatchCommand(
             // Fail-closed: register before streaming; a refused registration is retried next tick.
             if (!await PostSubagentStartAsync(sessionId, label.AgentId, label.AgentType, childLog, ct)) continue;
 
-            seen.Add(childLog);
-
             var key = $"{sessionId}-{label.AgentId}";
             await watchers.EnsureWatcherRunning(key: key, transcriptPath: childLog, agentId: label.AgentId,
                 sessionIdOverride: sessionId, vendor: "muse");
+
+            // EnsureWatcherRunning returns normally when it could not start one; the re-posted
+            // subagent-start is idempotent, so an unconfirmed child is retried whole next tick.
+            if (!watchers.IsWatcherAlive(key)) {
+                Log(time, $"Muse subagent {label.AgentId} child watcher did not start; retrying next scan");
+                continue;
+            }
+
+            seen.Add(childLog);
             spawnedChildKeys.Add(key);
             children.Spawned(key, childLog, time.GetUtcNow());
 
@@ -1357,9 +1364,21 @@ partial class WatchCommand(
 
         try {
             foreach (var key in children.Reengaged(File.GetLastWriteTimeUtc, time.GetUtcNow())) {
-                await watchers.EnsureWatcherRunning(key: key, transcriptPath: children.LogOf(key),
-                    agentId: key[(sessionId.Length + 1)..], sessionIdOverride: sessionId, vendor: "muse");
-                Log(time, $"Muse subagent {key} resumed; child watcher restarted");
+                var started = false;
+
+                try {
+                    await watchers.EnsureWatcherRunning(key: key, transcriptPath: children.LogOf(key),
+                        agentId: key[(sessionId.Length + 1)..], sessionIdOverride: sessionId, vendor: "muse");
+                    started = watchers.IsWatcherAlive(key);
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
+                    Log(time, $"Muse subagent {key} child watcher restart failed: {ex.Message}");
+                }
+
+                if (started) {
+                    Log(time, $"Muse subagent {key} resumed; child watcher restarted");
+                } else {
+                    children.RestartFailed(key);
+                }
             }
 
             if (!children.RecheckPending) return;

@@ -114,4 +114,11 @@ internal sealed class MuseChildWatchers {
 
         return back ?? (IReadOnlyList<string>)Array.Empty<string>();
     }
+
+    /// <summary>Puts a child <see cref="Reengaged"/> returned back to stopped when its watcher did not
+    /// start, and forgets the log's recorded mtime so the next <see cref="Reengaged"/> returns it again.</summary>
+    internal void RestartFailed(string key) {
+        _stopped.Add(key);
+        _logMtimes.Remove(_spawned[key].Log);
+    }
 }

@@ -210,4 +210,22 @@ public class MuseChildWatchersTests {
         await Assert.That(children.SelectStops(twice, respawnAt)).IsEmpty();
         await Assert.That(Stop(children, twice, respawnAt + MuseChildWatchers.StopGrace)).IsEquivalentTo(new[] { "s-a" });
     }
+
+    [Test]
+    public async Task A_respawn_that_did_not_start_is_offered_again_until_it_does() {
+        var children = new MuseChildWatchers();
+        children.Spawned("s-a", "/a/session.jsonl", T0);
+        var stopAt = T0 + MuseChildWatchers.StopGrace;
+        Stop(children, Ready("s-a"), stopAt);
+        var m0 = new DateTime(2026, 10, 13, 12, 0, 5, DateTimeKind.Utc);
+        children.RecordLogMtime("s-a", m0);
+        var grown = m0.AddSeconds(3);
+
+        await Assert.That(children.Reengaged(_ => grown, stopAt.AddSeconds(2))).IsEquivalentTo(new[] { "s-a" });
+
+        children.RestartFailed("s-a");
+
+        await Assert.That(children.Reengaged(_ => grown, stopAt.AddSeconds(4))).IsEquivalentTo(new[] { "s-a" });
+        await Assert.That(children.Reengaged(_ => grown, stopAt.AddSeconds(6))).IsEmpty();
+    }
 }
