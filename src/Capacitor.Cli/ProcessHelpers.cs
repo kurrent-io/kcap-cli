@@ -894,7 +894,7 @@ static partial class ProcessHelpers {
     }
 
     /// <summary>Agents whose process can sit between a kcap process and the harness it serves.</summary>
-    static readonly string[] NestableAgents = ["grok", "claude", "codex", "gemini", "copilot", "cursor-agent", "kiro", "opencode", "pi", "mistral-vibe", "agy"];
+    static readonly string[] NestableAgents = ["grok", "claude", "codex", "gemini", "copilot", "cursor-agent", "kiro", "opencode", "pi", "mistral-vibe", "agy", "antigravity"];
 
     /// <summary>The nearest coding agent on the ppid chain from <paramref name="startPid"/>, or null when
     /// none is found within <paramref name="maxHops"/> or the chain cannot be read.</summary>

@@ -25,4 +25,12 @@ public class NearestCodingAgentTests {
 
         await Assert.That(ProcessHelpers.NearestCodingAgent(60, lookup)).IsNull();
     }
+
+    [Test]
+    public async Task An_antigravity_process_under_grok_is_nearer_than_grok() {
+        // mcp(100) -> antigravity(70) -> grok(50)
+        var lookup = ProcTable.Of((70, 50, "antigravity"), (50, 1, "grok"));
+
+        await Assert.That(ProcessHelpers.NearestCodingAgent(70, lookup)!.Value.Vendor).IsNotEqualTo("grok");
+    }
 }

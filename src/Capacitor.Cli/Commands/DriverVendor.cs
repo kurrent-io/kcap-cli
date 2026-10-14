@@ -32,10 +32,13 @@ public static class DriverVendor {
         // Stamp wins when present and recognised — it is deterministic, unlike inherited env.
         if (Normalize(driverArg) is { } stamped) return stamped;
 
+        // Under a Grok id the walk decides; only a Claude Code ancestor goes on to the env check below.
         if (HarnessRequesterContext.GrokSessionIn(getEnv) is not null) {
-            switch (nearestAgent()) {
-                case null:              return null;
-                case { Vendor: "grok" }: return "grok";
+            switch (nearestAgent()?.Vendor) {
+                case "grok":   return "grok";
+                case "codex":  return "codex";
+                case "claude": break;
+                default:       return null;
             }
         }
 
