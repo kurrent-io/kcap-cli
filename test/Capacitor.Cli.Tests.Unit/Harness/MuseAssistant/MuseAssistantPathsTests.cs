@@ -12,7 +12,7 @@ public class MuseAssistantPathsTests {
     [Test]
     public async Task Scope_dir_hashes_server_and_user_under_the_config_root() {
         await Assert.That(MuseAssistantPaths.ScopeDir(Config, Acme))
-            .IsEqualTo("/cfg/muse-assistant/2cd7918f069b2edb1effab0afe9dde2c8c901b0fea1154882065db8c177e5247");
+            .IsEqualTo(Path.Join("/cfg", "muse-assistant", "2cd7918f069b2edb1effab0afe9dde2c8c901b0fea1154882065db8c177e5247"));
     }
 
     [Test]
@@ -37,7 +37,7 @@ public class MuseAssistantPathsTests {
         var dir   = "/cfg/muse-assistant/x";
         var state = MuseAssistantPaths.ChatState(dir, chatId);
 
-        await Assert.That(Path.GetDirectoryName(state)).IsEqualTo(dir);
+        await Assert.That(Path.GetDirectoryName(state)).IsEqualTo(Path.GetDirectoryName(Path.Join(dir, "x")));
         await Assert.That(Path.GetFileName(state)).Matches("^[0-9a-f]{64}\\.json$");
         await Assert.That(MuseAssistantPaths.ChatLock(dir, chatId)).IsEqualTo(Path.Join(dir, MuseAssistantPaths.ChatKey(chatId) + ".lock"));
     }
