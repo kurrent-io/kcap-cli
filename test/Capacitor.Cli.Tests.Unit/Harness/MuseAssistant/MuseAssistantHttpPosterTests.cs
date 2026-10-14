@@ -104,7 +104,7 @@ public class MuseAssistantHttpPosterTests : IDisposable {
     }
 
     [Test]
-    public async Task A_spent_retry_budget_reports_the_last_transport_fault_on_one_line() {
+    public async Task A_spent_retry_budget_reports_the_last_transport_fault_on_one_line_with_a_line_break_read_as_a_space() {
         var time   = new FakeTimeProvider();
         var poster = new MuseAssistantHttpPoster(Resolutions.Of(new() { ServerUrl = "https://acme.kcap.ai" }), new FaultingHttpClient(), time);
 
@@ -113,7 +113,7 @@ public class MuseAssistantHttpPosterTests : IDisposable {
         var refused = await sending.WaitAsync(TimeSpan.FromSeconds(10));
 
         await Assert.That(refused).Contains("retry budget");
-        await Assert.That(refused).Contains("socket reset by peer");
+        await Assert.That(refused).Contains("socket reset by peer second line");
         await Assert.That(refused).DoesNotContain("\n");
     }
 

@@ -56,8 +56,9 @@ public sealed class MuseAssistantHttpPoster(ProfileContext profiles, ICapacitorH
     }
 
     // A message is printed on a line the cron log is parsed by: no control characters, bounded length.
+    // A control character becomes a space so a line break cannot fuse two words.
     static string Clean(string message) {
-        var text = new string(message.Where(c => !char.IsControl(c)).ToArray());
+        var text = new string(message.Select(c => char.IsControl(c) ? ' ' : c).ToArray());
 
         return text.Length <= 200 ? text : string.Concat(text.AsSpan(0, 200), "…");
     }
