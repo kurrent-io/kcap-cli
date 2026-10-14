@@ -3,6 +3,7 @@ using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Lucide.Avalonia;
 using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia.Rendering;
 
@@ -13,9 +14,6 @@ namespace Capacitor.App.Views;
 /// Only an outermost section is a card; one inside another is a header row with its content set
 /// in beneath it, so nesting reads as an outline rather than boxes in boxes.
 sealed class DetailsBlockRenderer(DetailsState state, Action<int, bool> toggle) : AvaloniaObjectRenderer<DetailsBlock> {
-    static readonly Geometry Down = Geometry.Parse("M3,4.5 L6,7.5 L9,4.5");
-    static readonly Geometry Right = Geometry.Parse("M4.5,3 L7.5,6 L4.5,9");
-
     protected override void Write(AvaloniaRenderer renderer, DetailsBlock obj) {
         var expanded = state.IsExpanded(obj.Ordinal, obj.StartsOpen);
         var nested = IsNested(obj);
@@ -27,7 +25,7 @@ sealed class DetailsBlockRenderer(DetailsState state, Action<int, bool> toggle) 
         else renderer.WriteChildren(obj.Summary);
         renderer.Pop();
 
-        var chevron = new Avalonia.Controls.Shapes.Path { Data = expanded ? Down : Right, Width = 12, Height = 12, Stretch = Stretch.None, VerticalAlignment = VerticalAlignment.Center };
+        var chevron = new AppIcon { Kind = expanded ? LucideIconKind.ChevronDown : LucideIconKind.ChevronRight, Size = 12 };
         chevron.Classes.Add("markdown-details-chevron");
         var row = new Grid { ColumnDefinitions = new("Auto,*"), ColumnSpacing = 9 };
         row.Children.Add(chevron);

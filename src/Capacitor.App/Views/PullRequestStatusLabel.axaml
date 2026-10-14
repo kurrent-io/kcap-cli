@@ -20,34 +20,22 @@
         <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
             <Panel Width="12" Height="12" HorizontalAlignment="Center" VerticalAlignment="Center"
                    IsVisible="{Binding UsesDiscIcon}">
-                <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}"
-                         IsVisible="{Binding IsSuccess}" />
-                <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round" StrokeJoin="Round"
-                      Data="M3,6 L5.2,8.2 L9,4" HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsVisible="{Binding IsSuccess}" />
-                <Ellipse Width="12" Height="12" Fill="{StaticResource KcapDangerBrush}"
-                         IsVisible="{Binding IsDanger}" />
-                <Path Width="12" Height="12" Stroke="#07120E" StrokeThickness="1.6" StrokeLineCap="Round"
-                      Data="M4,4 L8,8 M8,4 L4,8" HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsVisible="{Binding IsDanger}" />
-                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
-                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsWarning}" />
+                <views:AppIcon Kind="CircleCheck" Size="12" IsVisible="{Binding IsSuccess}" Foreground="{StaticResource KcapSuccessBrush}" />
+                <views:AppIcon Kind="CircleX" Size="12" IsVisible="{Binding IsDanger}" Foreground="{StaticResource KcapDangerBrush}" />
+                <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding IsWarning}" Foreground="{StaticResource KcapWarningBrush}" />
                 <Ellipse Width="5" Height="5" Fill="{StaticResource KcapWarningBrush}"
                          HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsWarning}" />
-                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
-                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}" />
+                <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding IsPulsing}" Foreground="{StaticResource KcapMutedBrush}" />
                 <Border Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapMutedBrush}"
                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsPulsing}"
                         views:PulseClock.IsActive="{Binding IsPulsing}" />
-                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
-                         HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsNeutralDisc}" />
-                <Path Width="12" Height="12" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6" StrokeLineCap="Round"
-                      Data="M3.5,6 H8.5" HorizontalAlignment="Center" VerticalAlignment="Center"
-                      IsVisible="{Binding IsNeutralDisc}" />
+                <views:AppIcon Kind="CircleMinus" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               IsVisible="{Binding IsNeutralDisc}" Foreground="{StaticResource KcapMutedBrush}" />
             </Panel>
-            <Path Width="12" Height="12" Stretch="Uniform" Data="{Binding IconData}"
-                  Stroke="{Binding #StatusText.Foreground}" StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
-                  HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding UsesGlyphIcon}" />
+            <views:AppIcon Kind="{Binding IconKind}" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                           IsVisible="{Binding UsesGlyphIcon}" Foreground="{Binding #StatusText.Foreground}" />
         </Panel>
         <TextBlock x:Name="StatusText" Grid.Column="1" Classes="statusText" Text="{Binding Text}" TextWrapping="Wrap"
                    Margin="9,0,0,0" IsVisible="{Binding #Root.ShowText}"

@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="clr-namespace:Capacitor.App.Views">
     <!-- Shared section headers and indented bodies for the work context and session rail. -->
     <Style Selector="TextBlock.eyebrow">
         <Setter Property="FontSize" Value="11.5" />
@@ -58,10 +59,7 @@
     <Style Selector="Panel.chevronBox">
         <Setter Property="RenderTransform" Value="translateY(-1.5px)" />
     </Style>
-    <Style Selector="Path.chevron">
-        <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" />
-        <Setter Property="StrokeThickness" Value="1.8" />
-        <Setter Property="StrokeLineCap" Value="Round" />
-        <Setter Property="StrokeJoin" Value="Round" />
+    <Style Selector="views|AppIcon.chevron">
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
     </Style>
 </Styles>

@@ -112,7 +112,7 @@ public class DetailsViewTests {
                 await Assert.That(inner.Background).IsNull().Or.IsEqualTo(Brushes.Transparent);
                 var content = All<StackPanel>(inner).Single(p => p.Classes.Contains("markdown-details-content"));
                 await Assert.That(content.Margin.Left).IsGreaterThan(0);
-                foreach (var header in Headers(root)) await Assert.That(All<Avalonia.Controls.Shapes.Path>(header).Count(p => p.Classes.Contains("markdown-details-chevron"))).IsEqualTo(1);
+                foreach (var header in Headers(root)) await Assert.That(All<AppIcon>(header).Count(p => p.Classes.Contains("markdown-details-chevron"))).IsEqualTo(1);
             } finally { window.Close(); }
         });
     }

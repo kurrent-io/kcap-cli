@@ -1,5 +1,6 @@
 <rxui:ReactiveWindow xmlns="https://github.com/avaloniaui"
                      xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                     xmlns:views="clr-namespace:Capacitor.App.Views"
                      xmlns:rxui="clr-namespace:ReactiveUI.Avalonia;assembly=ReactiveUI.Avalonia"
                      xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
                      x:Class="Capacitor.App.Views.LifecyclePromptWindow"
@@ -40,11 +41,8 @@
                             <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
                                        Foreground="{StaticResource KcapMutedBrush}" />
                         </Border>
-                        <Path VerticalAlignment="Center" Width="28" Height="12" Stretch="None"
-                              IsVisible="{Binding ShowInstalledVersion}"
-                              Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.75"
-                              StrokeLineCap="Round" StrokeJoin="Round"
-                              Data="M2,6 L24,6 M19,1.5 L24,6 L19,10.5" />
+                        <views:AppIcon Kind="ArrowRight" Size="12" VerticalAlignment="Center" IsVisible="{Binding ShowInstalledVersion}"
+                                       Foreground="{StaticResource KcapPurpleBrush}" />
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
                                 Background="{StaticResource KcapPurpleDimBrush}"
                                 BorderBrush="{StaticResource KcapPurpleBrush}">

@@ -32,7 +32,7 @@
                         AutomationProperties.Name="Open pull request in browser">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
-                        <Path Classes="prExternal prAfterLabel" />
+                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal prAfterLabel" />
                     </StackPanel>
                 </Button>
             </Grid>
@@ -50,7 +50,7 @@
                         AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
-                        <Path Grid.Column="1" Classes="prChevron" />
+                        <views:AppIcon Kind="ChevronRight" Size="14" Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
                 <Button x:Name="SidebarReviewsButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
@@ -58,7 +58,7 @@
                         AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
-                        <Path Grid.Column="1" Classes="prChevron" />
+                        <views:AppIcon Kind="ChevronRight" Size="14" Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
             </StackPanel>

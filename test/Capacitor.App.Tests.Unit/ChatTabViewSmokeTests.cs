@@ -448,9 +448,9 @@ public class ChatTabViewSmokeTests {
             var copyBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink");
             var callsList = card.FindAncestorOfType<ItemsControl>()!;
             var header = host.View.GetVisualDescendants().OfType<ChatKindHeader>().Single(h => h.IsEffectivelyVisible);
-            var iconPath = header.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single();
+            var headerIcon = header.GetVisualDescendants().OfType<AppIcon>().Single();
             await Assert.That(callsList.ClipToBounds).IsFalse();
-            await Assert.That(iconPath.Bounds.Center.Y).IsEqualTo(7.0).Within(0.5);
+            await Assert.That(headerIcon.Bounds.Center.Y).IsEqualTo(7.0).Within(0.5);
             await Assert.That(openBtn.IsEffectivelyVisible).IsTrue();
             await Assert.That(copyBtn.IsEffectivelyVisible).IsTrue();
             await Assert.That(openBtn.TranslatePoint(default, host.Window)!.Value.X)
@@ -808,7 +808,7 @@ public class ChatTabViewSmokeTests {
             var header = host.View.GetVisualDescendants().OfType<ChatKindHeader>()
                 .Single(h => h.IsEffectivelyVisible);
             await Assert.That(header.Label).IsEqualTo("Search");
-            await Assert.That(header.IconData).IsNotEmpty();
+            await Assert.That(header.IconKind).IsNotNull();
             var chip = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible);
             await Assert.That(chip.Text).IsEqualTo("Search");
@@ -868,8 +868,9 @@ public class ChatTabViewSmokeTests {
             host.Settle();
             var call = OnlyGroup(host).Calls[0];
             await Assert.That(call.IsRunning).IsFalse();
-            var glyph = host.View.GetVisualDescendants().OfType<TextBlock>()
-                .Single(t => t.DataContext is ToolCallItem && t.Text == "?" && t.IsEffectivelyVisible);
+            var glyph = host.View.GetVisualDescendants().OfType<AppIcon>()
+                .Single(icon => icon.DataContext is ToolCallItem &&
+                                icon.Kind == Lucide.Avalonia.LucideIconKind.CircleQuestionMark && icon.IsEffectivelyVisible);
             await Assert.That(glyph.Foreground).IsSameReferenceAs(Brush(isError: false));
             await Assert.That(host.View.GetVisualDescendants().OfType<Border>()
                 .Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(0);

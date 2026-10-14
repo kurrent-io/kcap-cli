@@ -572,7 +572,7 @@
         </Style>
         <!-- A refresh glyph turning while its read is in flight: the click's only feedback when
              the result is unchanged. -->
-        <Style Selector="Path.kcapSpinning">
+        <Style Selector="views|AppIcon.kcapSpinning">
             <Setter Property="RenderTransform" Value="rotate(0deg)" />
             <Style.Animations>
                 <Animation Duration="0:0:0.9" IterationCount="Infinite">
