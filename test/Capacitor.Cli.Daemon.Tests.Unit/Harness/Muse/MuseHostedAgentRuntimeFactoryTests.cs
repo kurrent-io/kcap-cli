@@ -40,6 +40,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         MuseUnattendedReviewerEnabled = reviewerEnabled,
         Store                         = Daemons.Store,
         ConfigRoot                    = KcapConfig.Root,
+        Home                          = Home,
         Version                       = "9.9.9",
     };
 
@@ -200,6 +201,42 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         var turn = Params(await rig.Host.WaitForWriteAsync("turn/start"));
         await Assert.That((string?)turn["input"]![0]!["text"]).IsEqualTo("review this");
+    }
+
+    /// <summary>Muse passes an MCP child only <c>HOME</c> and the server's <c>env</c>, so a daemon whose
+    /// config root is not the one its home derives must name it, or the result channel reads another
+    /// profile. The rig's root is a separate temp directory, so it is non-default here.</summary>
+    [Test]
+    public async Task Reviewer_servers_carry_a_non_default_config_dir() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"]));
+        await using var _ = start.Runtime;
+
+        var servers = Params(await rig.Host.WaitForWriteAsync("session/start"))["config"]!["mcpServers"]!.AsObject();
+        await Assert.That(servers.Count).IsEqualTo(2);
+
+        foreach (var (_, server) in servers)
+            await Assert.That((string?)server!["env"]![ConfigRoot.ConfigDirEnvVar]).IsEqualTo(KcapConfig.Root.Directory);
+    }
+
+    /// <summary>The twin: a root the home derives is what the child finds by itself, so nothing is added.</summary>
+    [Test]
+    public async Task Reviewer_servers_leave_the_default_config_dir_unset() {
+        var config = Config();
+        config.ConfigRoot = ConfigRoot.UnderHome(Home.Path);
+        var rig = NewRig(config: config);
+
+        var start = await StartAsync(rig, Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"]));
+        await using var _ = start.Runtime;
+
+        var servers = Params(await rig.Host.WaitForWriteAsync("session/start"))["config"]!["mcpServers"]!.AsObject();
+        await Assert.That(servers.Count).IsEqualTo(2);
+
+        foreach (var (_, server) in servers) {
+            await Assert.That((string?)server!["env"]!["KCAP_URL"]).IsEqualTo("http://kcap.test");
+            await Assert.That(server["env"]!.AsObject().ContainsKey(ConfigRoot.ConfigDirEnvVar)).IsFalse();
+        }
     }
 
     /// <summary>A workspace that declares an MCP server under a kcap server's canonical name must not

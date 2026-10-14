@@ -170,7 +170,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
         if (ctx.IsBorrowedSnapshot && (!ctx.IsReviewFlow || ctx.Worktree.SnapshotRoot is null))
             throw new InvalidOperationException("borrowed_snapshot_containment_mismatch");
 
-        var plan = BuildPlan(ref ctx);
+        var plan = BuildPlan(ref ctx, _config);
 
         MuseHostedSessionMarker.Write(_config.ConfigRoot, new(
             plan.MintedSessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, _time.GetUtcNow()));
@@ -266,7 +266,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     /// <summary>The lane's posture and the session to open. For a reviewer, validates the launch and
     /// builds its MCP servers under fresh per-launch aliases, so a workspace-declared server can never
     /// take the name an admitted tool is matched on.</summary>
-    static MuseLaunchPlan BuildPlan(ref RuntimeStartContext ctx) {
+    static MuseLaunchPlan BuildPlan(ref RuntimeStartContext ctx, DaemonConfig config) {
         var minted = ctx.ResumeSessionId is not { } resume ? MuseMsp.NewId()
             : Guid.TryParse(resume, out var id) ? id.ToString("D")
             : throw new InvalidOperationException($"muse_resume_session_invalid: '{resume}' is not a Muse session id.");
@@ -298,18 +298,19 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
         // Under denyUnmatched Muse resolves an MCP approval by policy before the daemon can answer it,
         // so the result channel could never be allowed; the daemon decides every approval itself.
-        return new MuseLaunchPlan(true, ":read-only", "onRequest", RenderMcpServers(servers),
+        return new MuseLaunchPlan(true, ":read-only", "onRequest", RenderMcpServers(servers, NonDefaultConfigDir(config)),
             ctx.ResumeSessionId is null ? null : minted, MuseUnattendedApprovals.AdmittedFor(servers, identity), minted);
     }
 
     /// <summary>Each server under <see cref="MuseUnattendedApprovals.ServerKey"/>, <c>required</c> so a
     /// reviewer that cannot reach its result channel fails at start instead of never reporting.</summary>
-    static JsonObject RenderMcpServers(IReadOnlyList<AcpMcpServerSpec> servers) {
+    static JsonObject RenderMcpServers(IReadOnlyList<AcpMcpServerSpec> servers, string? configDir) {
         var rendered = new JsonObject();
 
         foreach (var server in servers) {
             var env = new JsonObject();
             foreach (var variable in server.Env) env[variable.Name] = variable.Value;
+            if (configDir is not null) env[ConfigRoot.ConfigDirEnvVar] = configDir;
 
             rendered[MuseUnattendedApprovals.ServerKey(server.Name)] = new JsonObject {
                 ["transport"] = "stdio",
@@ -321,6 +322,18 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
         }
 
         return rendered;
+    }
+
+    /// <summary>Muse gives an MCP child only <c>HOME</c> and the server's own <c>env</c>, so a kcap child
+    /// derives its root from the home; a daemon whose root is elsewhere has to name it.</summary>
+    static string? NonDefaultConfigDir(DaemonConfig config) {
+        var root = config.ConfigRoot.Directory;
+        var derived = ConfigRoot.UnderHome(config.Home.Path).Directory;
+
+        return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)),
+                             Path.TrimEndingDirectorySeparator(Path.GetFullPath(derived)), StringComparison.Ordinal)
+            ? null
+            : root;
     }
 
     internal static ProcessStartInfo BuildPsi(DaemonConfig config, RuntimeStartContext ctx, bool reviewer) {
