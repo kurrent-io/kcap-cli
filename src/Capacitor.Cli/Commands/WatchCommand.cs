@@ -1373,12 +1373,19 @@ partial class WatchCommand(
             // Read before the kill: a write after the child's final drain then still advances it.
             foreach (var key in stops) children.RecordLogMtime(key, File.GetLastWriteTimeUtc(children.LogOf(key)));
 
-            await watchers.KillWatchers(stops);
-            children.Stopped(stops, ready);
-            Log(time, $"Stopped {stops.Count} finished Muse child watcher(s)");
+            var stopped = (await Task.WhenAll(stops.Select(async key => (Key: key, Done: await StopMuseChild(key)))))
+                .Where(r => r.Done).Select(r => r.Key).ToArray();
+            children.Stopped(stopped, ready);
+            Log(time, $"Stopped {stopped.Length} of {stops.Count} finished Muse child watcher(s)");
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             // best-effort — the parent's teardown still stops every spawned child
         }
+    }
+
+    // KillWatcher's false also means nothing was running, which leaves the child as stopped as a kill does.
+    async Task<bool> StopMuseChild(string key) {
+        var running = watchers.PidAlive(key);
+        return await watchers.KillWatcher(key) || !running;
     }
 
     async Task<bool> PostSubagentStartAsync(

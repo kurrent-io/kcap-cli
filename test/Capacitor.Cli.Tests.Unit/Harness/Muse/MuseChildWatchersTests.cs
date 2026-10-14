@@ -110,6 +110,28 @@ public class MuseChildWatchersTests {
         await Assert.That(children.SelectStops(Ready("s-a"), now.AddSeconds(2))).IsEmpty();
     }
 
+    /// <summary>Only the kills that succeeded are confirmed; the failed one is still running, so it must
+    /// stay selectable and keep the check armed rather than be lost to the parent's teardown.</summary>
+    [Test]
+    public async Task A_failed_kill_among_successful_ones_is_selected_again_until_it_succeeds() {
+        var children = new MuseChildWatchers();
+        children.Spawned("s-a", "/a/session.jsonl", T0);
+        children.Spawned("s-b", "/b/session.jsonl", T0);
+        var now   = T0 + MuseChildWatchers.StopGrace;
+        var ready = Ready("s-a", "s-b");
+
+        await Assert.That(children.SelectStops(ready, now)).IsEquivalentTo(new[] { "s-a", "s-b" });
+        children.Stopped(["s-a"], ready);
+
+        await Assert.That(children.RecheckPending).IsTrue();
+        await Assert.That(children.SelectStops(ready, now.AddSeconds(1))).IsEquivalentTo(new[] { "s-b" });
+
+        children.Stopped(["s-b"], ready);
+
+        await Assert.That(children.RecheckPending).IsFalse();
+        await Assert.That(children.SelectStops(ready, now.AddSeconds(2))).IsEmpty();
+    }
+
     [Test]
     public async Task A_child_that_is_not_finished_or_not_spawned_is_left_alone() {
         var children = new MuseChildWatchers();

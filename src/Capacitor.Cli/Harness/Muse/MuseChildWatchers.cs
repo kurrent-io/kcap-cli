@@ -23,14 +23,15 @@ internal sealed class MuseChildWatchers {
     readonly Dictionary<string, int>      _held      = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTime> _logMtimes = new(StringComparer.Ordinal);
 
+    readonly HashSet<string> _unconfirmed = new(StringComparer.Ordinal);
+
     bool _recheck;
-    int  _unconfirmedStops;
 
     /// <summary>Set when a result may have arrived or a child was spawned; cleared once no spawned child
     /// is left that is finished, not yet stopped and still inside the grace, and every selected stop
     /// has been confirmed.</summary>
     internal bool RecheckPending {
-        get => _recheck || _unconfirmedStops > 0;
+        get => _recheck || _unconfirmed.Count > 0;
         set => _recheck = value;
     }
 
@@ -69,19 +70,20 @@ internal sealed class MuseChildWatchers {
             }
         }
 
-        _recheck          = waiting;
-        _unconfirmedStops = stops.Count;
+        _recheck = waiting;
+        _unconfirmed.Clear();
+        _unconfirmed.UnionWith(stops);
         return stops;
     }
 
-    /// <summary>Confirms that the children <see cref="SelectStops"/> returned for these counts were stopped.</summary>
-    internal void Stopped(IReadOnlyList<string> stops, IReadOnlyDictionary<string, int> readyCounts) {
-        foreach (var key in stops) {
+    /// <summary>Confirms which of the children <see cref="SelectStops"/> returned for these counts were
+    /// stopped. One left out stays selectable and keeps <see cref="RecheckPending"/> armed.</summary>
+    internal void Stopped(IEnumerable<string> stopped, IReadOnlyDictionary<string, int> readyCounts) {
+        foreach (var key in stopped) {
             _handled[key] = readyCounts[key];
             _stopped.Add(key);
+            _unconfirmed.Remove(key);
         }
-
-        _unconfirmedStops = 0;
     }
 
     internal void RecordLogMtime(string key, DateTime mtime) => WatchCommand.ChildRolloutAdvanced(_logMtimes, _spawned[key].Log, mtime);

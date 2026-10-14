@@ -191,7 +191,7 @@ public sealed partial class WatcherManager(
     }
 
     /// <summary>PID-only liveness: the process exists, irrespective of whether it's wedged.</summary>
-    bool PidAlive(string key) {
+    internal bool PidAlive(string key) {
         var pidFile = paths.PidFile(key);
 
         if (!File.Exists(pidFile)) {
