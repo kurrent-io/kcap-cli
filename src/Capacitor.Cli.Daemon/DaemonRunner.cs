@@ -567,6 +567,20 @@ public static partial class DaemonRunner {
             )
         );
 
+        // MSP is Muse's own JSON-RPC over one `muse serve` child per agent. Recording rides the hook
+        // and watcher path, so the runtime exposes no transcript source.
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new Harness.Muse.MuseHostedAgentRuntimeFactory(
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ServerConnection>(),
+                paths: harnesses.Of<Core.Harness.Muse.MuseHarness>().Paths,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+            )
+        );
+
         builder.Services.AddSingleton<IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>>(sp =>
             sp.GetServices<IHostedAgentRuntimeFactory>().ToDictionary(f => f.Vendor)
         );

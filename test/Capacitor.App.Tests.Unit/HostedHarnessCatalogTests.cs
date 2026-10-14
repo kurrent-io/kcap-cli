@@ -32,9 +32,15 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
         await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
         await Assert.That(HostedHarnessCatalog.Build(["mistral-vibe"]).Single(o => o.Vendor == "mistral-vibe").Available).IsTrue();
+    }
 
-        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse");
-        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("muse");
+    [Test]
+    public async Task Muse_is_offered_like_any_hosted_harness() {
+        var unknown = HostedHarnessCatalog.Build(null).Single(o => o.Vendor == "muse");
+        await Assert.That(unknown.Available).IsTrue();
+        await Assert.That(unknown.TransportFamily).IsEqualTo("rpc");
+
+        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Single(o => o.Vendor == "muse").Available).IsFalse();
         await Assert.That(HostedHarnessCatalog.Build(["muse"]).Single(o => o.Vendor == "muse").Available).IsTrue();
     }
 
