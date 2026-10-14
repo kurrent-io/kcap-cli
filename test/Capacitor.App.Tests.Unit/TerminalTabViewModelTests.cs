@@ -112,7 +112,7 @@ public class TerminalTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Resolve_timeout_is_not_found_and_a_late_dto_is_ignored_until_retry() {
+    public async Task Resolve_timeout_is_not_found_and_a_late_dto_recovers_without_retry() {
         await RunOnUiAsync(async () => {
             var daemon = new FakeDaemonClientService();
             var factory = new FakeTerminalAttachClientFactory();
@@ -122,14 +122,35 @@ public class TerminalTabViewModelTests {
             time.Advance(TimeSpan.FromSeconds(10));
             await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.NotFound);
 
-            // A late DTO reaches nothing -- the timeout disposed the Agents subscription.
+            // Timeout keeps the Agents subscription: a late DTO (daemon linked the session after
+            // the 10s budget) claims timeout-won → dto-won and attaches without Retry.
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.Connecting);
+            await Assert.That(factory.Created.Count).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Retry_after_timeout_with_no_agent_stays_not_found_and_can_still_recover() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, factory, time, agentId: "a1");
+
+            time.Advance(TimeSpan.FromSeconds(10));
+            await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.NotFound);
+
+            // Lookup miss restores timeout-won so a later Agents push (or another Retry) can try.
+            await vm.RetryResolveCommand.Execute();
             await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.NotFound);
             await Assert.That(factory.Created.Count).IsEqualTo(0);
 
-            // RetryResolveCommand resolves against the now-present DTO.
-            await vm.RetryResolveCommand.Execute();
-
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await Assert.That(vm.State.Phase).IsEqualTo(TerminalSessionPhase.Connecting);
             await Assert.That(factory.Created.Count).IsEqualTo(1);
         });
