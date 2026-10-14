@@ -34,6 +34,7 @@ internal sealed class MuseChildWatchers {
 
     readonly HashSet<string>             _unconfirmed = new(StringComparer.Ordinal);
     readonly HashSet<string>             _registered  = new(StringComparer.Ordinal);
+    readonly HashSet<string>             _restartPending = new(StringComparer.Ordinal);
     readonly Dictionary<string, Backoff> _backoff     = new(StringComparer.Ordinal);
 
     bool _recheck;
@@ -78,11 +79,15 @@ internal sealed class MuseChildWatchers {
     }
 
     /// <summary>Clears a child's backoff once its watcher is running.</summary>
-    internal void SpawnSucceeded(string key) => _backoff.Remove(key);
+    internal void SpawnSucceeded(string key) {
+        _backoff.Remove(key);
+        _restartPending.Remove(key);
+    }
 
     internal void Spawned(string key, string log, DateTimeOffset now) {
         _spawned[key]  = new Child(log, now);
         _backoff.Remove(key);
+        _restartPending.Remove(key);
         RecheckPending = true;
     }
 
@@ -143,7 +148,8 @@ internal sealed class MuseChildWatchers {
             if (!ShouldAttemptSpawn(key, now)) continue;
 
             var log = _spawned[key].Log;
-            if (!WatchCommand.ChildRolloutAdvanced(_logMtimes, log, mtimeOf(log))) continue;
+            var advanced = WatchCommand.ChildRolloutAdvanced(_logMtimes, log, mtimeOf(log));
+            if (!advanced && !_restartPending.Contains(key)) continue;
 
             _stopped.Remove(key);
             _spawned[key] = new Child(log, now);
@@ -154,11 +160,11 @@ internal sealed class MuseChildWatchers {
     }
 
     /// <summary>Puts a child <see cref="Reengaged"/> returned back to stopped when its watcher did not
-    /// start, and forgets the log's recorded mtime so <see cref="Reengaged"/> returns it again once the
-    /// returned backoff has elapsed.</summary>
+    /// start, and marks the restart pending so <see cref="Reengaged"/> returns it again once the returned
+    /// backoff has elapsed, whatever the log's mtime does meanwhile. Only a confirmed start clears it.</summary>
     internal TimeSpan RestartFailed(string key, DateTimeOffset now) {
         _stopped.Add(key);
-        _logMtimes.Remove(_spawned[key].Log);
+        _restartPending.Add(key);
         return SpawnFailed(key, now);
     }
 }

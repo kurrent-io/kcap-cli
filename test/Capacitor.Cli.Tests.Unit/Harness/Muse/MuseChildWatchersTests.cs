@@ -332,4 +332,31 @@ public class MuseChildWatchersTests {
 
         await Assert.That(children.ShouldAttemptSpawn("s-a", T0)).IsTrue();
     }
+
+    /// <summary>A new result during the backoff re-records the log's mtime while the child is already
+    /// stopped; the pending restart must not depend on that mtime still looking fresh.</summary>
+    [Test]
+    public async Task A_failed_restart_is_offered_after_its_backoff_even_when_a_result_stop_recorded_the_mtime() {
+        var children = new MuseChildWatchers();
+        children.Spawned("s-a", "/a/session.jsonl", T0);
+        var stopAt = T0 + MuseChildWatchers.StopGrace;
+        Stop(children, Ready("s-a"), stopAt);
+        var m0 = new DateTime(2026, 10, 13, 12, 0, 5, DateTimeKind.Utc);
+        children.RecordLogMtime("s-a", m0);
+        var grown    = m0.AddSeconds(3);
+        var failedAt = stopAt.AddSeconds(2);
+        children.Reengaged(_ => grown, failedAt);
+        children.RestartFailed("s-a", failedAt);
+
+        var twice = new Dictionary<string, int> { ["s-a"] = 2 };
+        var later = failedAt.AddSeconds(1);
+        await Assert.That(Stop(children, twice, later + MuseChildWatchers.StopGrace)).IsEquivalentTo(new[] { "s-a" });
+        children.RecordLogMtime("s-a", grown);
+
+        await Assert.That(children.Reengaged(_ => grown, failedAt + MuseChildWatchers.SpawnRetryInitial)).IsEquivalentTo(new[] { "s-a" });
+
+        children.SpawnSucceeded("s-a");
+
+        await Assert.That(children.Reengaged(_ => grown, failedAt + MuseChildWatchers.SpawnRetryInitial)).IsEmpty();
+    }
 }
