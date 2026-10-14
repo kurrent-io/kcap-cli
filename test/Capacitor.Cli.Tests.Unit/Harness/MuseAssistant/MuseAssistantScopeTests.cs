@@ -591,6 +591,29 @@ public class MuseAssistantScopeTests {
     }
 
     [Test]
+    [NotInParallel]
+    public async Task Reset_revokes_a_listed_chat_whose_state_file_reappears_before_its_lock_is_taken() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-b", History, default));
+        var dir    = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        var saved  = State("chat-b");
+        File.Delete(MuseAssistantPaths.ChatState(dir, "chat-b"));
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        Task<int> reset;
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b"))) {
+            reset = (await ScopeAsync(poster)).ResetAsync(default);
+            await Task.Delay(300);   // the fake clock is frozen, so reset is parked on the lock after its snapshot
+            Store().SaveState(saved);
+        }
+
+        await Assert.That(await TimedOut(reset)).IsEqualTo(0);
+
+        await Assert.That(State("chat-b").Grant.Revoked).IsTrue();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+        await Assert.That(output.GetCapturedError()).DoesNotContain("no grant recorded");
+    }
+
+    [Test]
     public async Task Reset_that_cannot_lock_a_listed_chat_with_unusable_state_keeps_it_listed_and_exits_4() {
         var scope = await ScopeAsync(new RecordingPoster());
         await scope.AddAsync("chat-b", History, default);

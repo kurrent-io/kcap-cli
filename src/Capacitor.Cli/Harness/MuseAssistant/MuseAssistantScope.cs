@@ -129,42 +129,33 @@ public sealed class MuseAssistantScope(
                 }
             }
 
-            foreach (var found in store.EnumerateStates().ToList()) {
-                using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, found.ChatId), ct);
+            // An ingest holds only its chat lock, so no file check before it is held says what the chat's state is.
+            var listed = store.LoadScope().Chats.ToHashSet(StringComparer.Ordinal);
+            var seen   = store.EnumerateStates().ToDictionary(x => x.ChatId, StringComparer.Ordinal);
+
+            foreach (var chatId in listed.Union(seen.Keys).ToList()) {
+                using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, chatId), ct);
                 if (chatLock is null) {
-                    if (!found.Grant.Revoked) {
-                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy} chat={found.ChatId}");
-                        unrevoked.Add(found.ChatId);
-                    } else {
+                    if (seen.TryGetValue(chatId, out var found) && found.Grant.Revoked) {
                         // Already revoked, so recording is stopped; `chat=` is kept for the chats that may still record.
-                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy}; already revoked, recording is stopped for \"{found.ChatId}\"");
+                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy}; already revoked, recording is stopped for \"{chatId}\"");
                         if (found.Open is not null) failed = true;
+                    } else {
+                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy} chat={chatId}");
+                        unrevoked.Add(chatId);
                     }
 
                     continue;
                 }
 
-                await RevokeLockedAsync(found);
-            }
-
-            // An ingest holds only its chat lock, so a missing file proves nothing until that lock is held.
-            var enumerated = store.EnumerateStates().Select(s => s.ChatId).ToHashSet(StringComparer.Ordinal);
-
-            foreach (var chatId in store.LoadScope().Chats.Where(c => !enumerated.Contains(c) && !File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, c))).ToList()) {
-                using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, chatId), ct);
-                if (chatLock is null) {
-                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy} chat={chatId}");
-                    unrevoked.Add(chatId);
+                var (state, problem) = store.LoadState(chatId);
+                if (state is not null) {
+                    await RevokeLockedAsync(state);
                     continue;
                 }
 
-                if (store.LoadState(chatId).State is { } appeared) {
-                    await RevokeLockedAsync(appeared);
-                    continue;
-                }
-
-                // An unusable file that appeared is set aside by the sweep over unusable files below.
-                if (File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, chatId))) continue;
+                // An unusable file is set aside by the sweep over unusable files below.
+                if (problem is not null || !listed.Contains(chatId)) continue;
 
                 setAside = true;
                 Console.Error.WriteLine($"kcap muse-assistant scope reset: no grant recorded for \"{chatId}\"; its state file is missing, so nothing more is recorded from it, but a session it had open may stay open");
