@@ -47,7 +47,7 @@ internal static class MuseReviewerCapability {
               + "default, which is enabled — or set it to 1.",
 
             MuseReviewerDecision.UnsupportedPlatform =>
-                "muse_reviewer_unsupported_platform: Muse Code is hosted only on macOS and Linux daemons.",
+                "muse_reviewer_unsupported_platform: unattended Muse Code reviews run only on macOS and Linux daemons.",
 
             MuseReviewerDecision.VersionUnresolved =>
                 $"muse_reviewer_version_unresolved: the version of '{binaryPath}' could not be determined. "
