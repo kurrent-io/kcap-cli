@@ -51,7 +51,8 @@ once a walk finds two and a half hours of quiet.
    chat; "this chat" is the one this conversation runs in. Never guess; ask if unsure.
 2. For each chat, call `chat.read_messages {"chat_id": "<id>", "limit": 20}` and note
    the highest `seq` in the result — the newest item — or that the chat has no items.
-3. Run `kcap whoami` and take the workspace address from its `Server:` line. Read
+3. Run `kcap whoami` and take the workspace address from its first `Server:` line
+   (the second says whether the server accepts the token). Read
    this back, filling the brackets from steps 1–3 and the user's words, and wait for
    a clear yes:
 
@@ -69,23 +70,24 @@ once a walk finds two and a half hours of quiet.
 4. On a clear yes, run one command per chat, choosing the flag from what you read in
    step 2 and what the user said:
    - the chat has items and the user did not ask for history:
-     `kcap muse-assistant scope add --chat <id> --after-seq <the highest seq from step 2>`
+     `kcap muse-assistant scope add --chat "<id>" --after-seq <the highest seq from step 2>`
    - the chat has no items:
-     `kcap muse-assistant scope add --chat <id> --empty-chat`
+     `kcap muse-assistant scope add --chat "<id>" --empty-chat`
    - the user's words include past messages ("including history", "everything so
      far", "from the beginning", "my earlier chats"):
-     `kcap muse-assistant scope add --chat <id> --include-history`
+     `kcap muse-assistant scope add --chat "<id>" --include-history`
 
    Exit 0 prints `granted key=… chat=<id>`; a repeat of the same grant prints
    `already granted key=… chat=<id>` and changes nothing. Any other exit: show the
-   user the stderr line, tell them that chat is not being recorded, and stop; do not
-   retry on your own.
+   user the stderr line, tell them that chat may not be recording and that they can
+   ask again to confirm, and stop; do not retry on your own. Always quote the chat id
+   (`--chat "<id>"`, right after the verb): an id may contain spaces.
 5. Create the cron below if it does not exist yet, then run it once by hand so the
    first walk happens now rather than in fifteen minutes.
 
 ## Stopping
 
-"Stop recording [this chat]" → `kcap muse-assistant scope remove --chat <id>`.
+"Stop recording [this chat]" → `kcap muse-assistant scope remove --chat "<id>"`.
 "Stop recording everything" → `kcap muse-assistant scope reset`. If it is unclear
 which chats the user means, run `kcap muse-assistant scope show` (one line per chat,
 `status=active` for those still recording) and ask.
@@ -114,34 +116,53 @@ unless the user asks for history.
 
 ## The cron: `capacitor-recording`, every 15 minutes
 
-Create it with this instruction, exactly:
+Create it with schedule every 15 minutes, **timeout 120 minutes**, and the instruction
+below, exactly. The timeout is generous on purpose: the first walk of a long chat
+granted with history pages 20 items per call, and a run cut off mid-walk ingests
+nothing. Runs that overlap are safe; the instruction handles them.
 
-> You are the Capacitor recorder. Set `KCAP=~/workspace/kcap/node_modules/.bin/kcap`
-> and `ROOT=~/workspace/capacitor/ingest`.
+> You are the Capacitor recorder. `KCAP` below means
+> `~/workspace/kcap/node_modules/.bin/kcap` and `ROOT` means
+> `$HOME/workspace/capacitor/ingest`. Every command runs on its own: write the literal
+> values (paths, `<key>`, `<FETCHED>`, chat ids) into each one, and never rely on a
+> shell variable set by an earlier command. Delete a directory only with the guarded
+> delete, which refuses anything but a chat's directory or one walk directory:
+> `node -e 'const p=process.argv[1];if(!/\/workspace\/capacitor\/ingest\/[0-9a-f]{64}(\/[0-9]{13,})?$/.test(p))process.exit(1);require("fs").rmSync(p,{recursive:true,force:true})' "<the directory>"`
 >
-> 1. Run `$KCAP muse-assistant sweep`. Each stdout line names one chat to record:
+> 1. Run `KCAP muse-assistant sweep`. Each stdout line names one chat to record:
 >    `key=<chat_key> watermark=<n|none> boundary=<after_seq|empty_chat|history> after_seq=<n|none> chat=<chat_id>`
 >    (the chat id is everything after `chat=`). If it exits non-zero, remember its
 >    last stderr line for the user's next turn and carry on with the lines it printed.
->    No lines: stop here.
+>    If it exits 0, guarded-delete every directory directly under `ROOT` whose name is
+>    not a printed key: those chats are no longer recorded. No lines: stop here.
 > 2. Call `chat.list {"include_archived": true}` once and note each chat's `is_main`.
+>    Run `node -e 'console.log(Date.now())'` once and call the number NOW.
 > 3. For each sweep line, in order:
->    a. Retry first. For each directory already under `$ROOT/<key>/`, oldest first
->       (each is named for its millisecond fetch time), run
->       `$KCAP muse-assistant ingest "$ROOT/<key>/<name>"`. Exit 0: delete every
->       directory under `$ROOT/<key>/` and go to b. Any other exit: keep it, remember
->       the last stderr line, and retry no further directories of this chat this run.
->       If that line is an exit 2 naming a `seq` at or above 1000000000, skip to the
->       next chat: see f.
->    b. `FETCHED=$(node -e 'console.log(Date.now())')` immediately before the first
->       call; `mkdir -p "$ROOT/<key>" && mkdir "$ROOT/<key>/$FETCHED"` — a fresh,
->       empty directory, never reused (if `mkdir` fails, take a new `FETCHED`).
+>    a. Look at the directories under `ROOT/<key>/` (each is named for its
+>       millisecond fetch time).
+>       - One without `manifest.json` is a walk still in progress (the manifest is
+>         written last): leave it, unless its name is more than 7200000 below NOW —
+>         then it is a crashed walk: guarded-delete it.
+>       - One with `manifest.json` is a kept walk. Retry kept walks oldest first with
+>         `KCAP muse-assistant ingest "ROOT/<key>/<name>"`:
+>         - exit 0 and stderr says "another ingest holds the chat": another run owns
+>           this chat now. Delete nothing and skip this chat for this run.
+>         - exit 0 otherwise: guarded-delete every directory under `ROOT/<key>/`
+>           that has `manifest.json`, then go to b.
+>         - any other exit: remember the last stderr line. Keep that directory,
+>           guarded-delete every other one under `ROOT/<key>/` that has
+>           `manifest.json`, and go to b — unless the line is an exit 2 naming a
+>           `seq` at or above 1000000000: then skip this chat for this run (see f).
+>    b. Run `node -e 'console.log(Date.now())'` immediately before the first call and
+>       call the number FETCHED. Run
+>       `mkdir -p "ROOT/<key>" && mkdir "ROOT/<key>/<FETCHED>"` — a fresh, empty
+>       directory, never reused (if `mkdir` fails, take a new FETCHED).
 >    c. Call `chat.read_messages {"chat_id": "<chat_id>", "limit": 20}`. Its complete
 >       result is on disk at `~/workspace/agents/<agent-id>/tool-output/<call-id>.json`;
->       copy that file, unchanged, to `$ROOT/<key>/$FETCHED/page-000.json`. If a
->       call's tool-output file does not exist, never write the page yourself: delete
->       `$ROOT/<key>/$FETCHED`, remember "chat.read_messages did not save its result
->       for chat <chat_id>", and go to the next chat.
+>       copy that file, unchanged, to `ROOT/<key>/<FETCHED>/page-000.json`. If a
+>       call's tool-output file does not exist, never write the page yourself:
+>       guarded-delete `ROOT/<key>/<FETCHED>`, remember "chat.read_messages did not
+>       save its result for chat <chat_id>", and go to the next chat.
 >    d. Look at the page you just copied. Walk further only while ALL of these hold:
 >       `page.has_more` is true; and, when `watermark` is a number, no item in the page
 >       has `seq` ≤ watermark; and, when `watermark` is `none` and `after_seq` is a
@@ -149,27 +170,30 @@ Create it with this instruction, exactly:
 >       `chat.read_messages {"chat_id": "<chat_id>", "limit": 20, "cursor": "<that page's page.next_cursor, passed back unchanged>"}`
 >       and copy its tool-output file to the next `page-NNN.json` (`page-001.json`,
 >       `page-002.json`, …). Record the cursor you passed for each page.
->    e. Write `$ROOT/<key>/$FETCHED/manifest.json`:
+>    e. Last, write `ROOT/<key>/<FETCHED>/manifest.json`:
 >       `{"chat_id":"<chat_id>","is_main":<true|false from chat.list>,"fetched_at_ms":<FETCHED>,"pages":[{"file":"page-000.json","cursor":null},{"file":"page-001.json","cursor":"<cursor passed for page-001>"}, …]}`
 >       — one entry per page in order, `cursor` being exactly the string passed to that
 >       call (`null` for page-000).
->    f. ALWAYS run `$KCAP muse-assistant ingest "$ROOT/<key>/$FETCHED"`, even when
+>    f. ALWAYS run `KCAP muse-assistant ingest "ROOT/<key>/<FETCHED>"`, even when
 >       page-000 holds nothing new: that run is what proves the chat's head and closes
 >       an idle session.
->       - Exit 0: delete `$ROOT/<key>/$FETCHED` and every other directory under
->         `$ROOT/<key>/` — except when stderr says "another ingest holds the chat":
->         then delete only `$ROOT/<key>/$FETCHED`.
->       - Any other exit, whatever the code: keep the directory and remember the last
->         stderr line.
+>       - Exit 0 and stderr says "another ingest holds the chat": guarded-delete only
+>         `ROOT/<key>/<FETCHED>`.
+>       - Exit 0 otherwise: guarded-delete `ROOT/<key>/<FETCHED>` and every other
+>         directory under `ROOT/<key>/` that has `manifest.json`.
+>       - Any other exit: remember the last stderr line. If step a kept a failed walk
+>         for this chat, guarded-delete `ROOT/<key>/<FETCHED>` — a chat keeps at most
+>         one failed walk, and the next fresh walk re-reads the same items. Otherwise
+>         keep it.
 >       - An exit 2 whose stderr names a `seq` at or above 1000000000 means this chat
 >         cannot be recorded: Capacitor cannot track message numbers that large.
 >         Remember "Capacitor cannot record chat <chat_id> (its message numbers are too
->         large); say 'stop recording' for it", once — not again on later runs.
-> 4. Leave directories of chats the sweep did not print alone. Never edit a page file,
->    never retype a page from your own view, never run any kcap command other than
->    `ingest` and `sweep` here, and do not wake the user. If anything was remembered,
->    say it once in the user's next turn, quoting each stderr line with its chat id;
->    do not repeat a line already reported for the same chat.
+>         large); say 'stop recording' for it".
+> 4. Never edit a page file, never retype a page from your own view, never run any
+>    kcap command other than `ingest` and `sweep` here, and do not wake the user. If
+>    anything was remembered, say it once in the user's next turn, quoting each stderr
+>    line with its chat id; do not repeat a line already reported for the same chat
+>    since that chat's last successful run.
 
 Only an `--include-history` or `--empty-chat` grant walks to a chat's beginning
 (`after_seq=none`, `watermark=none`); an `--after-seq` grant stops at the first page
