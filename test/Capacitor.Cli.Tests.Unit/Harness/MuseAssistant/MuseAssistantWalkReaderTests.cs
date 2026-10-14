@@ -164,6 +164,20 @@ public class MuseAssistantWalkReaderTests {
     }
 
     [Test]
+    public async Task An_occurred_at_ms_outside_the_representable_time_range_is_refused() {
+        static string At(WalkBuilder b, string name, long at) =>
+            b.AddPage(null, null, false, Developer(1, T0)).Write(name, d => Rewrite(d, "page-000.json", p => p["turns"]![0]!["items"]![0]!["occurred_at_ms"] = at));
+
+        var late  = At(new WalkBuilder(Tmp), "late", DateTimeOffset.MaxValue.ToUnixTimeMilliseconds() + 1);
+        var early = At(new WalkBuilder(Tmp), "early", DateTimeOffset.MinValue.ToUnixTimeMilliseconds() - 1);
+        var max   = At(new WalkBuilder(Tmp), "max", DateTimeOffset.MaxValue.ToUnixTimeMilliseconds());
+
+        await Assert.That(MuseAssistantWalkReader.Load(late).Problem).Contains("occurred_at_ms").And.Contains("outside");
+        await Assert.That(MuseAssistantWalkReader.Load(early).Problem).Contains("occurred_at_ms").And.Contains("outside");
+        await Assert.That(MuseAssistantWalkReader.Load(max).Problem).IsNull();
+    }
+
+    [Test]
     public async Task Out_of_order_or_duplicate_items_and_overlapping_pages_are_refused() {
         var dup     = new WalkBuilder(Tmp).AddPage(null, null, false, User(5, T0), Assistant(5, T0 + 1)).Write("dup");
         var time    = new WalkBuilder(Tmp).AddPage(null, null, false, User(5, T0 + 10), Assistant(6, T0)).Write("time");

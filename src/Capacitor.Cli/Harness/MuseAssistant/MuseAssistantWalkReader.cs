@@ -12,6 +12,11 @@ public static class MuseAssistantWalkReader {
     /// The server never advances a line high-water mark for a line number at or above this.
     const long MaxTrackableSeq = 1_000_000_000;
 
+    // Lifecycle posts render the time as ISO 8601; a value past these bounds would throw there, after
+    // a pending start had been saved, and every replay would hit it again.
+    static readonly long MinUnixMs = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    static readonly long MaxUnixMs = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
     public static string? ReadChatId(string dir) {
         var path = Path.Join(dir, "manifest.json");
         if (!File.Exists(path)) return null;
@@ -112,6 +117,7 @@ public static class MuseAssistantWalkReader {
                             if (seq >= MaxTrackableSeq)
                                 return (null, $"{file} turn {turnId}: seq {seq} is at or above {MaxTrackableSeq}, which the server cannot track");
                             if (item.Num("occurred_at_ms") is not { } at) return (null, $"{file} turn {turnId} seq {seq}: occurred_at_ms must be an integer");
+                            if (at < MinUnixMs || at > MaxUnixMs) return (null, $"{file} turn {turnId} seq {seq}: occurred_at_ms {at} is outside the representable time range");
 
                             if (item.Prop("chat_id") is not null || item.Prop("turn_id") is not null)
                                 return (null, $"{file} turn {turnId} seq {seq}: an item must not carry its own chat_id or turn_id");
