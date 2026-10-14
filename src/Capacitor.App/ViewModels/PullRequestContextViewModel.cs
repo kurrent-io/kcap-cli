@@ -68,7 +68,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
-    string _notice = "Waiting for the session to register…";
+    string _notice = WorkContextViewModel.WaitingNote;
     PullRequestReaderNote? _readerNote;
 
     public IAvaloniaReadOnlyList<PullRequestChoice> Choices => _choices;

@@ -40,8 +40,30 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
     bool _isEmpty = true;
     public bool IsEmpty {
         get => _isEmpty;
-        private set => this.RaiseAndSetIfChanged(ref _isEmpty, value);
+        private set {
+            if (_isEmpty == value) return;
+            this.RaiseAndSetIfChanged(ref _isEmpty, value);
+            this.RaisePropertyChanged(nameof(ShowsEmpty));
+            this.RaisePropertyChanged(nameof(ShowsRows));
+        }
     }
+
+    bool _hasLoaded;
+    /// False until the first log read applies — so the flyout does not flash the empty copy first.
+    public bool HasLoaded {
+        get => _hasLoaded;
+        private set {
+            if (_hasLoaded == value) return;
+            this.RaiseAndSetIfChanged(ref _hasLoaded, value);
+            this.RaisePropertyChanged(nameof(IsLoading));
+            this.RaisePropertyChanged(nameof(ShowsEmpty));
+            this.RaisePropertyChanged(nameof(ShowsRows));
+        }
+    }
+
+    public bool IsLoading => !HasLoaded;
+    public bool ShowsEmpty => HasLoaded && IsEmpty;
+    public bool ShowsRows => HasLoaded && !IsEmpty;
 
     bool _visible;
     int _tickCount;
@@ -150,6 +172,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
         _rowsSource.Load(result.Records.Select(ToRow));
         IsEmpty = _rowsSource.Count == 0;
+        HasLoaded = true;
     }
 
     static ActivityRow ToRow(ConsentDecisionRecord r) {

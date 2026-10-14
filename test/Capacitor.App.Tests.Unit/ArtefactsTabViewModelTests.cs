@@ -267,6 +267,27 @@ public class ArtefactsTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Switch_session_is_loading_until_the_read_settles() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.Gate();
+            h.Vm.SwitchSession(SessionA, "/repo");
+
+            await Assert.That(h.Vm.IsLoading).IsTrue();
+            await Assert.That(h.Vm.HasAny).IsFalse();
+            await Assert.That(h.Vm.EmptyReaderNote).IsEqualTo("Loading documents…");
+
+            gate.SetResult(Ready());
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.IsLoading).IsFalse();
+            await Assert.That(h.Vm.EmptyReaderNote).IsEqualTo("No documents yet.");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task An_open_before_the_first_read_lands_selects_the_row_when_it_does() {
         await RunOnUiAsync(async () => {
             var h = new Harness();

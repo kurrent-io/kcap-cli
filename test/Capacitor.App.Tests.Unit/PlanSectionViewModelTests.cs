@@ -53,6 +53,27 @@ public class PlanSectionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Switch_session_keeps_the_section_visible_while_loading() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.Gate();
+            h.Vm.SwitchSession(SessionA);
+
+            await Assert.That(h.Vm.IsLoading).IsTrue();
+            await Assert.That(h.Vm.ShowsPlan).IsTrue();
+            await Assert.That(h.Vm.HasPlan).IsFalse();
+
+            gate.SetResult(Ready());
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.IsLoading).IsFalse();
+            await Assert.That(h.Vm.ShowsPlan).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_section_is_hidden_until_a_read_names_a_plan_then_lists_tasks_in_order_and_counts_them() {
         await RunOnUiAsync(async () => {
             var h = new Harness();

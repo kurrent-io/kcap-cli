@@ -169,10 +169,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
         _disposables.Add(Disposable.Create(() => Artefacts.OpenRequested -= ShowArtefacts));
-        Artefacts.WhenAnyValue(a => a.HasAny).Subscribe(has => {
-            ShowsArtefactsTab = has;
-            if (!has && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
-        }).DisposeWith(_disposables);
+        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || loading)
+            .Subscribe(show => {
+                ShowsArtefactsTab = show;
+                if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
+            }).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         WorkContext.Plan.OpenDocument = path => {
             if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();

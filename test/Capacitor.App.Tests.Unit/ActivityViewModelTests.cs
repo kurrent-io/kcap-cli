@@ -160,6 +160,29 @@ public class ActivityViewModelTests {
         await Assert.That(ActivityViewModel.OutcomeLabelOf(raw)).IsEqualTo(expected);
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Empty_copy_waits_for_the_first_read() {
+        var (loadingBefore, emptyBefore, loadingAfter, emptyAfter, showsEmpty) = await AvaloniaSession.DispatchAsync(async () => {
+            var reader = new ScriptedReader();
+            reader.Set(new ConsentLogReadResult([], true));
+            var vm = new ActivityViewModel(reader.Read, new ScriptedStat().Get, new FakeTicker());
+            var loadingBefore = vm.IsLoading;
+            var emptyBefore = vm.ShowsEmpty;
+
+            vm.OnTabVisibleChanged(true);
+            await vm.PendingRefreshForTesting!;
+
+            return (loadingBefore, emptyBefore, vm.IsLoading, vm.IsEmpty, vm.ShowsEmpty);
+        });
+
+        await Assert.That(loadingBefore).IsTrue();
+        await Assert.That(emptyBefore).IsFalse();
+        await Assert.That(loadingAfter).IsFalse();
+        await Assert.That(emptyAfter).IsTrue();
+        await Assert.That(showsEmpty).IsTrue();
+    }
+
     // ---- Complete replaces, including to empty ----
 
     [Test]

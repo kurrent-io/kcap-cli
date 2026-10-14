@@ -182,7 +182,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     public string PhaseNote => _items.Count > 0 ? "" : Phase switch {
-        ChatTabPhase.Waiting     => "Waiting for the transcript…",
+        ChatTabPhase.Waiting     => "Waiting for chat…",
         ChatTabPhase.Missing     => _missingNote ?? "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
         ChatTabPhase.Failed      => FailureNote(_failureNote),
