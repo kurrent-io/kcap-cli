@@ -327,10 +327,10 @@ public class MuseImportSourceTests : IDisposable {
         return log;
     }
 
-    /// <summary>A reminder child has no result to report, and a running worker none yet: under a parent
-    /// still running, each may still be writing, so only the reported worker is stopped.</summary>
+    /// <summary>A worker can be re-engaged after its result, so a stop from the import would end the
+    /// live child watcher early: under a parent still running, not even a reported worker is stopped.</summary>
     [Test]
-    public async Task Under_an_unfinished_parent_only_a_child_whose_result_the_parent_reports_is_stopped() {
+    public async Task Under_an_unfinished_parent_no_child_is_stopped_even_one_whose_result_is_in() {
         LayOutUnfinishedProbeWithWorkers();
         StubServer();
 
@@ -338,8 +338,7 @@ public class MuseImportSourceTests : IDisposable {
 
         await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
         await Assert.That(PostedRoutes().Count(r => r == "/hooks/subagent-start")).IsEqualTo(4);
-        await Assert.That(PostedRoutes().Count(r => r == "/hooks/subagent-stop")).IsEqualTo(1);
-        await Assert.That((string?)PostedBody("/hooks/subagent-stop")["agent_id"]).IsEqualTo(DoneWorker.Replace("-", ""));
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
     }
 
@@ -361,19 +360,6 @@ public class MuseImportSourceTests : IDisposable {
         var routes = PostedRoutes();
         await Assert.That(routes.Count(r => r == "/hooks/subagent-stop")).IsEqualTo(4);
         await Assert.That(routes.Last()).IsEqualTo("/hooks/session-end/muse");
-    }
-
-    [Test]
-    public async Task Under_an_unfinished_parent_a_refused_stop_for_a_reported_child_fails_the_import() {
-        LayOutUnfinishedProbeWithWorkers();
-        StubServer();
-        _server.Given(Request.Create().WithPath("/hooks/subagent-stop").UsingPost())
-            .AtPriority(-1)
-            .RespondWith(Response.Create().WithStatusCode(500));
-
-        var (_, result) = await ImportProbeAsync();
-
-        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Failed);
     }
 
     /// <summary>Only a strict request makes the server refuse a child lifecycle write it failed to record.</summary>

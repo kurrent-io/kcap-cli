@@ -1,4 +1,3 @@
-using System.Collections.Frozen;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -295,14 +294,13 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
     /// <summary>Every child resends from line 0 (its server ids are deterministic), so
     /// <c>SentChildContent</c> reads true on any replay of a session that has one. A child whose start,
     /// content or stop the server did not record fails the import before the parent's session-end, so
-    /// a re-import retries it; a refused start skips that child's content. Under an unfinished parent a
-    /// child is stopped only once the parent log reports its result, as the live watcher stops it: a
-    /// stop's id is deterministic, so one posted early cannot be taken back, and the parent's end
-    /// closes the rest.</summary>
+    /// a re-import retries it; a refused start skips that child's content. Under an unfinished parent no
+    /// child is stopped: a worker can be re-engaged after its result, and a stop's id is deterministic,
+    /// so one posted early would stop the live child watcher for good. The live watcher owns those stops,
+    /// and a re-import after the parent's end posts them all.</summary>
     async Task<(bool AnySent, bool AllRecorded)> ImportChildrenAsync(
             ImportContext ctx, string parentSessionId, string parentLog, bool parentEnded, CancellationToken ct) {
         var labels      = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
-        var readyCounts = parentEnded ? FrozenDictionary<string, int>.Empty : MuseSubagentDiscovery.ResolveResultReadyCounts(parentLog);
         var anySent     = false;
         var allRecorded = true;
 
@@ -331,7 +329,7 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
 
             if (childSent > 0) anySent = true;
 
-            if (!parentEnded && !readyCounts.ContainsKey(label.ChildSessionId)) continue;
+            if (!parentEnded) continue;
 
             if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop",
                     Strict(MuseSubagentDiscovery.BuildStopPayload(parentSessionId, label.AgentId, label.AgentType, childLog)), ct))
