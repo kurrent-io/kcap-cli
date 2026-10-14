@@ -12,7 +12,8 @@ internal sealed class MuseChildWatchers {
     internal const int AnnouncementGraceScans = 3;
 
     /// <summary>A spawned child needs this long to start, register its SIGTERM handler, connect and make
-    /// its first drain; a stop sooner than that kills it with its content unread.</summary>
+    /// its first drain; a stop sooner than that kills it with its content unread. It also runs from the
+    /// moment a result is first observed, so the child's last writes flush before it is stopped.</summary>
     internal static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(10);
 
     /// <summary>First wait after a failed spawn: past the one-second scan so a persistent failure stops
@@ -24,6 +25,8 @@ internal sealed class MuseChildWatchers {
 
     sealed record Child(string Log, DateTimeOffset SpawnedAt);
 
+    sealed record Observed(int Count, DateTimeOffset At);
+
     sealed record Backoff(int Failures, DateTimeOffset NextAttempt);
 
     readonly Dictionary<string, Child>    _spawned   = new(StringComparer.Ordinal);
@@ -34,6 +37,7 @@ internal sealed class MuseChildWatchers {
 
     readonly HashSet<string>             _unconfirmed = new(StringComparer.Ordinal);
     readonly HashSet<string>             _registered  = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Observed> _observed = new(StringComparer.Ordinal);
     readonly HashSet<string>             _restartPending = new(StringComparer.Ordinal);
     readonly Dictionary<string, Backoff> _backoff     = new(StringComparer.Ordinal);
 
@@ -94,7 +98,8 @@ internal sealed class MuseChildWatchers {
     internal string LogOf(string key) => _spawned[key].Log;
 
     /// <summary>Spawned children to stop now: a result the parent reported since the child was last
-    /// stopped or respawned, and a spawn older than <see cref="StopGrace"/>. Nothing counts as stopped
+    /// stopped or respawned, once <see cref="StopGrace"/> has passed since the later of its spawn and the
+    /// first time that result count was observed. Nothing counts as stopped
     /// until <see cref="Stopped"/> confirms it, so a stop that fails is selected again.</summary>
     internal IReadOnlyList<string> SelectStops(IReadOnlyDictionary<string, int> readyCounts, DateTimeOffset now) {
         var stops   = new List<string>();
@@ -104,7 +109,14 @@ internal sealed class MuseChildWatchers {
             var ready = readyCounts.GetValueOrDefault(key);
             if (ready <= _handled.GetValueOrDefault(key)) continue;
 
-            if (now - child.SpawnedAt >= StopGrace) {
+            if (!_observed.TryGetValue(key, out var seen) || seen.Count != ready) {
+                seen          = new Observed(ready, now);
+                _observed[key] = seen;
+            }
+
+            var since = seen.At > child.SpawnedAt ? seen.At : child.SpawnedAt;
+
+            if (now - since >= StopGrace) {
                 stops.Add(key);
             } else {
                 waiting = true;
