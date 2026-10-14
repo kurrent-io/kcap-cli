@@ -99,9 +99,10 @@ Tell the user what the exit code says, and nothing more hopeful:
 - **1** — stopped here, but the server could not be told yet that the open session
   ended; the cron's `sweep` delivers that. Tell the user both facts.
 - **3** (`scope remove`) — kcap could not read this chat's recording record, or it
-  belongs to another Capacitor account. It has taken the chat off its list, so the
-  cron sends nothing more from it, but a session already open in Capacitor for it may
-  stay open. Say this plainly, quoting the stderr line.
+  belongs to another Capacitor account. It has taken the chat off its list and set the
+  record aside, so the cron sends nothing more from it, but a session already open in
+  Capacitor for it may stay open. Granting the chat again now starts afresh. Say this
+  plainly, quoting the stderr line.
 - **4** — kcap could **not** confirm that recording stopped (nothing was revoked, or
   an unexpected error). Never say it stopped. Run the same command once more —
   retrying is always safe. If that run exits 0, 1 or 3, report it as above; if it
@@ -131,17 +132,18 @@ nothing. Runs that overlap are safe; the instruction handles them.
 >
 > 1. Run `KCAP muse-assistant sweep`. Each stdout line names one chat to record:
 >    `key=<chat_key> watermark=<n|none> boundary=<after_seq|empty_chat|history> after_seq=<n|none> chat=<chat_id>`
->    (the chat id is everything after `chat=`). If it exits 3, a listed chat has no
->    usable recording state and is not printed: remember each stderr line that says
->    "no usable state" (it ends with `chat=<chat_id>`), still process the printed
->    chats, and do NOT delete any directory under `ROOT` in this step — a chat missing
->    from the output may still own kept walks. For the user's next turn, tell them
->    once (not again for the same chat since the last successful run) that Capacitor
->    cannot record chat `<chat_id>` and that saying "stop recording" for it, then
->    granting it again, restores recording. If it exits with any other non-zero code,
->    remember its last stderr line for the user's next turn and carry on with the
->    lines it printed. If it exits 0, guarded-delete every directory directly under
->    `ROOT` whose name is not a printed key: those chats are no longer recorded. No
+>    (the chat id is everything after `chat=`). Whatever the exit code (3, or 1 when a
+>    lifecycle post also failed), a listed chat with no usable recording state is not
+>    printed: remember each stderr line that says "no usable state" (it ends with
+>    `chat=<chat_id>`) and still process the printed chats. For the user's next turn,
+>    tell them once (not again for the same chat since the last successful run) that
+>    Capacitor cannot record chat `<chat_id>` and that saying "stop recording" for it,
+>    then granting it again, restores recording. If the exit code is not 0, also
+>    remember the last stderr line that is not a "no usable state" line, for the user's
+>    next turn, and carry on with the lines printed. Only if it exits 0, guarded-delete
+>    every directory directly under `ROOT` whose name is not a printed key: those chats
+>    are no longer recorded. On any other exit code delete no directory under `ROOT`
+>    in this step — a chat missing from the output may still own kept walks. No
 >    lines: stop here.
 > 2. Call `chat.list {"include_archived": true}` once and note each chat's `is_main`.
 >    Run `node -e 'console.log(Date.now())'` once and call the number NOW.
