@@ -13,10 +13,12 @@ using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
+using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Models.Transcripts.Harness.Claude;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.Hosting;
@@ -5188,17 +5190,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly TimeSpan CodexTurnObserveInterval = TimeSpan.FromSeconds(2);
     static readonly TimeSpan CodexTurnObserveTimeout  = TimeSpan.FromMinutes(2);
 
-    /// Locates the transcript a freshly spawned PTY agent writes — Claude's per-worktree
+    /// Locates the transcript a freshly spawned agent writes — Claude's per-worktree
     /// project dir (a symlink onto the source repo's, shared with the user's own sessions,
     /// so the locator disambiguates by cwd), Codex's rollout tree (disambiguated by cwd and
-    /// spawn time). A vendor without a locator is a no-op. Best-effort background work,
-    /// cancelled with the agent; it never blocks a launch.
+    /// spawn time), Muse's log named by the launch's hosted-session marker. A vendor without a
+    /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
+    /// a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
             "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
                 _harnesses.Of<ClaudeHarness>().Paths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
                 _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "muse"   => _ => MuseHostedSessionLocator.TryLocate(
+                _configRoot, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime)),
             _        => null,
         };
         if (locate is null) return Task.CompletedTask;
