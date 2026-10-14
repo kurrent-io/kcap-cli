@@ -229,25 +229,24 @@ public sealed partial class WatcherManager(
     }
 
     /// <summary>The pid file names a process that is still this watcher's incarnation, irrespective of
-    /// whether it's wedged.</summary>
+    /// whether it's wedged. A pid file that exists but cannot be read counts as alive: reading it as
+    /// gone would let a spawn overwrite it and orphan the watcher it names.</summary>
     bool PidAlive(string key) {
-        var pidFile = paths.PidFile(key);
-
-        if (!File.Exists(pidFile)) {
-            return false;
-        }
+        string[] lines;
 
         try {
-            var lines = File.ReadAllLines(pidFile);
-
-            if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var pid)) {
-                return false;
-            }
-
-            return !IsGone(pid, lines.Length > 1 ? lines[1].Trim() : "");
+            lines = File.ReadAllLines(paths.PidFile(key));
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return false;
         } catch {
+            return true;
+        }
+
+        if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var pid)) {
             return false;
         }
+
+        return !IsGone(pid, lines.Length > 1 ? lines[1].Trim() : "");
     }
 
     /// <summary>
@@ -316,25 +315,25 @@ public sealed partial class WatcherManager(
             return; // fast path: no lock needed to observe an already-healthy watcher.
         }
 
-        // Everything past this point — the kill-if-wedged step AND the spawn itself — runs
-        // under the per-key spawn lock. Guarding ONLY the kill+respawn of a wedged watcher
-        // would leave a race: KillWatcher deletes the pid file before releasing the lock, so
-        // a second hook arriving in that window would see "no pid" and take an unguarded
-        // plain-spawn path, double-spawning anyway. Locking the whole decision — including
-        // the plain "no watcher yet" spawn — closes that window.
+        // Both the reap of a wedged watcher and the spawn run under the per-key spawn lock: a
+        // hook arriving between the reap's pid-file delete and the new pid file would otherwise
+        // see "no pid" and spawn a second watcher.
         await WithSpawnLock(key, async () => {
-            // Re-check under the lock: another hook may have already reaped + respawned (or
-            // spawned from scratch) this key while we were waiting to acquire it.
             if (IsWatcherAlive(key)) {
                 return;
             }
 
             if (PidAlive(key)) {
-                // The process exists but its heartbeat is stale: wedged, not dead. Reap before
-                // respawning — still holding the lock, so no other hook can race the gap
-                // between the kill and the new pid file landing.
+                // Alive but its heartbeat is stale: wedged. A watcher the reap could not stop
+                // keeps its pid file; spawning over it would leave two watchers on this key, the
+                // first one unaddressable. A later call retries the reap.
                 await Console.Error.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
-                await KillWatcher(key);
+
+                if (!await TryStopWatcher(key)) {
+                    await Console.Error.WriteLineAsync($"Watcher {key} could not be stopped; not respawning");
+
+                    return;
+                }
             }
 
             await spawner.SpawnAsync(
