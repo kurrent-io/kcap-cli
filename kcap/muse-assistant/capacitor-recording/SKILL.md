@@ -104,13 +104,17 @@ Tell the user what the exit code says, and nothing more hopeful:
 - **0** — stopped: nothing further is sent (`removed chat=<id>`, `no grant recorded
   chat=<id>`, or `reset: every grant revoked`).
 - **1** — stopped here, but the server could not be told yet that the open session
-  ended; the cron's `sweep` delivers that. Tell the user both facts.
+  ended; the cron's `sweep` delivers that for a chat whose state is intact. Tell the
+  user both facts. For `scope reset`, read every stderr line first: a chat reported as
+  "set aside" or "no grant recorded" was unlisted with its state gone, so `sweep`
+  cannot close its open session and it may stay open (see **3**).
 - **3** (`scope remove`, or `scope reset` for each stderr line saying "set aside" or
   "no grant recorded") — this chat's recording record is missing, unreadable, or
   belongs to another Capacitor account. kcap has taken the chat off its list (and set
   an unreadable record aside), so the cron sends nothing more from it, but a session
-  already open in Capacitor for it may stay open. Granting the chat again now starts afresh. Say this plainly, quoting the
-  stderr line. A `scope reset` exit 3 stopped every other chat too.
+  already open in Capacitor for it may stay open, and `sweep` cannot close it. Granting
+  the chat again now starts afresh. Say this plainly, quoting the stderr line. A
+  `scope reset` exit 3 stopped every other chat too.
 - **4** — kcap could **not** confirm that recording stopped (nothing was revoked, or
   an unexpected error). Never say it stopped. Run the same command once more —
   retrying is always safe. If that run exits 0, 1 or 3, report it as above; if it
@@ -119,6 +123,11 @@ Tell the user what the exit code says, and nothing more hopeful:
   4 names each chat it could not stop with `chat=<id>`: those may still be recording.
 - **2** or anything else — the command did not run as given; recording has not
   stopped. Show the stderr line.
+
+Whatever exit code a `scope reset` ends with (only 1, 3 and 4 can carry these lines),
+report every stderr line saying "set aside" or "no grant recorded" to the user, quoted,
+with the open-session caveat above; never let a failure line for another chat hide them,
+and never say `sweep` will close such a chat's session.
 
 Re-granting later starts a new session; the interval without a grant is never sent
 unless the user asks for history, and even then nothing an earlier grant of the chat
