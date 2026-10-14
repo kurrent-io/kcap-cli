@@ -52,7 +52,7 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
 
             try {
                 var dashless = Guid.Parse(id).ToString("N");
-                if (!seen.Add(dashless)) continue;
+                if (seen.Contains(dashless)) continue;
                 if (sessionFilter is not null && !string.Equals(dashless, sessionFilter, StringComparison.Ordinal)) continue;
 
                 var (workspaceRoot, firstTs) = ReadHead(log);
@@ -63,6 +63,9 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
                 firstTs ??= TryGetCreationUtc(log);
                 if (sinceUtc is { } cutoff && firstTs is { } ts && ts < cutoff) continue;
 
+                // Claimed only once accepted: a copy in another date directory that was unreadable or
+                // filtered out must not hide a readable one.
+                seen.Add(dashless);
                 result.Add(new DiscoveredSession(dashless, Vendor, workspaceRoot, firstTs,
                     new Dictionary<string, object?> { [LogPathKey] = log }));
             } catch {

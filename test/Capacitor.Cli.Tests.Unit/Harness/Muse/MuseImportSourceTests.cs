@@ -117,6 +117,24 @@ public class MuseImportSourceTests : IDisposable {
         await Assert.That(found.Select(f => f.SessionId)).IsEquivalentTo(new[] { ParentId.Replace("-", "") });
     }
 
+    /// <summary>Directory order is the filesystem's, so the readable copy takes each of the two places in
+    /// turn: whichever is enumerated first, only the readable copy may claim the id.</summary>
+    [Test]
+    public async Task Discovery_keeps_a_readable_copy_of_a_session_whose_other_copy_is_not() {
+        var a = LayOut(Path.Combine(Paths.SessionsDir, "2026", "09", "01", ResumedId), "approval-only.session.jsonl");
+        var b = LayOut(SessionDir(ResumedId), "resumed.session.jsonl");
+
+        foreach (var readable in new[] { b, a }) {
+            File.WriteAllText(a, Fixture(readable == a ? "resumed.session.jsonl" : "approval-only.session.jsonl"));
+            File.WriteAllText(b, Fixture(readable == b ? "resumed.session.jsonl" : "approval-only.session.jsonl"));
+
+            var found = await Source().DiscoverAsync(NoFilters, CancellationToken.None);
+
+            await Assert.That(found.Count).IsEqualTo(1);
+            await Assert.That((string?)found[0].SourceMeta!["LogPath"]).IsEqualTo(readable);
+        }
+    }
+
     [Test]
     public async Task Discovery_dates_a_session_by_its_opened_record() {
         LayOutProbe();
