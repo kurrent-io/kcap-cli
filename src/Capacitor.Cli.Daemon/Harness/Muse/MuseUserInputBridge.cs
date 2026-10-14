@@ -9,20 +9,16 @@ internal static class MuseUserInputBridge {
     /// question, so a prompt with more than one is refused and the runtime then cancels it.</summary>
     public static AcpInteractionRequest ToInteraction(string agentId, string sessionId, JsonElement userInputParams) {
         var question = FirstQuestion(userInputParams);
-        var header   = MuseApprovalBridge.StringOf(question, "header");
-        var text     = MuseApprovalBridge.StringOf(question, "question") ?? "";
-        var multiple = question.ValueKind == JsonValueKind.Object
-                    && question.TryGetProperty("selection", out var selection)
-                    && MuseApprovalBridge.StringOf(selection, "mode") == "multiple";
+        var header   = question.Str("header");
+        var text     = question.Str("question") ?? "";
+        var multiple = question.Obj("selection")?.Str("mode") == "multiple";
 
         var options = new List<AcpInteractionOption>();
 
-        if (question.ValueKind == JsonValueKind.Object
-         && question.TryGetProperty("options", out var arr)
-         && arr.ValueKind == JsonValueKind.Array) {
+        if (question.Arr("options") is { } arr) {
             foreach (var option in arr.EnumerateArray()) {
-                if (MuseApprovalBridge.StringOf(option, "label") is { } label)
-                    options.Add(new AcpInteractionOption(label, label, MuseApprovalBridge.StringOf(option, "description")));
+                if (option.Str("label") is { } label)
+                    options.Add(new AcpInteractionOption(label, label, option.Str("description")));
             }
         }
 
@@ -30,9 +26,9 @@ internal static class MuseUserInputBridge {
             AgentId:       agentId,
             AcpSessionId:  sessionId,
             Kind:          "elicitation",
-            ToolName:      MuseApprovalBridge.StringOf(userInputParams, "toolName"),
+            ToolName:      userInputParams.Str("toolName"),
             ToolInput:     null,
-            ToolCallId:    MuseApprovalBridge.StringOf(userInputParams, "toolCallId"),
+            ToolCallId:    userInputParams.Str("toolCallId"),
             Prompt:        string.IsNullOrEmpty(header) ? text : header + ": " + text,
             Options:       options.Count == 0 ? null : [.. options],
             IsMultiSelect: multiple);
@@ -43,11 +39,10 @@ internal static class MuseUserInputBridge {
         if (decision.Outcome is "cancel" or "timeout" or "deny") return null;
 
         var question   = FirstQuestion(userInputParams);
-        var questionId = MuseApprovalBridge.StringOf(question, "id");
+        var questionId = question.Str("id");
         if (string.IsNullOrEmpty(questionId)) return null;
 
-        var multiple = question.TryGetProperty("selection", out var selection)
-                    && MuseApprovalBridge.StringOf(selection, "mode") == "multiple";
+        var multiple = question.Obj("selection")?.Str("mode") == "multiple";
 
         var single = decision.SelectedOptionLabel ?? decision.SelectedOptionId;
 
@@ -65,10 +60,5 @@ internal static class MuseUserInputBridge {
     }
 
     static JsonElement FirstQuestion(JsonElement userInputParams) =>
-        userInputParams.ValueKind == JsonValueKind.Object
-     && userInputParams.TryGetProperty("questions", out var questions)
-     && questions.ValueKind == JsonValueKind.Array
-     && questions.GetArrayLength() > 0
-            ? questions[0]
-            : default;
+        userInputParams.Arr("questions") is { } questions && questions.GetArrayLength() > 0 ? questions[0] : default;
 }

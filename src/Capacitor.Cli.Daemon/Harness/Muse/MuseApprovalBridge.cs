@@ -9,23 +9,24 @@ internal static class MuseApprovalBridge {
     const string DeclinedFeedback = "kcap: declined";
 
     public static AcpInteractionRequest ToInteraction(string agentId, string sessionId, JsonElement approvalParams) {
-        var subject  = approvalParams.TryGetProperty("subject", out var s) ? s : default;
-        var kind     = StringOf(subject, "kind");
+        var given    = approvalParams.Prop("subject");
+        var subject  = given ?? default;
+        var kind     = subject.Str("kind");
         var toolName = kind switch {
-            "tool"  => StringOf(subject, "toolName") ?? StringOf(approvalParams, "toolName") ?? "tool",
+            "tool"  => subject.Str("toolName") ?? approvalParams.Str("toolName") ?? "tool",
             "shell" => "bash",
-            _       => kind ?? StringOf(approvalParams, "toolName") ?? "unknown",
+            _       => kind ?? approvalParams.Str("toolName") ?? "unknown",
         };
 
-        var prompt = kind == "shell" ? StringOf(subject, "command") ?? toolName : toolName;
-        if (approvalParams.TryGetProperty("subagentOrigin", out _)) prompt = "[subagent] " + prompt;
+        var prompt = kind == "shell" ? subject.Str("command") ?? toolName : toolName;
+        if (approvalParams.Prop("subagentOrigin") is not null) prompt = "[subagent] " + prompt;
 
         var options = new List<AcpInteractionOption>();
         foreach (var choice in Choices(approvalParams)) {
-            var id = StringOf(choice, "choiceId");
+            var id = choice.Str("choiceId");
             if (id is null) continue;
 
-            options.Add(new AcpInteractionOption(id, StringOf(choice, "label") ?? id, null, KindOf(StringOf(choice, "decision"))));
+            options.Add(new AcpInteractionOption(id, choice.Str("label") ?? id, null, KindOf(choice.Str("decision"))));
         }
 
         return new AcpInteractionRequest(
@@ -33,8 +34,8 @@ internal static class MuseApprovalBridge {
             AcpSessionId:  sessionId,
             Kind:          "permission",
             ToolName:      toolName,
-            ToolInput:     ToolInput(subject, StringOf(approvalParams, "rawArgs")),
-            ToolCallId:    StringOf(approvalParams, "toolCallId"),
+            ToolInput:     ToolInput(given, approvalParams.Str("rawArgs")),
+            ToolCallId:    approvalParams.Str("toolCallId"),
             Prompt:        prompt,
             Options:       [.. options],
             IsMultiSelect: false);
@@ -48,12 +49,12 @@ internal static class MuseApprovalBridge {
         if (decision.SelectedOptionId is { } id
          && decision.Outcome is "allow" or "allow_once" or "allow_always" or "deny") {
             foreach (var choice in choices) {
-                if (!string.Equals(StringOf(choice, "choiceId"), id, StringComparison.Ordinal)) continue;
+                if (!string.Equals(choice.Str("choiceId"), id, StringComparison.Ordinal)) continue;
 
-                var isAbort = StringOf(choice, "decision") == AbortChoice;
+                var isAbort = choice.Str("decision") == AbortChoice;
                 if (decision.Outcome == "deny" && !isAbort) break;
 
-                var takesFeedback = choice.TryGetProperty("acceptsFeedback", out var f) && f.ValueKind == JsonValueKind.True;
+                var takesFeedback = choice.Bool("acceptsFeedback") == true;
 
                 return new MuseApprovalDecision(id, takesFeedback ? decision.FreeText : null);
             }
@@ -66,7 +67,7 @@ internal static class MuseApprovalBridge {
     /// rejects rather than reads as a grant.</summary>
     internal static string AbortChoiceId(List<JsonElement> choices) {
         foreach (var choice in choices) {
-            if (StringOf(choice, "choiceId") is { } id && StringOf(choice, "decision") == AbortChoice) return id;
+            if (choice.Str("choiceId") is { } id && choice.Str("decision") == AbortChoice) return id;
         }
 
         return AbortChoice;
@@ -75,20 +76,13 @@ internal static class MuseApprovalBridge {
     internal static List<JsonElement> Choices(JsonElement approvalParams) {
         var list = new List<JsonElement>();
 
-        if (approvalParams.ValueKind == JsonValueKind.Object
-         && approvalParams.TryGetProperty("availableChoices", out var arr)
-         && arr.ValueKind == JsonValueKind.Array) {
+        if (approvalParams.Arr("availableChoices") is { } arr) {
             foreach (var item in arr.EnumerateArray())
-                if (item.ValueKind == JsonValueKind.Object) list.Add(item);
+                if (item.IsObject) list.Add(item);
         }
 
         return list;
     }
-
-    internal static string? StringOf(JsonElement obj, string name) =>
-        obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
-            ? v.GetString()
-            : null;
 
     static string? KindOf(string? decision) => decision switch {
         "approved"                 => "allow_once",
@@ -98,15 +92,15 @@ internal static class MuseApprovalBridge {
         _                          => null,
     };
 
-    static JsonElement ToolInput(JsonElement subject, string? rawArgs) {
+    static JsonElement ToolInput(JsonElement? subject, string? rawArgs) {
         using var stream = new MemoryStream();
 
         using (var writer = new Utf8JsonWriter(stream)) {
             writer.WriteStartObject();
             writer.WritePropertyName("subject");
 
-            if (subject.ValueKind == JsonValueKind.Undefined) writer.WriteNullValue();
-            else subject.WriteTo(writer);
+            if (subject is { } given) given.WriteTo(writer);
+            else writer.WriteNullValue();
 
             writer.WritePropertyName("args");
 

@@ -30,21 +30,13 @@ internal sealed record MuseMspFrame(
         }
 
         var root = doc.RootElement;
-        if (root.ValueKind != JsonValueKind.Object) {
+        if (!root.IsObject) {
             doc.Dispose();
             return null;
         }
 
-        long? id = root.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.Number && idEl.TryGetInt64(out var n)
-            ? n
-            : null;
-
-        var method = root.TryGetProperty("method", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
-
-        return new MuseMspFrame(id, method, Member(root, "params"), Member(root, "result"), Member(root, "error"), doc);
+        return new MuseMspFrame(root.Num("id"), root.Str("method"), root.Prop("params"), root.Prop("result"), root.Prop("error"), doc);
     }
 
     public void Dispose() => Owner.Dispose();
-
-    static JsonElement? Member(JsonElement root, string name) => root.TryGetProperty(name, out var v) ? v : null;
 }

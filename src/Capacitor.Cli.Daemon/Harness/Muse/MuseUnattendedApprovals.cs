@@ -48,14 +48,14 @@ internal static class MuseUnattendedApprovals {
     }
 
     public static MuseApprovalDecision Decide(JsonElement approvalParams, IReadOnlySet<string> admitted) {
-        var subject = approvalParams.ValueKind == JsonValueKind.Object && approvalParams.TryGetProperty("subject", out var s) ? s : default;
+        var subject = approvalParams.Prop("subject") ?? default;
 
-        if (MuseApprovalBridge.StringOf(subject, "kind") == "tool"
-         && MuseApprovalBridge.StringOf(subject, "toolName") is { } toolName
+        if (subject.Str("kind") == "tool"
+         && subject.Str("toolName") is { } toolName
          && admitted.Contains(toolName)) {
             foreach (var choice in MuseApprovalBridge.Choices(approvalParams)) {
-                if (MuseApprovalBridge.StringOf(choice, "choiceId") is { } id
-                 && MuseApprovalBridge.StringOf(choice, "decision") == "approved"
+                if (choice.Str("choiceId") is { } id
+                 && choice.Str("decision") == "approved"
                  && id == "allow_once")
                     return new MuseApprovalDecision(id, null);
             }

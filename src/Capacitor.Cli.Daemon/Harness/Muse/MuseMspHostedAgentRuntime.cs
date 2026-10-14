@@ -227,7 +227,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     }
 
     static string? ErrorMessage(MuseMspFrame frame) =>
-        frame.Error is { ValueKind: JsonValueKind.Object } error ? error.Str("message") ?? error.GetRawText() : null;
+        frame.Error is { } error && error.IsObject ? error.Str("message") ?? error.GetRawText() : null;
 
     void Track(Task task) {
         _background[task] = 0;
@@ -257,7 +257,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
                 if (ErrorMessage(init) is { } error)
                     throw new InvalidOperationException($"Muse: initialize was refused: {error}");
 
-                var result  = init.Result is { ValueKind: JsonValueKind.Object } r ? r : default;
+                var result  = init.Result ?? default;
                 var schema  = result.Obj("schema");
                 var version = schema?.Num("version");
 
@@ -315,7 +315,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
 
     /// <summary>Fails closed on a session with no id or log path: the recording correlates on both.</summary>
     void ApplySession(MuseMspFrame response) {
-        var session = response.Result is { ValueKind: JsonValueKind.Object } r ? r.Obj("session") : null;
+        var session = response.Result?.Obj("session");
 
         if (session?.Str("sessionId") is not { Length: > 0 } sessionId || session.Value.Str("path") is not { Length: > 0 } path)
             throw new InvalidOperationException("Muse: the session answer carried no session id or log path.");
@@ -541,8 +541,9 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     /// <summary>A started turn's ack precedes its <c>turn/started</c>, so it marks the turn running at once;
     /// otherwise an idle wait right after the send would return before the turn began.</summary>
     void ApplyTurnStartAck(MuseMspFrame response) {
-        if (response.Result is not { ValueKind: JsonValueKind.Object } result
-         || result.Str("disposition") != "started"
+        var result = response.Result ?? default;
+
+        if (result.Str("disposition") != "started"
          || result.Str("turnId") is not { Length: > 0 } turnId)
             return;
 
@@ -780,7 +781,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     }
 
     static bool IsAlreadyResolved(MuseMspFrame response) =>
-        response.Error is { ValueKind: JsonValueKind.Object } error
+        response.Error is { } error
      && (error.Num("code") == ApprovalAlreadyResolvedCode || error.Obj("data")?.Str("kind") == "approvalAlreadyResolved");
 
     async Task HandleUserInputAsync(string userInputId, JsonElement p, CancellationToken ct) {
