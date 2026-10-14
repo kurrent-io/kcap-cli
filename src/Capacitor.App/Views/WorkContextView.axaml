@@ -51,14 +51,55 @@
         <Style Selector="Button.copyValue:pressed">
             <Setter Property="RenderTransform" Value="scale(1)" />
         </Style>
-        <Style Selector="Button.copyValue.open /template/ ContentPresenter#PART_ContentPresenter">
+        <Style Selector="Button.copyValue.planDocRow">
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Margin" Value="-8,0" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="Button.copyValue.planDocRow /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="CornerRadius" Value="7" />
+        </Style>
+        <Style Selector="Button.copyValue.planDocRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.copyValue.planDocRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        </Style>
+        <Style Selector="Button.copyValue.open /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.copyValue.open:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.copyValue.open:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+        </Style>
+        <Style Selector="Border.docKindBadge">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="7,1" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.docKindBadge > TextBlock">
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="LetterSpacing" Value="0.4" />
+            <Setter Property="LineHeight" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="Button.copyValue.open Border.docKindBadge">
+            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
+        </Style>
+        <Style Selector="Button.copyValue.open Border.docKindBadge > TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
         </Style>
         <Style Selector="Button.copyValue TextBlock.docName">
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <Style Selector="Button.copyValue.open TextBlock.docName">
             <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="FontWeight" Value="Medium" />
+        </Style>
+        <Style Selector="Button.copyValue.open Path.chevron">
+            <Setter Property="Stroke" Value="{StaticResource KcapPurpleBrush}" />
         </Style>
         <Style Selector="Border.pill.shipped">
             <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
@@ -240,8 +281,8 @@
                 <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
                     <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsActive}"
-                            views:PulseClock.IsActive="{Binding IsActive}" />
+                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
+                            IsVisible="{Binding IsActive}" views:PulseClock.IsActive="{Binding IsActive}" />
                 </Panel>
                 <StackPanel Grid.Column="1" Spacing="2">
                     <TextBlock Text="{Binding Title}" Classes="planTask" Classes.settled="{Binding IsSettled}"
@@ -599,14 +640,16 @@
                 </StackPanel>
 
                 <!-- The Artefacts tab's summary; the tab itself lives in the centre. -->
-                <Button x:Name="ArtefactsSummaryRow" Classes="copyValue" Margin="0,18,0,0" HorizontalAlignment="Stretch"
+                <Button x:Name="ArtefactsSummaryRow" Classes="sectionHeader expandable" Margin="0,18,0,0"
                         Command="{Binding OpenArtefactsCommand}"
                         IsVisible="{Binding Artefacts.HasAny, FallbackValue=False}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <TextBlock Text="ARTEFACTS" Classes="eyebrow" />
                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                             <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
-                            <Path Classes="prChevron" />
+                            <Panel Classes="chevronBox" Width="12" Height="12">
+                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" />
+                            </Panel>
                         </StackPanel>
                     </Grid>
                 </Button>
@@ -644,8 +687,12 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:PlanTaskCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
-                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center"
-                                                                RenderTransform="translateY(-1.5px)" />
+                                                <Panel Width="12" Height="12" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
+                                                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
+                                                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                                                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
+                                                            IsVisible="{Binding IsActive}" views:PulseClock.IsActive="{Binding IsActive}" />
+                                                </Panel>
                                                 <TextBlock Text="{Binding Count}" Classes="sectionMeta" />
                                             </StackPanel>
                                         </DataTemplate>
@@ -669,20 +716,23 @@
                             <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}" IsVisible="{Binding Plan.HasDocuments}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
-                                        <StackPanel Spacing="6" />
+                                        <StackPanel Spacing="4" />
                                     </ItemsPanelTemplate>
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PlanDocumentRow">
-                                        <Button Classes="copyValue" Classes.open="{Binding IsOpen}" HorizontalAlignment="Stretch"
+                                        <Button Classes="copyValue planDocRow" Classes.open="{Binding IsOpen}" HorizontalAlignment="Stretch"
                                                 Command="{Binding $parent[ItemsControl].((vm:WorkContextViewModel)DataContext).Plan.OpenDocumentCommand}"
                                                 CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
-                                            <Grid ColumnDefinitions="46,*,Auto" ColumnSpacing="6">
-                                                <TextBlock Text="{Binding Kind}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}" />
+                                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                                <Border Classes="docKindBadge">
+                                                    <TextBlock Text="{Binding KindLabel}" />
+                                                </Border>
                                                 <TextBlock Grid.Column="1" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <Path Grid.Column="2" Width="8" Height="8" Stretch="None" VerticalAlignment="Center"
-                                                      Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5" Data="M2,1 L5,4 L2,7" />
+                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                                <Panel Grid.Column="2" Classes="chevronBox" Width="12" Height="12" VerticalAlignment="Center">
+                                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" />
+                                                </Panel>
                                             </Grid>
                                         </Button>
                                     </DataTemplate>

@@ -116,7 +116,7 @@ public class PlanSectionViewModelTests {
             await h.SwitchAsync(SessionA);
 
             await Assert.That(h.Vm.Counts).IsEquivalentTo(new PlanTaskCount[] {
-                new(PlanTaskState.Pending, 2), new(PlanTaskState.InProgress, 1), new(PlanTaskState.Completed, 2),
+                new(PlanTaskState.Pending, 2), new(PlanTaskState.InProgress, 1, true), new(PlanTaskState.Completed, 2),
             }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Counts.Select(c => c.Label))
                 .IsEquivalentTo(new[] { "2 pending", "1 in progress", "2 done" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
@@ -429,11 +429,13 @@ public class PlanSectionViewModelTests {
             h.Source.Enqueue(Ready(Plan("p1", tasks: Todo("t1", 1, "in_progress"))));
             await h.SwitchAsync(SessionA);
             await Assert.That(h.Vm.Tasks.Single().IsActive).IsTrue();
+            await Assert.That(h.Vm.Counts.Single().IsActive).IsTrue();
 
             h.Activity.SessionOver = true;
 
             await Assert.That(h.Vm.Tasks.Single().IsInProgress).IsTrue();
             await Assert.That(h.Vm.Tasks.Single().IsActive).IsFalse();
+            await Assert.That(h.Vm.Counts.Single().IsActive).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
