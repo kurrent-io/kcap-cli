@@ -1179,7 +1179,7 @@ minimum version automatically at startup and refuses anything older. Use `kcap d
 permission, and it never blocks a first launch.
 
 **To disable a vendor**, set its variable to `0` (or `false`/`no`/`off`) in the **daemon's** environment
-(Gemini, Kiro, OpenCode, Antigravity, Pi, and Grok):
+(Gemini, Kiro, OpenCode, Antigravity, Pi, Grok, and Muse Code):
 
 ```bash
 export KCAP_GEMINI_UNATTENDED_REVIEWER=0        # this DAEMON's environment — not a server setting
@@ -1188,6 +1188,7 @@ export KCAP_OPENCODE_UNATTENDED_REVIEWER=0
 export KCAP_ANTIGRAVITY_UNATTENDED_REVIEWER=0
 export KCAP_PI_UNATTENDED_REVIEWER=0
 export KCAP_GROK_UNATTENDED_REVIEWER=0
+export KCAP_MUSE_UNATTENDED_REVIEWER=0
 ```
 
 Unset means enabled. A value the daemon cannot read as true or false is treated as **disabled**, and
@@ -1196,7 +1197,7 @@ so an unreadable value is a failed "off" rather than an ambiguous input. Surroun
 (`"0"` works), since a mis-quoted service-unit entry is the usual way that happens.
 
 **On a service-installed daemon, set it before you install.** `kcap daemon service install` copies these
-five variables into the service unit — on every platform — but a supervised daemon inherits nothing from
+variables into the service unit — on every platform — but a supervised daemon inherits nothing from
 your shell afterwards, so its environment is frozen at install time. Exporting an opt-out later has no
 effect until you reinstall the service:
 
@@ -1414,6 +1415,20 @@ reviewer, and no kcap release is ever needed.
 POSIX only: the per-launch directory holds the reviewer's own transcript and manifest and cannot be
 created owner-only on Windows. Borrowed (in-place) review is not offered; a borrowed request falls
 back to a daemon-owned worktree, same as Antigravity.
+
+#### Unattended Muse reviews
+
+Enabled by default; `KCAP_MUSE_UNATTENDED_REVIEWER=0` in the daemon's environment disables it.
+
+A Muse reviewer runs read-only in a daemon-owned worktree or snapshot, with network restricted, and does not trust the workspace: the reviewed repository's Muse hooks, rules, skills and `.mcp.json` servers never load. Your own hooks in `~/.config/muse/settings.json` still run, which is how a reviewer is recorded when kcap's hooks are installed. Muse runs in its `onRequest` approval mode so that every approval reaches the daemon, which decides each one itself: it allows only the kcap tools it injected for the review, under per-launch names a repository cannot shadow, and rejects everything else. A review of your working tree borrows it as an independent snapshot, never your live checkout. It authenticates as **you**, with the daemon's own Muse credential (see [Hosted Muse Code agents](#hosted-muse-code-agents) — a service-installed daemon does not see a key exported in your shell), and `KCAP_MUSE_MODEL` picks its model.
+
+**Minimum version.** The daemon refuses a `muse` older than 1.4.7, the oldest build the reviewer's posture was measured on, and older than the build you first enabled the reviewer with; any newer build is accepted.
+
+```bash
+kcap daemon reviewer affirm --vendor muse
+```
+
+Same command and model as Pi and Grok: it moves the recorded minimum to whatever is installed now, records nothing else, and does not enable the reviewer. POSIX only, and Linux needs bubblewrap with user namespaces; a host that cannot sandbox refuses with `muse_reviewer_sandbox_unavailable`. A Muse PR review (`kcap review <pr>`) is refused with `muse_pr_review_unsupported`.
 
 #### Hosted Antigravity agents run without permission prompts
 
@@ -1773,7 +1788,7 @@ KCAP_CURSOR_PATH=/opt/cursor/bin/cursor-agent kcap daemon
 KCAP_CURSOR_MODEL=claude-opus-4-8 kcap daemon
 ```
 
-`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon hosts Claude, Codex, Cursor, Copilot, Kiro, Gemini, Pi, OpenCode, Antigravity and Grok. `KCAP_GEMINI_PATH` overrides the `gemini` binary the same way (`gemini --experimental-acp`), and applies to both hosted Gemini agents and the [unattended Gemini reviewer](#unattended-reviewers-are-enabled-by-default-they-used-to-be-opt-in) (enabled by default) — whose build-affirmation check reads whichever binary it names. `KCAP_OPENCODE_PATH` overrides the `opencode` binary the daemon spawns for **OpenCode hosted agents** (`opencode acp`) — no longer reserved; see [Hosted OpenCode agents](#hosted-opencode-agents) below. `KCAP_GROK_PATH` overrides the `grok` binary the daemon spawns for **Grok Build hosted agents** (`grok agent --no-leader stdio`); see [Hosted Grok agents](#hosted-grok-agents) below. `KCAP_PI_PATH` overrides the `pi` binary the daemon spawns for **Pi hosted agents** (`pi --mode rpc`) — interactive hosting only in this release; see [Hosted Pi agents](#hosted-pi-agents) below.
+`KCAP_COPILOT_PATH` overrides the `copilot` binary the daemon spawns for **GitHub Copilot hosted agents** (`copilot --acp --stdio`), mirroring `KCAP_CURSOR_PATH` — the daemon hosts Claude, Codex, Cursor, Copilot, Kiro, Gemini, Pi, OpenCode, Antigravity, Grok and Muse Code. `KCAP_GEMINI_PATH` overrides the `gemini` binary the same way (`gemini --experimental-acp`), and applies to both hosted Gemini agents and the [unattended Gemini reviewer](#unattended-reviewers-are-enabled-by-default-they-used-to-be-opt-in) (enabled by default) — whose build-affirmation check reads whichever binary it names. `KCAP_OPENCODE_PATH` overrides the `opencode` binary the daemon spawns for **OpenCode hosted agents** (`opencode acp`) — no longer reserved; see [Hosted OpenCode agents](#hosted-opencode-agents) below. `KCAP_GROK_PATH` overrides the `grok` binary the daemon spawns for **Grok Build hosted agents** (`grok agent --no-leader stdio`); see [Hosted Grok agents](#hosted-grok-agents) below. `KCAP_PI_PATH` overrides the `pi` binary the daemon spawns for **Pi hosted agents** (`pi --mode rpc`) — interactive hosting only in this release; see [Hosted Pi agents](#hosted-pi-agents) below. `KCAP_MUSE_PATH` overrides the `muse` binary the daemon spawns for **Muse Code hosted agents** (`muse serve`); see [Hosted Muse Code agents](#hosted-muse-code-agents) below.
 
 ```bash
 KCAP_COPILOT_PATH=/opt/copilot/bin/copilot kcap daemon
@@ -1961,6 +1976,20 @@ Enabled by default; `KCAP_GROK_UNATTENDED_REVIEWER=0` in the daemon's environmen
 - **The reviewer gets reads, search and the shell, and no edit tools.** It is launched with an agent profile that removes `search_replace` and `write`, subagents and web search.
 - **Your Grok configuration still applies.** Permission rules you set in `~/.grok` approve matching calls without asking, and your Grok hooks and MCP servers run as they do in your own sessions. Grok has no per-process switch for them. Your Claude Code and Cursor MCP servers, hooks, skills and rules are not loaded.
 - **Version floor:** the daemon records the installed `grok` at startup and refuses an older build. `kcap daemon reviewer affirm --vendor grok` moves it.
+
+### Hosted Muse Code agents
+
+The daemon hosts Muse Code over `muse serve` (chat, no terminal) when `muse` is on `PATH` (or `KCAP_MUSE_PATH` names it). `KCAP_MUSE_MODEL` overrides the model, mirroring `KCAP_PI_MODEL`; a per-launch model from the dashboard takes precedence, and with neither set Muse runs its own default.
+
+```bash
+KCAP_MUSE_MODEL=<model> kcap daemon
+```
+
+- **Credentials stay on the daemon host.** The daemon never looks for them, and one installed as a service inherits no `META_API_KEY` exported in your shell: run `muse auth set` as the user the daemon runs as, or set `META_API_KEY` in the service unit's own environment. On Linux this is required; a macOS `auth.json` does not transfer.
+- **Linux needs bubblewrap with user namespaces.** Without them a reviewer launch is refused, and an interactive agent runs without Muse's sandbox.
+- **Always in a daemon-owned worktree,** never your own checkout, because Muse's sandbox does not confine reads. The worktree is trusted, so its Muse hooks and MCP servers load; new network hosts ask for approval.
+- **Reminder child sessions run and bill on every launch.** Muse does not let `serve` disable them; each is recorded as a subagent of its parent.
+- **It is recorded once,** from Muse's own session log. Reviews: [Unattended Muse reviews](#unattended-muse-reviews).
 
 ### Hosted Pi agents
 

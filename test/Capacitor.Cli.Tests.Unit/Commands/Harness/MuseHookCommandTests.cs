@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.PrDetection;
@@ -110,6 +111,220 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned[0].Key).IsEqualTo(ParentDashless);
         await Assert.That(_spawner.Spawned[0].TranscriptPath).IsEqualTo(log);
         await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
+    }
+
+    /// <summary>A hook inherits no <c>KCAP_AGENT_ID</c> from a daemon-hosted Muse, so the marker the daemon
+    /// wrote is the only link to the agent. The command's config root is not the home-derived one, so the
+    /// marker is found only by looking where a cleared-environment hook would.</summary>
+    [Test]
+    public async Task SessionStart_without_a_hosted_environment_takes_agent_host_id_from_the_marker() {
+        StubHooks();
+        StageParentLog();
+        MuseHostedSessionMarker.Write(Home,
+            new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
+
+        await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-start/muse").Single()).RootElement;
+        await Assert.That(body.GetProperty("agent_host_id").GetString()).IsEqualTo("agent-from-marker");
+    }
+
+    /// <summary>A hook for a session hosted by a daemon with its own config root records to that root's
+    /// profile: the home-derived root a cleared environment resolves names no server at all, so the post
+    /// reaching the stub proves the marker's root was used.</summary>
+    [Test]
+    public async Task A_marker_naming_a_config_root_makes_the_hook_post_through_that_roots_profile() {
+        StubHooks();
+        StageParentLog();
+        var daemonRoot = DaemonRoot(_server.Url!);
+        WriteMarker(daemonRoot, serverUrl: null);
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(root.Directory).IsEqualTo(daemonRoot);
+        await Assert.That((await AppConfig.ResolveActiveProfile([], ConfigRoot.UnderHome(Home.Path), ProfileOverrides.None)).Resolution.ServerUrl)
+            .IsNull();
+
+        await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-start/muse").Single()).RootElement;
+        await Assert.That(body.GetProperty("agent_host_id").GetString()).IsEqualTo("agent-from-marker");
+    }
+
+    /// <summary>The daemon's server outranks the root's active profile, as the relay's <c>KCAP_URL</c> does.</summary>
+    [Test]
+    public async Task A_marker_naming_a_server_overrides_the_roots_active_profile() {
+        StubHooks();
+        StageParentLog();
+        WriteMarker(DaemonRoot("http://127.0.0.1:9"), _server.Url);
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
+
+        await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>A default-root daemon pointed elsewhere by <c>KCAP_URL</c>: the hook shares its root, but the
+    /// root's active profile names another server, so only the marker's server lands the post on the stub.</summary>
+    [Test]
+    public async Task A_marker_server_redirects_a_default_root_hook_from_the_active_profile() {
+        StubHooks();
+        StageParentLog();
+        HomeRoot("http://127.0.0.1:9");
+        WriteMarker(configDir: null, _server.Url);
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(root.Directory).IsEqualTo(ConfigRoot.UnderHome(Home.Path).Directory);
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
+
+        await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>The hook takes the marker profile's credential and posts to the marker's server, even
+    /// when the profile's own URL differs.</summary>
+    [Test]
+    public async Task A_marker_profile_supplies_the_credential_while_the_marker_server_stays_the_destination() {
+        StubHooks();
+        StageParentLog();
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: "http://127.0.0.1:9"), _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Name).IsEqualTo("team-b");
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
+
+        await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>A profile removed mid-session leaves only the active profile's credential to fall back on,
+    /// so the hook is refused rather than recorded under another user.</summary>
+    [Test]
+    public async Task A_marker_profile_removed_from_the_config_refuses_the_hook() {
+        WriteMarker(DaemonRoot(_server.Url!), _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (_, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Name).IsEqualTo("default");
+        await Assert.That(connection.MissingProfileWarning(profiles)).Contains("'team-b'");
+    }
+
+    [Test]
+    public async Task A_marker_profile_present_in_the_config_is_not_refused() {
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: _server.Url), _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (_, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(connection.MissingProfileWarning(profiles)).IsNull();
+    }
+
+    /// <summary>A marker that names a profile but no usable server leaves the destination to the profile.</summary>
+    [Test]
+    public async Task A_marker_profile_without_a_server_resolves_through_the_profile() {
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: _server.Url), "file:///etc/passwd", profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (_, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Name).IsEqualTo("team-b");
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
+    }
+
+    /// <summary>An environment that chooses a server by either means keeps it; the marker's root still applies.</summary>
+    [Test]
+    public async Task An_environment_profile_outranks_the_marker_server_but_not_its_root() {
+        var daemonRoot = DaemonRoot(_server.Url!);
+        WriteMarker(daemonRoot, _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home,
+            k => k == ProfileOverrides.ProfileVar ? "mine" : null);
+
+        await Assert.That(connection).IsEqualTo(new MuseHookConnection(daemonRoot, null, null));
+    }
+
+    /// <summary>A child's hook names its own session; the marker belongs to the parent it runs under.</summary>
+    [Test]
+    public async Task A_child_hook_finds_the_marker_under_its_parent_session() {
+        var daemonRoot = DaemonRoot(_server.Url!);
+        WriteMarker(daemonRoot, _server.Url);
+        var child = $$"""{"hook_event_name":"SubagentStart","child_session_id":"{{WorkerChild}}","session_id":"{{WorkerChild}}"}""";
+
+        var connection = MuseHookConnection.Resolve(child, Home, ParentEnv);
+
+        await Assert.That(connection).IsEqualTo(new MuseHookConnection(daemonRoot, _server.Url, null));
+    }
+
+    /// <summary>What the environment sets wins: a relayed hook already carries the daemon's own values.</summary>
+    [Test]
+    public async Task The_environment_outranks_the_marker() {
+        WriteMarker(DaemonRoot(_server.Url!), _server.Url);
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home,
+            k => k is ConfigRoot.ConfigDirEnvVar or ProfileOverrides.UrlVar ? "set" : null);
+
+        await Assert.That(connection).IsEqualTo(MuseHookConnection.None);
+    }
+
+    /// <summary>The absolute root is built from the temp directory: a POSIX literal is not fully qualified
+    /// on Windows.</summary>
+    [Test]
+    [Arguments(false, "https://kcap.example", true)]
+    [Arguments(true, "file:///etc/passwd", false)]
+    [Arguments(true, "not a url", false)]
+    public async Task A_marker_value_that_is_not_an_absolute_root_or_http_url_is_ignored(
+            bool absoluteDir, string serverUrl, bool urlAdopted) {
+        var configDir = absoluteDir ? Tmp.PathTo("abs-config") : Path.Join("relative", "config");
+        WriteMarker(configDir, serverUrl);
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+
+        await Assert.That(connection).IsEqualTo(
+            new MuseHookConnection(absoluteDir ? configDir : null, urlAdopted ? serverUrl : null, null));
+    }
+
+    [Test]
+    public async Task No_marker_names_no_connection() =>
+        await Assert.That(MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null)).IsEqualTo(MuseHookConnection.None);
+
+    [Test]
+    public async Task SessionStart_without_a_marker_or_hosted_environment_forwards_no_agent_host_id() {
+        StubHooks();
+        StageParentLog();
+
+        await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-start/muse").Single()).RootElement;
+        await Assert.That(body.TryGetProperty("agent_host_id", out _)).IsFalse();
+    }
+
+    /// <summary>The end is linked to the same agent as the start, through the marker it then deletes.</summary>
+    [Test]
+    public async Task SessionEnd_takes_agent_host_id_from_the_marker_then_deletes_it() {
+        StubHooks();
+        StageParentLog();
+        MuseHostedSessionMarker.Write(Home,
+            new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
+
+        await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"SessionEnd","reason":"other","session_id":"{{ParentId}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-end/muse").Single()).RootElement;
+        await Assert.That(body.GetProperty("agent_host_id").GetString()).IsEqualTo("agent-from-marker");
+        await Assert.That(MuseHostedSessionMarker.TryRead(Home, ParentId)).IsNull();
     }
 
     /// <summary>Stop only starts a watcher, so this is the start's one chance: it is posted without a
@@ -409,13 +624,47 @@ public class MuseHookCommandTests : IDisposable {
 
     static string? ParentEnv(string key) => key == "MUSE_SESSION_ID" ? ParentId : null;
 
-    MuseHookCommand Command(FakeWatcherSpawner? spawner = null, HarnessRegistry? harnesses = null) {
-        var profiles = Resolutions.At(_server.Url!, Config.Root);
-        var http     = new FixedCapacitorHttpClient();
+    MuseHookCommand Command(
+            FakeWatcherSpawner? spawner = null, HarnessRegistry? harnesses = null, ConfigRoot? root = null, ProfileContext? profiles = null) {
+        root     ??= Config.Root;
+        profiles ??= Resolutions.At(_server.Url!, root);
+        var http   = new FixedCapacitorHttpClient();
 
-        return new MuseHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, harnesses ?? TestHarnesses.Under(Home),
-            HostedAgent.Terminal, http, TestWatchers.For(Config.Root, profiles, http, spawner ?? _spawner), new GitProviderRouter(),
+        return new MuseHookCommand(root, profiles, new HookClock(TimeProvider.System), Home, harnesses ?? TestHarnesses.Under(Home),
+            HostedAgent.Terminal, http, TestWatchers.For(root, profiles, http, spawner ?? _spawner), new GitProviderRouter(),
             new WorkingDirectory(AppContext.BaseDirectory));
+    }
+
+    /// <summary>A config root of its own whose active profile points at <paramref name="serverUrl"/>.</summary>
+    string DaemonRoot(string serverUrl, string? teamBUrl = null) {
+        WriteRootConfig(Tmp.PathTo("daemon-config"), serverUrl, teamBUrl);
+        return Tmp.PathTo("daemon-config");
+    }
+
+    /// <summary>The config the home-derived root holds: what a cleared-environment hook resolves by itself.</summary>
+    void HomeRoot(string serverUrl) => WriteRootConfig(ConfigRoot.UnderHome(Home.Path).Directory, serverUrl, null);
+
+    static void WriteRootConfig(string dir, string activeUrl, string? teamBUrl) {
+        Directory.CreateDirectory(dir);
+        var teamB = teamBUrl is null ? "" : $$""", "team-b": { "server_url": "{{teamBUrl}}" }""";
+        File.WriteAllText(Path.Join(dir, "config.json"), $$"""
+            {
+              "version": 2,
+              "active_profile": "default",
+              "profiles": { "default": { "server_url": "{{activeUrl}}" }{{teamB}} },
+              "profile_bindings": {}
+            }
+            """);
+    }
+
+    void WriteMarker(string? configDir, string? serverUrl, string? profile = null) =>
+        MuseHostedSessionMarker.Write(Home, new MuseHostedSessionMarker(
+            ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow, configDir, serverUrl, profile));
+
+    /// <summary>The process-level resolution a cleared-environment hook gets, as the composition root builds it.</summary>
+    static async Task<(ConfigRoot Root, ProfileContext Profiles)> Resolve(MuseHookConnection connection, Func<ConfigRoot> fallback) {
+        var root = connection.ConfigRootOr(fallback);
+        return (root, connection.Bind(await AppConfig.ResolveActiveProfile([], root, connection.Apply(ProfileOverrides.None))));
     }
 
     string StageParentLog(params string[] lines) {

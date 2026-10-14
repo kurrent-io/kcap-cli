@@ -117,8 +117,19 @@ var clock  = new HookClock(time);
 var isHook = command == "hook";
 
 // Resolved once here and passed onward; nothing downstream resolves a root for itself.
-var config  = ConfigRoot.FromEnvironment();
-var home    = UserHome.FromEnvironment();
+var home = UserHome.FromEnvironment();
+
+// Muse runs a hook with a cleared environment, so a hosted session's marker supplies the daemon's root and server.
+var museHook = MuseHookConnection.None;
+if (isHook && args.Contains("--muse")) {
+    string body;
+    try { body = await Console.In.ReadToEndAsync(); } catch { body = ""; }
+
+    Console.SetIn(new StringReader(body));
+    museHook = MuseHookConnection.Resolve(body, home, Environment.GetEnvironmentVariable);
+}
+
+var config  = museHook.ConfigRootOr(ConfigRoot.FromEnvironment);
 var workdir = WorkingDirectory.FromProcess();
 
 // git runs this after every commit on the machine, so it resolves no server, profile or update.
@@ -150,11 +161,18 @@ if (isRefreshHandoff) RefreshTokenHandoff.EnterDetached();
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
-var serverEnv = ProfileOverrides.FromEnvironment();
+var serverEnv = museHook.Apply(ProfileOverrides.FromEnvironment());
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000);
+var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
+
+if (museHook.MissingProfileWarning(profiles) is { } missingProfile) {
+    Console.Error.WriteLine(missingProfile);
+
+    return 0;
+}
+
 var baseUrl  = profiles.Resolution.ServerUrl;
 
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy

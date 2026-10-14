@@ -2,7 +2,7 @@
 
 **File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, transcript normalization at `src/Capacitor.Models.Transcripts/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
 
-**Harness layout:** vendor-specific code lives under `Harness/`. Vendors: Antigravity, Claude, Codex, Copilot, Cursor, Gemini, Kiro, OpenCode, Pi.
+**Harness layout:** vendor-specific code lives under `Harness/`. Vendors: Antigravity, Claude, Codex, Copilot, Cursor, Gemini, Grok, Kiro, MistralVibe, Muse, OpenCode, Pi.
 
 - `src/Capacitor.Models.Transcripts/Harness/<Vendor>/` — transcript projections to canonical events, the one place a vendor's transcript format is read.
 - `src/Capacitor.Cli.Core/Harness/<Vendor>/` — paths, hook parsers/installers, CLI runners, chat display rules.

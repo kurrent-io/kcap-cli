@@ -32,10 +32,17 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
         await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
         await Assert.That(HostedHarnessCatalog.Build(["mistral-vibe"]).Single(o => o.Vendor == "mistral-vibe").Available).IsTrue();
+    }
 
+    /// <summary>A daemon too old to host Muse Code advertises nothing for it, so silence must not offer it.</summary>
+    [Test]
+    public async Task Muse_is_listed_only_when_a_daemon_advertises_it() {
         await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse");
         await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("muse");
-        await Assert.That(HostedHarnessCatalog.Build(["muse"]).Single(o => o.Vendor == "muse").Available).IsTrue();
+
+        var advertised = HostedHarnessCatalog.Build(["muse"]).Single(o => o.Vendor == "muse");
+        await Assert.That(advertised.Available).IsTrue();
+        await Assert.That(advertised.TransportFamily).IsEqualTo("rpc");
     }
 
     [Test]
