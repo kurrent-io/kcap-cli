@@ -924,9 +924,12 @@ switch (command) {
         // Codex blocks on this hook's stdout, so its stamp waits until the hook has answered.
         if (hookVendor is not null && hookVendor != HarnessId.Codex.VendorId) new HookActivity(config, time).Stamp(hookVendor);
 
-        // Blocks the agent's Read, so it skips the spool drain below.
+        // These two block the agent's tool call, so they skip the spool drain below.
         if (args.Contains("--claude") && args.Contains("--plan-read")) {
             return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));
+        }
+        if (args.Contains("--claude") && args.Contains("--task-list")) {
+            return await Run<ClaudeHookCommand>().HandleTaskList(new StringReader(claudeHookBody!));
         }
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
