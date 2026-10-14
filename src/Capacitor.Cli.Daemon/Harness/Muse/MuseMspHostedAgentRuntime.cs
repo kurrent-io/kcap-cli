@@ -43,7 +43,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     readonly MuseLaunchPlan  _plan;
     readonly string          _daemonVersion;
     readonly TimeSpan        _readyDeadline;
-    readonly Action?         _onDisposed;
+    readonly Func<Task>?     _onDisposed;
     readonly Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>> _requestInteraction;
 
     /// <summary>Never disposed: its token reaches process calls still in flight on other threads when
@@ -106,7 +106,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             MuseLaunchPlan  plan,
             string          daemonVersion,
             TimeSpan?       readyDeadline = null,
-            Action?         onDisposed    = null) {
+            Func<Task>?     onDisposed    = null) {
         _process            = process;
         _logger             = logger;
         _agentId            = agentId;
@@ -933,7 +933,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         if (_onDisposed is null) return;
 
         try {
-            _onDisposed();
+            await _onDisposed().ConfigureAwait(false);
         } catch (Exception ex) {
             _logger.LogWarning(ex, "Muse: the runtime's disposal callback failed (agentId={AgentId}).", _agentId);
         }

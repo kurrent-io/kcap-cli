@@ -197,7 +197,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
                 plan,
                 _config.Version ?? "0.0.0",
                 _readyDeadline,
-                onDisposed: () => OnRuntimeDisposed(runtime, launch, plan, relayedStart));
+                onDisposed: () => OnRuntimeDisposedAsync(runtime, launch, plan, relayedStart));
             runtime.ActivityClock = ctx.ActivityClock;
 
             await runtime.WaitForSessionReadyAsync(ct).ConfigureAwait(false);
@@ -380,8 +380,10 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     };
 
     /// <summary>Relays the session's end when its start was relayed (the relayed hook then removes the
-    /// marker); otherwise removes the marker itself, which Muse's own end hook may already have done.</summary>
-    void OnRuntimeDisposed(MuseMspHostedAgentRuntime? runtime, RuntimeStartContext ctx, MuseLaunchPlan plan, bool relayedStart) {
+    /// marker); otherwise removes the marker itself, which Muse's own end hook may already have done.
+    /// Awaited by the runtime's disposal, so a daemon shutting down does not lose the only end the
+    /// session gets; the relay bounds itself.</summary>
+    async Task OnRuntimeDisposedAsync(MuseMspHostedAgentRuntime? runtime, RuntimeStartContext ctx, MuseLaunchPlan plan, bool relayedStart) {
         if (!relayedStart || runtime?.Session is not { } session) {
             MuseHostedSessionMarker.Delete(_config.Home, plan.MintedSessionId);
             return;
@@ -395,12 +397,8 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
             ["transcript_path"] = session.LogPath,
         };
 
-        _ = RelayDetachedAsync(ctx, session.SessionId, payload);
-    }
-
-    async Task RelayDetachedAsync(RuntimeStartContext ctx, string sessionId, JsonObject payload) {
         try {
-            await _hookRelay(ctx.CapacitorPath, payload, sessionId, ctx.AgentId, ctx.ServerUrl, ctx.DaemonId,
+            await _hookRelay(ctx.CapacitorPath, payload, session.SessionId, ctx.AgentId, ctx.ServerUrl, ctx.DaemonId,
                 ctx.DaemonEpoch, _logger, CancellationToken.None).ConfigureAwait(false);
         } catch (Exception ex) {
             _logger.LogWarning(ex, "Muse: relaying the session end failed (agentId={AgentId}).", ctx.AgentId);

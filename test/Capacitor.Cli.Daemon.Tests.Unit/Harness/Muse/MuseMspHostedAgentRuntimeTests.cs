@@ -681,7 +681,10 @@ public class MuseMspHostedAgentRuntimeTests {
         var disposed = 0;
         var host     = new MuseScriptedHost();
         var rt = new MuseMspHostedAgentRuntime(host.Process, NullLogger.Instance, "agent-1", "/w", null, new FakeTimeProvider(),
-            (_, _) => throw new InvalidOperationException(), Plan(), "9.9.9", onDisposed: () => Interlocked.Increment(ref disposed));
+            (_, _) => throw new InvalidOperationException(), Plan(), "9.9.9", onDisposed: () => {
+                Interlocked.Increment(ref disposed);
+                return Task.CompletedTask;
+            });
 
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
         await rt.DisposeAsync();
@@ -690,6 +693,46 @@ public class MuseMspHostedAgentRuntimeTests {
         await Assert.That(host.Process.TerminateCalls).IsEqualTo(1);
         await Assert.That(host.Process.DisposeCalls).IsEqualTo(1);
         await Assert.That(Volatile.Read(ref disposed)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Dispose_does_not_complete_until_the_callback_does() {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var host    = new MuseScriptedHost();
+        var rt = new MuseMspHostedAgentRuntime(host.Process, NullLogger.Instance, "agent-1", "/w", null, new FakeTimeProvider(),
+            (_, _) => throw new InvalidOperationException(), Plan(), "9.9.9", onDisposed: () => {
+                started.TrySetResult();
+                return gate.Task;
+            });
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        var dispose = rt.DisposeAsync().AsTask();
+
+        await started.Task.WaitAsync(HangGuard);
+        await Assert.That(dispose.IsCompleted).IsFalse();
+
+        gate.SetResult();
+        await dispose.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_failing_callback_does_not_escape_dispose() {
+        Func<Task>[] callbacks = [
+            () => throw new InvalidOperationException("sync"),
+            () => Task.FromException(new IOException("async")),
+        ];
+
+        foreach (var callback in callbacks) {
+            var host = new MuseScriptedHost();
+            var rt = new MuseMspHostedAgentRuntime(host.Process, NullLogger.Instance, "agent-1", "/w", null, new FakeTimeProvider(),
+                (_, _) => throw new InvalidOperationException(), Plan(), "9.9.9", onDisposed: callback);
+
+            await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+            await rt.DisposeAsync().AsTask().WaitAsync(HangGuard);
+
+            await Assert.That(host.Process.DisposeCalls).IsEqualTo(1);
+        }
     }
 
     // ---- Status ----

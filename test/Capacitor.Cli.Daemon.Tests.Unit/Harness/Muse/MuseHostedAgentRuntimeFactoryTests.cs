@@ -74,7 +74,8 @@ public class MuseHostedAgentRuntimeFactoryTests {
             Action<MuseScriptedHost>? configure = null,
             TimeProvider?     time           = null,
             TimeSpan?         readyDeadline  = null,
-            Action?           onRelay        = null) {
+            Action?           onRelay        = null,
+            Func<Relay, Task>? relayOutcome  = null) {
         config ??= Config();
         if (affirmed is not null) new ReviewerVersionStore(config.Store.StateDirectory(config.Name), DaemonRunner.MuseVendor).Affirm(affirmed);
 
@@ -99,9 +100,10 @@ public class MuseHostedAgentRuntimeFactoryTests {
             sandbox: sandbox ?? new MuseSandboxProbe(() => true),
             hooksInstalled: _ => hooksInstalled,
             hookRelay: (kcap, payload, sessionId, agentId, url, daemonId, epoch, _, _) => {
-                lock (rig!.Relays) rig.Relays.Add(new Relay(kcap, payload, sessionId, agentId, url, daemonId, epoch));
+                var relay = new Relay(kcap, payload, sessionId, agentId, url, daemonId, epoch);
+                lock (rig!.Relays) rig.Relays.Add(relay);
                 onRelay?.Invoke();
-                return Task.CompletedTask;
+                return relayOutcome?.Invoke(relay) ?? Task.CompletedTask;
             },
             readyDeadline: readyDeadline);
 
@@ -385,6 +387,42 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await quiet.Runtime.DisposeAsync();
 
         await Assert.That(hooked.Relays).IsEmpty();
+    }
+
+    /// <summary>The relayed end is the session's only end when no hooks are installed, so a daemon
+    /// shutting down must not finish disposing before it lands.</summary>
+    [Test]
+    public async Task Dispose_waits_for_the_relayed_session_end() {
+        var endStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var endGate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rig = NewRig(hooksInstalled: false, relayOutcome: relay => {
+            if ((string?)relay.Payload["hook_event_name"] != "SessionEnd") return Task.CompletedTask;
+
+            endStarted.TrySetResult();
+            return endGate.Task;
+        });
+
+        var start   = await StartAsync(rig, Ctx());
+        var dispose = start.Runtime.DisposeAsync().AsTask();
+
+        await endStarted.Task.WaitAsync(HangGuard);
+        await Assert.That(dispose.IsCompleted).IsFalse();
+
+        endGate.SetResult();
+        await dispose.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task A_failing_session_end_relay_does_not_escape_dispose() {
+        var rig = NewRig(hooksInstalled: false, relayOutcome: relay =>
+            (string?)relay.Payload["hook_event_name"] == "SessionEnd"
+                ? Task.FromException(new IOException("relay failed"))
+                : Task.CompletedTask);
+
+        var start = await StartAsync(rig, Ctx());
+        await start.Runtime.DisposeAsync().AsTask().WaitAsync(HangGuard);
+
+        await Assert.That(rig.Relays.Count).IsEqualTo(2);
     }
 
     [Test]
