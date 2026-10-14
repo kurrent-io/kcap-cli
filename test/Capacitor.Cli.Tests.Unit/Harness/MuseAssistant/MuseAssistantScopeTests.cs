@@ -257,8 +257,8 @@ public class MuseAssistantScopeTests {
 
         await Assert.That(output.GetCapturedOutput().Trim()).IsEqualTo(
             $"key={MuseAssistantPaths.ChatKey("chat-a")} watermark=none boundary=history after_seq=none chat=chat-a");
-        await Assert.That(output.GetCapturedError()).Contains("no usable state; run `scope remove` then `scope add` chat=chat-b");
-        await Assert.That(output.GetCapturedError()).Contains("chat=chat-c d");
+        await Assert.That(output.GetCapturedError()).Contains("no usable state; the state file is unreadable or belongs to another account; `scope remove` sets it aside, then `scope add` records the chat afresh chat=chat-b");
+        await Assert.That(output.GetCapturedError()).Contains("no usable state; run `scope remove` then `scope add` chat=chat-c d");
         await Assert.That(output.GetCapturedError()).DoesNotContain("chat=chat-a");
     }
 
@@ -549,6 +549,70 @@ public class MuseAssistantScopeTests {
         var lines = stdout.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         await Assert.That(lines.Single(l => l.EndsWith("chat=chat-a", StringComparison.Ordinal))).Contains("status=active");
         await Assert.That(lines.Single(l => l.EndsWith("chat=chat-b", StringComparison.Ordinal))).Contains("status=closing");
+    }
+
+    [Test]
+    [NotInParallel]
+    [Arguments("{ not json")]
+    [Arguments("")]
+    public async Task Remove_of_an_unreadable_state_sets_the_file_aside_and_a_later_add_grants_afresh(string content) {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-main", History, default);
+        var dir  = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        var path = MuseAssistantPaths.ChatState(dir, "chat-main");
+        File.WriteAllText(path, content);
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(3);
+
+        await Assert.That(File.Exists(path)).IsFalse();
+        var aside = Directory.GetFiles(dir, Path.GetFileName(path) + ".unusable-*").Single();
+        await Assert.That(File.ReadAllText(aside)).IsEqualTo(content);
+        await Assert.That(Path.GetFileName(aside)).Matches($"^{Path.GetFileName(path)}\\.unusable-{T0 + 4 * Hour}$");
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+        await Assert.That(Store().EnumerateStates()).IsEmpty();
+        await Assert.That(output.GetCapturedError()).Contains("set aside").And.Contains(Path.GetFileName(aside));
+
+        await Assert.That(await scope.AddAsync("chat-main", History, default)).IsEqualTo(0);
+        await Assert.That(State().Grant.Id).Matches("^[0-9a-f]{32}$");
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+        await Assert.That(File.Exists(aside)).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Remove_of_a_state_file_that_belongs_to_another_account_sets_it_aside_and_a_later_add_grants_afresh() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-main", History, default);
+        var before = State().Grant.Id;
+        var dir    = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        var path   = MuseAssistantPaths.ChatState(dir, "chat-main");
+        var copied = File.ReadAllText(path).Replace("user_01HXYZ", "user_01OTHER");
+        File.WriteAllText(path, copied);
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(3);
+
+        await Assert.That(File.Exists(path)).IsFalse();
+        await Assert.That(File.ReadAllText(Directory.GetFiles(dir, Path.GetFileName(path) + ".unusable-*").Single())).IsEqualTo(copied);
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+
+        await Assert.That(await scope.AddAsync("chat-main", History, default)).IsEqualTo(0);
+        await Assert.That(State().Grant.Id).IsNotEqualTo(before);
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Remove_of_a_chat_with_no_state_file_sets_nothing_aside() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-main", History, default);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        File.Delete(MuseAssistantPaths.ChatState(dir, "chat-main"));
+
+        await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(0);
+
+        await Assert.That(Directory.GetFiles(dir, "*.unusable-*")).IsEmpty();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
     }
 
     async Task<RecordingPoster> Record(Func<MuseAssistantScope, Task> act) {

@@ -50,6 +50,19 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
         return (state, null);
     }
 
+    /// <summary>Renames an unusable state file out of the <c>*.json</c> set so the chat can be granted
+    /// afresh while the file stays as evidence. Returns the new file name; the caller holds the chat lock.</summary>
+    public string SetAsideState(string chatId, long nowMs) {
+        var path = MuseAssistantPaths.ChatState(scopeDir, chatId);
+        for (var stamp = nowMs;; stamp++) {
+            var aside = $"{path}.unusable-{stamp}";
+            if (File.Exists(aside)) continue;
+
+            File.Move(path, aside);
+            return Path.GetFileName(aside);
+        }
+    }
+
     public virtual void SaveState(MuseAssistantChatState state) {
         if (state.ServerUrl != principal.ServerUrl || state.UserId != principal.UserId)
             throw new InvalidOperationException("state for another tenant or account");

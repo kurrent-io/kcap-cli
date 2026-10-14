@@ -7,7 +7,7 @@ namespace Capacitor.Cli.Harness.MuseAssistant;
 /// <summary>
 /// Grants, revocations and their replay. Every command that rewrites the chat list takes the scope lock,
 /// then the chat lock, so a grant, a revocation and a run are totally ordered per chat and two adds for
-/// different chats cannot drop each other's entry. State is never deleted.
+/// different chats cannot drop each other's entry. State is never deleted; an unusable file is renamed aside.
 /// </summary>
 public sealed class MuseAssistantScope(
         ConfigRoot                     config,
@@ -64,8 +64,9 @@ public sealed class MuseAssistantScope(
         UnderLocksAsync("scope remove", chatId, MuseAssistantExitCodes.NotRevoked, async (_, store) => {
             var (state, stateProblem) = store.LoadState(chatId);
             if (stateProblem is not null) {
+                var aside = store.SetAsideState(chatId, time.GetUtcNow().ToUnixTimeMilliseconds());
                 Unlist(store, chatId);
-                return Fail("scope remove", MuseAssistantExitCodes.OutOfScope, $"{stateProblem}; the chat is no longer listed, so nothing more is recorded");
+                return Fail("scope remove", MuseAssistantExitCodes.OutOfScope, $"{stateProblem}; set aside as {aside}, and the chat is no longer listed, so nothing more is recorded; `scope add` now grants it afresh");
             }
 
             if (state is null) {
@@ -163,7 +164,7 @@ public sealed class MuseAssistantScope(
     /// <summary>Replays recorded intents and reconciles the two files; prints every active chat for the
     /// cron. Never idle-closes: that needs the chat's current head, which only the ingest has seen. A listed
     /// chat with no usable state is not printed, so the cron would otherwise read the run as clean:
-    /// it exits 3 naming each such chat on stderr.</summary>
+    /// it exits 3 naming each such chat on stderr, or 1 when a lifecycle post also failed.</summary>
     public Task<int> SweepAsync(CancellationToken ct) =>
         UnderLocksAsync("sweep", null, MuseAssistantExitCodes.Server, async (_, store) => {
             var listed = store.LoadScope().Chats.ToHashSet(StringComparer.Ordinal);
@@ -175,7 +176,10 @@ public sealed class MuseAssistantScope(
             foreach (var chatId in listed.Union(states.Keys).Order(StringComparer.Ordinal)) {
                 if (!states.TryGetValue(chatId, out var state)) {
                     stateless = true;
-                    Console.Error.WriteLine($"kcap muse-assistant sweep: no usable state; run `scope remove` then `scope add` chat={chatId}");
+                    var guidance = File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, chatId))
+                        ? "the state file is unreadable or belongs to another account; `scope remove` sets it aside, then `scope add` records the chat afresh"
+                        : "run `scope remove` then `scope add`";
+                    Console.Error.WriteLine($"kcap muse-assistant sweep: no usable state; {guidance} chat={chatId}");
                     continue;
                 }
 
