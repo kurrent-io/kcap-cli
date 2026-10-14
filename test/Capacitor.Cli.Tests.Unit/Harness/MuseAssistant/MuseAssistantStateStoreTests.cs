@@ -10,6 +10,8 @@ public class MuseAssistantStateStoreTests {
     static readonly MuseAssistantPrincipal Acme  = new("https://acme.kcap.ai", "user_01HXYZ");
     static readonly MuseAssistantPrincipal Other = new("https://acme.kcap.ai", "user_01OTHER");
 
+    static string StateFileName(string chatId) => MuseAssistantPaths.ChatKey(chatId) + ".json";
+
     static MuseAssistantChatState State(MuseAssistantPrincipal p, string chat = "chat-main", MuseAssistantOpenSession? open = null) =>
         new(chat, p.ServerUrl, p.UserId, new("0123456789abcdef0123456789abcdef", MuseAssistantGrantBoundaries.AfterSeq, 11, 1_760_000_000_000, null), 15, 1_760_000_012_000, open);
 
@@ -33,8 +35,7 @@ public class MuseAssistantStateStoreTests {
         var theirs = new MuseAssistantStateStore(Tmp.PathTo("theirs"), Other);
         theirs.SaveState(State(Other));
         var mine = new MuseAssistantStateStore(Tmp.PathTo("mine"), Acme);
-        Directory.CreateDirectory(Tmp.PathTo("mine"));
-        File.Copy(MuseAssistantPaths.ChatState(Tmp.PathTo("theirs"), "chat-main"), MuseAssistantPaths.ChatState(Tmp.PathTo("mine"), "chat-main"));
+        File.Copy(MuseAssistantPaths.ChatState(Tmp.PathTo("theirs"), "chat-main"), MuseAssistantPaths.ChatState(Tmp.CreateDir("mine"), "chat-main"));
 
         var (state, problem) = mine.LoadState("chat-main");
 
@@ -48,8 +49,8 @@ public class MuseAssistantStateStoreTests {
     public async Task Corrupt_state_is_a_problem_and_corrupt_or_missing_scope_reads_as_empty() {
         var dir   = Tmp.CreateDir("scope");
         var store = new MuseAssistantStateStore(dir, Acme);
-        File.WriteAllText(MuseAssistantPaths.ChatState(dir, "chat-main"), "{not json");
-        File.WriteAllText(MuseAssistantPaths.ScopeFile(dir), "{not json");
+        dir.CreateFile(StateFileName("chat-main"), "{not json");
+        dir.CreateFile("scope.json", "{not json");
 
         await Assert.That(store.LoadState("chat-main").Problem).Contains("unreadable");
         await Assert.That(store.LoadScope().Chats).IsEmpty();
@@ -75,7 +76,7 @@ public class MuseAssistantStateStoreTests {
         var store = new MuseAssistantStateStore(dir, Acme);
         store.SaveState(State(Acme));
         store.SaveScope(new(Acme.ServerUrl, Acme.UserId, MuseAssistantRoles.Selected, ["chat-main"]));
-        File.Copy(MuseAssistantPaths.ChatState(dir, "chat-main"), Path.Join(dir, "renamed-copy.json"));
+        File.Copy(MuseAssistantPaths.ChatState(dir, "chat-main"), dir.PathTo("renamed-copy.json"));
 
         await Assert.That(store.EnumerateStates().Select(s => s.ChatId)).IsEquivalentTo(["chat-main"]);
     }
@@ -115,9 +116,9 @@ public class MuseAssistantStateStoreTests {
         var store = new MuseAssistantStateStore(dir, Acme);
         var noGrant = $$"""{"chat_id":"chat-main","server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","watermark":null,"last_selected_at_ms":null,"open":null}""";
         var noChat  = $$"""{"server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","grant":{"id":"g","boundary":"history","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null},"watermark":null,"last_selected_at_ms":null,"open":null}""";
-        File.WriteAllText(MuseAssistantPaths.ChatState(dir, "chat-main"), noGrant);
-        File.WriteAllText(Path.Join(dir, "no-chat.json"), noChat);
-        File.WriteAllText(MuseAssistantPaths.ScopeFile(dir), $$"""{"server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","chats":["chat-main"]}""");
+        dir.CreateFile(StateFileName("chat-main"), noGrant);
+        dir.CreateFile("no-chat.json", noChat);
+        dir.CreateFile("scope.json", $$"""{"server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","chats":["chat-main"]}""");
 
         await Assert.That(store.LoadState("chat-main").Problem).Contains("unreadable");
         await Assert.That(store.EnumerateStates()).IsEmpty();

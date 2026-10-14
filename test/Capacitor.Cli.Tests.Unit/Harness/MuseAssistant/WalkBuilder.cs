@@ -23,8 +23,8 @@ sealed class WalkBuilder(TempDir tmp) {
     public static Item Commentary(long seq, long at, string content = "thinking", string turn = "t1") => new(turn, "commentary", seq, at, content);
     public static Item Developer(long seq, long at, string content = "runtime instruction", string turn = "t1") => new(turn, "developer", seq, at, content);
 
-    public string Write(string name = "walk", Action<string>? tamper = null) {
-        var dir   = tmp.CreateDir(name).Path;
+    public string Write(string name = "walk", Action<TempDirHandle>? tamper = null) {
+        var dir   = tmp.CreateDir(name);
         var pages = new JsonArray();
 
         for (var i = 0; i < Pages.Count; i++) {
@@ -48,16 +48,16 @@ sealed class WalkBuilder(TempDir tmp) {
                 ["page"]    = new JsonObject { ["has_more"] = page.HasMore, ["next_cursor"] = page.NextCursor, ["limit"] = 20, ["order"] = "newest_first" },
                 ["turns"]   = turns
             };
-            File.WriteAllText(Path.Join(dir, $"page-{i:000}.json"), body.ToJsonString());
+            dir.CreateFile($"page-{i:000}.json", body.ToJsonString());
             pages.Add(new JsonObject { ["file"] = $"page-{i:000}.json", ["cursor"] = page.Cursor });
         }
 
         var manifest = new JsonObject { ["chat_id"] = ChatId, ["pages"] = pages };
         if (IsMain is { } main) manifest["is_main"] = main;
         if (FetchedAtMs is { } at) manifest["fetched_at_ms"] = at;
-        File.WriteAllText(Path.Join(dir, "manifest.json"), manifest.ToJsonString());
+        dir.CreateFile("manifest.json", manifest.ToJsonString());
 
         tamper?.Invoke(dir);
-        return dir;
+        return dir.Path;
     }
 }

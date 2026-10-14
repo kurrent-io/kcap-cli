@@ -60,8 +60,7 @@ public class MuseAssistantWalkReaderTests {
     public async Task A_pretty_printed_page_still_yields_one_line_per_item() {
         var content = "two\nlines, \"quoted\", 日本語";
         var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(12, T0, content)).Write(tamper: d => {
-            var path = Path.Join(d, "page-000.json");
-            File.WriteAllText(path, JsonNode.Parse(File.ReadAllText(path))!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            d.CreateFile("page-000.json", JsonNode.Parse(File.ReadAllText(d.PathTo("page-000.json")))!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         });
 
         var (walk, problem) = MuseAssistantWalkReader.Load(dir);
@@ -107,9 +106,9 @@ public class MuseAssistantWalkReaderTests {
 
     [Test]
     public async Task A_missing_page_file_or_an_extra_file_is_refused() {
-        var missing  = TwoPages().Write("missing", d => File.Delete(Path.Join(d, "page-001.json")));
-        var extra    = TwoPages().Write("extra", d => File.WriteAllText(Path.Join(d, "notes.txt"), "x"));
-        var unlisted = TwoPages().Write("unlisted", d => File.Copy(Path.Join(d, "page-001.json"), Path.Join(d, "page-002.json")));
+        var missing  = TwoPages().Write("missing", d => File.Delete(d.PathTo("page-001.json")));
+        var extra    = TwoPages().Write("extra", d => d.CreateFile("notes.txt", "x"));
+        var unlisted = TwoPages().Write("unlisted", d => d.CreateFile("page-002.json", File.ReadAllText(d.PathTo("page-001.json"))));
 
         await Assert.That(MuseAssistantWalkReader.Load(missing).Problem).Contains("missing");
         await Assert.That(MuseAssistantWalkReader.Load(extra).Problem).Contains("notes.txt");
@@ -199,8 +198,7 @@ public class MuseAssistantWalkReaderTests {
     [Test]
     public async Task A_lone_surrogate_escape_in_a_page_is_a_problem_not_an_exception() {
         var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write(tamper: d => {
-            var path = Path.Join(d, "page-000.json");
-            File.WriteAllText(path, File.ReadAllText(path).Replace("\"content\":\"hello\"", "\"content\":\"\\ud800\""));
+            d.CreateFile("page-000.json", File.ReadAllText(d.PathTo("page-000.json")).Replace("\"content\":\"hello\"", "\"content\":\"\\ud800\""));
         });
 
         await Assert.That(MuseAssistantWalkReader.Load(dir).Problem).Contains("UTF-16");
@@ -209,7 +207,7 @@ public class MuseAssistantWalkReaderTests {
     [Test]
     public async Task A_page_that_is_not_valid_utf8_is_refused_instead_of_being_repaired() {
         var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write(tamper: d => {
-            var path  = Path.Join(d, "page-000.json");
+            var path  = d.PathTo("page-000.json");
             var bytes = File.ReadAllBytes(path);
             var at    = bytes.AsSpan().IndexOf("hello"u8);
             bytes[at] = 0xFF;
@@ -222,7 +220,7 @@ public class MuseAssistantWalkReaderTests {
     [Test]
     public async Task A_null_page_entry_in_the_manifest_is_a_problem() {
         var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write(tamper: d =>
-            File.WriteAllText(Path.Join(d, "manifest.json"), """{"chat_id":"chat-main","is_main":true,"fetched_at_ms":1760000500000,"pages":[null]}"""));
+            d.CreateFile("manifest.json", """{"chat_id":"chat-main","is_main":true,"fetched_at_ms":1760000500000,"pages":[null]}"""));
 
         await Assert.That(MuseAssistantWalkReader.Load(dir).Problem).IsNotNull();
     }
@@ -273,10 +271,9 @@ public class MuseAssistantWalkReaderTests {
         await Assert.That(MuseAssistantWalkReader.Load(Tmp.PathTo("nope")).Problem).IsNotNull();
     }
 
-    static void Rewrite(string dir, string file, Action<JsonObject> edit) {
-        var path = Path.Join(dir, file);
-        var node = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+    static void Rewrite(TempDirHandle dir, string file, Action<JsonObject> edit) {
+        var node = JsonNode.Parse(File.ReadAllText(dir.PathTo(file)))!.AsObject();
         edit(node);
-        File.WriteAllText(path, node.ToJsonString());
+        dir.CreateFile(file, node.ToJsonString());
     }
 }

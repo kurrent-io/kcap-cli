@@ -31,10 +31,10 @@ public class MuseAssistantIngestTests {
     async Task<MuseAssistantIngest> IngestAsync(RecordingPoster poster, MuseAssistantStateStoreFactory? stores = null, string userId = "user_01HXYZ") =>
         new(Config.Root, Home.Home, await MuseAssistantTestIdentity.SignedInAsync(Config.Root, userId: userId), stores ?? new(), new MuseAssistantActionRunner(poster, TimeProvider.System), TimeProvider.System);
 
-    string TwoSessionWalk(string name = "walk", long fetchedAt = T0 + 6 * Hour) => new WalkBuilder(Walks) { FetchedAtMs = fetchedAt }
+    string TwoSessionWalk(string name = "walk", long fetchedAt = T0 + 6 * Hour, Action<TempDirHandle>? tamper = null) => new WalkBuilder(Walks) { FetchedAtMs = fetchedAt }
         .AddPage(null, "c1", true, User(5, T0 + 3 * Hour, turn: "t2"), Assistant(6, T0 + 3 * Hour + Minute, turn: "t2"))
         .AddPage("c1", null, false, User(1, T0), Assistant(2, T0 + Minute))
-        .Write(name);
+        .Write(name, tamper);
 
     static string Id(long firstSeq, string user = "user_01HXYZ") => MuseAssistantSessionId.For(user, "chat-main", GrantId, firstSeq);
 
@@ -96,8 +96,8 @@ public class MuseAssistantIngestTests {
         Grant();
         var poster  = new RecordingPoster();
         var ingest  = await IngestAsync(poster);
-        var missing = TwoSessionWalk("missing"); File.Delete(Path.Join(missing, "page-001.json"));
-        var extra   = TwoSessionWalk("extra");   File.WriteAllText(Path.Join(extra, "stray.json"), "{}");
+        var missing = TwoSessionWalk("missing", tamper: d => File.Delete(d.PathTo("page-001.json")));
+        var extra   = TwoSessionWalk("extra", tamper: d => d.CreateFile("stray.json", "{}"));
         var partial = new WalkBuilder(Walks).AddPage(null, "c1", true, User(50, T0)).Write("partial");
         var notWalk = Walks.CreateDir("empty");
 
@@ -122,8 +122,7 @@ public class MuseAssistantIngestTests {
 
     [Test]
     public async Task A_walk_both_malformed_and_out_of_scope_reports_malformed() {
-        var dir = TwoSessionWalk("missing");
-        File.Delete(Path.Join(dir, "page-001.json"));
+        var dir = TwoSessionWalk("missing", tamper: d => File.Delete(d.PathTo("page-001.json")));
 
         await Assert.That(await (await IngestAsync(new RecordingPoster())).RunAsync(dir, default)).IsEqualTo(2);
     }
