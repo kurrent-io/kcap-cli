@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -509,6 +510,27 @@ public class TrayAdapterTests {
             await Assert.That(labels).Contains("Open Kurrent Capacitor");
             await Assert.That(labels).Contains("Quit");
             await Assert.That(commandIsOpen).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Eager_cadence_refreshes_the_pause_state_without_a_click() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var pause = new FakePauseController();
+                var consent = new FakeConsentService();
+                using var vm = new TrayViewModel(service, pause, NewActions(service), consent);
+                var time = new FakeTimeProvider();
+
+                using var manager = new TrayIconManager(Application.Current!, vm, rebuildEagerly: true, time);
+                var initial = pause.RefreshCount;
+                time.Advance(TimeSpan.FromSeconds(30));
+                return (initial, pause.RefreshCount);
+            });
+
+            await Assert.That(after).IsEqualTo(before + 1);
         });
     }
 

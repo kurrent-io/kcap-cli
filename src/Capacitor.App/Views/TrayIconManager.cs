@@ -8,6 +8,8 @@ namespace Capacitor.App.Views;
 /// raises NativeMenu.NeedsUpdate and shows nothing at all for a menu with no items, so on Windows
 /// the menu is rebuilt on every model change and a left-click opens the main window. Elsewhere it
 /// rebuilds lazily inside NeedsUpdate.
+/// That backend raises nothing on a right-click either, so on Windows the pause state is refreshed on
+/// a timer: a failed first read or a policy changed elsewhere would otherwise stay in the menu.
 public sealed class TrayIconManager : IDisposable {
     readonly Application _app;
     readonly TrayIcon _trayIcon;
@@ -15,11 +17,14 @@ public sealed class TrayIconManager : IDisposable {
     readonly TrayMenuBuilder _builder;
     readonly TrayMenuSync _sync = new();
     readonly IDisposable _subscription;
+    readonly IDisposable? _pauseRefresh;
+
+    static readonly TimeSpan PauseRefreshInterval = TimeSpan.FromSeconds(30);
 
     public TrayIconManager(Application app, TrayViewModel vm)
         : this(app, vm, rebuildEagerly: OperatingSystem.IsWindows()) { }
 
-    public TrayIconManager(Application app, TrayViewModel vm, bool rebuildEagerly) {
+    public TrayIconManager(Application app, TrayViewModel vm, bool rebuildEagerly, TimeProvider? time = null) {
         _app = app;
         _builder = new TrayMenuBuilder(vm);
 
@@ -29,6 +34,8 @@ public sealed class TrayIconManager : IDisposable {
         if (rebuildEagerly) {
             _trayIcon.Command = vm.OpenMainWindowCommand;
             _trayIcon.Clicked += (_, _) => vm.RequestPauseRefresh();
+            _pauseRefresh = (time ?? TimeProvider.System).CreateTimer(
+                _ => vm.RequestPauseRefresh(), null, PauseRefreshInterval, PauseRefreshInterval);
         } else {
             // macOS status-item menus never raise NativeMenu.Opening, so this is also the pause refresh kick.
             _menu.NeedsUpdate += (_, _) => {
@@ -46,6 +53,7 @@ public sealed class TrayIconManager : IDisposable {
 
     public void Dispose() {
         _subscription.Dispose();
+        _pauseRefresh?.Dispose();
         TrayIcon.SetIcons(_app, null);
         _trayIcon.Dispose();
     }
