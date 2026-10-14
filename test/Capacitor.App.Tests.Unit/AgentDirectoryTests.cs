@@ -297,12 +297,15 @@ public class AgentDirectoryTests {
         // While local is still Connecting (no snapshot yet), twin is unproven; once the Connected
         // frame's snapshot lands, the twin's remote row is suppressed immediately without waiting
         // for the trailing Status flip.
-        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
-
+        var recording = false;
         var sawRemoteTwin = false;
         using var sub = dir.Rows.Connect().Subscribe(_ => {
-            if (dir.Rows.Lookup("remote:a1").HasValue) sawRemoteTwin = true;
+            if (recording && dir.Rows.Lookup("remote:a1").HasValue) sawRemoteTwin = true;
         });
+
+        recording = true;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        await Assert.That(dir.Rows.Lookup("remote:a1").HasValue).IsFalse();
 
         local.Agents.AddOrUpdate(LocalAgent("a1"));
         local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/1"]));

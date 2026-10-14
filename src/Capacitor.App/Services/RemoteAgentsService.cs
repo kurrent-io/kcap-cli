@@ -36,6 +36,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     // Admission (busy check / set rerun) and completion (rerun check / clear busy) share this
     // same critical section, so a losing admission can never land between a drain loop reading
     // rerun false and clearing busy.
+    static readonly TimeSpan DaemonsRefreshTimeout = TimeSpan.FromSeconds(5);
+
     readonly Lock _lock = new();
     int _generation;
     string? _lastSubject;
@@ -50,11 +52,13 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     bool _daemonsRerun;
     TaskCompletionSource? _daemonsInFlight;
     readonly Action<int>? _onUnauthorized;
+    readonly TimeProvider _time;
 
     public RemoteAgentsService(
             IServerLane lane, Func<CancellationToken, Task<RemoteFetch>> fetchAgents,
-            TimeSpan? debounce = null, Action<int>? onUnauthorized = null) {
+            TimeSpan? debounce = null, Action<int>? onUnauthorized = null, TimeProvider? time = null) {
         _onUnauthorized = onUnauthorized;
+        _time = time ?? TimeProvider.System;
         var wait = debounce ?? TimeSpan.FromMilliseconds(250);
         var connected = lane.Status
             .Select(s => s.State == ServerLaneState.Connected)
@@ -117,9 +121,13 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             } catch (Exception) {
                 // Data-plane refresh: a throw here is a missed refresh, never an app fault.
             }
-            Task? daemonsInFlight;
-            lock (_lock) daemonsInFlight = _daemonsInFlight?.Task;
-            if (daemonsInFlight is not null) await daemonsInFlight.ConfigureAwait(false);
+            if (result?.Rows is not null) {
+                Task? daemonsInFlight;
+                lock (_lock) daemonsInFlight = _daemonsInFlight?.Task;
+                if (daemonsInFlight is not null)
+                    await daemonsInFlight.WaitAsync(DaemonsRefreshTimeout, _time, CancellationToken.None)
+                        .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            }
             var notifyUnauthorized = false;
             bool rerun;
             lock (_lock) {
@@ -154,21 +162,28 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             int generation;
             lock (_lock) generation = _generation;
             IReadOnlyList<DaemonInfo>? result = null;
+            using var cts = new CancellationTokenSource(DaemonsRefreshTimeout, _time);
             try {
-                result = await lane.GetConnectedDaemonsAsync(CancellationToken.None).ConfigureAwait(false);
+                result = await lane.GetConnectedDaemonsAsync(cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
             } catch (Exception) {
             }
             TaskCompletionSource? completed;
+            bool rerun;
             lock (_lock) {
                 if (result is not null && generation == _generation)
                     _daemons.OnNext(result);
-                if (_daemonsRerun) { _daemonsRerun = false; continue; }
-                _daemonsBusy = false;
                 completed = _daemonsInFlight;
-                _daemonsInFlight = null;
+                rerun = _daemonsRerun;
+                if (rerun) {
+                    _daemonsRerun = false;
+                    _daemonsInFlight = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                } else {
+                    _daemonsBusy = false;
+                    _daemonsInFlight = null;
+                }
             }
             completed?.TrySetResult();
-            return;
+            if (!rerun) return;
         }
     }
 
