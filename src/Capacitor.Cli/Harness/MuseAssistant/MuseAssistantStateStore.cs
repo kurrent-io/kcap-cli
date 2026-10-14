@@ -46,9 +46,19 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
         if (state is null) return (null, "the state file for this chat is empty");
         if (state.ChatId != chatId || state.ServerUrl != principal.ServerUrl || state.UserId != principal.UserId)
             return (null, "the state file for this chat belongs to another chat, tenant or account");
+        if (!IsWellFormed(state.Grant))
+            return (null, "the state file for this chat holds a grant `scope add` could not have written");
 
         return (state, null);
     }
+
+    // Any shape but the ones scope add writes has no floor, so it would read as consent to the whole chat.
+    static bool IsWellFormed(MuseAssistantGrant? grant) =>
+        grant is { Id.Length: > 0 } && grant.Boundary switch {
+            MuseAssistantGrantBoundaries.AfterSeq                                          => grant.AfterSeq is >= 0,
+            MuseAssistantGrantBoundaries.EmptyChat or MuseAssistantGrantBoundaries.History => grant.AfterSeq is null,
+            _                                                                              => false
+        };
 
     /// <summary>Renames an unusable state file out of the <c>*.json</c> set so the chat can be granted
     /// afresh while the file stays as evidence. Returns the new file name; the caller holds the chat lock.</summary>
@@ -76,7 +86,7 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
     public IEnumerable<MuseAssistantChatState> EnumerateStates() =>
         ScanStateFiles().Where(f => f.State is not null).Select(f => f.State!);
 
-    /// <summary>Every other <c>*.json</c> beside <c>scope.json</c>: unreadable, another account's, or misnamed.</summary>
+    /// <summary>Every other <c>*.json</c> beside <c>scope.json</c>: unreadable, malformed, another account's, or misnamed.</summary>
     public IEnumerable<string> EnumerateUnusableStateFiles() =>
         ScanStateFiles().Where(f => f.State is null).Select(f => f.File);
 
@@ -95,7 +105,7 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
             }
 
             var usable = state is not null && state.ServerUrl == principal.ServerUrl && state.UserId == principal.UserId
-                      && name == MuseAssistantPaths.ChatKey(state.ChatId) + ".json";
+                      && name == MuseAssistantPaths.ChatKey(state.ChatId) + ".json" && IsWellFormed(state.Grant);
 
             yield return (file, usable ? state : null);
         }

@@ -105,11 +105,11 @@ Tell the user what the exit code says, and nothing more hopeful:
   chat=<id>`, or `reset: every grant revoked`).
 - **1** — stopped here, but the server could not be told yet that the open session
   ended; the cron's `sweep` delivers that. Tell the user both facts.
-- **3** (`scope remove`, or `scope reset` for each stderr line saying "set aside") —
-  kcap could not read this chat's recording record, or it belongs to another Capacitor
-  account. It has taken the chat off its list and set the record aside, so the cron
-  sends nothing more from it, but a session already open in Capacitor for it may stay
-  open. Granting the chat again now starts afresh. Say this plainly, quoting the
+- **3** (`scope remove`, or `scope reset` for each stderr line saying "set aside" or
+  "no grant recorded") — this chat's recording record is missing, unreadable, or
+  belongs to another Capacitor account. kcap has taken the chat off its list (and set
+  an unreadable record aside), so the cron sends nothing more from it, but a session
+  already open in Capacitor for it may stay open. Granting the chat again now starts afresh. Say this plainly, quoting the
   stderr line. A `scope reset` exit 3 stopped every other chat too.
 - **4** — kcap could **not** confirm that recording stopped (nothing was revoked, or
   an unexpected error). Never say it stopped. Run the same command once more —

@@ -74,9 +74,13 @@ public sealed class MuseAssistantScope(
             }
 
             if (state is null) {
+                if (!store.LoadScope().Chats.Contains(chatId, StringComparer.Ordinal)) {
+                    Console.Out.WriteLine($"no grant recorded chat={chatId}");
+                    return MuseAssistantExitCodes.Ok;
+                }
+
                 Unlist(store, chatId);
-                Console.Out.WriteLine($"no grant recorded chat={chatId}");
-                return MuseAssistantExitCodes.Ok;
+                return Fail("scope remove", MuseAssistantExitCodes.OutOfScope, $"no grant recorded chat={chatId}; its state file is missing, so the chat is no longer listed and nothing more is recorded, but a session it had open may stay open; `scope add` grants it afresh");
             }
 
             if (!state.Grant.Revoked) state = Revoke(store, state);
@@ -104,14 +108,16 @@ public sealed class MuseAssistantScope(
         return MuseAssistantExitCodes.Ok;
     }
 
-    /// <summary>Revokes every chat it can lock and sets aside every state file it cannot read. One it cannot
-    /// lock stays granted and listed — dropping it from the list alone would be undone by the next sweep —
-    /// and the exit says recording has not stopped.</summary>
+    /// <summary>Revokes every chat it can lock, sets aside every state file it cannot use and unlists a listed
+    /// chat with no state file, exiting 3 for either of the last two. One it cannot lock stays granted and
+    /// listed — dropping it from the list alone would be undone by the next sweep — and the exit says
+    /// recording has not stopped.</summary>
     public Task<int> ResetAsync(CancellationToken ct) =>
         UnderLocksAsync("scope reset", null, MuseAssistantExitCodes.NotRevoked, async (_, store) => {
             var unrevoked = new HashSet<string>(StringComparer.Ordinal);
             var failed    = false;
             var setAside  = false;
+            var stateless = store.LoadScope().Chats.Where(c => !File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, c))).ToList();
 
             foreach (var found in store.EnumerateStates().ToList()) {
                 using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, found.ChatId), ct);
@@ -159,6 +165,11 @@ public sealed class MuseAssistantScope(
                 setAside = true;
                 var subject = listedAs is null ? Path.GetFileName(file) : $"the state file of \"{listedAs}\"";
                 Console.Error.WriteLine($"kcap muse-assistant scope reset: {subject} is unreadable or belongs to another account; set aside as {aside}, so nothing more is recorded from it, but a session it had open may stay open");
+            }
+
+            foreach (var chatId in stateless) {
+                setAside = true;
+                Console.Error.WriteLine($"kcap muse-assistant scope reset: no grant recorded for \"{chatId}\"; its state file is missing, so nothing more is recorded from it, but a session it had open may stay open");
             }
 
             var scope = store.LoadScope();

@@ -25,14 +25,16 @@ scope add      Grant one chat: --after-seq <seq> records items newer than the ne
                seq read in the granting turn, --empty-chat every future item of a chat
                with none yet (refused when re-granting a stopped chat that already has recorded
                items), --include-history the whole chat (for a chat recorded before, back to
-               where its recording last stopped). Idempotent; a request that would widen
-               an active grant exits 2 and changes nothing.
+               where its recording last stopped). Idempotent; a request whose boundary
+               differs from an active grant's exits 2 and changes nothing.
 scope remove   Withdraw a chat: closes its open session and sends nothing further. A chat whose
-               state file is unreadable or belongs to another account is unlisted and the
-               file is renamed to <chat_key>.json.unusable-<epoch ms> (kept, never read
-               again); that run exits 3, and `scope add` then grants the chat afresh.
-scope reset    Withdraw every chat. A state file it cannot read, or that belongs to another
-               account, is set aside as `scope remove` does, and that run exits 3.
+               state file is unreadable, malformed or belongs to another account is unlisted
+               and the file is renamed to <chat_key>.json.unusable-<epoch ms> (kept, never
+               read again); that run exits 3, and `scope add` then grants the chat afresh.
+               A listed chat whose state file is missing is unlisted and exits 3 as well:
+               a session it had open may stay open.
+scope reset    Withdraw every chat. A state file it cannot use is set aside as `scope remove`
+               does, and a listed chat with no state file is unlisted; either exits 3.
 scope show     Every chat with its status, boundary, watermark and open session.
 sweep          Replay interrupted lifecycle posts, reconcile the files, and print one
                line per active chat for the cron:

@@ -141,6 +141,45 @@ public class MuseAssistantStateStoreTests {
         await Assert.That(sparse.Pages).IsEquivalentTo([new MuseAssistantManifestPage("p1.json", null)]);
     }
 
+    /// <summary>A grant scope add could never have written selects by accident: an unknown boundary or a
+    /// missing after_seq has no floor, so it would read as the whole chat. It must be unusable instead.</summary>
+    [Test]
+    [Arguments("""null""")]
+    [Arguments("""{"id":"g","boundary":"everything","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"g","boundary":"after_seq","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"g","boundary":"after_seq","after_seq":-1,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"g","boundary":"history","after_seq":5,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"g","boundary":"empty_chat","after_seq":0,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"","boundary":"history","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":null,"boundary":"history","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"g","boundary":null,"after_seq":null,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    public async Task A_state_whose_grant_scope_add_could_not_have_written_is_unusable(string grant) {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        dir.CreateFile(StateFileName("chat-main"), $$"""{"chat_id":"chat-main","server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","grant":{{grant}},"watermark":null,"last_selected_at_ms":null,"open":null}""");
+
+        var (state, problem) = store.LoadState("chat-main");
+
+        await Assert.That(state).IsNull();
+        await Assert.That(problem).IsNotNull();
+        await Assert.That(store.EnumerateStates()).IsEmpty();
+        await Assert.That(store.EnumerateUnusableStateFiles().Select(f => Path.GetFileName(f))).IsEquivalentTo([StateFileName("chat-main")]);
+    }
+
+    [Test]
+    [Arguments("""{"id":"g","boundary":"after_seq","after_seq":0,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    [Arguments("""{"id":"g","boundary":"empty_chat","after_seq":null,"granted_at_ms":1,"revoked_at_ms":2}""")]
+    [Arguments("""{"id":"g","boundary":"history","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null}""")]
+    public async Task A_state_with_a_grant_scope_add_writes_is_usable(string grant) {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        dir.CreateFile(StateFileName("chat-main"), $$"""{"chat_id":"chat-main","server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","grant":{{grant}},"watermark":null,"last_selected_at_ms":null,"open":null}""");
+
+        await Assert.That(store.LoadState("chat-main").Problem).IsNull();
+        await Assert.That(store.EnumerateStates().Select(s => s.ChatId)).IsEquivalentTo(["chat-main"]);
+        await Assert.That(store.EnumerateUnusableStateFiles()).IsEmpty();
+    }
+
     [Test]
     public async Task A_state_file_missing_a_required_field_is_unreadable_and_skipped() {
         var dir   = Tmp.CreateDir("scope");

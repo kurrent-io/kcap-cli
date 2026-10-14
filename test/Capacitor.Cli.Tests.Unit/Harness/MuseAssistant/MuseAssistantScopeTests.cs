@@ -555,6 +555,26 @@ public class MuseAssistantScopeTests {
     }
 
     [Test]
+    [NotInParallel]
+    public async Task Reset_of_a_listed_chat_with_no_state_file_unlists_it_and_exits_3() {
+        var poster = new RecordingPoster();
+        var scope  = await ScopeAsync(poster);
+        await scope.AddAsync("chat-a", History, default);
+        await scope.AddAsync("chat-b", History, default);
+        File.Delete(MuseAssistantPaths.ChatState(MuseAssistantPaths.ScopeDir(Config.Root, Acme), "chat-b"));
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await scope.ResetAsync(default)).IsEqualTo(3);
+
+        await Assert.That(State("chat-a").Grant.Revoked).IsTrue();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+        await Assert.That(output.GetCapturedOutput()).Contains("reset: every grant revoked or set aside");
+        await Assert.That(output.GetCapturedError()).Contains("no grant recorded for \"chat-b\"").And.Contains("may stay open").And.DoesNotContain("chat=");
+
+        await Assert.That(await scope.ResetAsync(default)).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Reset_that_cannot_lock_a_listed_chat_with_unusable_state_keeps_it_listed_and_exits_4() {
         var scope = await ScopeAsync(new RecordingPoster());
         await scope.AddAsync("chat-b", History, default);
@@ -692,17 +712,38 @@ public class MuseAssistantScopeTests {
         await Assert.That(State().Grant.Id).IsNotEqualTo(before);
     }
 
+    /// <summary>A listed chat whose state file is gone may have a session open on the server that nothing
+    /// can close now, so the unlisting is not reported as a clean stop.</summary>
     [Test]
     [NotInParallel]
-    public async Task Remove_of_a_chat_with_no_state_file_sets_nothing_aside() {
-        var scope = await ScopeAsync(new RecordingPoster());
+    public async Task Remove_of_a_listed_chat_with_no_state_file_unlists_it_and_exits_3() {
+        var poster = new RecordingPoster();
+        var scope  = await ScopeAsync(poster);
         await scope.AddAsync("chat-main", History, default);
         var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
         File.Delete(MuseAssistantPaths.ChatState(dir, "chat-main"));
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(3);
+
+        await Assert.That(Directory.GetFiles(dir, "*.unusable-*")).IsEmpty();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+        await Assert.That(poster.Accepted).IsEmpty();
+        await Assert.That(output.GetCapturedOutput()).IsEmpty();
+        await Assert.That(output.GetCapturedError()).Contains("no grant recorded").And.Contains("may stay open").And.Contains("chat=chat-main");
+
+        await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(0);   // retried: nothing listed, nothing to stop
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Remove_of_a_chat_never_granted_exits_0() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        using var output = ConsoleOutput.StartFullCapture("\n");
 
         await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(0);
 
-        await Assert.That(Directory.GetFiles(dir, "*.unusable-*")).IsEmpty();
+        await Assert.That(output.GetCapturedOutput()).Contains("no grant recorded chat=chat-main");
         await Assert.That(Store().LoadScope().Chats).IsEmpty();
     }
 
