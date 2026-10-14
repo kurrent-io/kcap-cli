@@ -163,6 +163,10 @@ internal sealed record AcpVendorDescriptor {
     /// required by that policy and unused by every other.</summary>
     public UnattendedToolAdmitter?      ToolAdmitter { get; }
 
+    /// <summary>Reads a turn's token usage from a notification other than <c>session/update</c>, for a
+    /// vendor that reports it on its own extension method. Null for every vendor that does not.</summary>
+    public Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>? TurnUsageReader { get; }
+
     public AcpVendorDescriptor(
             HarnessId                   Harness,
             ImmutableArray<string>      Argv,
@@ -178,7 +182,9 @@ internal sealed record AcpVendorDescriptor {
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
                                         UnattendedTrustArgvBuilder = null,
             Func<bool, JsonObject>?     SessionNewMeta = null,
-            UnattendedToolAdmitter?     ToolAdmitter = null
+            UnattendedToolAdmitter?     ToolAdmitter = null,
+            Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>?
+                                        TurnUsageReader = null
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -236,6 +242,7 @@ internal sealed record AcpVendorDescriptor {
         this.SupportsReconnectResume = SupportsReconnectResume;
         this.SessionNewMeta = SessionNewMeta;
         this.ToolAdmitter   = ToolAdmitter;
+        this.TurnUsageReader = TurnUsageReader;
 
         if (UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove && ToolAdmitter is null)
             throw new ArgumentException(
@@ -529,7 +536,8 @@ internal static class AcpVendorDescriptors {
         SupportsMcpServers:  true,
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
         SupportsReconnectResume: false,
-        SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta
+        SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
+        TurnUsageReader:     GrokTurnUsage.Read
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).

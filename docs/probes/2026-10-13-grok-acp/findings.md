@@ -47,8 +47,8 @@ the daemon.
 
 - Live text streams as many small `agent_message_chunk`s. The on-disk `updates.jsonl` keeps one line per text run.
 - Live turn usage arrives as `_x.ai/session_notification` `turn_completed`; a replay carries it as
-  `_x.ai/session/update` `turn_completed`. The daemon forwards only `session/update`, so a hosted Grok turn
-  reports no token usage.
+  `_x.ai/session/update` `turn_completed`. The daemon reads the live frame (`GrokTurnUsage`), one usage envelope
+  per model, and ignores the replay.
 - Grok runs Claude Code's and Cursor's MCP servers and hooks by default (`[compat.claude]` / `[compat.cursor]`,
   or `GROK_CLAUDE_MCPS_ENABLED` and its siblings), including kcap's own `~/.grok/hooks/kcap.json`. There is no
   per-process switch for `~/.grok/hooks`, so the daemon sets `KCAP_HOSTED_GROK` to its own pid on a hosted

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Acp;
@@ -63,6 +65,42 @@ public class GrokHostedLaunchTests {
 
         var sessionNew = fake.ReceivedCalls.Single(c => c.Method == "session/new").Params!.Value;
         await Assert.That(sessionNew.GetProperty("_meta").GetProperty("yoloMode").GetBoolean()).IsFalse();
+
+        await start.Runtime.DisposeAsync();
+        await cts.CancelAsync();
+        await fake.DisposeAsync();
+        try { await run; } catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Grok reports a turn's usage only on its own extension method, so a launch that did not
+    /// hand the runtime the Grok reader would record a hosted turn as free.</summary>
+    [Test]
+    public async Task A_hosted_turn_reports_its_token_usage() {
+        var fake = new FakeAcpAgent();
+        fake.EnqueuePromptScript(
+            [JsonDocument.Parse($$"""{"jsonrpc":"2.0","method":"_x.ai/session_notification","params":{"sessionId":"{{FakeAcpAgent.FixedSessionId}}","update":{"sessionUpdate":"turn_completed","usage":{"modelUsage":{"grok-4.5-build":{"inputTokens":100,"cachedReadTokens":40,"outputTokens":7} } } } } }""").RootElement.Clone()],
+            JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
+        using var cts = new CancellationTokenSource();
+        var run = fake.RunAsync(cts.Token);
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Grok,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new StubServerConnection(),
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()),
+            timeProvider: TimeProvider.System);
+
+        var start = await factory.StartAsync(Ctx() with { Prompt = "hi" }, cts.Token).WaitAsync(HangGuard);
+        var envelopes = ((AcpHostedAgentRuntime)start.Runtime).Envelopes;
+
+        AcpEventEnvelope usage;
+        do usage = await envelopes.ReadAsync().AsTask().WaitAsync(HangGuard);
+        while (usage.Kind != AcpEventKind.TokenUsage);
+
+        await Assert.That(usage.Model).IsEqualTo("grok-4.5-build");
+        await Assert.That(usage.UsageInputTokens).IsEqualTo(100);
+        await Assert.That(usage.UsageCachedInputTokens).IsEqualTo(40);
 
         await start.Runtime.DisposeAsync();
         await cts.CancelAsync();
