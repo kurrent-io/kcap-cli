@@ -34,6 +34,15 @@ public class MuseAssistantCommandTests {
     [Arguments((object)new[] { "muse-assistant", "scope" })]
     [Arguments((object)new[] { "muse-assistant", "scope", "add" })]
     [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "c" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "--empty-chat" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "", "--empty-chat" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "c", "--empty-chat", "junk", "--bogus" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "c", "--empty-chat", "--include-history" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "c", "--after-seq", "5", "junk" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "add", "--empty-chat", "--chat", "c" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "remove", "--chat", "--empty-chat" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "remove", "--chat", "" })]
+    [Arguments((object)new[] { "muse-assistant", "scope", "remove", "--chat", "c", "junk" })]
     [Arguments((object)new[] { "muse-assistant", "scope", "add", "--chat", "c", "--after-seq", "x" })]
     [Arguments((object)new[] { "muse-assistant", "scope", "remove" })]
     [Arguments((object)new[] { "muse-assistant", "scope", "reset", "--chat", "c" })]
@@ -53,7 +62,7 @@ public class MuseAssistantCommandTests {
 
     [Test]
     [NotInParallel]
-    public async Task Scope_add_show_and_sweep_dispatch_to_the_scope_commands() {
+    public async Task Scope_add_show_sweep_remove_and_reset_dispatch_to_the_scope_commands() {
         using var stdout = ConsoleOutput.StartCapture();
         var (command, _) = await CommandAsync();
 

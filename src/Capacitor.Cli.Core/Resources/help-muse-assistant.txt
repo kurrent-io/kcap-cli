@@ -12,7 +12,8 @@ runs `scope` in the turn where the user grants or withdraws recording, and a
 15-minute cron pages each granted chat with chat.read_messages into a fresh
 directory and runs `ingest` on it. Only user, assistant and commentary items
 are recorded, as private sessions owned by the signed-in kcap user; developer
-items are never sent. A session ends after two hours of quiet.
+items are never sent. A new session starts after a gap of two hours or more; an
+idle session is closed once 2 h 30 m have passed by the time the walk was fetched.
 
 ingest <dir>   One walk of one chat: manifest.json plus page-000.json, page-001.json, …
                in walk order, each page a complete chat.read_messages result and the
@@ -36,8 +37,9 @@ Exit codes: 0 done or nothing to do (also: another ingest holds the chat);
             2 malformed or incomplete input, or a wrong argument shape;
             3 chat not in scope, revoked, no grant recorded, or state from another
               tenant or account;
-            4 scope remove or scope reset only: nothing was revoked, so recording has
-              NOT stopped — retry.
+            4 scope remove or scope reset only: recording could not be confirmed
+              stopped (nothing revoked, or an unexpected error) — retry; retrying
+              is safe.
 
 State: ~/.config/kcap/muse-assistant/<sha256(server\nuser)>/ — scope.json, one
 <sha256(chat_id)>.json per chat, and the lock files beside them.

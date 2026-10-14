@@ -42,24 +42,24 @@ public sealed class MuseAssistantCommand(MuseAssistantIngest ingest, MuseAssista
     }
 
     async Task<int> HandleScopeAsync(string[] args, CancellationToken ct) {
-        var chat = Option(args, "--chat");
+        var chat = args.Length > 4 && args[3] == "--chat" && IsChatId(args[4]) ? args[4] : null;
 
         return (args.Length > 2 ? args[2] : null) switch {
-            "add"    when chat is not null => await scope.AddAsync(chat, args, ct),
-            "remove" when chat is not null && args.Length == 5 => await scope.RemoveAsync(chat, ct),
-            "reset"  when args.Length == 3 => await scope.ResetAsync(ct),
-            "show"   when args.Length == 3 => await scope.ShowAsync(ct),
-            _                              => Usage()
+            "add"    when chat is not null && IsBoundary(args[5..]) => await scope.AddAsync(chat, args, ct),
+            "remove" when chat is not null && args.Length == 5      => await scope.RemoveAsync(chat, ct),
+            "reset"  when args.Length == 3                          => await scope.ResetAsync(ct),
+            "show"   when args.Length == 3                          => await scope.ShowAsync(ct),
+            _                                                       => Usage()
         };
     }
+
+    // A flag in the id's place means the id was left out; granting a chat named "--empty-chat" would be silent.
+    static bool IsChatId(string value) => !string.IsNullOrWhiteSpace(value) && !value.StartsWith("--", StringComparison.Ordinal);
+
+    static bool IsBoundary(string[] rest) => rest is ["--empty-chat"] or ["--include-history"] or ["--after-seq", _];
 
     static int Usage() {
         Console.Error.WriteLine(UsageText);
         return MuseAssistantExitCodes.Malformed;
-    }
-
-    static string? Option(string[] args, string name) {
-        var i = Array.IndexOf(args, name);
-        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
     }
 }
