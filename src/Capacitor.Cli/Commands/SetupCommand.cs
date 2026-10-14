@@ -561,11 +561,12 @@ sealed class SetupCommand(
         // server, equivalent to --server-url. A bare single label expands to {slug}.kcap.ai.
         if (serverUrlArg is null && args.Length > 1 && !args[1].StartsWith('-'))
             serverUrlArg = ServerInput.ResolveTenantArg(args[1]);
-        var noPrompt         = args.Contains("--no-prompt");
+        var museAssistant    = args.Contains(MuseAssistantPosture.Flag);
+        var noPrompt         = args.Contains("--no-prompt") || museAssistant;
         // Also when there is no keyboard: a redirected stdin cannot press the escape-hatch key, so a
         // loopback wait there can only end in the listener timeout. Not a headless guess - an
         // interactive SSH session has a keyboard and keeps the browser.
-        var forceDevice      = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
+        var forceDevice      = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device") || museAssistant, ConsoleKeyWatcher.Instance.CanWatch);
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
@@ -593,7 +594,7 @@ sealed class SetupCommand(
         var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
         var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
         var skipGrokFlag     = args.Contains("--skip-grok-hooks");
-        var skipImport       = args.Contains("--skip-import");
+        var skipImport       = args.Contains("--skip-import") || museAssistant;
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -603,6 +604,12 @@ sealed class SetupCommand(
         var serverUrlGiven = serverUrlArg is not null
                           || args.Contains("--server-url")
                           || args.Any(a => a.StartsWith("--server-url=", StringComparison.Ordinal));
+
+        if (museAssistant && MuseAssistantPosture.ArgumentError(tenantGiven: serverUrlArg is not null) is { } museError) {
+            await Console.Error.WriteLineAsync($"  {museError}");
+
+            return 1;
+        }
 
         var (requestedWorkspace, workspaceArgError) = ParseRequestedWorkspace(args, serverUrlGiven);
 
@@ -620,6 +627,17 @@ sealed class SetupCommand(
             await Console.Error.WriteLineAsync("  Add --no-prompt.");
 
             return 1;
+        }
+
+        // Plain Console.Out: an agent reads this from redirected output. Ahead of the funnel event,
+        // which flushes to the telemetry host at once, so no card appears before its explanation.
+        var museHosts = museAssistant ? MuseAssistantPosture.ApprovalHosts(serverUrlArg!) : null;
+
+        if (museHosts is not null) {
+            foreach (var line in MuseAssistantPosture.HostNoticeLines(museHosts)) await Console.Out.WriteLineAsync(line);
+            await Console.Out.WriteLineAsync();
+        } else if (MuseAssistantEnvironment.IsMuseAssistant(home)) {
+            AnsiConsole.MarkupLine(MuseAssistantPosture.AdviceLine);
         }
 
         var profile = await AppConfig.LoadProfileConfig(config);
@@ -644,6 +662,7 @@ sealed class SetupCommand(
             return 1;
         }
         AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
+
 
         // Check if already configured
         var activeProfile  = profile.ActiveName;
@@ -670,9 +689,19 @@ sealed class SetupCommand(
 
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
-            if (resolved is null) return 1;
+
+            if (resolved is null) {
+                if (museHosts is not null)
+                    foreach (var line in MuseAssistantPosture.UnreachableHintLines(museHosts)) await Console.Out.WriteLineAsync(line);
+
+                return 1;
+            }
 
             (serverUrl, provider) = resolved.Value;
+
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.SignInNoticeLines(MuseAssistantPosture.SignInHosts(provider)))
+                    await Console.Out.WriteLineAsync(line);
 
             // A named server can be one still being created, which the provisioner says to re-run setup against.
             if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
@@ -703,7 +732,7 @@ sealed class SetupCommand(
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
-        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile);
+        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
         if (loginStepResult != 0) return loginStepResult;
 
         // Ahead of the browser leg, whose import decides the eval-watch handoff from them.
@@ -787,7 +816,8 @@ sealed class SetupCommand(
                       .Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility ?? "org_public");
 
         if (noPrompt) {
-            defaultVisibility = (GetArg(args, "--default-visibility") ?? "org_public").ToLowerInvariant();
+            defaultVisibility = (GetArg(args, "--default-visibility")
+                              ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility : "org_public")).ToLowerInvariant();
 
             if (!AppConfig.ValidVisibilities.Contains(defaultVisibility)) {
                 await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}");
@@ -858,11 +888,12 @@ sealed class SetupCommand(
             // entry named a vendor this build has never heard of asks for nothing this build can do —
             // and the step's own writes are gated on this, not on the per-vendor skips.
             installAgents = answered.Choices.Count > 0;
+        } else if (museAssistant) {
+            installAgents = false;
+            AnsiConsole.MarkupLine(MuseAssistantPosture.SkippedHarnessesLine);
         } else {
-            // The single install-consent decision, replacing the nine per-vendor prompts. Made
-            // BEFORE CodingAgentsStep.Options is constructed, so it uses the LOCAL `noPrompt` (there
-            // is no `options` object yet). NoPrompt alone would not imply InstallAgents, so this must
-            // be set explicitly here or `--no-prompt` would silently stop installing agents.
+            // Set explicitly: NoPrompt alone does not imply InstallAgents, so leaving it to the
+            // Options default would make --no-prompt stop installing agents.
             installAgents = SetupDecisions.DecideInstallAgents(detected, noPrompt, PromptYesNo);
         }
 
@@ -897,7 +928,9 @@ sealed class SetupCommand(
             SkipMistralVibeMcp: skipVibeMcpFlag,
             SkipGrok: skipGrokFlag);
 
-        stepOptions = SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
+        stepOptions = museAssistant
+            ? MuseAssistantPosture.Apply(stepOptions)
+            : SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 
         // allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -1004,7 +1037,8 @@ sealed class SetupCommand(
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
         OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
         OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
-        new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
+        // The posture offers no harness, so nothing may be recorded as offered.
+        if (!museAssistant) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -1272,6 +1306,7 @@ sealed class SetupCommand(
         grid.AddRow("[bold]Server[/]",     Markup.Escape(serverUrl));
         grid.AddRow("[bold]Visibility[/]", Markup.Escape(defaultVisibility));
         grid.AddRow("[bold]Daemon[/]",     Markup.Escape(daemonName));
+        if (museAssistant) grid.AddRow("[bold]Posture[/]", MuseAssistantPosture.SummaryValue);
 
         if (useProviderApiKey) {
             grid.AddRow("[bold]Provider API key[/]", "kept in headless spawns");
@@ -1302,10 +1337,9 @@ sealed class SetupCommand(
             new FirstRunNoticeStore(config).Arm();
         }
 
-        // Setup itself is user-scope and works fine outside a repo, but sessions recorded
-        // from non-repo directories have no owner/repo/branch/PR enrichment (see
-        // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
-        if (gitRoot is null) {
+        // Sessions recorded outside a repo carry no owner/repo/branch enrichment. A Muse VM records
+        // nothing from a checkout, so the tip is noise there.
+        if (gitRoot is null && !museAssistant) {
             AnsiConsole.MarkupLine(
                 $"\n  [yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(workdir.Path)}[/]).");
             AnsiConsole.MarkupLine(
@@ -1314,7 +1348,7 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
+        if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -1970,7 +2004,8 @@ sealed class SetupCommand(
     /// since setup's whole job is configuring that profile for the chosen server.
     /// </summary>
     internal async Task<int> RunLoginStepAsync(
-            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile) {
+            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile,
+            bool museAssistant = false) {
         if (loginComplete) {
             // Discovery's WorkOS leg reports the sign-in itself, naming the workspace it picked. Every
             // other provider's discovery reports a tenant count and no identity, so this is its only one.
@@ -1988,6 +2023,9 @@ sealed class SetupCommand(
 
         if (result is not AuthResult.Committed { CredentialSaved: true }) {
             await Console.Error.WriteLineAsync("  Login failed.");
+
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.LoginFailedHintLines(result, provider)) await Console.Out.WriteLineAsync(line);
 
             return 1;
         }
