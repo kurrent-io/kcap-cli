@@ -1,0 +1,93 @@
+using System.Text;
+using System.Text.Json;
+
+namespace Capacitor.Cli.Harness.MuseAssistant;
+
+/// <summary>The files under one profile's scope directory. Every write goes to a temp file, is flushed to
+/// disk and renamed over the target, so a crash mid-write leaves the previous state rather than a torn
+/// one. A file whose stored server or user disagrees with the directory is refused: it was copied here,
+/// and running it would post another account's intents.</summary>
+public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal principal) {
+    public string ScopeDir => scopeDir;
+
+    MuseAssistantScopeFile EmptyScope => new(principal.ServerUrl, principal.UserId, MuseAssistantRoles.Selected, []);
+
+    public MuseAssistantScopeFile LoadScope() {
+        var path = MuseAssistantPaths.ScopeFile(scopeDir);
+        if (!File.Exists(path)) return EmptyScope;
+
+        try {
+            var scope = JsonSerializer.Deserialize(File.ReadAllText(path), MuseAssistantJsonContext.Default.MuseAssistantScopeFile);
+
+            return scope is not null && scope.ServerUrl == principal.ServerUrl && scope.UserId == principal.UserId && scope.Chats is not null
+                ? scope
+                : EmptyScope;
+        } catch (JsonException) {
+            return EmptyScope;
+        }
+    }
+
+    public void SaveScope(MuseAssistantScopeFile scope) =>
+        WriteAtomic(
+            MuseAssistantPaths.ScopeFile(scopeDir),
+            JsonSerializer.Serialize(scope with { ServerUrl = principal.ServerUrl, UserId = principal.UserId, Roles = MuseAssistantRoles.Selected }, MuseAssistantJsonContext.Default.MuseAssistantScopeFile));
+
+    public (MuseAssistantChatState? State, string? Problem) LoadState(string chatId) {
+        var path = MuseAssistantPaths.ChatState(scopeDir, chatId);
+        if (!File.Exists(path)) return (null, null);
+
+        MuseAssistantChatState? state;
+        try {
+            state = JsonSerializer.Deserialize(File.ReadAllText(path), MuseAssistantJsonContext.Default.MuseAssistantChatState);
+        } catch (JsonException e) {
+            return (null, $"the state file for this chat is unreadable: {e.Message}");
+        }
+
+        if (state is null) return (null, "the state file for this chat is empty");
+        if (state.ChatId != chatId || state.ServerUrl != principal.ServerUrl || state.UserId != principal.UserId)
+            return (null, "the state file for this chat belongs to another chat, tenant or account");
+
+        return (state, null);
+    }
+
+    public virtual void SaveState(MuseAssistantChatState state) {
+        if (state.ServerUrl != principal.ServerUrl || state.UserId != principal.UserId)
+            throw new InvalidOperationException("state for another tenant or account");
+
+        WriteAtomic(MuseAssistantPaths.ChatState(scopeDir, state.ChatId), JsonSerializer.Serialize(state, MuseAssistantJsonContext.Default.MuseAssistantChatState));
+    }
+
+    /// <summary>Every readable state file that belongs here, by the name its own chat id would give it.</summary>
+    public IEnumerable<MuseAssistantChatState> EnumerateStates() {
+        if (!Directory.Exists(scopeDir)) yield break;
+
+        foreach (var file in Directory.EnumerateFiles(scopeDir, "*.json").Order(StringComparer.Ordinal)) {
+            var name = Path.GetFileName(file);
+            if (name == "scope.json") continue;
+
+            MuseAssistantChatState? state;
+            try {
+                state = JsonSerializer.Deserialize(File.ReadAllText(file), MuseAssistantJsonContext.Default.MuseAssistantChatState);
+            } catch (JsonException) {
+                continue;
+            }
+
+            if (state is null || state.ServerUrl != principal.ServerUrl || state.UserId != principal.UserId) continue;
+            if (name != MuseAssistantPaths.ChatKey(state.ChatId) + ".json") continue;
+
+            yield return state;
+        }
+    }
+
+    static void WriteAtomic(string path, string json) {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = $"{path}.{Environment.ProcessId}.tmp";
+
+        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None)) {
+            stream.Write(new UTF8Encoding(false).GetBytes(json));
+            stream.Flush(true);
+        }
+
+        File.Move(temp, path, overwrite: true);
+    }
+}

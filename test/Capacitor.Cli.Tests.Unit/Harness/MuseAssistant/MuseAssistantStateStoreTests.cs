@@ -1,0 +1,108 @@
+using Capacitor.Cli.Harness.MuseAssistant;
+
+namespace Capacitor.Cli.Tests.Unit.Harness.MuseAssistant;
+
+/// <summary>State is bound to the directory it sits in: a file for another tenant, account or chat is
+/// refused, not read; a missing scope file reads as empty; writes land whole or not at all.</summary>
+public class MuseAssistantStateStoreTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    static readonly MuseAssistantPrincipal Acme  = new("https://acme.kcap.ai", "user_01HXYZ");
+    static readonly MuseAssistantPrincipal Other = new("https://acme.kcap.ai", "user_01OTHER");
+
+    static MuseAssistantChatState State(MuseAssistantPrincipal p, string chat = "chat-main", MuseAssistantOpenSession? open = null) =>
+        new(chat, p.ServerUrl, p.UserId, new("0123456789abcdef0123456789abcdef", MuseAssistantGrantBoundaries.AfterSeq, 11, 1_760_000_000_000, null), 15, 1_760_000_012_000, open);
+
+    [Test]
+    public async Task State_round_trips_with_and_without_an_open_session() {
+        var store = new MuseAssistantStateStore(Tmp.PathTo("scope"), Acme);
+        var open  = new MuseAssistantOpenSession("451e8f8bd31baf5cf44a88b1ff4231d4", 12, 1_760_000_005_000, true, "/home/hatch", MuseAssistantSessionPhases.Started, null);
+
+        store.SaveState(State(Acme, open: open));
+        store.SaveState(State(Acme, chat: "chat-two"));
+
+        await Assert.That(store.LoadState("chat-main").State).IsEqualTo(State(Acme, open: open));
+        await Assert.That(store.LoadState("chat-two").State).IsEqualTo(State(Acme, chat: "chat-two"));
+        await Assert.That(store.LoadState("chat-three")).IsEqualTo(((MuseAssistantChatState?)null, (string?)null));
+        await Assert.That(File.Exists(MuseAssistantPaths.ChatState(Tmp.PathTo("scope"), "chat-main"))).IsTrue();
+        await Assert.That(Directory.EnumerateFiles(Tmp.PathTo("scope"), "*.tmp")).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_state_file_copied_from_another_profile_is_refused() {
+        var theirs = new MuseAssistantStateStore(Tmp.PathTo("theirs"), Other);
+        theirs.SaveState(State(Other));
+        var mine = new MuseAssistantStateStore(Tmp.PathTo("mine"), Acme);
+        Directory.CreateDirectory(Tmp.PathTo("mine"));
+        File.Copy(MuseAssistantPaths.ChatState(Tmp.PathTo("theirs"), "chat-main"), MuseAssistantPaths.ChatState(Tmp.PathTo("mine"), "chat-main"));
+
+        var (state, problem) = mine.LoadState("chat-main");
+
+        await Assert.That(state).IsNull();
+        await Assert.That(problem).Contains("another");
+        await Assert.That(mine.EnumerateStates()).IsEmpty();
+        await Assert.That(() => mine.SaveState(State(Other))).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Corrupt_state_is_a_problem_and_corrupt_or_missing_scope_reads_as_empty() {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        File.WriteAllText(MuseAssistantPaths.ChatState(dir, "chat-main"), "{not json");
+        File.WriteAllText(MuseAssistantPaths.ScopeFile(dir), "{not json");
+
+        await Assert.That(store.LoadState("chat-main").Problem).Contains("unreadable");
+        await Assert.That(store.LoadScope().Chats).IsEmpty();
+        await Assert.That(store.LoadScope().Roles).IsEquivalentTo(["user", "assistant", "commentary"]);
+        await Assert.That(new MuseAssistantStateStore(Tmp.PathTo("absent"), Acme).LoadScope().Chats).IsEmpty();
+    }
+
+    [Test]
+    public async Task Scope_round_trips_and_is_stamped_with_the_principal() {
+        var store = new MuseAssistantStateStore(Tmp.PathTo("scope"), Acme);
+
+        store.SaveScope(new("ignored", "ignored", MuseAssistantRoles.Selected, ["chat-main", "chat-two"]));
+
+        var scope = store.LoadScope();
+        await Assert.That(scope.ServerUrl).IsEqualTo(Acme.ServerUrl);
+        await Assert.That(scope.UserId).IsEqualTo(Acme.UserId);
+        await Assert.That(scope.Chats).IsEquivalentTo(["chat-main", "chat-two"]);
+    }
+
+    [Test]
+    public async Task Enumerate_skips_scope_json_foreign_files_and_misnamed_copies() {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        store.SaveState(State(Acme));
+        store.SaveScope(new(Acme.ServerUrl, Acme.UserId, MuseAssistantRoles.Selected, ["chat-main"]));
+        File.Copy(MuseAssistantPaths.ChatState(dir, "chat-main"), Path.Join(dir, "renamed-copy.json"));
+
+        await Assert.That(store.EnumerateStates().Select(s => s.ChatId)).IsEquivalentTo(["chat-main"]);
+    }
+
+    [Test]
+    public async Task Roles_selected_are_user_assistant_and_commentary_only() {
+        await Assert.That(MuseAssistantRoles.IsSelected("user")).IsTrue();
+        await Assert.That(MuseAssistantRoles.IsSelected("assistant")).IsTrue();
+        await Assert.That(MuseAssistantRoles.IsSelected("commentary")).IsTrue();
+        await Assert.That(MuseAssistantRoles.IsSelected("developer")).IsFalse();
+    }
+
+    [Test]
+    public async Task Grant_floor_is_the_seq_only_for_an_after_seq_boundary() {
+        var afterSeq = new MuseAssistantGrant("g", MuseAssistantGrantBoundaries.AfterSeq, 11, 1, null);
+
+        await Assert.That(afterSeq.Floor).IsEqualTo(11);
+        await Assert.That(afterSeq.Revoked).IsFalse();
+        await Assert.That((afterSeq with { Boundary = MuseAssistantGrantBoundaries.EmptyChat }).Floor).IsNull();
+        await Assert.That((afterSeq with { Boundary = MuseAssistantGrantBoundaries.History }).Floor).IsNull();
+        await Assert.That((afterSeq with { RevokedAtMs = 2 }).Revoked).IsTrue();
+    }
+
+    [Test]
+    public async Task A_manifest_with_missing_fields_deserializes_to_nulls() {
+        var manifest = System.Text.Json.JsonSerializer.Deserialize("{}", MuseAssistantJsonContext.Default.MuseAssistantManifest);
+
+        await Assert.That(manifest).IsEqualTo(new MuseAssistantManifest(null, null, null, null));
+    }
+}
