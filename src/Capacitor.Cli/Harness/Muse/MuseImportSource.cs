@@ -19,6 +19,11 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
     const string LogPathKey  = "LogPath";
     const string LastLineKey = "LastLine";
     const string EndedAtKey  = "EndedAt";
+    const string LastAtKey   = "LastRecordedAt";
+
+    // The server's stale-session sweep closes a watcher-backed session idle this long. An unfinished
+    // log idle as long has no live watcher left to stop its children, so the import stops them.
+    internal static readonly TimeSpan AbandonedAfter = TimeSpan.FromMinutes(30);
 
     // runtime.session.metadata is the log's second record; this bounds the head scan on a log that has none.
     const int HeadScanLines = 64;
@@ -134,12 +139,14 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         return (workspaceRoot, opened ?? first);
     }
 
-    /// <summary>The last non-blank line index and the newest <c>session.end</c>, in one pass. A log whose
-    /// last <c>session.opened.observed</c> follows its last end (a resume still running) or that has no
-    /// end is unfinished: <c>EndedAt</c> is null, since a historical end must not close a live session.</summary>
-    static (int NonBlank, int LastNonBlankIndex, DateTimeOffset? EndedAt) ReadTail(string log) {
+    /// <summary>The last non-blank line index, the newest <c>session.end</c> and the last record's time, in
+    /// one pass. A log whose last <c>session.opened.observed</c> follows its last end (a resume still
+    /// running) or that has no end is unfinished: <c>EndedAt</c> is null, since a historical end must not
+    /// close a live session.</summary>
+    static (int NonBlank, int LastNonBlankIndex, DateTimeOffset? EndedAt, DateTimeOffset? LastRecordedAt) ReadTail(string log) {
         var nonBlank = 0;
         var lastIdx  = 0;
+        string? lastLine = null;
         DateTimeOffset? endedAt = null;
         var open  = false;
         var index = 0;
@@ -147,7 +154,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         foreach (var line in File.ReadLinesShared(log)) {
             if (!string.IsNullOrWhiteSpace(line)) {
                 nonBlank++;
-                lastIdx = index;
+                lastIdx  = index;
+                lastLine = line;
 
                 var mentionsEnd    = line.Contains("\"session.end\"", StringComparison.Ordinal);
                 var mentionsOpened = line.Contains("\"session.opened.observed\"", StringComparison.Ordinal);
@@ -172,7 +180,16 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             index++;
         }
 
-        return (nonBlank, lastIdx, open ? null : endedAt);
+        return (nonBlank, lastIdx, open ? null : endedAt, lastLine is null ? null : LineRecordedAt(lastLine));
+    }
+
+    static DateTimeOffset? LineRecordedAt(string line) {
+        try {
+            using var doc = JsonDocument.Parse(line);
+            return doc.RootElement.IsObject ? RecordedAt(doc.RootElement) ?? FrameRecordedAt(doc.RootElement) : null;
+        } catch (JsonException) {
+            return null;
+        }
     }
 
     static DateTimeOffset? RecordedAt(JsonElement record) {
@@ -217,8 +234,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             var meta = new SessionMetadata { SessionId = s.SessionId, Cwd = s.Cwd, FirstTimestamp = s.FirstTimestamp };
 
             int nonBlank, lastIdx;
-            DateTimeOffset? endedAt;
-            try { (nonBlank, lastIdx, endedAt) = ReadTail(log); }
+            DateTimeOffset? endedAt, lastRecordedAt;
+            try { (nonBlank, lastIdx, endedAt, lastRecordedAt) = ReadTail(log); }
             catch { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, lastLine: 0, "transcript read failed")); continue; }
 
             if (nonBlank == 0) { results.Add(Classify(s, meta, ImportCommand.ClassificationStatus.ProbeError, 0, lastLine: 0, "empty transcript")); continue; }
@@ -241,7 +258,7 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             results.Add(new ImportCommand.SessionClassification {
                 SessionId = s.SessionId, FilePath = "", EncodedCwd = "", Meta = meta,
                 Status = status, Vendor = Vendor, ResumeFromLine = resumeFromLn, TotalLines = nonBlank,
-                SourceMeta = SourceMetaFor(log, lastIdx, endedAt),
+                SourceMeta = SourceMetaFor(log, lastIdx, endedAt, lastRecordedAt),
             });
         }
 
@@ -277,8 +294,9 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         // Children land before session-end so their lifecycle sits inside the parent's. An unfinished
         // log posts no end; the server's stale-session closers own an abandoned one.
         var parentEndedAt = classification.SourceMeta![EndedAtKey] as DateTimeOffset?;
+        var stopChildren  = parentEndedAt is not null || IsAbandoned(log, classification.SourceMeta[LastAtKey] as DateTimeOffset?);
 
-        var (sentChildContent, childrenRecorded) = await ImportChildrenAsync(ctx, classification.SessionId, log, parentEndedAt is not null, ct);
+        var (sentChildContent, childrenRecorded) = await ImportChildrenAsync(ctx, classification.SessionId, log, stopChildren, ct);
         if (!childrenRecorded) return new ImportSessionResult(ImportOutcome.Failed, sentChildContent);
 
         if (parentEndedAt is { } endedAt
@@ -294,12 +312,12 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
     /// <summary>Every child resends from line 0 (its server ids are deterministic), so
     /// <c>SentChildContent</c> reads true on any replay of a session that has one. A child whose start,
     /// content or stop the server did not record fails the import before the parent's session-end, so
-    /// a re-import retries it; a refused start skips that child's content. Under an unfinished parent no
-    /// child is stopped: a worker can be re-engaged after its result, and a stop's id is deterministic,
+    /// a re-import retries it; a refused start skips that child's content. Under a parent still running
+    /// no child is stopped: a worker can be re-engaged after its result, and a stop's id is deterministic,
     /// so one posted early would stop the live child watcher for good. The live watcher owns those stops,
-    /// and a re-import after the parent's end posts them all.</summary>
+    /// and a re-import after the parent ends or is abandoned posts them all.</summary>
     async Task<(bool AnySent, bool AllRecorded)> ImportChildrenAsync(
-            ImportContext ctx, string parentSessionId, string parentLog, bool parentEnded, CancellationToken ct) {
+            ImportContext ctx, string parentSessionId, string parentLog, bool stopChildren, CancellationToken ct) {
         var labels      = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
         var anySent     = false;
         var allRecorded = true;
@@ -329,7 +347,7 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
 
             if (childSent > 0) anySent = true;
 
-            if (!parentEnded) continue;
+            if (!stopChildren) continue;
 
             if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop",
                     Strict(MuseSubagentDiscovery.BuildStopPayload(parentSessionId, label.AgentId, label.AgentType, childLog)), ct))
@@ -337,6 +355,18 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         }
 
         return (anySent, allRecorded);
+    }
+
+    /// <summary>An unfinished parent whose log and every child log have gone unwritten past
+    /// <see cref="AbandonedAfter"/>. With no activity time to read, it is not.</summary>
+    bool IsAbandoned(string parentLog, DateTimeOffset? lastRecordedAt) {
+        var lastActivity = lastRecordedAt;
+
+        foreach (var log in MuseSubagentDiscovery.EnumerateChildLogs(parentLog).Prepend(parentLog))
+            if (TryGetLastWriteUtc(log) is { } written && (lastActivity is null || written > lastActivity))
+                lastActivity = written;
+
+        return lastActivity is { } last && time.GetUtcNow() - last > AbandonedAfter;
     }
 
     // Without strict the server answers 200 when it fails to record a child's start or stop.
@@ -391,8 +421,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         return doc.RootElement.Num("last_line_number") is { } ln ? (int)ln : null;
     }
 
-    static Dictionary<string, object?> SourceMetaFor(string log, int lastLine, DateTimeOffset? endedAt = null) =>
-        new() { [LogPathKey] = log, [LastLineKey] = lastLine, [EndedAtKey] = endedAt };
+    static Dictionary<string, object?> SourceMetaFor(string log, int lastLine, DateTimeOffset? endedAt = null, DateTimeOffset? lastRecordedAt = null) =>
+        new() { [LogPathKey] = log, [LastLineKey] = lastLine, [EndedAtKey] = endedAt, [LastAtKey] = lastRecordedAt };
 
     ImportCommand.SessionClassification Classify(
             DiscoveredSession s, SessionMetadata meta, ImportCommand.ClassificationStatus status, int totalLines, int lastLine,

@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Harness.Muse;
+using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -39,7 +40,7 @@ public class MuseImportSourceTests : IDisposable {
 
     MusePaths Paths => new(new UserHome(Tmp.PathTo("home")), null, Tmp.PathTo("data"));
 
-    MuseImportSource Source() => new(Paths, TimeProvider.System);
+    MuseImportSource Source(TimeProvider? time = null) => new(Paths, time ?? TimeProvider.System);
 
     static string Fixture(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Harness", "Muse", "fixtures", name));
 
@@ -74,10 +75,11 @@ public class MuseImportSourceTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
     }
 
-    async Task<(IReadOnlyList<ImportCommand.SessionClassification> Classified, ImportSessionResult Result)> ImportProbeAsync() {
+    async Task<(IReadOnlyList<ImportCommand.SessionClassification> Classified, ImportSessionResult Result)> ImportProbeAsync(
+            TimeProvider? time = null) {
         using var client = new HttpClient();
 
-        var source     = Source();
+        var source     = Source(time);
         var discovered = await source.DiscoverAsync(NoFilters, CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 1, Home: Home), CancellationToken.None);
         var result     = await source.ImportSessionAsync(classified[0], new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
@@ -327,19 +329,63 @@ public class MuseImportSourceTests : IDisposable {
         return log;
     }
 
+    // The last record LayOutUnfinishedProbeWithWorkers writes.
+    static readonly DateTimeOffset UnfinishedLastRecord = FromMicros(1791916431000000);
+
+    static void LastWrittenAt(string parentLog, DateTimeOffset at) {
+        File.SetLastWriteTimeUtc(parentLog, at.UtcDateTime);
+        foreach (var child in MuseSubagentDiscovery.EnumerateChildLogs(parentLog)) File.SetLastWriteTimeUtc(child, at.UtcDateTime);
+    }
+
     /// <summary>A worker can be re-engaged after its result, so a stop from the import would end the
-    /// live child watcher early: under a parent still running, not even a reported worker is stopped.</summary>
+    /// live child watcher early: under a parent active within the server's stale window, not even a
+    /// reported worker is stopped.</summary>
     [Test]
-    public async Task Under_an_unfinished_parent_no_child_is_stopped_even_one_whose_result_is_in() {
-        LayOutUnfinishedProbeWithWorkers();
+    public async Task Under_a_recently_active_unfinished_parent_no_child_is_stopped_even_one_whose_result_is_in() {
+        var log = LayOutUnfinishedProbeWithWorkers();
+        LastWrittenAt(log, UnfinishedLastRecord);
         StubServer();
 
-        var (_, result) = await ImportProbeAsync();
+        var (_, result) = await ImportProbeAsync(new FakeTimeProvider(UnfinishedLastRecord + MuseImportSource.AbandonedAfter));
 
         await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
         await Assert.That(PostedRoutes().Count(r => r == "/hooks/subagent-start")).IsEqualTo(4);
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
+    }
+
+    /// <summary>An unfinished log idle past the server's stale window has no live watcher to stop its
+    /// children, and the server's stale close completes none, so the import stops every one. The
+    /// session's own end stays with that stale close.</summary>
+    [Test]
+    public async Task Under_an_abandoned_unfinished_parent_every_child_is_stopped_but_the_session_is_not_ended() {
+        var log = LayOutUnfinishedProbeWithWorkers();
+        LastWrittenAt(log, UnfinishedLastRecord);
+        StubServer();
+
+        var now = UnfinishedLastRecord + MuseImportSource.AbandonedAfter + TimeSpan.FromSeconds(1);
+        var (_, result) = await ImportProbeAsync(new FakeTimeProvider(now));
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
+
+        var childRoutes = PostedRoutes().Where(r => r.StartsWith("/hooks/subagent-", StringComparison.Ordinal)).ToArray();
+        await Assert.That(childRoutes).IsEquivalentTo(
+            Enumerable.Repeat(new[] { "/hooks/subagent-start", "/hooks/subagent-stop" }, 4).SelectMany(r => r), CollectionOrdering.Matching);
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
+    }
+
+    /// <summary>A worker still writing its own log keeps an otherwise idle parent from reading as abandoned.</summary>
+    [Test]
+    public async Task A_child_written_within_the_stale_window_keeps_an_idle_parent_from_being_abandoned() {
+        var log = LayOutUnfinishedProbeWithWorkers();
+        LastWrittenAt(log, UnfinishedLastRecord);
+        var now = UnfinishedLastRecord + MuseImportSource.AbandonedAfter + TimeSpan.FromMinutes(10);
+        File.SetLastWriteTimeUtc(MuseSubagentDiscovery.EnumerateChildLogs(log)[0], (now - TimeSpan.FromMinutes(1)).UtcDateTime);
+        StubServer();
+
+        await ImportProbeAsync(new FakeTimeProvider(now));
+
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
     }
 
     [Test]
