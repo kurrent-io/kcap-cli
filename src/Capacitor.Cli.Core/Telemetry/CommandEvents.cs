@@ -16,7 +16,7 @@ public static partial class CommandEvents {
     // resurrect the directory it just deleted.
     static readonly HashSet<string> Denylisted = new(StringComparer.Ordinal) {
         "hook", "watch", "mcp", "permission-request", "generate-whats-done",
-        "set-title", "copilot-finalize", "cursor-verify-appendonly", "refresh-token",
+        "set-title", "copilot-finalize", "cursor-verify-appendonly", "refresh-token", "muse-assistant",
 
         // `Program.cs` already skips the post-command update check for `uninstall`, with a
         // comment explaining why: any write into the config directory after `Directory.Delete`
@@ -43,7 +43,7 @@ public static partial class CommandEvents {
         "curate", "cleanup", "uninstall", "disable", "hide", "import", "watch",
         "copilot-finalize", "set-title", "hook", "cursor", "cursor-verify-appendonly",
         "generate-whats-done", "permission-request", "feedback", "refresh-token",
-        "page", "artefact",
+        "page", "artefact", "muse-assistant",
     };
 
     // Verbs whose args[1] is a known literal rather than user data. Verbs absent from this

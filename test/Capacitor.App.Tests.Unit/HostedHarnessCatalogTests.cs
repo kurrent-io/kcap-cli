@@ -197,4 +197,10 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("claude")).IsFalse();
         await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("cursor")).IsFalse();
     }
+
+    [Test]
+    public async Task Muse_assistant_has_the_muse_blue_monogram_but_is_never_offered_to_launch() {
+        await Assert.That(HostedHarnessCatalog.TileFor("muse-assistant")).IsEqualTo(("MA", "#2F6FE0"));
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse-assistant");
+    }
 }

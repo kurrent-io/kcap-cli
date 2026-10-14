@@ -10,6 +10,10 @@ namespace Capacitor.App.Views;
 public partial class RemoteSessionView : UserControl {
     IDisposable? _tabFocus;
 
+    // Remote sessions have no work-context pane; their header must carry its own window chrome.
+    void OnHeaderPointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>
+        WindowChrome.BeginDrag(this, e);
+
     public RemoteSessionView() {
         InitializeComponent();
         TerminalClipboard.Attach(this, TerminalHost);
@@ -21,6 +25,7 @@ public partial class RemoteSessionView : UserControl {
         DataContextChanged += (_, _) => {
             _tabFocus?.Dispose();
             ArtefactsPane.Content = null;
+            PullRequestPane.Content = null;
             var model = DataContext as RemoteSessionViewModel;
             _tabFocus = model is null ? null : model
                 .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
@@ -28,6 +33,9 @@ public partial class RemoteSessionView : UserControl {
                     if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
                     if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
                         ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
+                    if (pair.Property1 == RemoteTab.PullRequest && PullRequestPane.Content is null && model?.PullRequests is { } pullRequests)
+                        PullRequestPane.Content = new PullRequestReader { DataContext = pullRequests };
+                    if (PullRequestPane.Content is PullRequestReader reader) reader.IsVisible = pair.Property1 == RemoteTab.PullRequest;
                     if (pair.Property1 == RemoteTab.Chat) ChatHost.FocusComposer();
                     else if (pair.Property1 == RemoteTab.Terminal) TerminalHost.Focus();
                 }, DispatcherPriority.Loaded));

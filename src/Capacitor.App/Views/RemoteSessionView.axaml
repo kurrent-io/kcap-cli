@@ -11,7 +11,7 @@
          streams, and the two actions that reach across. -->
     <Grid RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
-                Padding="20,16,16,16">
+                Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                 <StackPanel Spacing="6" VerticalAlignment="Center" Margin="0,0,8,0">
                     <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"
@@ -34,6 +34,9 @@
                             <Button x:Name="TerminalTabButton" Content="Terminal" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsTerminalActive}" Command="{Binding ShowTerminalCommand}"
                                     IsVisible="{Binding ShowsTerminalTab}" />
+                            <Button x:Name="PullRequestTabButton" Content="Pull Request" Classes="kcapSegmentItem"
+                                    Classes.active="{Binding IsPullRequestActive}" Command="{Binding ShowPullRequestCommand}"
+                                    IsVisible="{Binding ShowsPullRequestTab}" />
                             <Button x:Name="ArtefactsTabButton" Content="Artefacts" Classes="kcapSegmentItem"
                                     Classes.active="{Binding IsArtefactsActive}" Command="{Binding ShowArtefactsCommand}"
                                     IsVisible="{Binding ShowsArtefactsTab}" />
@@ -99,6 +102,7 @@
                     </Grid>
                 </Border>
             </Grid>
+            <ContentControl x:Name="PullRequestPane" IsVisible="{Binding ShowsPullRequestPane}" />
             <ContentControl x:Name="ArtefactsPane" IsVisible="{Binding ShowsArtefactsPane}" />
         </Grid>
     </Grid>

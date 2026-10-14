@@ -196,6 +196,7 @@ public sealed partial class PullRequestContextViewModel {
         SetNotice(Reason(read));
     }
     void ApplyChoices(bool listed) {
+        if (_selected is null) ApplyRequestedSubject();
         var incoming = _sessionItems.Select(link => new PullRequestChoice(link)).ToList();
         var previous = _selected?.Subject;
         var selected = _explicitSelection ? incoming.FirstOrDefault(choice => choice.Subject == previous) : null;
@@ -208,9 +209,10 @@ public sealed partial class PullRequestContextViewModel {
         try {
             if (!_choices.SequenceEqual(incoming)) { _choices.Clear(); _choices.AddRange(incoming); }
         } finally { _updatingChoices = false; }
-        if (previous != selected?.Subject) Select(selected);
+        if (previous != selected?.Subject) Select(selected, explicitSelection: _explicitSelection);
         else { _selected = selected; this.RaisePropertyChanged(nameof(Selected)); }
         if (listed) {
+            _requestedSubject = null;
             if (selected is { IsAvailable: false }) {
                 CancelReads(); ClearProtected(); SetNotice("This pull request is no longer linked or visible. Select another PR or retry.");
             }
@@ -253,7 +255,10 @@ public sealed partial class PullRequestContextViewModel {
         Select(best);
         return true;
     }
-    void ForgetChoices() { CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null; }
+    void ForgetChoices() {
+        if (_explicitSelection && _selected is not null) _requestedSubject = _selected.Subject;
+        CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null;
+    }
     void FailProtocol(string? reader) {
         ClearProtected();
         SetNotice(reader is null ? "The server returned an inconsistent PR response. Retry after updating the server and app."

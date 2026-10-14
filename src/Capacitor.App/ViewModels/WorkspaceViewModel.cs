@@ -74,7 +74,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     }
     bool _showsPullRequestTab;
     public bool ShowsPullRequestTab {
-        get => _showsPullRequestTab;
+        get => _showsPullRequestTab || IsPullRequestActive;
         private set {
             this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
             this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
@@ -91,6 +91,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(ShowsChat));
             this.RaisePropertyChanged(nameof(IsTerminalActive));
             this.RaisePropertyChanged(nameof(IsPullRequestActive));
+            this.RaisePropertyChanged(nameof(ShowsPullRequestTab));
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
             this.RaisePropertyChanged(nameof(ShowsTerminalBanners));
             this.RaisePropertyChanged(nameof(IsArtefactsActive));
             Artefacts.IsShown = IsArtefactsActive;
@@ -111,6 +113,13 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowPullRequestCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowArtefactsCommand { get; }
+
+    public void OpenPullRequest(PullRequestSubjectDto? subject = null) {
+        if (PullRequests is null) return;
+        if (subject is not null) PullRequests.SelectSubject(subject);
+        ActiveTab = WorkspaceTab.PullRequest;
+        if (!PullRequests.IsReading) PullRequests.Refresh();
+    }
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = WorkspaceTab.Artefacts; }
 
@@ -172,10 +181,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
-        PullRequests?.HasPullRequestChanges.Subscribe(has => {
-            ShowsPullRequestTab = has;
-            if (!has && IsPullRequestActive) ActiveTab = WorkspaceTab.Chat;
-        }).DisposeWith(_disposables);
+        if (PullRequests is { } context)
+            context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
+                .Subscribe(state => {
+                    ShowsPullRequestTab = state.has;
+                    if (!state.has && IsPullRequestActive && state.listed) ActiveTab = WorkspaceTab.Chat;
+                }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);

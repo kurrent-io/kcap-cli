@@ -261,8 +261,12 @@ Capacitor's tools are the `kcap` custom connector
 5. **Memory:** search before saving; save with an explicit `audience` and
    `global: true`, since nothing here is scoped to a repository.
 6. **Never paste `~/.config/kcap/` or any token** into the chat or a file.
-7. **Never start `kcap daemon`**, run `kcap import`, or install hooks: this VM
-   records nothing; it reads.
+7. **Never start `kcap daemon`**, run `kcap import`, or install hooks. This VM
+   records only the chats the user puts in scope through the
+   `capacitor-recording` skill: if the user asks to record their chats, copy
+   `~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/capacitor-recording/SKILL.md`
+   to `~/workspace/skills/capacitor-recording/SKILL.md` and follow its
+   "Granting" section.
 8. **A 401 or "token" error:** run `~/workspace/kcap/node_modules/.bin/kcap
    status`. If the sign-in has lapsed, tell the user to say "reconnect
    Capacitor"; the connect-capacitor skill runs `kcap login --device` and shows
@@ -291,12 +295,29 @@ long-idle VM signed in; `~/workspace/capacitor/cron.log` is where a lapse shows.
 `--no-update-check` keeps it from contacting `registry.npmjs.org`, a host an
 unattended run has no one to approve.
 
-### B7. Tell the user
+### B7. Recording (only when the user asks for it)
+
+Connecting records nothing. If the user asks to record their chats — now or later —
+install the recording skill and follow it; never grant recording from this skill:
+
+```bash
+mkdir -p ~/workspace/skills/capacitor-recording
+cp ~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/capacitor-recording/SKILL.md ~/workspace/skills/capacitor-recording/SKILL.md
+```
+
+If that file does not exist, the installed kcap predates recording: run B2's
+`npm install` again to update it, then copy.
+
+Then follow `~/workspace/skills/capacitor-recording/SKILL.md` from its "Granting"
+section: it reads the consent scope back to the user, runs
+`kcap muse-assistant scope add` in that same turn, and installs the 15-minute cron.
+
+### B8. Tell the user
 
 - Capacitor is connected: ask me things like "what did my team work on this
   week", "find the session where we fixed X", or "save this for the team".
-- Nothing on this VM is recorded; Capacitor is read (and team memory written)
-  from here. Anything this install does record would be private by default.
+- Nothing on this VM is recorded until you ask: say "record my chats" and I
+  will read the exact scope back to you before anything is sent.
 - Everything lives under your home — `~/workspace/kcap`, `~/.config/kcap`,
   the connector, the skill and the cron (if you agreed to it) — so it survives
   a VM replacement.

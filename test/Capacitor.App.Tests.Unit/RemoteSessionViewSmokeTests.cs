@@ -1,4 +1,9 @@
 using System.Reactive.Linq;
+using System.Reflection;
+using Avalonia;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Platform;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
@@ -33,7 +38,7 @@ public class RemoteSessionViewSmokeTests {
         public readonly RemoteSessionView View;
         public readonly Window Window;
 
-        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1") {
+        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1", IWindowImpl? windowImpl = null) {
             _access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
             var row = AgentRow.FromRemote(new AgentInstanceDto {
@@ -45,7 +50,10 @@ public class RemoteSessionViewSmokeTests {
                 (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time,
                 () => new FakeTerminalSurface(), planArtifacts);
             View = new RemoteSessionView { DataContext = Vm };
-            Window = new Window { Content = View, Width = 900, Height = 700 };
+            Window = windowImpl is null ? new Window() : new Window(windowImpl);
+            Window.Content = View;
+            Window.Width = 900;
+            Window.Height = 700;
             Window.Show();
             Settle();
         }
@@ -67,6 +75,67 @@ public class RemoteSessionViewSmokeTests {
             Permissions.Dispose();
             _directory.Dispose();
         }
+    }
+
+    // Forward to the real headless platform so these assertions exercise hit testing and routed
+    // input, while recording the move request that a native window would receive.
+    public class MoveRecorder : DispatchProxy {
+        public IWindowImpl Target { get; set; } = null!;
+        public int Moves { get; private set; }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) {
+            if (targetMethod!.Name == "BeginMoveDrag") Moves++;
+            return targetMethod.Invoke(Target, args);
+        }
+    }
+
+    [Test]
+    public async Task The_remote_header_drags_without_work_context_and_keeps_tab_buttons_clickable() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var platformWindow = new Window();
+            var platform = DispatchProxy.Create<IWindowImpl, MoveRecorder>();
+            var recorder = (MoveRecorder)platform;
+            recorder.Target = platformWindow.PlatformImpl!;
+            var closed = typeof(ITopLevelImpl).GetProperty("Closed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
+            var helperClosed = closed.GetValue(recorder.Target);
+            try {
+                using var host = new Host(windowImpl: platform);
+                try {
+                    await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+                    await Assert.That(host.View.GetVisualDescendants().OfType<WorkContextView>().Any()).IsFalse();
+
+                    // Blank padding needs a hit-testable background; title text must bubble too.
+                    var title = host.View.FindControl<TextBlock>("RemoteTitle")!;
+                    var titlePoint = title.TranslatePoint(new Point(4, title.Bounds.Height / 2), host.Window)!.Value;
+                    foreach (var point in new[] { new Point(200, 8), titlePoint }) {
+                        platformWindow.MouseDown(point, MouseButton.Left);
+                        platformWindow.MouseUp(point, MouseButton.Left);
+                    }
+                    await Assert.That(recorder.Moves).IsEqualTo(2);
+
+                    platformWindow.MouseDown(new Point(200, 8), MouseButton.Right);
+                    platformWindow.MouseUp(new Point(200, 8), MouseButton.Right);
+                    await Assert.That(recorder.Moves).IsEqualTo(2);
+
+                    var terminal = host.View.FindControl<Button>("TerminalTabButton")!;
+                    var buttonPoint = terminal.TranslatePoint(new Point(terminal.Bounds.Width / 2, terminal.Bounds.Height / 2), host.Window)!.Value;
+                    platformWindow.MouseDown(buttonPoint, MouseButton.Left);
+                    platformWindow.MouseUp(buttonPoint, MouseButton.Left);
+                    host.Settle();
+                    await Assert.That(host.Vm.IsTerminalActive).IsTrue();
+                    await Assert.That(recorder.Moves).IsEqualTo(2);
+                } finally {
+                    await host.Vm.TeardownAsync();
+                }
+            } finally {
+                // Host replaces the shared implementation's close callback. Restore the helper's
+                // callback after Host closes so its managed subscriptions are released too.
+                closed.SetValue(recorder.Target, helperClosed);
+                platformWindow.Close();
+            }
+            await Assert.That(platformWindow.PlatformImpl).IsNull();
+            return true;
+        });
     }
 
     [Test]

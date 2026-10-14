@@ -37,9 +37,10 @@ public class RemoteSessionViewModelTests {
                 Vendor = vendor, OwnerUserId = "u1", RegisteredAt = DateTime.UtcNow,
             });
 
-        public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null) {
+        public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
+                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface(), planArtifacts);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface(), planArtifacts, pullRequests: pullRequests);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -63,6 +64,64 @@ public class RemoteSessionViewModelTests {
             Permissions.Dispose();
             Directory.Dispose();
         }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Initial_pr_loading_keeps_the_tab_visible_and_an_empty_result_returns_to_chat(bool failed) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePullRequestSource(h.Time) { Links = [],
+                Capability = failed ? Capacitor.Cli.Core.PullRequests.PullRequestCapabilityKind.Unavailable : Capacitor.Cli.Core.PullRequests.PullRequestCapabilityKind.Supported };
+            var vm = h.Build(Harness.Row(), pullRequests: source);
+            vm.OpenPullRequest();
+            await Assert.That(vm.IsPullRequestActive).IsTrue();
+            await Assert.That(vm.ShowsPullRequestTab).IsTrue();
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => failed ? vm.PullRequests.Notice is { } note && note != "Loading pull requests…" : vm.PullRequests.HasListed, what: "first list settled");
+            await Assert.That(vm.IsPullRequestActive).IsEqualTo(failed);
+            await Assert.That(vm.ShowsPullRequestTab).IsEqualTo(failed);
+            await Assert.That(vm.IsChatActive).IsEqualTo(!failed);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_remote_session_opens_the_native_pr_reader_and_keeps_the_picker() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var source = new FakePullRequestSource(h.Time);
+            var vm = h.Build(Harness.Row(), pullRequests: source);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            vm.PullRequests!.SetForeground(true);
+            vm.OpenPullRequest(Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(source.Links[0]));
+            await WaitUntilAsync(() => vm.PullRequests.CanReveal && !vm.PullRequests.IsReading, what: "PR reader");
+            await Assert.That(vm.IsPullRequestActive).IsTrue();
+            await Assert.That(vm.ShowsPullRequestPane).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            await Assert.That(vm.ShowsPullRequestTab).IsTrue();
+            await Assert.That(vm.PullRequests.Choices).Count().IsEqualTo(2);
+            await Assert.That(vm.PullRequests.Selected!.Subject.Number).IsEqualTo(1);
+            vm.PullRequests.ShowSectionCommand.Execute("checks").Subscribe();
+            await WaitUntilAsync(() => vm.PullRequests.Rows.Count > 0 && !vm.PullRequests.IsReading, what: "checks loaded");
+            var rows = vm.PullRequests.Rows.ToArray();
+            var pages = source.Pages;
+            vm.ShowChatCommand.Execute().Subscribe();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            var lists = source.Lists;
+            var overviews = source.Overviews;
+            h.Time.Advance(TimeSpan.FromSeconds(4));
+            vm.ShowPullRequestCommand.Execute().Subscribe();
+            await Assert.That(vm.IsPullRequestActive).IsTrue();
+            await Assert.That(vm.PullRequests.Selected!.Subject.Number).IsEqualTo(1);
+            await Assert.That(source.Lists).IsEqualTo(lists);
+            await Assert.That(source.Overviews).IsEqualTo(overviews);
+            await Assert.That(source.Pages).IsEqualTo(pages);
+            await Assert.That(vm.PullRequests.Section).IsEqualTo("checks");
+            await Assert.That(vm.PullRequests.Rows).IsEquivalentTo(rows);
+            await vm.TeardownAsync();
+        });
     }
 
     [Test]

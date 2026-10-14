@@ -196,7 +196,11 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 : FrozenSet<string>.Empty;
 
             var remote = _remoteAgents
-                .Where(a => a.Status is "Starting" or "Running")
+                // The server registry uses lowercase `idle` for a live agent waiting between
+                // turns; local daemon snapshots call that same live state `Running`.
+                .Where(a => a.Status.Equals("Starting", StringComparison.OrdinalIgnoreCase)
+                    || a.Status.Equals("Running", StringComparison.OrdinalIgnoreCase)
+                    || a.Status.Equals("Idle", StringComparison.OrdinalIgnoreCase))
                 .Where(a => !(_localConnected && OnTwin(a)))
                 .ToList();
             // The counterpart set is the TWIN's own rows, never every remote row: proving this
