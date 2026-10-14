@@ -7,9 +7,10 @@ namespace Capacitor.Cli.Core;
 /// index stops learning at one, and a UTF-16 or UTF-32 file is never indexed.
 /// </summary>
 /// <remarks>
-/// The bytes just before the indexed end are compared on every poll, and a file that changed
-/// there or shrank below it drops the index, so a rewrite falls back to a full read. One reader at
-/// a time.
+/// Only the bytes just before the indexed end are compared on each poll: a file that shrank below
+/// it or changed there drops the index and is read from byte 0. A rewrite further back goes
+/// unnoticed, which the line cursor already relies on never happening — a transcript is appended
+/// to, never edited. One reader at a time.
 /// </remarks>
 sealed class TranscriptLineIndex {
     const int TailLength = 4096;
@@ -34,10 +35,12 @@ sealed class TranscriptLineIndex {
     public async ValueTask<(int Line, long Offset)> StartAsync(FileStream stream, long length, int line, CancellationToken ct) {
         if (Frontier > 0 && (Frontier != _tailEnd || length < Frontier || !await TailMatchesAsync(stream, ct))) Reset();
 
+        // An unsupported file is read from byte 0 every time, so its encoding is checked again.
         var from = _unsupported ? 0 : Math.Min(line, _starts.Count - 1);
-        _position  = _starts[from];
-        _scanning  = !_unsupported;
-        _pendingCr = false;
+        _unsupported = false;
+        _position    = _starts[from];
+        _scanning    = true;
+        _pendingCr   = false;
 
         return (from, _position);
     }

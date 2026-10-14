@@ -203,10 +203,13 @@ partial class WatchCommand(
 
     /// <summary>
     /// The file's text from its last <c>'\n'</c> on, or all of it when it has none: what
-    /// <see cref="IsFinalLineComplete"/> decides on, read without decoding the lines before it.
+    /// <see cref="IsFinalLineComplete"/> decides on, read without decoding the lines before it. A
+    /// UTF-16 or UTF-32 file is read whole, since its newline is not a lone <c>0x0A</c> byte.
     /// </summary>
     internal static async Task<string> ReadFinalLineSharedAsync(string path) {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length > 0 && stream.ReadByte() is 0xFE or 0xFF or 0x00) return await File.ReadAllTextSharedAsync(path);
+
         var end   = stream.Length;
         var start = end;
 

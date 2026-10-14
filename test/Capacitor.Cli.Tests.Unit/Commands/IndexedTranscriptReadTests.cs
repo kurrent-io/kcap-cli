@@ -165,12 +165,10 @@ public class IndexedTranscriptReadTests {
     [Arguments(8)]
     public async Task Indexed_reads_match_full_reads_through_appends_rewinds_and_rewrites(int seed) {
         var rng     = new Random(seed);
-        var path    = Tmp.PathTo($"fuzz-{seed}.jsonl");
-        var content = new List<byte>(seed % 4 == 0 ? Encoding.UTF8.GetPreamble() : []);
+        var path    = Tmp.CreateFile($"fuzz-{seed}.jsonl", seed % 4 == 0 ? "\uFEFF" : "");
+        var content = new List<byte>(await File.ReadAllBytesAsync(path));
         var index   = new TranscriptLineIndex();
         var cursor  = 0;
-
-        await File.WriteAllBytesAsync(path, content.ToArray());
 
         for (var step = 0; step < 300; step++) {
             var op = rng.Next(20);
@@ -227,6 +225,7 @@ public class IndexedTranscriptReadTests {
     [Arguments("{\"a\":1}\n   ")]
     [Arguments("{\"a\":1")]
     [Arguments("\uFEFF{\"a\":1}")]
+    [Arguments("UTF16")]
     [Arguments("LONG")]
     [Arguments("LONG-PARTIAL")]
     public async Task The_final_line_read_decides_completeness_as_the_whole_file_does(string content) {
@@ -237,10 +236,25 @@ public class IndexedTranscriptReadTests {
             _              => content,
         };
         var path = Tmp.CreateFile($"final-{Guid.NewGuid():N}.jsonl", content);
+        if (content == "UTF16") await File.WriteAllTextAsync(path, "{\"a\":1}\n", Encoding.Unicode);
 
         var expected = WatchCommand.IsFinalLineComplete(await File.ReadAllTextAsync(path));
         var actual   = WatchCommand.IsFinalLineComplete(await WatchCommand.ReadFinalLineSharedAsync(path));
 
         await Assert.That(actual).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task A_transcript_replaced_by_utf8_is_indexed_again() {
+        var path  = Tmp.PathTo("was-utf16.jsonl");
+        var index = new TranscriptLineIndex();
+        await File.WriteAllTextAsync(path, "{\"a\":1}\n", Encoding.Unicode);
+        await Read(path, 0, Hold, index);
+
+        await File.WriteAllTextAsync(path, string.Concat(Enumerable.Range(0, 2000).Select(i => $"{{\"i\":{i},\"p\":\"{new string('x', 500)}\"}}\n")));
+        var first = await Read(path, 0, Hold, index);
+        var idle  = await Read(path, first.Result.NextPosition, Hold, index);
+
+        await Assert.That(idle.BytesRead).IsLessThan(16 * 1024);
     }
 }
