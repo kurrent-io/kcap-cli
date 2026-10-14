@@ -304,19 +304,23 @@ public class SessionTranscriptLocatorTests {
     }
 
     [Test]
-    public async Task A_pre_spawn_transcript_is_cached_in_ruled_out_on_first_scan() {
+    public async Task A_pre_spawn_transcript_resumed_after_first_scan_wins_once_written_to() {
         using var tmp = new TempDir();
         var projectDir = tmp.CreateDir("projects", "-repo").Path;
         var worktree = tmp.PathTo("wt");
         var file = tmp.CreateFile(["projects", "-repo", "0123456789abcdef0123456789abcdef.jsonl"], TranscriptLine(worktree) + "\n");
         var old = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var spawnedAt = old.AddHours(1);
         File.SetCreationTimeUtc(file, old);
         File.SetLastWriteTimeUtc(file, old);
         var ruledOut = new HashSet<string>();
 
-        var winner = SessionTranscriptLocator.TryLocateWinner(projectDir, worktree, old.AddHours(1), ruledOut);
+        var first = SessionTranscriptLocator.TryLocateWinner(projectDir, worktree, spawnedAt, ruledOut);
+        await Assert.That(first).IsNull();
+        await Assert.That(ruledOut).IsEmpty();
 
-        await Assert.That(winner).IsNull();
-        await Assert.That(ruledOut).Contains(file);
+        File.SetLastWriteTimeUtc(file, spawnedAt.AddSeconds(10));
+        var second = SessionTranscriptLocator.TryLocateWinner(projectDir, worktree, spawnedAt, ruledOut);
+        await Assert.That(second?.SessionId).IsEqualTo("0123456789abcdef0123456789abcdef");
     }
 }

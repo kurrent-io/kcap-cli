@@ -73,7 +73,6 @@ internal static class SessionTranscriptLocator {
                 }
 
                 if (!IsNewEnough(File.GetCreationTimeUtc(file), File.GetLastWriteTimeUtc(file), spawnedAtUtc)) {
-                    ruledOut?.Add(file);
                     continue;
                 }
 
