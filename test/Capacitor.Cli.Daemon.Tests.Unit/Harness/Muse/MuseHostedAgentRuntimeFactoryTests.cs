@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 
@@ -69,7 +70,10 @@ public class MuseHostedAgentRuntimeFactoryTests {
             string?           installed      = "1.4.7",
             string?           affirmed       = "1.4.7",
             bool              binary         = true,
-            Action<MuseScriptedHost>? configure = null) {
+            Action<MuseScriptedHost>? configure = null,
+            TimeProvider?     time           = null,
+            TimeSpan?         readyDeadline  = null,
+            Action?           onRelay        = null) {
         config ??= Config();
         if (affirmed is not null) new ReviewerVersionStore(config.Store.StateDirectory(config.Name), DaemonRunner.MuseVendor).Affirm(affirmed);
 
@@ -81,7 +85,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         var factory = new MuseHostedAgentRuntimeFactory(
-            config, NullLoggerFactory.Instance, TimeProvider.System, connection,
+            config, NullLoggerFactory.Instance, time ?? TimeProvider.System, connection,
             new MusePaths(Home, null, null),
             processSource: (psi, _) => {
                 rig!.Spawned.Add(psi);
@@ -95,8 +99,10 @@ public class MuseHostedAgentRuntimeFactoryTests {
             hooksInstalled: _ => hooksInstalled,
             hookRelay: (kcap, payload, sessionId, agentId, url, daemonId, epoch, _, _) => {
                 lock (rig!.Relays) rig.Relays.Add(new Relay(kcap, payload, sessionId, agentId, url, daemonId, epoch));
+                onRelay?.Invoke();
                 return Task.CompletedTask;
-            });
+            },
+            readyDeadline: readyDeadline);
 
         rig = new Rig { Host = host, Factory = factory };
         return rig;
@@ -417,6 +423,62 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         await Assert.That(rig.Host.Process.DisposeCalls).IsGreaterThanOrEqualTo(1);
         await Assert.That(Directory.GetFiles(MarkerDir)).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_host_that_never_acknowledges_the_first_prompt_fails_the_launch_at_the_ready_deadline() {
+        var time = new FakeTimeProvider();
+        var rig  = NewRig(configure: h => h.Silent.Add("turn/start"), time: time, readyDeadline: TimeSpan.FromSeconds(5));
+
+        var launch = rig.Factory.StartAsync(Ctx(), CancellationToken.None);
+        await rig.Host.WaitForWriteAsync("turn/start");
+
+        // The deadline's timer is armed just after the write the test observed, so advance until it fires.
+        using var guard = new CancellationTokenSource(HangGuard);
+        while (!launch.IsCompleted) {
+            guard.Token.ThrowIfCancellationRequested();
+            time.Advance(TimeSpan.FromSeconds(1));
+            await Task.WhenAny(launch, Task.Delay(20, guard.Token));
+        }
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await launch);
+        await Assert.That(ex!.Message).StartsWith("muse_first_turn_unacknowledged");
+        await Assert.That(rig.Host.Process.DisposeCalls).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task Cancelling_while_the_first_prompt_is_unacknowledged_aborts_the_launch() {
+        var rig = NewRig(configure: h => h.Silent.Add("turn/start"));
+        using var cts = new CancellationTokenSource();
+
+        var launch = rig.Factory.StartAsync(Ctx(), cts.Token);
+        await rig.Host.WaitForWriteAsync("turn/start");
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await launch.WaitAsync(HangGuard));
+        await Assert.That(rig.Host.Process.DisposeCalls).IsGreaterThanOrEqualTo(1);
+    }
+
+    /// <summary>The relay swallows its own cancellation, so the launch must notice it afterwards rather than
+    /// go on to send the first prompt.</summary>
+    [Test]
+    public async Task A_launch_cancelled_during_the_relay_sends_no_prompt() {
+        using var cts = new CancellationTokenSource();
+        var rig = NewRig(hooksInstalled: false, onRelay: cts.Cancel);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            async () => await rig.Factory.StartAsync(Ctx(), cts.Token).WaitAsync(HangGuard));
+
+        await Assert.That(rig.Relays).Count().IsGreaterThanOrEqualTo(1);
+        await Assert.That(rig.Host.WritesOf("turn/start")).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_throwing_sandbox_probe_withholds_the_reviewer() {
+        var rig = NewRig(sandbox: new MuseSandboxProbe(() => throw new InvalidOperationException("probe failed")));
+
+        await Assert.That(rig.Factory.SupportsUnattended).IsFalse();
+        await Assert.That(rig.Factory.DescribeUnattendedSupport().WithheldReason).StartsWith("muse_reviewer_sandbox_unavailable");
     }
 
     [Test]

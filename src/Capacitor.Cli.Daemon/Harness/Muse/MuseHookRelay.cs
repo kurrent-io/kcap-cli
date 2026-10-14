@@ -71,8 +71,12 @@ internal static class MuseHookRelay {
                 await process.WaitForExitAsync(bounded.Token).ConfigureAwait(false);
             } catch (OperationCanceledException) {
                 ProcessTree.Kill(process);
-                logger.LogWarning("Muse hook relay: {Event} did not finish within {Seconds}s (agentId={AgentId}).",
-                    hookEvent, Ceiling.TotalSeconds, agentId);
+
+                if (ct.IsCancellationRequested)
+                    logger.LogInformation("Muse hook relay: {Event} was cancelled with its launch (agentId={AgentId}).", hookEvent, agentId);
+                else
+                    logger.LogWarning("Muse hook relay: {Event} did not finish within {Seconds}s (agentId={AgentId}).",
+                        hookEvent, Ceiling.TotalSeconds, agentId);
                 return;
             }
 

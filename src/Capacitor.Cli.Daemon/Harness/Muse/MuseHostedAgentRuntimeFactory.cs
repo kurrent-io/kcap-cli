@@ -215,11 +215,14 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
                 relayedStart = true;
                 await _hookRelay(ctx.CapacitorPath, SessionStartPayload(session, ctx), session.SessionId, ctx.AgentId,
                     ctx.ServerUrl, ctx.DaemonId, ctx.DaemonEpoch, _logger, ct).ConfigureAwait(false);
+
+                // The relay swallows its own cancellation.
+                ct.ThrowIfCancellationRequested();
             }
 
             // The reviewer always has a prompt: BuildPlan refused a blank one.
             if (!string.IsNullOrEmpty(ctx.Prompt))
-                await runtime.SendUserInputAndWaitForWriteAsync(ctx.Prompt).ConfigureAwait(false);
+                await AwaitFirstTurnAsync(runtime, ctx.Prompt, ct).ConfigureAwait(false);
 
             return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: null);
         } catch (Exception ex) {
@@ -240,6 +243,23 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
             }
 
             throw;
+        }
+    }
+
+    async Task AwaitFirstTurnAsync(MuseMspHostedAgentRuntime runtime, string prompt, CancellationToken ct) {
+        var deadline = _readyDeadline ?? MuseMspHostedAgentRuntime.DefaultReadyDeadline;
+
+        var send = runtime.SendUserInputAndWaitForWriteAsync(prompt);
+
+        // Abandoned on timeout or cancellation, then faulted by the runtime's disposal.
+        _ = send.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        try {
+            await send.WaitAsync(deadline, _time, ct).ConfigureAwait(false);
+        } catch (TimeoutException) {
+            throw new InvalidOperationException(
+                $"muse_first_turn_unacknowledged: the Muse host did not acknowledge the first prompt within {deadline.TotalSeconds:0}s.");
         }
     }
 

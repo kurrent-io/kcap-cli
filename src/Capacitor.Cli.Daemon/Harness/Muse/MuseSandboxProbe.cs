@@ -13,9 +13,19 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 internal sealed class MuseSandboxProbe(Func<bool>? probe = null) {
     static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);
 
-    readonly Lazy<bool> _available = new(probe ?? RunDefault, LazyThreadSafetyMode.ExecutionAndPublication);
+    readonly Lazy<bool> _available = new(() => FailClosed(probe ?? RunDefault), LazyThreadSafetyMode.ExecutionAndPublication);
 
     public bool Available => _available.Value;
+
+    /// <summary>A throwing probe would be cached by the <see cref="Lazy{T}"/> and rethrown from every
+    /// capability read, so any exception is an unavailable sandbox.</summary>
+    static bool FailClosed(Func<bool> check) {
+        try {
+            return check();
+        } catch (Exception) {
+            return false;
+        }
+    }
 
     static bool RunDefault() => !OperatingSystem.IsLinux() || RunBubblewrap();
 
@@ -37,7 +47,7 @@ internal sealed class MuseSandboxProbe(Func<bool>? probe = null) {
 
             ProcessTree.Kill(process);
             return false;
-        } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) {
+        } catch (Exception) {
             return false;
         }
     }
