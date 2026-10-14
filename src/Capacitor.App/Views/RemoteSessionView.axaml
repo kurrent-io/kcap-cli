@@ -11,7 +11,7 @@
          streams, and the two actions that reach across. -->
     <Grid RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
-                Padding="20,16,16,16">
+                Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
                 <StackPanel Spacing="6" VerticalAlignment="Center" Margin="0,0,8,0">
                     <TextBlock x:Name="RemoteTitle" Text="{Binding Title}" FontWeight="SemiBold" FontSize="16"

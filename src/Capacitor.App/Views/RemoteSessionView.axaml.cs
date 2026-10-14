@@ -10,6 +10,10 @@ namespace Capacitor.App.Views;
 public partial class RemoteSessionView : UserControl {
     IDisposable? _tabFocus;
 
+    // Remote sessions have no work-context pane; their header must carry its own window chrome.
+    void OnHeaderPointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>
+        WindowChrome.BeginDrag(this, e);
+
     public RemoteSessionView() {
         InitializeComponent();
         TerminalClipboard.Attach(this, TerminalHost);
