@@ -51,10 +51,10 @@ once a walk finds two and a half hours of quiet.
    chat; "this chat" is the one this conversation runs in. Never guess; ask if unsure.
 2. For each chat, call `chat.read_messages {"chat_id": "<id>", "limit": 20}` and note
    the highest `seq` in the result — the newest item — or that the chat has no items.
-3. Run `kcap whoami` and take the workspace address from its first `Server:` line
-   (the second says whether the server accepts the token). Read
-   this back, filling the brackets from steps 1–3 and the user's words, and wait for
-   a clear yes:
+3. Run `kcap whoami` and take the workspace address from its first `Server:` line;
+   the second `Server:` line says whether the server accepts the token. Then read the
+   text below back to the user, filling the brackets from steps 1 and 2, the workspace
+   address and the user's words, and wait for a clear yes:
 
    > Recording scope: Capacitor will record these chats: [chat ids, with "main chat"
    > where it applies]. From each, every message with role `user`, `assistant` or
