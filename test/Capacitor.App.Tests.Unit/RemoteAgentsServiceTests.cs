@@ -270,8 +270,9 @@ public class RemoteAgentsServiceTests {
 
         daemonsGate.SetResult([new DaemonInfo { Name = "work-mac", MachineId = "m1", OwnerUserId = "u1", Connected = true }]);
 
-        await Eventually(() => svc.Agents.Count == 1);
-        await Assert.That(daemonsWhenAgentsPublished).IsNotNull();
+        // Count flips inside the cache write, before Connect notifies. Waiting on Count alone
+        // reads the side effect before the subscriber has stored the daemon list it observed.
+        await Eventually(() => svc.Agents.Count == 1 && daemonsWhenAgentsPublished is not null);
         await Assert.That(daemonsWhenAgentsPublished!.Count).IsEqualTo(1);
     }
 }
