@@ -3,10 +3,12 @@ using System.Globalization;
 using System.Runtime.Versioning;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Daemon.Harness.Muse;
+using Capacitor.Cli.Daemon.Pty.Unix;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 
+[ParallelLimiter<SubprocessLimit>]
 public class MuseHookRelayTests {
     /// <summary>A hook that exits while a detached child still holds its output pipes must not hold the
     /// relay, and with it the launch, until that child exits. The stub's child outlives the exit ceiling,
@@ -20,6 +22,11 @@ public class MuseHookRelayTests {
         var pidFile = tmp.PathTo("child.pid");
         var stub    = tmp.CreateExecutable("kcap", $"#!/bin/sh\ncat > /dev/null\nsleep 25 &\necho $! > '{pidFile}'\nexit 0\n");
 
+        // The child is reparented once the stub exits, so its pid is not this process's to signal
+        // unless it still carries the identity captured while it was provably alive.
+        var childPid      = 0;
+        var childIdentity = "";
+
         try {
             var watch = Stopwatch.StartNew();
 
@@ -30,17 +37,13 @@ public class MuseHookRelayTests {
             watch.Stop();
 
             await Assert.That(File.Exists(pidFile)).IsTrue();
+            childPid      = int.Parse(File.ReadAllText(pidFile).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture);
+            childIdentity = PidIdentity.Capture(childPid);
+
             await Assert.That(watch.Elapsed).IsLessThan(MuseHookRelay.DrainCeiling + TimeSpan.FromSeconds(5));
         } finally {
-            if (File.Exists(pidFile)
-             && int.TryParse(File.ReadAllText(pidFile).Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var pid)) {
-                try {
-                    using var child = Process.GetProcessById(pid);
-                    child.Kill();
-                } catch (Exception) {
-                    // Already gone.
-                }
-            }
+            if (childPid > 0 && !PidIdentity.IsGone(childPid, childIdentity))
+                UnixPtyInterop.kill(childPid, UnixPtyInterop.SIGKILL);
         }
     }
 }
