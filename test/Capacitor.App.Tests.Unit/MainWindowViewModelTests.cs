@@ -272,13 +272,13 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
-    [Arguments(AttachState.Connecting, null, "connected", "#FFB300")]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", "#9E9E9E")]
-    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", "#E53935")]
-    [Arguments(AttachState.Connected, null, "connected", "#4CAF50")]
-    [Arguments(AttachState.Connected, null, "connecting", "#FFB300")]
-    [Arguments(AttachState.Connected, null, "reconnecting", "#FFB300")]
-    [Arguments(AttachState.Connected, null, "disconnected", "#E53935")]
+    [Arguments(AttachState.Connecting, null, "connected", StatusColors.InProgress)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", StatusColors.Unavailable)]
+    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", StatusColors.Disrupted)]
+    [Arguments(AttachState.Connected, null, "connected", StatusColors.Connected)]
+    [Arguments(AttachState.Connected, null, "connecting", StatusColors.InProgress)]
+    [Arguments(AttachState.Connected, null, "reconnecting", StatusColors.InProgress)]
+    [Arguments(AttachState.Connected, null, "disconnected", StatusColors.Disrupted)]
     public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
             AttachState state, string? reason, string daemonConnection, string expectedHex) {
         var status = new AttachStatus(state, reason, null);
@@ -293,7 +293,7 @@ public class MainWindowViewModelTests {
             AttachState state, string? reason, string daemonConnection) {
         var status = new AttachStatus(state, reason, null);
         var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
-        await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+        await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
     }
 
     [Test]
@@ -319,7 +319,7 @@ public class MainWindowViewModelTests {
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
             var brush = (ISolidColorBrush)vm.StatusBrush;
-            await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+            await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
         });
     }
 

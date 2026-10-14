@@ -17,9 +17,8 @@ public sealed class UppercaseConverter : IValueConverter {
         throw new NotSupportedException();
 }
 
-/// Activity row outcome badge: the same Connected/Disrupted greens and reds as the status dots,
-/// so "allowed" matches a live session indicator rather than a darker Material green. Immutable
-/// brushes, so the shared instances carry no thread affinity.
+/// Activity row outcome badge: the same Connected/Disrupted greens and reds as the status dots.
+/// Immutable brushes, so the shared instances carry no thread affinity.
 public sealed class OutcomeBrushConverter : IValueConverter {
     public static readonly OutcomeBrushConverter Instance = new();
 
