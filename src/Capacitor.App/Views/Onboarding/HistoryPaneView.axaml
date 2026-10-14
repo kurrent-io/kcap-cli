@@ -161,6 +161,7 @@
                         Foreground="{StaticResource FrMutedBrush}" /><Run Text=" in your configuration." />
                 </TextBlock>
                 <Button x:Name="RepoSettingsDocsButton" Classes="frLink" HorizontalAlignment="Left"
+                        AutomationProperties.Name="Repository settings in the docs"
                         Click="OnDocsClick" IsVisible="{Binding HasRepos}" Margin="0,-6,0,0">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="Repository settings in the docs" VerticalAlignment="Center" />

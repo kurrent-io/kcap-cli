@@ -6,7 +6,7 @@ namespace Capacitor.App.Views;
 /// Semantic category mappings shared by chat headers and pending prompts.
 public static class ToolCategoryIcons {
     public static LucideIconKind ForCategory(ToolCategory category) => category switch {
-        ToolCategory.Read      => LucideIconKind.FileText,
+        ToolCategory.Read      => LucideIconKind.FileSearch,
         ToolCategory.Edit      => LucideIconKind.Pencil,
         ToolCategory.Command   => LucideIconKind.Terminal,
         ToolCategory.Search    => LucideIconKind.Search,
