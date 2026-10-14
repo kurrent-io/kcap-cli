@@ -72,7 +72,6 @@ public class ArtefactsTabViewModelTests {
 
             await Assert.That(h.Source.Requested).IsEquivalentTo(new[] { SessionA });
             await Assert.That(h.Vm.HasAny).IsTrue();
-            await Assert.That(h.Vm.SummaryText).IsEqualTo("4 documents");
             await Assert.That(h.Vm.Documents.Select(d => d.Path))
                 .IsEquivalentTo(new[] { "docs/p1.md", "docs/p2.md", "docs/s.md", "docs/d.md" }, CollectionOrdering.Matching);
             await Assert.That(h.Vm.Documents[2].Source).IsEqualTo("declared");

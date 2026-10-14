@@ -16,7 +16,7 @@ public sealed class DocumentReaderViewModel {
     public string MetaLabel => SizeLabel.Length > 0 ? $"{DeclaredLabel} · {SizeLabel}" : DeclaredLabel;
 
     public static DocumentReaderViewModel For(DocumentRow row, DriftState drift, DateTimeOffset now) => new() {
-        KindLabel = row.Kind switch { "plan" => "Plan", "spec" => "Spec", "design" => "Design", _ => "Document" },
+        KindLabel = row.KindLabel,
         FileName = row.FileName,
         Path = row.Path,
         Body = row.Content ?? "",

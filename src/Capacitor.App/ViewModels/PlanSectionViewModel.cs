@@ -44,7 +44,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     /// What the expanded header says; collapsed, the header shows Counts.
     public string HeaderText => $"{DoneCount} of {_tasks.Count} done";
     /// Pending, in progress, done: one entry per state something is in, so the numbers add up
-    /// to the list. The instance changes only when a number does.
+    /// to the list.
     public IReadOnlyList<PlanTaskCount> Counts => _counts;
 
     bool _isExpanded;

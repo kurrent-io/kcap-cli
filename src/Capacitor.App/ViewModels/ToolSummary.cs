@@ -110,10 +110,18 @@ public static class ToolSummary {
     /// Human verb for a built-in tool row whose input carries no prose description of its own.
     public static string? RowLabel(string name, ToolCategory category, string? inputJson) {
         if (category == ToolCategory.Question || ToolDetail.RawForKey(inputJson, "description").Length > 0) return null;
-        if (name.Equals("Write", StringComparison.OrdinalIgnoreCase) || name.Equals("write_file", StringComparison.OrdinalIgnoreCase))
-            return "Wrote file";
-        if (name.Equals("LS", StringComparison.OrdinalIgnoreCase))
-            return "Listed files";
+        switch (name.ToLowerInvariant()) {
+            case "write" or "write_file":                       return "Wrote file";
+            case "ls":                                          return "Listed files";
+            case "bashoutput":                                  return "Read shell output";
+            case "killshell":                                   return "Stopped shell";
+            case "write_stdin" or "send_input" or "send_message": return "Sent input";
+            case "taskoutput":                                  return "Read agent output";
+            case "taskstop" or "interrupt_agent" or "close_agent": return "Stopped agent";
+            case "wait_agent":                                  return "Waited on agent";
+            case "resume_agent":                                return "Resumed agent";
+            case "list_agents":                                 return "Listed agents";
+        }
         return category switch {
             ToolCategory.Read      => "Read file",
             ToolCategory.Edit      => "Edited file",

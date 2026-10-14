@@ -481,13 +481,16 @@ public static class CodexCommandClassifier {
             : new CodexCommandHint("search", Path: path, Query: query);
     }
 
-    static CodexCommandHint FindClassify(List<string> tail) {
+    static CodexCommandHint? FindClassify(List<string> tail) {
         // Very basic: first non-flag is the search path; `-name <pattern>` becomes query.
         string? path  = null;
         string? query = null;
 
         for (var i = 0; i < tail.Count; i++) {
             var arg = tail[i];
+
+            if (arg is "-delete" or "-exec" or "-execdir" or "-ok" or "-okdir" or "-fprint" or "-fprint0" or "-fprintf" or "-fls")
+                return null;
 
             if (arg is "-name" or "-iname") {
                 if (i + 1 < tail.Count) query = tail[i + 1];

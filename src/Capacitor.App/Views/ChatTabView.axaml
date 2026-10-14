@@ -162,7 +162,6 @@
                                 <ColumnDefinition Width="*" MinWidth="0" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <!-- The human verb phrase leads in primary text; the trailing argument is muted. -->
                             <TextBlock x:Name="ToolRowLabel" Grid.Column="0" Classes="toolLine" Text="{Binding Label}"
                                        Foreground="{StaticResource KcapTextBrush}" Margin="0,0,8,0"
                                        IsVisible="{Binding HasLabel}" />

@@ -104,6 +104,8 @@ public class KcapToolCatalogueTests {
     [Test]
     [Arguments("select:mcp__plugin_kcap_kcap-workitems__declare_work_item,mcp__plugin_kcap_kcap-pages__publish_page,mcp__plugin_kcap_kcap-plans__set_plan_tasks",
                "declare_work_item, publish_page, set_plan_tasks")]
+    [Arguments("select:mcp__github__search,mcp__linear__search",
+               "Github · search, Linear · search")]
     [Arguments("declare_work_item publish_artefact set_plan_tasks",
                "declare_work_item, publish_artefact, set_plan_tasks")]
     [Arguments("create pull request",

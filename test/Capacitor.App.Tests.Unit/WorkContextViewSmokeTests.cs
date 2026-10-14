@@ -71,10 +71,10 @@ public class WorkContextViewSmokeTests {
         }
     }
 
-    /// The pane's two ways into the tab: a clickable document row and the summary row.
+    /// Clickable document rows under PLAN open the Artefacts tab without a separate summary row.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Document_rows_are_buttons_and_the_summary_row_shows_once_the_tab_has_something() {
+    public async Task Document_rows_are_buttons_that_open_the_tab_and_reflect_the_selected_document() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "design", Path = "docs/x-design.md" }]));

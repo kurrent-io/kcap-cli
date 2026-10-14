@@ -32,7 +32,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public bool HasAny => _documents.Count > 0;
     /// True while a session lease is open and has not yet applied a result — distinct from a settled empty list.
     public bool IsLoading => _reads.IsLoading;
-    public string SummaryText => _documents.Count == 1 ? "1 document" : $"{_documents.Count} documents";
     /// Right-pane prompt when nothing is open: loading, settled empty, or pick a row.
     public string EmptyReaderNote => IsLoading ? "Loading documents…"
         : HasAny ? "Select a document to read it."
@@ -210,7 +209,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     void RaiseShape() {
         this.RaisePropertyChanged(nameof(HasAny));
-        this.RaisePropertyChanged(nameof(SummaryText));
         this.RaisePropertyChanged(nameof(EmptyReaderNote));
     }
 

@@ -135,11 +135,22 @@ public static class KcapToolCatalogue {
         var parts = body.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return "";
         if (!isSelect && !parts.All(IsToolIdentifierToken)) return trimmed;
-        var names = new List<string>(parts.Length);
+        var items = new List<(string? Server, string Clean)>(parts.Length);
+        var seenRaw = new HashSet<string>(StringComparer.Ordinal);
+        var cleanCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var part in parts) {
-            var (_, tool) = Split(part);
+            if (!seenRaw.Add(part)) continue;
+            var (server, tool) = Split(part);
             var clean = tool.Length > 0 ? tool : part;
-            if (!names.Contains(clean, StringComparer.Ordinal)) names.Add(clean);
+            items.Add((server, clean));
+            cleanCounts[clean] = cleanCounts.GetValueOrDefault(clean) + 1;
+        }
+        var names = new List<string>(items.Count);
+        foreach (var (server, clean) in items) {
+            var formatted = cleanCounts[clean] > 1 && !string.IsNullOrEmpty(server)
+                ? $"{Humanise(server)} · {clean}"
+                : clean;
+            if (!names.Contains(formatted, StringComparer.Ordinal)) names.Add(formatted);
         }
         return string.Join(", ", names);
     }
