@@ -47,6 +47,16 @@ public class MuseAssistantWalkReaderTests {
     }
 
     [Test]
+    public async Task A_compact_item_becomes_the_prefix_plus_its_own_text_byte_for_byte() {
+        var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(12, T0, "She said \"done\" — 日本語", "7c1e")).Write();
+
+        using var page = JsonDocument.Parse(File.ReadAllBytes(Path.Join(dir, "page-000.json")));
+        var raw = page.RootElement.GetProperty("turns")[0].GetProperty("items")[0].GetRawText();
+
+        await Assert.That(MuseAssistantWalkReader.Load(dir).Walk!.Items[0].Line).IsEqualTo("{\"chat_id\":\"chat-main\",\"turn_id\":\"7c1e\"," + raw[1..]);
+    }
+
+    [Test]
     public async Task A_pretty_printed_page_still_yields_one_line_per_item() {
         var content = "two\nlines, \"quoted\", 日本語";
         var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(12, T0, content)).Write(tamper: d => {
@@ -170,6 +180,71 @@ public class MuseAssistantWalkReaderTests {
         await Assert.That(MuseAssistantWalkReader.Load(chat).Problem).Contains("chat_id");
         await Assert.That(MuseAssistantWalkReader.Load(page).Problem).Contains("page object");
         await Assert.That(MuseAssistantWalkReader.Load(turns).Problem).Contains("turns");
+    }
+
+    [Test]
+    public async Task An_empty_middle_page_does_not_hide_an_overlap_between_its_neighbours() {
+        var b = new WalkBuilder(Tmp)
+            .AddPage(null, "c1", true, User(20, T0 + 20), User(30, T0 + 30))
+            .AddPage("c1", "c2", true)
+            .AddPage("c2", null, false, User(25, T0 + 25));
+
+        await Assert.That(MuseAssistantWalkReader.Load(b.Write()).Problem).Contains("overlap");
+    }
+
+    [Test]
+    public async Task A_lone_surrogate_escape_in_a_page_is_a_problem_not_an_exception() {
+        var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write(tamper: d => {
+            var path = Path.Join(d, "page-000.json");
+            File.WriteAllText(path, File.ReadAllText(path).Replace("\"content\":\"hello\"", "\"content\":\"\\ud800\""));
+        });
+
+        await Assert.That(MuseAssistantWalkReader.Load(dir).Problem).Contains("UTF-16");
+    }
+
+    [Test]
+    public async Task A_page_that_is_not_valid_utf8_is_refused_instead_of_being_repaired() {
+        var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write(tamper: d => {
+            var path  = Path.Join(d, "page-000.json");
+            var bytes = File.ReadAllBytes(path);
+            var at    = bytes.AsSpan().IndexOf("hello"u8);
+            bytes[at] = 0xFF;
+            File.WriteAllBytes(path, bytes);
+        });
+
+        await Assert.That(MuseAssistantWalkReader.Load(dir).Problem).Contains("UTF-8");
+    }
+
+    [Test]
+    public async Task A_null_page_entry_in_the_manifest_is_a_problem() {
+        var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write(tamper: d =>
+            File.WriteAllText(Path.Join(d, "manifest.json"), """{"chat_id":"chat-main","is_main":true,"fetched_at_ms":1760000500000,"pages":[null]}"""));
+
+        await Assert.That(MuseAssistantWalkReader.Load(dir).Problem).IsNotNull();
+    }
+
+    [Test]
+    public async Task An_item_carrying_its_own_chat_or_turn_id_is_refused() {
+        var chat = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write("chat", d => Rewrite(d, "page-000.json", p => p["turns"]![0]!["items"]![0]!["chat_id"] = "other"));
+        var turn = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write("turn", d => Rewrite(d, "page-000.json", p => p["turns"]![0]!["items"]![0]!["turn_id"] = "other"));
+
+        await Assert.That(MuseAssistantWalkReader.Load(chat).Problem).Contains("must not carry");
+        await Assert.That(MuseAssistantWalkReader.Load(turn).Problem).Contains("must not carry");
+    }
+
+    [Test]
+    public async Task A_directory_that_cannot_be_listed_is_a_problem_not_an_exception() {
+        Skip.Unless(!OperatingSystem.IsWindows() && !Environment.IsPrivilegedProcess, "needs POSIX permissions and an unprivileged user");
+        if (OperatingSystem.IsWindows()) return;
+
+        var dir = new WalkBuilder(Tmp).AddPage(null, null, false, User(1, T0)).Write();
+        File.SetUnixFileMode(dir, UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        try {
+            await Assert.That(MuseAssistantWalkReader.Load(dir).Problem).IsNotNull();
+        } finally {
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     [Test]

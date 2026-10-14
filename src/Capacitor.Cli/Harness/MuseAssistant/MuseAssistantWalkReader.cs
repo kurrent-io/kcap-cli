@@ -14,20 +14,31 @@ public static class MuseAssistantWalkReader {
         if (!File.Exists(path)) return null;
 
         try {
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
             return doc.RootElement.Str("chat_id") is { Length: > 0 } id ? id : null;
-        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) {
             return null;
         }
     }
 
     public static (MuseAssistantWalk? Walk, string? Problem) Load(string dir) {
+        try {
+            return LoadCore(dir);
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+            return (null, $"{dir} is unreadable: {e.Message}");
+        }
+    }
+
+    static (MuseAssistantWalk? Walk, string? Problem) LoadCore(string dir) {
         if (!Directory.Exists(dir)) return (null, $"{dir} does not exist");
 
         MuseAssistantManifest? manifest;
         try {
-            manifest = JsonSerializer.Deserialize(File.ReadAllText(Path.Join(dir, "manifest.json")), MuseAssistantJsonContext.Default.MuseAssistantManifest);
-        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
+            var bytes = File.ReadAllBytes(Path.Join(dir, "manifest.json"));
+            if (!IsUtf8(bytes)) return (null, "manifest.json is not valid UTF-8");
+
+            manifest = JsonSerializer.Deserialize(bytes, MuseAssistantJsonContext.Default.MuseAssistantManifest);
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException) {
             return (null, $"manifest.json is unreadable: {e.Message}");
         }
 
@@ -40,7 +51,7 @@ public static class MuseAssistantWalkReader {
 
         for (var i = 0; i < pages.Length; i++) {
             var expected = $"page-{i:000}.json";
-            if (pages[i].File != expected) return (null, $"pages[{i}] must be {expected}, found {pages[i].File ?? "(none)"}");
+            if (pages[i]?.File != expected) return (null, $"pages[{i}] must be {expected}, found {pages[i]?.File ?? "(none)"}");
 
             listed.Add(expected);
             if (!File.Exists(Path.Join(dir, expected))) return (null, $"{expected} is listed but missing");
@@ -50,7 +61,7 @@ public static class MuseAssistantWalkReader {
         if (!present.SetEquals(listed))
             return (null, $"files not listed in manifest.json: {string.Join(", ", present.Except(listed).Order(StringComparer.Ordinal))}");
 
-        if (pages[0].Cursor is not null) return (null, "page-000 must be fetched without a cursor");
+        if (pages[0]!.Cursor is not null) return (null, "page-000 must be fetched without a cursor");
 
         var items           = new List<MuseAssistantItem>();
         var pageMin         = new long?[pages.Length];
@@ -60,52 +71,62 @@ public static class MuseAssistantWalkReader {
         var oldestHasMore   = false;
 
         for (var i = 0; i < pages.Length; i++) {
-            var file = pages[i].File!;
+            var file = pages[i]!.File!;
             JsonDocument doc;
 
             try {
-                doc = JsonDocument.Parse(File.ReadAllText(Path.Join(dir, file)));
+                var bytes = File.ReadAllBytes(Path.Join(dir, file));
+                if (!IsUtf8(bytes)) return (null, $"{file} is not valid UTF-8");
+
+                doc = JsonDocument.Parse(bytes);
             } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
                 return (null, $"{file} is unreadable: {e.Message}");
             }
 
             using (doc) {
-                var root = doc.RootElement;
-                if (!root.IsObject) return (null, $"{file} is not an object");
-                if (root.Str("chat_id") != chatId) return (null, $"{file} chat_id differs from the manifest");
-                if (root.Obj("page") is not { } page) return (null, $"{file} has no page object");
-                if (root.Arr("turns") is not { } turns) return (null, $"{file} has no turns array");
-                if (page.Bool("has_more") is not { } hasMore) return (null, $"{file} page.has_more must be a boolean");
+                try {
+                    var root = doc.RootElement;
+                    if (!root.IsObject) return (null, $"{file} is not an object");
+                    if (root.Str("chat_id") != chatId) return (null, $"{file} chat_id differs from the manifest");
+                    if (root.Obj("page") is not { } page) return (null, $"{file} has no page object");
+                    if (root.Arr("turns") is not { } turns) return (null, $"{file} has no turns array");
+                    if (page.Bool("has_more") is not { } hasMore) return (null, $"{file} page.has_more must be a boolean");
 
-                if (i > 0) {
-                    if (!previousHasMore) return (null, $"page-{i - 1:000} has has_more:false but {file} follows it");
-                    if (previousNext is null || pages[i].Cursor != previousNext) return (null, $"{file} was not fetched with page-{i - 1:000}'s next_cursor");
-                }
-
-                foreach (var turn in turns.EnumerateArray()) {
-                    if (!turn.IsObject || turn.Str("id") is not { Length: > 0 } turnId) return (null, $"{file} has a turn without an id");
-                    if (turn.Arr("items") is not { } turnItems) return (null, $"{file} turn {turnId} has no items array");
-
-                    foreach (var item in turnItems.EnumerateArray()) {
-                        if (!item.IsObject) return (null, $"{file} turn {turnId} has an item that is not an object");
-                        if (item.Str("role") is not { Length: > 0 } role) return (null, $"{file} turn {turnId}: an item has no role");
-                        if (item.Num("seq") is not { } seq || seq < 0 || seq > int.MaxValue)
-                            return (null, $"{file} turn {turnId}: seq must be an integer between 0 and {int.MaxValue}");
-                        if (item.Num("occurred_at_ms") is not { } at) return (null, $"{file} turn {turnId} seq {seq}: occurred_at_ms must be an integer");
-
-                        var content = item.Str("content");
-                        if (MuseAssistantRoles.IsSelected(role) && string.IsNullOrEmpty(content))
-                            return (null, $"{file} turn {turnId} seq {seq}: a {role} item has no non-empty string content");
-
-                        items.Add(new(turnId, role, seq, at, content, Line(chatId, turnId, item)));
-                        pageMin[i] = pageMin[i] is { } mn ? Math.Min(mn, seq) : seq;
-                        pageMax[i] = pageMax[i] is { } mx ? Math.Max(mx, seq) : seq;
+                    if (i > 0) {
+                        if (!previousHasMore) return (null, $"page-{i - 1:000} has has_more:false but {file} follows it");
+                        if (previousNext is null || pages[i]!.Cursor != previousNext) return (null, $"{file} was not fetched with page-{i - 1:000}'s next_cursor");
                     }
-                }
 
-                previousNext    = page.Str("next_cursor");
-                previousHasMore = hasMore;
-                oldestHasMore   = hasMore;
+                    foreach (var turn in turns.EnumerateArray()) {
+                        if (!turn.IsObject || turn.Str("id") is not { Length: > 0 } turnId) return (null, $"{file} has a turn without an id");
+                        if (turn.Arr("items") is not { } turnItems) return (null, $"{file} turn {turnId} has no items array");
+
+                        foreach (var item in turnItems.EnumerateArray()) {
+                            if (!item.IsObject) return (null, $"{file} turn {turnId} has an item that is not an object");
+                            if (item.Str("role") is not { Length: > 0 } role) return (null, $"{file} turn {turnId}: an item has no role");
+                            if (item.Num("seq") is not { } seq || seq < 0 || seq > int.MaxValue)
+                                return (null, $"{file} turn {turnId}: seq must be an integer between 0 and {int.MaxValue}");
+                            if (item.Num("occurred_at_ms") is not { } at) return (null, $"{file} turn {turnId} seq {seq}: occurred_at_ms must be an integer");
+
+                            if (item.Prop("chat_id") is not null || item.Prop("turn_id") is not null)
+                                return (null, $"{file} turn {turnId} seq {seq}: an item must not carry its own chat_id or turn_id");
+
+                            var content = item.Str("content");
+                            if (MuseAssistantRoles.IsSelected(role) && string.IsNullOrEmpty(content))
+                                return (null, $"{file} turn {turnId} seq {seq}: a {role} item has no non-empty string content");
+
+                            items.Add(new(turnId, role, seq, at, content, Line(chatId, turnId, item)));
+                            pageMin[i] = pageMin[i] is { } mn ? Math.Min(mn, seq) : seq;
+                            pageMax[i] = pageMax[i] is { } mx ? Math.Max(mx, seq) : seq;
+                        }
+                    }
+
+                    previousNext    = page.Str("next_cursor");
+                    previousHasMore = hasMore;
+                    oldestHasMore   = hasMore;
+                } catch (InvalidOperationException e) {
+                    return (null, $"{file} holds a string that is not valid UTF-16: {e.Message}");
+                }
             }
         }
 
@@ -116,9 +137,13 @@ public static class MuseAssistantWalkReader {
             if (items[i].OccurredAtMs < items[i - 1].OccurredAtMs) return (null, $"seq {items[i].Seq} is earlier than seq {items[i - 1].Seq}");
         }
 
-        for (var i = 0; i + 1 < pages.Length; i++)
-            if (pageMin[i] is { } newer && pageMax[i + 1] is { } older && newer <= older)
-                return (null, $"page-{i:000} and page-{i + 1:000} overlap or are out of walk order");
+        long? olderMax = null;
+        for (var i = pages.Length - 1; i >= 0; i--) {
+            if (pageMin[i] is { } newer && olderMax is { } older && newer <= older)
+                return (null, $"page-{i:000} and an older page overlap or are out of walk order");
+
+            if (pageMax[i] is { } top) olderMax = olderMax is { } m ? Math.Max(m, top) : top;
+        }
 
         return (new MuseAssistantWalk(chatId, isMain, fetched, items, oldestHasMore, pageMin[^1]), null);
     }
@@ -131,6 +156,15 @@ public static class MuseAssistantWalkReader {
         if (raw.AsSpan().ContainsAny('\n', '\r')) raw = Minify(item);
 
         return $"{{\"chat_id\":\"{JsonEncodedText.Encode(chatId)}\",\"turn_id\":\"{JsonEncodedText.Encode(turnId)}\",{raw[1..]}";
+    }
+
+    static bool IsUtf8(byte[] bytes) {
+        try {
+            _ = new UTF8Encoding(false, true).GetCharCount(bytes);
+            return true;
+        } catch (DecoderFallbackException) {
+            return false;
+        }
     }
 
     static string Minify(JsonElement item) {
