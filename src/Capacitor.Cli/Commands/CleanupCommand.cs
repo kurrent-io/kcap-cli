@@ -17,6 +17,7 @@ sealed class CleanupCommand(WatcherManager watchers) {
 
         var killed  = 0;
         var cleaned = 0;
+        var failed  = 0;
 
         foreach (var pidFile in pidFiles) {
             var key        = Path.GetFileNameWithoutExtension(pidFile);
@@ -25,6 +26,9 @@ sealed class CleanupCommand(WatcherManager watchers) {
             if (wasRunning) {
                 await Console.Out.WriteLineAsync($"Killed watcher {key}");
                 killed++;
+            } else if (File.Exists(pidFile)) {
+                await Console.Out.WriteLineAsync($"Could not stop watcher {key}; kept its PID file");
+                failed++;
             } else {
                 await Console.Out.WriteLineAsync($"Cleaned up stale PID file for {key}");
                 cleaned++;
@@ -39,6 +43,12 @@ sealed class CleanupCommand(WatcherManager watchers) {
 
         await Console.Out.WriteLineAsync(
             $"Done. Killed {killed} watcher(s), cleaned {cleaned} stale PID file(s), purged {purged} auxiliary file(s).");
+
+        if (failed > 0) {
+            await Console.Out.WriteLineAsync($"{failed} watcher(s) could not be stopped; run kcap cleanup again.");
+
+            return 1;
+        }
 
         return 0;
     }

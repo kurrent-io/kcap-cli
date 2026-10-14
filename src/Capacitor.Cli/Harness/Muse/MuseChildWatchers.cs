@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Harness.Muse;
 /// <summary>
 /// The parent watcher's bookkeeping for the child watchers it spawned for Muse sessions: which
 /// unannounced children are still held back, and which finished workers to stop. Pure given the
-/// clock, so the policy is testable without a watcher.
+/// clock apart from <see cref="Stop"/>, so the policy is testable without a watcher.
 /// </summary>
 internal sealed class MuseChildWatchers {
     /// <summary>Scans an unannounced child is held back, so a late-flushed announcement still labels it.</summary>
@@ -84,6 +84,16 @@ internal sealed class MuseChildWatchers {
             _stopped.Add(key);
             _unconfirmed.Remove(key);
         }
+    }
+
+    /// <summary>Stops the children <see cref="SelectStops"/> returned and confirms each one that has no
+    /// process left running. Returns how many were confirmed.</summary>
+    internal async Task<int> Stop(WatcherManager watchers, IReadOnlyList<string> stops, IReadOnlyDictionary<string, int> readyCounts) {
+        var results = await Task.WhenAll(stops.Select(async key => (Key: key, Done: await watchers.TryStopWatcher(key))));
+        var stopped = results.Where(r => r.Done).Select(r => r.Key).ToArray();
+        Stopped(stopped, readyCounts);
+
+        return stopped.Length;
     }
 
     internal void RecordLogMtime(string key, DateTime mtime) => WatchCommand.ChildRolloutAdvanced(_logMtimes, _spawned[key].Log, mtime);
