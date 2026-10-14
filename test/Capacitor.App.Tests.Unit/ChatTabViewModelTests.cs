@@ -829,6 +829,7 @@ public class ChatTabViewModelTests {
 
             var note = (SystemNoteItem)h.Chat.Items.Single();
             await Assert.That(note.Label).IsEqualTo(SystemNoteItem.AgentReportLabel);
+            await Assert.That(note.IconKind).IsEqualTo(Lucide.Avalonia.LucideIconKind.BotMessageSquare);
             await Assert.That(note.Text).IsEqualTo("**Done.**");
             await h.TeardownAsync();
         });

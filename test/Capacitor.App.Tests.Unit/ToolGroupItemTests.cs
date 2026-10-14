@@ -65,17 +65,36 @@ public class ToolGroupItemTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Header_icon_follows_the_first_settled_category() {
+    public async Task Header_icon_represents_the_settled_categories_named_by_the_summary() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
             var a = Call("Bash", ToolCategory.Command);
             var b = Call("Read", ToolCategory.Read);
             group.Add(a);
             group.Add(b);
+            await Assert.That(group.HeaderIconKind).IsNull();
             b.Outcome = ToolOutcome.Done;
             await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
             a.Outcome = ToolOutcome.Done;
-            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Other));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_summary_of_one_category_keeps_its_specific_icon_while_other_categories_are_live() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var first = Call("Read", ToolCategory.Read);
+            var second = Call("read_file", ToolCategory.Read);
+            group.Add(first);
+            group.Add(second);
+            group.Add(Call("Bash", ToolCategory.Command));
+            first.Outcome = ToolOutcome.Done;
+            second.Outcome = ToolOutcome.Done;
+
+            await Assert.That(group.Summary).IsEqualTo("Read files");
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
         });
     }
 

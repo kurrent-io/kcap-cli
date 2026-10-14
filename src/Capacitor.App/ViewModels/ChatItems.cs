@@ -32,7 +32,7 @@ public sealed class SystemNoteItem(string text, string label = SystemNoteItem.No
 
     public string Text { get; } = text;
     public string Label { get; } = label;
-    public LucideIconKind IconKind => Label == NoteLabel ? ToolCategoryIcons.NoteIcon : ToolCategoryIcons.ForCategory(ToolCategory.Agent);
+    public LucideIconKind IconKind => ToolCategoryIcons.ForFixedLabel(Label) ?? ToolCategoryIcons.NoteIcon;
 }
 
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
@@ -199,7 +199,12 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         get {
             if (_calls.Count == 1) return ToolCategoryIcons.ForCategory(_calls[0].Category);
             var firstSettled = _calls.FirstOrDefault(c => c.IsSettled);
-            return firstSettled is null ? null : ToolCategoryIcons.ForCategory(firstSettled.Category);
+            if (firstSettled is null) return null;
+            // Match the categories named by Summary; live rows are shown separately.
+            var category = _calls.Any(c => c.IsSettled && c.Category != firstSettled.Category)
+                ? ToolCategory.Other
+                : firstSettled.Category;
+            return ToolCategoryIcons.ForCategory(category);
         }
     }
 

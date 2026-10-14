@@ -396,7 +396,7 @@
                                     Margin="0,0,10,0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                     Background="Transparent" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                                     Foreground="{StaticResource KcapMutedBrush}">
-                                <views:AppIcon Kind="Plus" Size="16" />
+                                <views:AppIcon Kind="Paperclip" Size="16" />
                             </Button>
                             <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />

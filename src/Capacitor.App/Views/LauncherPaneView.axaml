@@ -78,7 +78,7 @@
                                         Background="{StaticResource KcapSurfaceRaisedBrush}"
                                         BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                                         Foreground="{StaticResource KcapMutedBrush}">
-                                    <views:AppIcon Kind="Plus" Size="16" />
+                                    <views:AppIcon Kind="Paperclip" Size="16" />
                                 </Button>
 
                                 <!-- Harness + model picker: built per open in code-behind, like the repo menu. -->

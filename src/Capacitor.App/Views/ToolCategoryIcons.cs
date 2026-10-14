@@ -11,28 +11,30 @@ public static class ToolCategoryIcons {
         ToolCategory.Command   => LucideIconKind.Terminal,
         ToolCategory.Search    => LucideIconKind.Search,
         ToolCategory.WebSearch => LucideIconKind.Globe,
-        ToolCategory.Fetch     => LucideIconKind.Download,
-        ToolCategory.Skill     => LucideIconKind.Sparkles,
+        ToolCategory.Fetch     => LucideIconKind.Link,
+        ToolCategory.Skill     => LucideIconKind.BookOpen,
         ToolCategory.Agent     => LucideIconKind.Bot,
         ToolCategory.Plan      => LucideIconKind.ListTodo,
         ToolCategory.Question  => LucideIconKind.MessageCircleQuestionMark,
-        ToolCategory.Artefact  => LucideIconKind.File,
+        ToolCategory.Artefact  => LucideIconKind.FileText,
         ToolCategory.Work      => LucideIconKind.Ticket,
-        ToolCategory.Memory    => LucideIconKind.Bookmark,
-        ToolCategory.Session   => LucideIconKind.RotateCcw,
+        ToolCategory.Memory    => LucideIconKind.Brain,
+        ToolCategory.Session   => LucideIconKind.RotateCcwClock,
         ToolCategory.Flow      => LucideIconKind.Workflow,
-        _                      => LucideIconKind.Puzzle,
+        _                      => LucideIconKind.Wrench,
     };
 
     public static LucideIconKind? ForFixedLabel(string label) => label switch {
-        "Note"       => LucideIconKind.StickyNote,
-        "Permission" => LucideIconKind.LockKeyhole,
+        "Note"       => NoteIcon,
+        "Permission" => PermissionIcon,
         "Question"   => ForCategory(ToolCategory.Question),
+        SystemNoteItem.AgentReportLabel or SystemNoteItem.AgentMessageLabel => AgentMessageIcon,
         _            => null,
     };
 
     public static LucideIconKind CommandIcon => ForCategory(ToolCategory.Command);
     public static LucideIconKind NoteIcon => LucideIconKind.StickyNote;
-    public static LucideIconKind PermissionIcon => LucideIconKind.LockKeyhole;
+    public static LucideIconKind PermissionIcon => LucideIconKind.ShieldQuestionMark;
     public static LucideIconKind QuestionIcon => ForCategory(ToolCategory.Question);
+    public static LucideIconKind AgentMessageIcon => LucideIconKind.BotMessageSquare;
 }
