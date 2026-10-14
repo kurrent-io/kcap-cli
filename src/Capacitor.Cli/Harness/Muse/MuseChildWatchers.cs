@@ -23,9 +23,16 @@ internal sealed class MuseChildWatchers {
     readonly Dictionary<string, int>      _held      = new(StringComparer.Ordinal);
     readonly Dictionary<string, DateTime> _logMtimes = new(StringComparer.Ordinal);
 
+    bool _recheck;
+    int  _unconfirmedStops;
+
     /// <summary>Set when a result may have arrived or a child was spawned; cleared once no spawned child
-    /// is left that is finished, not yet stopped and still inside the grace.</summary>
-    internal bool RecheckPending { get; set; }
+    /// is left that is finished, not yet stopped and still inside the grace, and every selected stop
+    /// has been confirmed.</summary>
+    internal bool RecheckPending {
+        get => _recheck || _unconfirmedStops > 0;
+        set => _recheck = value;
+    }
 
     internal bool ShouldHold(string childLog, bool announced) {
         if (announced) return false;
@@ -45,7 +52,8 @@ internal sealed class MuseChildWatchers {
     internal string LogOf(string key) => _spawned[key].Log;
 
     /// <summary>Spawned children to stop now: a result the parent reported since the child was last
-    /// stopped or respawned, and a spawn older than <see cref="StopGrace"/>. Marks them stopped.</summary>
+    /// stopped or respawned, and a spawn older than <see cref="StopGrace"/>. Nothing counts as stopped
+    /// until <see cref="Stopped"/> confirms it, so a stop that fails is selected again.</summary>
     internal IReadOnlyList<string> SelectStops(IReadOnlyDictionary<string, int> readyCounts, DateTimeOffset now) {
         var stops   = new List<string>();
         var waiting = false;
@@ -61,13 +69,19 @@ internal sealed class MuseChildWatchers {
             }
         }
 
+        _recheck          = waiting;
+        _unconfirmedStops = stops.Count;
+        return stops;
+    }
+
+    /// <summary>Confirms that the children <see cref="SelectStops"/> returned for these counts were stopped.</summary>
+    internal void Stopped(IReadOnlyList<string> stops, IReadOnlyDictionary<string, int> readyCounts) {
         foreach (var key in stops) {
             _handled[key] = readyCounts[key];
             _stopped.Add(key);
         }
 
-        RecheckPending = waiting;
-        return stops;
+        _unconfirmedStops = 0;
     }
 
     internal void RecordLogMtime(string key, DateTime mtime) => WatchCommand.ChildRolloutAdvanced(_logMtimes, _spawned[key].Log, mtime);

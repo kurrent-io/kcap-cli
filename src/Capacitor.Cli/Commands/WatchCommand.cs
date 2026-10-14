@@ -1374,6 +1374,7 @@ partial class WatchCommand(
             foreach (var key in stops) children.RecordLogMtime(key, File.GetLastWriteTimeUtc(children.LogOf(key)));
 
             await watchers.KillWatchers(stops);
+            children.Stopped(stops, ready);
             Log(time, $"Stopped {stops.Count} finished Muse child watcher(s)");
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             // best-effort — the parent's teardown still stops every spawned child
