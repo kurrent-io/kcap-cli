@@ -575,6 +575,22 @@ public class MuseAssistantScopeTests {
     }
 
     [Test]
+    [NotInParallel]
+    public async Task Reset_that_cannot_lock_a_listed_chat_with_no_state_file_keeps_it_listed_and_exits_4() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-b", History, default);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        File.Delete(MuseAssistantPaths.ChatState(dir, "chat-b"));
+        using var stderr = ConsoleOutput.StartErrorCapture("\n");
+
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b")))
+            await Assert.That(await TimedOut(scope.ResetAsync(default))).IsEqualTo(4);
+
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-b"]);
+        await Assert.That(stderr.GetCapturedError()).Contains("chat=chat-b");
+    }
+
+    [Test]
     public async Task Reset_that_cannot_lock_a_listed_chat_with_unusable_state_keeps_it_listed_and_exits_4() {
         var scope = await ScopeAsync(new RecordingPoster());
         await scope.AddAsync("chat-b", History, default);

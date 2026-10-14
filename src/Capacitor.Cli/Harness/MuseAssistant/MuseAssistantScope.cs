@@ -117,7 +117,17 @@ public sealed class MuseAssistantScope(
             var unrevoked = new HashSet<string>(StringComparer.Ordinal);
             var failed    = false;
             var setAside  = false;
-            var stateless = store.LoadScope().Chats.Where(c => !File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, c))).ToList();
+
+            // The caller holds the chat lock.
+            async Task RevokeLockedAsync(MuseAssistantChatState found) {
+                var state = store.LoadState(found.ChatId).State ?? found;
+                if (!state.Grant.Revoked) state = Revoke(store, state);
+
+                if (await runner.ExecuteAsync(store, MuseAssistantPlanner.Closure(state), state.ChatId, ct) is { } refused) {
+                    failed = true;
+                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {refused}; recording stopped here, and `kcap muse-assistant sweep` tells the server about \"{state.ChatId}\"");
+                }
+            }
 
             foreach (var found in store.EnumerateStates().ToList()) {
                 using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, found.ChatId), ct);
@@ -134,13 +144,30 @@ public sealed class MuseAssistantScope(
                     continue;
                 }
 
-                var state = store.LoadState(found.ChatId).State ?? found;
-                if (!state.Grant.Revoked) state = Revoke(store, state);
+                await RevokeLockedAsync(found);
+            }
 
-                if (await runner.ExecuteAsync(store, MuseAssistantPlanner.Closure(state), state.ChatId, ct) is { } refused) {
-                    failed = true;
-                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {refused}; recording stopped here, and `kcap muse-assistant sweep` tells the server about \"{state.ChatId}\"");
+            // An ingest holds only its chat lock, so a missing file proves nothing until that lock is held.
+            var enumerated = store.EnumerateStates().Select(s => s.ChatId).ToHashSet(StringComparer.Ordinal);
+
+            foreach (var chatId in store.LoadScope().Chats.Where(c => !enumerated.Contains(c) && !File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, c))).ToList()) {
+                using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, chatId), ct);
+                if (chatLock is null) {
+                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy} chat={chatId}");
+                    unrevoked.Add(chatId);
+                    continue;
                 }
+
+                if (store.LoadState(chatId).State is { } appeared) {
+                    await RevokeLockedAsync(appeared);
+                    continue;
+                }
+
+                // An unusable file that appeared is set aside by the sweep over unusable files below.
+                if (File.Exists(MuseAssistantPaths.ChatState(store.ScopeDir, chatId))) continue;
+
+                setAside = true;
+                Console.Error.WriteLine($"kcap muse-assistant scope reset: no grant recorded for \"{chatId}\"; its state file is missing, so nothing more is recorded from it, but a session it had open may stay open");
             }
 
             var listedByKey = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -165,11 +192,6 @@ public sealed class MuseAssistantScope(
                 setAside = true;
                 var subject = listedAs is null ? Path.GetFileName(file) : $"the state file of \"{listedAs}\"";
                 Console.Error.WriteLine($"kcap muse-assistant scope reset: {subject} is unreadable or belongs to another account; set aside as {aside}, so nothing more is recorded from it, but a session it had open may stay open");
-            }
-
-            foreach (var chatId in stateless) {
-                setAside = true;
-                Console.Error.WriteLine($"kcap muse-assistant scope reset: no grant recorded for \"{chatId}\"; its state file is missing, so nothing more is recorded from it, but a session it had open may stay open");
             }
 
             var scope = store.LoadScope();
