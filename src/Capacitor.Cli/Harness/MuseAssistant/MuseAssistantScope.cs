@@ -50,9 +50,10 @@ public sealed class MuseAssistantScope(
 
                 state = store.LoadState(chatId).State! with { Grant = NewGrant(boundary, now) };
                 store.SaveState(state);
-            } else if (Widens(boundary, state.Grant)) {
-                // Exit 0 here would confirm a consent read-back that promised items this grant never selects.
-                return Fail("scope add", MuseAssistantExitCodes.Malformed, $"already granted {Describe(state)}; an active grant cannot be widened, so the items it leaves out are not recorded");
+            } else if (!Matches(boundary, state.Grant)) {
+                // Exit 0 would confirm a consent the grant does not carry: a wider boundary promises items it
+                // never selects, a narrower one would keep sending items the user just declined.
+                return Fail("scope add", MuseAssistantExitCodes.Malformed, $"chat already recorded with {DescribeBoundary(state.Grant)}; run `kcap muse-assistant scope remove --chat \"{chatId}\"` then `scope add` with the new boundary");
             } else if (store.LoadScope().Chats.Contains(chatId, StringComparer.Ordinal)) {
                 Console.Out.WriteLine($"already granted {Describe(state)}");
                 return MuseAssistantExitCodes.Ok;
@@ -270,12 +271,8 @@ public sealed class MuseAssistantScope(
 
     Task<FileStream?> LockAsync(string path, CancellationToken ct) => MuseAssistantChatLock.AcquireAsync(path, LockWait, time, ct);
 
-    /// <summary>Whether <paramref name="requested"/> would select an item <paramref name="grant"/> does not.</summary>
-    static bool Widens(MuseAssistantBoundary requested, MuseAssistantGrant grant) {
-        var floor = requested.Kind == MuseAssistantGrantBoundaries.AfterSeq ? requested.AfterSeq : null;
-
-        return grant.Floor is { } granted && (floor is null || floor < granted);
-    }
+    static bool Matches(MuseAssistantBoundary requested, MuseAssistantGrant grant) =>
+        requested.Kind == grant.Boundary && (requested.Kind != MuseAssistantGrantBoundaries.AfterSeq || requested.AfterSeq == grant.AfterSeq);
 
     static MuseAssistantGrant NewGrant(MuseAssistantBoundary boundary, long now) =>
         new(RandomNumberGenerator.GetHexString(32, lowercase: true), boundary.Kind, boundary.AfterSeq, now, null);
@@ -307,7 +304,10 @@ public sealed class MuseAssistantScope(
     /// <summary>The line the cron and the recording skill parse; the chat id is last because it is the one
     /// field that may hold a space.</summary>
     static string Describe(MuseAssistantChatState state) =>
-        $"key={MuseAssistantPaths.ChatKey(state.ChatId)} watermark={state.Watermark?.ToString(CultureInfo.InvariantCulture) ?? "none"} boundary={state.Grant.Boundary} after_seq={state.Grant.AfterSeq?.ToString(CultureInfo.InvariantCulture) ?? "none"} chat={state.ChatId}";
+        $"key={MuseAssistantPaths.ChatKey(state.ChatId)} watermark={state.Watermark?.ToString(CultureInfo.InvariantCulture) ?? "none"} {DescribeBoundary(state.Grant)} chat={state.ChatId}";
+
+    static string DescribeBoundary(MuseAssistantGrant grant) =>
+        $"boundary={grant.Boundary} after_seq={grant.AfterSeq?.ToString(CultureInfo.InvariantCulture) ?? "none"}";
 
     static int Fail(string verb, int code, string message) {
         Console.Error.WriteLine($"kcap muse-assistant {verb}: {message}");

@@ -8,6 +8,7 @@ public sealed class MuseAssistantCommand(MuseAssistantIngest ingest, MuseAssista
     internal const string UsageText =
         "Usage: kcap muse-assistant ingest <dir>\n" +
         "       kcap muse-assistant scope add --chat <id> (--after-seq <seq> | --empty-chat | --include-history)\n" +
+        "         (an active grant with a different boundary is refused, exit 2: `scope remove` it first)\n" +
         "       kcap muse-assistant scope remove --chat <id>\n" +
         "       kcap muse-assistant scope reset | scope show\n" +
         "       kcap muse-assistant sweep";

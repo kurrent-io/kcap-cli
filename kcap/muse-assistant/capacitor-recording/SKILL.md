@@ -78,12 +78,14 @@ once a walk finds two and a half hours of quiet.
      far", "from the beginning", "my earlier chats"):
      `kcap muse-assistant scope add --chat "<id>" --include-history`
 
-   Exit 0 prints `granted key=… chat=<id>`; a repeat of the same grant prints
-   `already granted key=… chat=<id>` and changes nothing. Exit 2 with `already
-   granted … after_seq=<n> …` on stderr means the chat is already recording under a
-   grant that leaves its earlier messages out, and that grant cannot be widened: tell
-   the user the chat is still recording, but only messages after `seq` `<n>`, so the
-   earlier messages promised above are not recorded. Any other exit: show the
+   Exit 0 prints `granted key=… chat=<id>`; a repeat of the identical grant prints
+   `already granted key=… chat=<id>` and changes nothing. Exit 2 with `chat already
+   recorded with boundary=… after_seq=…` on stderr means the chat is already recording
+   under a different boundary than the one the user just confirmed, and it is left
+   unchanged: never treat it as success. Tell the user the chat is already recorded
+   under that earlier boundary, not the one they agreed to, and offer to stop and
+   re-grant; only on a clear yes run `kcap muse-assistant scope remove --chat "<id>"`,
+   then the `scope add` again. Any other exit: show the
    user the stderr line, tell them that chat may not be recording and that they can
    ask again to confirm, and stop; do not retry on your own. Always quote the chat id
    (`--chat "<id>"`, right after the verb): an id may contain spaces.
