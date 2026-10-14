@@ -8,6 +8,8 @@ public class McpArtefactsServerTests {
 
     const string CapacitorSessionIdEnvVar = "KCAP_SESSION_ID";
     const string CodexThreadIdEnvVar      = "CODEX_THREAD_ID";
+    const string ClaudeSessionIdEnvVar    = "CLAUDE_CODE_SESSION_ID";
+    const string GrokSessionIdEnvVar      = "GROK_SESSION_ID";
 
     // Shares ArgParsingTests' NotInParallel key: both suites mutate the same process-global
     // KCAP_SESSION_ID / CODEX_THREAD_ID env vars, so tests in either must not interleave.
@@ -84,39 +86,39 @@ public class McpArtefactsServerTests {
     [Test]
     [NotInParallel(SessionEnvVarMutation)]
     public async Task Publish_body_cites_the_ambient_session_without_being_asked() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "ambientsess1");
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+        await WithoutAmbientSessionAsync(async () => {
+            using var kap = new EnvScope(CapacitorSessionIdEnvVar, "ambientsess1");
 
-        try {
             var body = McpArtefactsServer.BuildPublishBody(Args("""{"title":"Plan"}"""), "<p>x</p>");
 
             await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
                         .IsEquivalentTo(new[] { "ambientsess1" });
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
+        });
+    }
+
+    [Test]
+    public async Task Publish_body_cites_claude_code_session_id_in_mcp_stdio_env() {
+        var body = McpArtefactsServer.BuildPublishBody(
+            Args("""{"title":"Plan"}"""),
+            "<p>x</p>",
+            name => name == ClaudeSessionIdEnvVar ? "69849952-6dcc-484c-81cc-ccf504b1a807" : null);
+
+        await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
+                    .IsEquivalentTo(new[] { "698499526dcc484c81ccccf504b1a807" });
     }
 
     [Test]
     [NotInParallel(SessionEnvVarMutation)]
     public async Task An_explicit_session_list_beats_the_ambient_one() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "ambientsess1");
+        using var kap = new EnvScope(CapacitorSessionIdEnvVar, "ambientsess1");
 
-        try {
-            var body = McpArtefactsServer.BuildPublishBody(
-                Args("""{"title":"Plan","session_ids":["1234abcd-56ef-78ab-90cd-1234567890ab"]}"""), "<p>x</p>");
+        var body = McpArtefactsServer.BuildPublishBody(
+            Args("""{"title":"Plan","session_ids":["1234abcd-56ef-78ab-90cd-1234567890ab"]}"""), "<p>x</p>");
 
-            // Canonicalized the way the server files sessions, so a dashed GUID cites the session
-            // the caller meant rather than silently citing nothing.
-            await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
-                        .IsEquivalentTo(new[] { "1234abcd56ef78ab90cd1234567890ab" });
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-        }
+        // Canonicalized the way the server files sessions, so a dashed GUID cites the session
+        // the caller meant rather than silently citing nothing.
+        await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
+                    .IsEquivalentTo(new[] { "1234abcd56ef78ab90cd1234567890ab" });
     }
 
     [Test]
@@ -338,16 +340,11 @@ public class McpArtefactsServerTests {
     }
 
     static async Task WithoutAmbientSessionAsync(Func<Task> body) {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, null);
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+        using var kap = new EnvScope(CapacitorSessionIdEnvVar, null);
+        using var cdx = new EnvScope(CodexThreadIdEnvVar, null);
+        using var cld = new EnvScope(ClaudeSessionIdEnvVar, null);
+        using var grk = new EnvScope(GrokSessionIdEnvVar, null);
 
-        try {
-            await body();
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
+        await body();
     }
 }
