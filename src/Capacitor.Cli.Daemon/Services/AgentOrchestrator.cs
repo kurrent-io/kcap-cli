@@ -5193,7 +5193,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// Locates the transcript a freshly spawned agent writes — Claude's per-worktree
     /// project dir (a symlink onto the source repo's, shared with the user's own sessions,
     /// so the locator disambiguates by cwd), Codex's rollout tree (disambiguated by cwd and
-    /// spawn time), Muse's log named by the launch's hosted-session marker. A vendor without a
+    /// spawn time), Muse's log from its runtime's session or the launch's hosted-session marker. A vendor without a
     /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
     /// a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
@@ -5203,7 +5203,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
                 _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
-                _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime)),
+                _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime),
+                (agent.Runtime as MuseMspHostedAgentRuntime)?.Session),
             _        => null,
         };
         if (locate is null) return Task.CompletedTask;

@@ -22,8 +22,8 @@ public class MuseHostedSessionLocatorTests {
         return path;
     }
 
-    (string SessionId, string Path)? Locate(string agentId) =>
-        MuseHostedSessionLocator.TryLocate(Home, Paths, agentId, Today);
+    (string SessionId, string Path)? Locate(string agentId, MuseSessionDescriptor? opened = null) =>
+        MuseHostedSessionLocator.TryLocate(Home, Paths, agentId, Today, opened);
 
     [Test]
     public async Task Nothing_is_found_without_a_marker() =>
@@ -63,5 +63,25 @@ public class MuseHostedSessionLocatorTests {
         CreateLog(SessionId);
 
         await Assert.That(Locate("agent-1")?.SessionId).IsEqualTo(SessionId.Replace("-", ""));
+    }
+
+    /// <summary>A session that ended before the first poll has lost its marker to the end hook; the
+    /// runtime's own session still links it.</summary>
+    [Test]
+    public async Task The_runtimes_session_is_found_without_a_marker() {
+        var log = CreateLog(SessionId);
+
+        var found = Locate("agent-1", new MuseSessionDescriptor(SessionId, log, null, "/workspace"));
+
+        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Value.SessionId).IsEqualTo(SessionId.Replace("-", ""));
+        await Assert.That(found.Value.Path).IsEqualTo(log);
+    }
+
+    [Test]
+    public async Task The_runtimes_session_is_not_found_before_its_log_exists() {
+        var opened = new MuseSessionDescriptor(SessionId, Paths.SessionLogPath(SessionId, Today)!, null, "/workspace");
+
+        await Assert.That(Locate("agent-1", opened)).IsNull();
     }
 }

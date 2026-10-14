@@ -3,12 +3,17 @@ using Capacitor.Cli.Core.Harness.Muse;
 
 namespace Capacitor.Cli.Daemon.Harness.Muse;
 
-/// <summary>Finds the session a hosted Muse agent runs from the marker its launch wrote, for the
-/// daemon's own link when the hook's never lands.</summary>
+/// <summary>Finds the session a hosted Muse agent runs, for the daemon's own link when the hook's never
+/// lands: the session its runtime opened, else the marker its launch wrote.</summary>
 internal static class MuseHostedSessionLocator {
-    /// <summary>The marked session's canonical id and log; null until Muse has created the log, so a
-    /// caller never records a path that does not exist.</summary>
-    internal static (string SessionId, string Path)? TryLocate(UserHome home, MusePaths paths, string agentId, DateOnly today) {
+    /// <summary>The session's canonical id and log; null until Muse has created the log, so a caller never
+    /// records a path that does not exist. The runtime's session comes first because a session that has
+    /// already ended has had its marker deleted by the end hook.</summary>
+    internal static (string SessionId, string Path)? TryLocate(
+            UserHome home, MusePaths paths, string agentId, DateOnly today, MuseSessionDescriptor? opened) {
+        if (opened is not null && Guid.TryParse(opened.SessionId, out var openedId) && File.Exists(opened.LogPath))
+            return (openedId.ToString("N"), opened.LogPath);
+
         var dir = MuseHostedSessionMarker.DirectoryFor(home);
         if (!Directory.Exists(dir)) return null;
 
