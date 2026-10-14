@@ -27,7 +27,8 @@ scope add      Grant one chat: --after-seq <seq> records items newer than the ne
                items), --include-history the whole chat (for a chat recorded before, back to
                where its recording last stopped). Idempotent; a request whose boundary
                differs from an active grant's exits 2 and changes nothing.
-scope remove   Withdraw a chat: closes its open session and sends nothing further. A chat whose
+scope remove   Withdraw a chat: revokes its grant, sends nothing further and attempts to close its
+               open session; if that post fails it exits 1 and `sweep` delivers it. A chat whose
                state file is unreadable, malformed or belongs to another account is unlisted
                and the file is renamed to <chat_key>.json.unusable-<epoch ms> (kept, never
                read again); that run exits 3, and `scope add` then grants the chat afresh.
