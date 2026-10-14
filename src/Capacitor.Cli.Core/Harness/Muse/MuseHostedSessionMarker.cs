@@ -8,7 +8,9 @@ namespace Capacitor.Cli.Core.Harness.Muse;
 /// Links a Muse session to the daemon-hosted agent running it, for a hook that inherits no
 /// <c>KCAP_AGENT_ID</c>. The hook resolves <see cref="ConfigRoot.FromEnvironment"/> with a cleared
 /// environment, so a daemon running under a non-default <c>KCAP_CONFIG_DIR</c> writes where the hook
-/// never looks; the relay path carries the link there instead.
+/// never looks. The daemon's own hook relay passes the agent id directly, but it runs only when no kcap
+/// hooks are installed in Muse's settings; with hooks installed, such a daemon's hosted sessions record
+/// without their agent link.
 /// </summary>
 public sealed partial record MuseHostedSessionMarker(
         string         SessionId,
