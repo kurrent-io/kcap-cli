@@ -234,7 +234,8 @@ sealed class MuseHookCommand(
         };
 
         if (cwd is not null) forwarded["cwd"] = cwd;
-        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if ((hosted.AgentId ?? MuseHostedSessionMarker.TryRead(home, sessionId)?.AgentId) is { } agentHostId)
+            forwarded["agent_host_id"] = agentHostId;
 
         await PostInOrderAsync("session-end/muse", forwarded.ToJsonString(), sessionId, budget);
         MuseHostedSessionMarker.Delete(home, sessionId);

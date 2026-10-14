@@ -139,8 +139,9 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(body.TryGetProperty("agent_host_id", out _)).IsFalse();
     }
 
+    /// <summary>The end is linked to the same agent as the start, through the marker it then deletes.</summary>
     [Test]
-    public async Task SessionEnd_deletes_the_hosted_session_marker_after_posting() {
+    public async Task SessionEnd_takes_agent_host_id_from_the_marker_then_deletes_it() {
         StubHooks();
         StageParentLog();
         MuseHostedSessionMarker.Write(Home,
@@ -150,7 +151,8 @@ public class MuseHookCommandTests : IDisposable {
             $$"""{"hook_event_name":"SessionEnd","reason":"other","session_id":"{{ParentId}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
             new StringWriter(), ParentEnv, Today);
 
-        await Assert.That(HookPosts("/hooks/session-end/muse").Count).IsEqualTo(1);
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-end/muse").Single()).RootElement;
+        await Assert.That(body.GetProperty("agent_host_id").GetString()).IsEqualTo("agent-from-marker");
         await Assert.That(MuseHostedSessionMarker.TryRead(Home, ParentId)).IsNull();
     }
 
