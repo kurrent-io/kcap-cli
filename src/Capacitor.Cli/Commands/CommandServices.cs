@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Harness.MuseAssistant;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -107,6 +108,13 @@ public static class CommandServices {
         services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
+        services.AddTransient<MuseAssistantCommand>();
+        services.AddTransient<MuseAssistantIngest>();
+        services.AddTransient<MuseAssistantScope>();
+        services.AddTransient<MuseAssistantIdentity>();
+        services.AddTransient<MuseAssistantActionRunner>();
+        services.AddSingleton<MuseAssistantStateStoreFactory>();
+        services.AddTransient<IMuseAssistantPoster, MuseAssistantHttpPoster>();
         services.AddTransient<PluginCommand>();
         services.AddTransient<ProfileCommand>();
         services.AddTransient<ProjectsCommand>();

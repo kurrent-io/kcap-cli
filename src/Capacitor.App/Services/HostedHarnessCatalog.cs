@@ -177,6 +177,7 @@ public static class HostedHarnessCatalog {
         ["antigravity"] = ("An", "#F4B860"),
         ["pi"]          = ("π", "#A994FF"),
         ["mistral-vibe"] = ("Mv", "#FA520F"),
+        ["muse-assistant"] = ("MA", "#2F6FE0"),
         ["grok"]        = ("Gk", "#F1F3F7"),
     };
 
