@@ -47,7 +47,7 @@ public class RemoteSessionViewSmokeTests {
             });
             _directory.Rows.AddOrUpdate(row);
             Vm = new RemoteSessionViewModel(row, _directory, _access, Permissions, NewActions(), Lane,
-                (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time,
+                (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time, new FakeWorkContextSource(),
                 () => new FakeTerminalSurface(), planArtifacts);
             View = new RemoteSessionView { DataContext = Vm };
             Window = windowImpl is null ? new Window() : new Window(windowImpl);
@@ -90,7 +90,7 @@ public class RemoteSessionViewSmokeTests {
     }
 
     [Test]
-    public async Task The_remote_header_drags_without_work_context_and_keeps_tab_buttons_clickable() {
+    public async Task The_remote_header_drags_beside_work_context_and_keeps_tab_buttons_clickable() {
         await AvaloniaSession.DispatchAsync(async () => {
             var platformWindow = new Window();
             var platform = DispatchProxy.Create<IWindowImpl, MoveRecorder>();
@@ -102,7 +102,8 @@ public class RemoteSessionViewSmokeTests {
                 using var host = new Host(windowImpl: platform);
                 try {
                     await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
-                    await Assert.That(host.View.GetVisualDescendants().OfType<WorkContextView>().Any()).IsFalse();
+                    await Assert.That(host.View.GetVisualDescendants().OfType<WorkContextView>().Single().DataContext)
+                    .IsSameReferenceAs(host.Vm.WorkContext);
 
                     // Blank padding needs a hit-testable background; title text must bubble too.
                     var title = host.View.FindControl<TextBlock>("RemoteTitle")!;
