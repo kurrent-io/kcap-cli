@@ -25,6 +25,10 @@ sealed class ScriptedConsole : IAnsiConsole, IDisposable {
             // whatever was asked for, so a prompt that works in a terminal throws on the runner.
             Enrichment  = new ProfileEnrichment { UseDefaultEnrichers = false },
         });
+        // Redirected/headless hosts can report zero terminal dimensions. Live prompt
+        // layout needs a real viewport even though the output is a StringWriter.
+        _inner.Profile.Width  = 120;
+        _inner.Profile.Height = 40;
         _inner.Profile.Capabilities.Interactive = true;
         _inner.Profile.Capabilities.Ansi        = true;
         AnsiConsole.Console = this;

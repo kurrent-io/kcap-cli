@@ -797,10 +797,18 @@ public class RemoteSessionViewModelTests {
     public async Task The_artefacts_tab_re_reads_when_access_becomes_ready() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
+            var accessReady = new TaskCompletionSource<HubCallOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Lane.AccessWatchHandler = _ => accessReady.Task;
             var source = new FakePlanArtifactSource();
             var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source);
+            // Settle the initial read before granting access, so the ready edge must start a new read.
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(source.Requested.Count).IsEqualTo(1);
+
+            accessReady.SetResult(HubCallOutcome.Ok);
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
-            await WaitUntilAsync(() => source.Requested.Count >= 2, what: "re-read on ready");
+            await WaitUntilAsync(() => source.Requested.Count == 2, what: "re-read on ready");
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
             await vm.TeardownAsync();
         });
     }
@@ -815,12 +823,16 @@ public class RemoteSessionViewModelTests {
             var source = new FakePlanArtifactSource { Default = new PlanArtifactsRead(SessionPlansReadKind.Unreachable, null) };
             var vm = h.Build(Harness.Row(sessionId: "0123456789abcdef0123456789abcdef"), source);
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
-            await WaitUntilAsync(() => source.Requested.Count >= 2, what: "re-read on ready");
+            // The session switch and access-ready refresh can coalesce. Await the read
+            // that actually ran rather than requiring a scheduler-dependent startup count.
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
             await WaitUntilAsync(() => vm.Artefacts.LastReadFailed, what: "unreachable recorded");
             var before = source.Requested.Count;
 
             h.Time.Advance(WorkContextViewModel.PollInterval);
             await WaitUntilAsync(() => source.Requested.Count > before, what: "retry after the poll interval");
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.Artefacts.LastReadFailed).IsTrue();
 
             source.Default = new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto());
             h.Time.Advance(WorkContextViewModel.PollInterval);

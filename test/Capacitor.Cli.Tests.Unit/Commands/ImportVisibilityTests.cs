@@ -221,7 +221,7 @@ public class ImportVisibilityTests : IDisposable {
     [Test]
     public async Task HandleImport_chain_forcePrivate_stamps_private_even_when_transcript_batch_fails_after_session_start() {
         // The scenario the stamp exists for: forcePrivate:true with a non-null defaultVisibility,
-        // failing AFTER session-start succeeds (transcript batch 500s) and so before session-end /
+        // failing AFTER session-start succeeds (transcript batch rejected) and so before session-end /
         // importedSessionIds — which is what SetVisibilityNoneForAll reads, so this session is
         // never privatized post-hoc. An omitted field would leave it org-visible for good.
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet())
@@ -229,7 +229,7 @@ public class ImportVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/session-start*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(500)); // fails AFTER session-start succeeded
+            .RespondWith(Response.Create().WithStatusCode(400)); // fails AFTER session-start succeeded
         _server.Given(Request.Create().WithPath("/hooks/session-end*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("{}"));
 
@@ -265,7 +265,7 @@ public class ImportVisibilityTests : IDisposable {
         _server.Given(Request.Create().WithPath("/hooks/transcript").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200));
         _server.Given(Request.Create().WithPath("/hooks/session-end*").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(200));
 
@@ -514,7 +514,7 @@ public class ImportVisibilityTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(404));
         StubAllHookEndpoints();
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
 
         var projectsDir = Path.Combine(_tempDir, "claude-projects-lostwrite");
         WriteClaudeSession(projectsDir, "vis-lost-write");
@@ -616,7 +616,7 @@ public class ImportVisibilityTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":2}"""));
         StubAllHookEndpoints();
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
 
         var projectsDir = Path.Combine(_tempDir, "claude-projects-floorfail");
         WriteClaudeSession(projectsDir, "vis-floor-failed");
@@ -691,7 +691,7 @@ public class ImportVisibilityTests : IDisposable {
 
     [Test]
     public async Task HandleImport_forcePrivate_does_not_title_a_loaded_codex_session_it_could_not_make_private() {
-        var posts = await ImportLoadedNamedCodexSessionAsync(visibilityStatus: 500);
+        var posts = await ImportLoadedNamedCodexSessionAsync(visibilityStatus: 400);
 
         await Assert.That(posts).DoesNotContain("/hooks/harness-title")
                     .Because("the session is still public and the user was told it was skipped");
@@ -705,7 +705,7 @@ public class ImportVisibilityTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":2}"""));
         StubAllHookEndpoints();
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
-            .RespondWith(Response.Create().WithStatusCode(500));
+            .RespondWith(Response.Create().WithStatusCode(400));
 
         var projectsDir = Path.Combine(_tempDir, "claude-projects-floorsay");
         WriteClaudeSession(projectsDir, "vis-floor-said");

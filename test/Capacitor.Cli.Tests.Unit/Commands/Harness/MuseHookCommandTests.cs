@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -41,6 +42,15 @@ public class MuseHookCommandTests : IDisposable {
     readonly FakeWatcherSpawner _spawner = new();
 
     public void Dispose() => _server.Stop();
+
+    async Task WarmServer() {
+        // Server startup/JIT is outside the hook's real five-second budget. The tests
+        // assert hook ordering and payloads; only the stalled-server case measures time.
+        using var client = new HttpClient();
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var response = await client.GetAsync($"{_server.Url}/__warmup", guard.Token);
+        _server.ResetLogEntries();
+    }
 
     [Test]
     public async Task Parent_session_id_comes_from_the_environment_only() {
@@ -542,13 +552,14 @@ public class MuseHookCommandTests : IDisposable {
     [Test, NotInParallel("AuthProviderDiscoveryCache")]
     public async Task SessionStart_against_a_stalled_server_spools_the_start_and_still_writes_the_fragment() {
         _server.Given(Request.Create().WithPath("/hooks/*").UsingPost())
-            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(30)));
+            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(10)));
         StubMemoryIndex(3);
         StageParentLog();
         var stdout  = new StringWriter();
+        await WarmServer();
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
 
-        var exit = await Command().Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
+        var exit = await Command(time: TimeProvider.System).Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
 
         elapsed.Stop();
         await Assert.That(exit).IsEqualTo(0);
@@ -625,12 +636,15 @@ public class MuseHookCommandTests : IDisposable {
     static string? ParentEnv(string key) => key == "MUSE_SESSION_ID" ? ParentId : null;
 
     MuseHookCommand Command(
-            FakeWatcherSpawner? spawner = null, HarnessRegistry? harnesses = null, ConfigRoot? root = null, ProfileContext? profiles = null) {
+            FakeWatcherSpawner? spawner = null, HarnessRegistry? harnesses = null, ConfigRoot? root = null, ProfileContext? profiles = null,
+            TimeProvider? time = null) {
         root     ??= Config.Root;
         profiles ??= Resolutions.At(_server.Url!, root);
         var http   = new FixedCapacitorHttpClient();
 
-        return new MuseHookCommand(root, profiles, new HookClock(TimeProvider.System), Home, harnesses ?? TestHarnesses.Under(Home),
+        // Payload and ordering assertions should not depend on CPU scheduling. Only the
+        // elapsed-time/spooling test above supplies the real clock.
+        return new MuseHookCommand(root, profiles, new HookClock(time ?? new FakeTimeProvider(DateTimeOffset.UtcNow)), Home, harnesses ?? TestHarnesses.Under(Home),
             HostedAgent.Terminal, http, TestWatchers.For(root, profiles, http, spawner ?? _spawner), new GitProviderRouter(),
             new WorkingDirectory(AppContext.BaseDirectory));
     }

@@ -168,9 +168,14 @@ A single suite still runs directly as an executable, which is the faster loop wh
 dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests.Unit.csproj
 ```
 
-Every suite, the daemon one included, runs green at full parallelism — no flag needed, and CI runs
-each assembly at that same width. A test that needs exclusion carries the constraint itself; a
-narrower width would only narrow the race window, not close it.
+CI caps concurrency at three assemblies with four tests each on Linux/macOS, and two assemblies
+with two tests each on Windows. To reproduce CI locally, pass `--max-parallel-test-modules 3`
+and `-- --maximum-parallel-tests 4`. Tests touching shared state still need their own exclusion;
+the concurrency cap only limits resource contention.
+
+The installed Codex schema certification is opt-in: set `KCAP_CODEX_SCHEMA_CHECK=1` to compare
+your local Codex version with the vendored pin. `KCAP_CODEX_SCHEMA_PIN_UPDATE=1` regenerates
+the pin after an intended, vetted upgrade, without needing the check flag.
 
 ## Publishing
 
