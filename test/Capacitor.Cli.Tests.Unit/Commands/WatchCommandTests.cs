@@ -782,6 +782,7 @@ public class WatchCommandTests {
     [Arguments("cursor",      true)]
     [Arguments("mistral-vibe", true)]
     [Arguments("grok",        true)]
+    [Arguments("muse",        true)]
     [Arguments("codex",       false)]
     [Arguments("claude",      false)]
     [Arguments("gemini",      false)]

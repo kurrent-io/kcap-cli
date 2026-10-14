@@ -63,6 +63,16 @@ public class TranscriptIdsTests {
         await Assert.That(TranscriptIds.VibeEntry("a")).IsNotEqualTo(TranscriptIds.VibeEntry("b"));
     }
 
+    [Test]
+    public async Task Muse_record_hashes_stream_and_record_id() {
+        const string stream = "01a13694-b0ad-7ae2-8bf5-2af6357a0847";
+        const string record = "e6b35c82-47c0-48f2-868a-0e369eccecc8";
+        await Assert.That(TranscriptIds.MuseRecord(stream, record))
+            .IsEqualTo(new Guid(XxHash128.Hash(Encoding.UTF8.GetBytes($"muse-record:{stream}:{record}"))));
+        await Assert.That(TranscriptIds.MuseRecord(stream, record)).IsNotEqualTo(TranscriptIds.MuseRecord(stream, "other"));
+        await Assert.That(TranscriptIds.MuseRecord(stream, record)).IsNotEqualTo(TranscriptIds.MuseRecord("other", record));
+    }
+
     /// Fixed vectors: a later change to any derivation fails here even if the framing tests are edited too.
     [Test]
     [Arguments("sibling", "580a4b24-18bc-bc19-9676-ed805dff4bdd")]
@@ -73,6 +83,7 @@ public class TranscriptIdsTests {
     [Arguments("codex-usage-backfill", "5bccf7a4-6eee-83b2-b58c-f10627871a82")]
     [Arguments("vibe-record", "ca3c057b-649d-864f-339b-160c1c7fd711")]
     [Arguments("vibe-entry", "d219bcea-d51a-d28e-6f8a-c4d4635844d0")]
+    [Arguments("muse-record", "d8a1a66a-0ef6-88fa-a0ea-41440eb74617")]
     public async Task Vectors_are_fixed(string name, string expected) {
         await Assert.That(Vector(name).ToString("D")).IsEqualTo(expected);
     }
@@ -86,6 +97,7 @@ public class TranscriptIdsTests {
         "codex-usage-backfill" => TranscriptIds.Sibling(Primary, "usage-backfill"),
         "vibe-record"       => TranscriptIds.VibeRecord("{\"role\":\"user\",\"content\":\"hi\"}"),
         "vibe-entry"        => TranscriptIds.VibeEntry("user-turn-abc-1"),
+        "muse-record"       => TranscriptIds.MuseRecord("01a13694-b0ad-7ae2-8bf5-2af6357a0847", "e6b35c82-47c0-48f2-868a-0e369eccecc8"),
         _                   => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 }

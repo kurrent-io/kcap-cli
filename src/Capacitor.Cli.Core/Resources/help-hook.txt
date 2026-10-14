@@ -12,7 +12,7 @@ Description:
   dispatch is argument-driven (no stdin payload) — see --pi / --opencode below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok]',
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--muse]',
   which writes the appropriate hook configuration (or, for Pi/OpenCode/Antigravity,
   the plugin/hooks-block) for the vendor.
 
@@ -66,6 +66,15 @@ Options:
               spawns the watcher on the session's updates.jsonl (vendor=grok);
               stop restarts a watcher that has gone. Always exits 0 with empty
               stdout.
+  --muse      Dispatch a Muse Code hook event. Self-routes on the payload's
+              hook_event_name (SessionStart/UserPromptSubmit/SubagentStart/
+              SubagentStop/Stop/SessionEnd). Muse payloads carry no transcript
+              path, so kcap resolves ~/.local/share/muse/sessions/YYYY/MM/DD/<id>/
+              session.jsonl and spawns the watcher tailing it (vendor=muse).
+              Muse runs hooks without $XDG_DATA_HOME, so a custom data root is
+              the one saved by `kcap setup` or `kcap plugin install --muse`.
+              Always exits 0; the only stdout is the memory fragment Muse
+              appends to the model's context on SessionStart.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

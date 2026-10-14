@@ -169,6 +169,7 @@ public static class CommandServices {
         services.AddTransient<KiroHookCommand>();
         services.AddTransient<MistralVibeHookCommand>();
         services.AddTransient<GrokHookCommand>();
+        services.AddTransient<MuseHookCommand>();
         services.AddTransient<OpenCodeHookCommand>();
         services.AddTransient<PiHookCommand>();
 

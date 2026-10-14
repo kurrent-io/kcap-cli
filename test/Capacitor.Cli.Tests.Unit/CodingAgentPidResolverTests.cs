@@ -204,6 +204,42 @@ public class CodingAgentPidResolverTests {
     }
 
     [Test]
+    public async Task Resolves_muse_by_its_binary_name() {
+        // hook(100) -> sh(90) -> muse(50) -> zsh(20)
+        var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, "muse"), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "muse", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    /// <summary>The installed <c>muse</c> is a launcher script that execs <c>muse-bin-&lt;version&gt;</c>,
+    /// so the durable process shows that name (exec basename and argv[0]) or its truncated comm. Its
+    /// dots fail the clean-stem gate, so only the prefix rule can find it.</summary>
+    [Test]
+    [Arguments("muse-bin-1.4.7-R6101.1")]
+    [Arguments("/Users/someone/.local/bin/muse-bin-1.4.7-R6101.1")]
+    [Arguments("muse-bin-1.4.7-R")]
+    [Arguments("muse-bin-1.4.7-")]
+    public async Task Resolves_muse_by_its_versioned_binary_name(string name) {
+        // hook(100) -> sh(90) -> muse-bin-1.4.7-R6101.1(50) -> zsh(20)
+        var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, name), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "muse", lookup);
+
+        await Assert.That(pid).IsEqualTo(50);
+    }
+
+    [Test]
+    public async Task The_muse_binary_prefix_matches_only_the_muse_vendor() {
+        var lookup = ProcTable.Of((90, 50, "sh"), (50, 20, "muse-bin-1.4.7-R6101.1"), (20, 1, "-zsh"));
+
+        var pid = ProcessHelpers.ResolveCodingAgentPid(startPid: 90, vendor: "claude", lookup);
+
+        await Assert.That(pid).IsNull();
+    }
+
+    [Test]
     public async Task Resolves_mistral_vibe_by_its_vibe_script_name() {
         // The vendor token is `mistral-vibe`; the agent is a python console script whose comm is
         // `vibe` while its argv[0] and exe are the interpreter.

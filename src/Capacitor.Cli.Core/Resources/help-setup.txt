@@ -123,6 +123,10 @@ Options:
                               (where Antigravity reads them, not ~/.agents/skills).
   --skip-grok-hooks           Don't install the Grok hooks even if Grok is
                               detected (~/.grok/ or grok on PATH).
+  --skip-muse-hooks           Don't install the Muse Code hooks even if Muse is
+                              detected (~/.config/muse/ or muse on PATH).
+  --skip-muse-mcp             Skip registering the kcap MCP servers for Muse Code
+                              (the mcp_servers block of its settings.json).
   --use-provider-api-key <v>  In --no-prompt mode, set whether kcap keeps
                               ANTHROPIC_API_KEY / OPENAI_API_KEY in headless
                               agent spawns. Accepts true/1/yes/on or
@@ -155,7 +159,9 @@ AWS Kiro CLI via ~/.kiro/ or the kiro/kiro-cli binary on PATH; Pi (badlogic/pi-m
 via ~/.pi/ or the pi binary on PATH; SST OpenCode via ~/.config/opencode/ (or
 ~/.local/share/opencode/) or the opencode binary on PATH; Google Antigravity via
 ~/.gemini/antigravity/, ~/.gemini/antigravity-cli/, or the antigravity/agy binary
-on PATH. Setup lists the
+on PATH; Mistral Vibe via ~/.vibe/ or the vibe binary on PATH; Muse Code via
+~/.config/muse/, ~/.local/share/muse/ (honouring XDG_CONFIG_HOME/XDG_DATA_HOME), or
+the muse binary on PATH. Setup lists the
 detected agents, then asks a single yes/no prompt to install kcap (hooks,
 skills, instructions, MCP) for all of them, instead of one prompt per agent.
 Hooks are installed user-wide (Pi, OpenCode, and Antigravity install a

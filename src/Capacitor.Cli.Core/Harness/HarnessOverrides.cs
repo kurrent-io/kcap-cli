@@ -27,6 +27,7 @@ public static class HarnessOverrides {
             HarnessId.Antigravity => "KCAP_ANTIGRAVITY_PATH",
             HarnessId.MistralVibe => "KCAP_MISTRAL_VIBE_PATH",
             HarnessId.Grok        => "KCAP_GROK_PATH",
+            HarnessId.Muse        => "KCAP_MUSE_PATH",
         };
 
         /// <summary>Overrides the model a hosted agent of this vendor runs. Null where we hand the
@@ -39,7 +40,7 @@ public static class HarnessOverrides {
             HarnessId.Antigravity => "KCAP_ANTIGRAVITY_MODEL",
 
             HarnessId.Claude or HarnessId.Codex or HarnessId.Copilot or HarnessId.Gemini
-                or HarnessId.MistralVibe or HarnessId.Grok => null,
+                or HarnessId.MistralVibe or HarnessId.Grok or HarnessId.Muse => null,
         };
     }
 }

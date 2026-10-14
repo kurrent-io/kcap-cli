@@ -29,6 +29,7 @@ internal static class SetupDecisions {
         if (d.Antigravity) names.Add("Antigravity");
         if (d.Vibe)        names.Add("Mistral Vibe");
         if (d.Grok)        names.Add("Grok");
+        if (d.Muse)        names.Add("Muse Code");
 
         return names.Count == 0 ? null : string.Join(", ", names);
     }
@@ -79,6 +80,7 @@ internal static class SetupDecisions {
             SkipAntigravity = Skip(HarnessId.Antigravity, options.SkipAntigravity),
             SkipMistralVibe = Skip(HarnessId.MistralVibe, options.SkipMistralVibe),
             SkipGrok        = Skip(HarnessId.Grok, options.SkipGrok),
+            SkipMuse        = Skip(HarnessId.Muse, options.SkipMuse),
 
             // The hooks flag counts against TOOLS as well. `--skip-<vendor>-hooks` is a whole-vendor
             // opt-out, and the browser's separate tools axis must not re-enable the half of it the
@@ -90,6 +92,7 @@ internal static class SetupDecisions {
             SkipOpenCodeMcp    = Tools(HarnessId.OpenCode, options.SkipOpenCode || options.SkipOpenCodeMcp),
             SkipAntigravityMcp = Tools(HarnessId.Antigravity, options.SkipAntigravity || options.SkipAntigravityMcp),
             SkipMistralVibeMcp = Tools(HarnessId.MistralVibe, options.SkipMistralVibe || options.SkipMistralVibeMcp),
+            SkipMuseMcp        = Tools(HarnessId.Muse, options.SkipMuse || options.SkipMuseMcp),
 
             // Kiro is the exception, and stays one. `--skip-kiro-hooks` opts out of only the invasive
             // agent clone; the terminal path registers Kiro's MCP under it and says so. Carrying it

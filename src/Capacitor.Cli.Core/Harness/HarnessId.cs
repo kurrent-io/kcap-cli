@@ -18,4 +18,5 @@ public enum HarnessId {
     Antigravity,
     MistralVibe,
     Grok,
+    Muse,
 }

@@ -18,6 +18,7 @@ internal sealed record HandoffLaunchRecipe(HarnessId Vendor, IReadOnlyList<strin
         [HarnessId.Antigravity] = new(HarnessId.Antigravity, ["-i"]),
         [HarnessId.MistralVibe] = new(HarnessId.MistralVibe, []),
         [HarnessId.Grok]        = new(HarnessId.Grok,        ["--prompt"]),
+        [HarnessId.Muse]        = new(HarnessId.Muse,        []),
     }.ToFrozenDictionary();
 
     public IReadOnlyList<string> Argv(string prompt) => [.. LeadingArgs, prompt];

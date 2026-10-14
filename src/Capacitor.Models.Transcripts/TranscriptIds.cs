@@ -47,4 +47,9 @@ public static class TranscriptIds {
     /// rather than the surrounding bytes (which <c>updatedAt</c>/<c>generationStatus</c> churn). Scoped
     /// by a prefix so an id can never collide with another derivation's input.
     public static Guid VibeEntry(string entryId) => Hash(Encoding.UTF8.GetBytes("vibe-entry:" + entryId));
+
+    /// A Muse record is identified by its stream and its own record id; the prefix keeps the input from
+    /// colliding with another derivation's.
+    public static Guid MuseRecord(string streamId, string recordId) =>
+        Hash(Encoding.UTF8.GetBytes("muse-record:" + streamId + ":" + recordId));
 }

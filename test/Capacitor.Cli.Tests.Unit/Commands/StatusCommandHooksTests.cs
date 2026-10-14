@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Muse;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -101,6 +102,65 @@ public class StatusCommandHooksTests {
 
         // Must not throw; numeric command is not a kcap entry.
         await Assert.That(CodexHooksInstaller.ReferencesKcapHook(path)).IsFalse();
+    }
+
+    [Test]
+    public async Task MuseHookGapLine_is_silent_when_every_event_is_installed() {
+        await Assert.That(StatusCommand.MuseHookGapLine(MuseHooksParser.MuseHookEvents.ToHashSet())).IsNull();
+    }
+
+    [Test]
+    public async Task MuseHookGapLine_names_each_missing_event() {
+        var line = StatusCommand.MuseHookGapLine(new HashSet<string> { "SessionStart", "Stop" });
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("UserPromptSubmit, SubagentStart, SubagentStop, SessionEnd");
+        await Assert.That(line).DoesNotContain("SessionStart,");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_says_an_unparseable_settings_json_is_not_valid_json() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        await File.WriteAllTextAsync(path, "{ \"hooks\": ");
+
+        var line = StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true);
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("is not valid JSON");
+        await Assert.That(line).DoesNotContain("hooks missing");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_says_a_non_object_root_is_not_a_json_object() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        await File.WriteAllTextAsync(path, "[]");
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).Contains("is not a JSON object");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_is_silent_when_every_event_is_installed() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        MuseHooksInstaller.Install(path);
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).IsNull();
+    }
+
+    /// <summary>An unparseable file reads as unwired, marker or not, so this is the case the line must
+    /// still reach; a valid file with no hooks leaves it to the not-configured line.</summary>
+    [Test]
+    public async Task MuseHooksDetailLine_reports_an_unparseable_file_for_an_installed_but_unwired_muse() {
+        using var tmp     = new TempDir();
+        var       broken  = tmp.CreateFile("broken/settings.json", "{ \"hooks\": ");
+        var       hookless = tmp.CreateFile("hookless/settings.json", "{\"schema_version\":1}");
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: true, wired: false)).Contains("is not valid JSON");
+        await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: false, wired: false)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(hookless, detected: true, wired: false)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(tmp.PathTo("absent/settings.json"), detected: true, wired: false)).IsNull();
     }
 
     /// Every harness the build knows appears on the line — a tenth would too, since the line is

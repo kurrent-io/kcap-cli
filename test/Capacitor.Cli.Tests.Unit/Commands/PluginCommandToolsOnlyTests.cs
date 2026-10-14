@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
@@ -6,6 +7,7 @@ using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
@@ -231,6 +233,19 @@ public class PluginCommandToolsOnlyTests {
 
         await Assert.That(await File.ReadAllTextAsync(vibe.ConfigToml)).Contains("kcap-sessions");
         await Assert.That(File.Exists(vibe.HooksToml)).IsFalse();
+    }
+
+    [Test]
+    public async Task Muse_tools_only_writes_mcp_and_skills_but_no_hooks() {
+        var env  = Env();
+        var muse = env.Harnesses.Of<MuseHarness>().Paths;
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse", "--tools-only")).IsEqualTo(0);
+
+        await Assert.That(MuseSettingsJson.OwnsAnything(muse.SettingsJson, new(Home.Path))).IsTrue();
+        await Assert.That(AgentsSkillsInstaller.IsInstalled(env.Agents.UserSkillsDir)).IsTrue();
+        await Assert.That(MuseHooksParser.InstalledEvents((JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(muse.SettingsJson))!)).IsEmpty();
+        await Assert.That(File.Exists(GitConfig)).IsFalse();
     }
 
     [Test]

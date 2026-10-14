@@ -14,6 +14,7 @@ using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
@@ -30,6 +31,7 @@ using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
 using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.Harness.MistralVibe;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Spectre.Console;
@@ -594,6 +596,8 @@ sealed class SetupCommand(
         var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
         var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
         var skipGrokFlag     = args.Contains("--skip-grok-hooks");
+        var skipMuseFlag     = args.Contains("--skip-muse-hooks");
+        var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
         var skipImport       = args.Contains("--skip-import") || museAssistant;
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
@@ -755,6 +759,7 @@ sealed class SetupCommand(
         var agy      = harnesses.Of<AntigravityHarness>().Paths;
         var vibe     = harnesses.Of<MistralVibeHarness>().Paths;
         var grok     = harnesses.Of<GrokHarness>().Paths;
+        var muse     = harnesses.Of<MuseHarness>().Paths;
 
         var stepPaths = new CodingAgentsStep.Paths(
             ClaudeSettingsPath:   claudeSettingsPath,
@@ -788,7 +793,8 @@ sealed class SetupCommand(
             PiAgentsMdPath:       pi.AgentsMd,
             VibeHooksPath:        vibe.HooksToml,
             VibeConfigPath:       vibe.ConfigToml,
-            GrokHooksPath:        grok.KcapHooksJson);
+            GrokHooksPath:        grok.KcapHooksJson,
+            MuseSettingsPath:     muse.SettingsJson);
 
         // The browser leg, where the tenant serves one. Unnumbered because it is not a step: the
         // steps below run either way, and on every tenant that has not turned the flow on this
@@ -866,7 +872,8 @@ sealed class SetupCommand(
             OpenCode:    harnesses.Detected(HarnessId.OpenCode),
             Antigravity: harnesses.Detected(HarnessId.Antigravity),
             Vibe:        harnesses.Detected(HarnessId.MistralVibe),
-            Grok:        harnesses.Detected(HarnessId.Grok));
+            Grok:        harnesses.Detected(HarnessId.Grok),
+            Muse:        harnesses.Detected(HarnessId.Muse));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -926,7 +933,9 @@ sealed class SetupCommand(
             InstallAgents: installAgents,
             SkipMistralVibe: skipVibeFlag,
             SkipMistralVibeMcp: skipVibeMcpFlag,
-            SkipGrok: skipGrokFlag);
+            SkipGrok: skipGrokFlag,
+            SkipMuse: skipMuseFlag,
+            SkipMuseMcp: skipMuseMcpFlag);
 
         stepOptions = museAssistant
             ? MuseAssistantPosture.Apply(stepOptions)
@@ -994,7 +1003,10 @@ sealed class SetupCommand(
             // Vibe's hooks.toml and MCP config.toml are TOML (not the JSON writer / Codex map).
             InstallVibeHooks:         p => MistralVibeHooksInstaller.Install(p) != TomlConfigFile.Outcome.Failed,
             RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml),
-            InstallGrokHooks:         GrokHooksInstaller.Install);
+            InstallGrokHooks:         GrokHooksInstaller.Install,
+            // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
+            InstallMuseHooks:         p => InstallMuseHooks(p, home, muse, WriteLine),
+            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
@@ -1037,6 +1049,7 @@ sealed class SetupCommand(
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
         OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
         OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
+        OfferedIf(detected.Muse,        skipMuseFlag,        HarnessId.Muse);
         // The posture offers no harness, so nothing may be recorded as offered.
         if (!museAssistant) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
@@ -1362,7 +1375,7 @@ sealed class SetupCommand(
             installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
             installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
-            installResult.VibeHooksInstalled, installResult.GrokHooksInstalled,
+            installResult.VibeHooksInstalled, installResult.GrokHooksInstalled, installResult.MuseHooksInstalled,
         }.Count(installed => installed);
 
         telemetry.Funnel.Succeeded(agentsConfigured);
@@ -1855,7 +1868,8 @@ sealed class SetupCommand(
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
             new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
-            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time)
+            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time),
+            new MuseImportSource(harnesses.Of<MuseHarness>().Paths, WatcherPaths.FromEnvironment(config), time)
         ];
 
         if (vendors is null) return all;
@@ -2733,6 +2747,21 @@ sealed class SetupCommand(
           + "Commits are filed from the agent's shell commands until you upgrade git.",
         _ => "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]"
     };
+
+    /// <summary>
+    /// True only once every event carries kcap's hook. The roots are written whenever any kcap hook is in
+    /// the file, complete or not: a hook Muse runs finds its session log only through them.
+    /// </summary>
+    internal static bool InstallMuseHooks(string settingsPath, UserHome home, MusePaths muse, Action<string> writeLine) {
+        var installed = MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged
+                     && MuseHooksInstaller.HasAllHooks(settingsPath);
+
+        if (MuseHooksInstaller.IsWired(settingsPath) && !MuseHookRoots.Persist(home, muse))
+            writeLine($"  [yellow]⚠[/] Could not write {Markup.Escape(MuseHookRoots.PathFor(home))} — "
+                    + "Muse hooks may look for sessions outside this shell's XDG roots.");
+
+        return installed;
+    }
 
     /// <summary>
     /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the

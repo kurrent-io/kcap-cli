@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 
@@ -46,6 +47,7 @@ static class McpServerNudgeAvailability {
                 HarnessId.OpenCode    => JsonBlockHasServer(harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson, "mcp", serverName),
                 HarnessId.Antigravity => JsonBlockHasServer(harnesses.Of<AntigravityHarness>().Paths.McpConfigJson, "mcpServers", serverName),
                 HarnessId.Pi          => PiHas(harnesses, PiToken(serverName)),
+                HarnessId.Muse        => JsonBlockHasServer(harnesses.Of<MuseHarness>().Paths.SettingsJson, "mcp_servers", serverName),
                 _ => false
             };
         } catch {

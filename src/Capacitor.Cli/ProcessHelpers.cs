@@ -931,6 +931,11 @@ static partial class ProcessHelpers {
         var slash    = comm.LastIndexOfAny(['/', '\\']);
         var basename = slash >= 0 ? comm[(slash + 1)..] : comm;
 
+        // A versioned binary is matched by its prefix before the clean-stem gate, which its dots fail.
+        if (VersionedBinaryPrefixOf(vendor) is { } prefix && basename.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
+
         // Reduce the basename to a clean stem: the whole name if it has no dot, or the part before a
         // single trailing extension (".exe"). Anything else (multiple dots, a space) is not a clean
         // executable name and never matches.
@@ -959,6 +964,14 @@ static partial class ProcessHelpers {
     static string[] ProcessNamesOf(string vendor) => vendor switch {
         "mistral-vibe" => ["vibe", "Vibe CLI"],
         _              => [vendor],
+    };
+
+    /// <summary>The prefix of a vendor's versioned binary. Muse's <c>muse</c> is a launcher script that
+    /// execs <c>muse-bin-&lt;version&gt;</c>, so the durable process never reads as <c>muse</c>; its
+    /// comm is the same name truncated to 15 or 16 characters.</summary>
+    static string? VersionedBinaryPrefixOf(string vendor) => vendor switch {
+        "muse" => "muse-bin-",
+        _      => null,
     };
 
     /// <summary>
