@@ -284,6 +284,62 @@ public class MuseMspHostedAgentRuntimeTests {
         await Assert.That(rig.Host.WritesOf("turn/steer")).Count().IsEqualTo(1);
     }
 
+    /// <summary>Input completes on the host's acceptance, not its write, so a refusal reaches the caller.</summary>
+    [Test]
+    public async Task A_refused_turn_fails_the_input() {
+        await using var rig = await ReadyRig(configure: h => h.Override = r =>
+            (string?)r["method"] == "turn/start" ? MuseScriptedHost.ErrorResponse((long)r["id"]!, "session is closing") : null);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await rig.Runtime.SendUserInputAsync("go").WaitAsync(HangGuard));
+
+        await Assert.That(ex!.Message).Contains("session is closing");
+    }
+
+    /// <summary>The steer's write is not the input's delivery: a refused steer whose fallback turn is also
+    /// refused fails the input.</summary>
+    [Test]
+    public async Task A_refused_steer_whose_fallback_turn_is_refused_fails_the_input() {
+        await using var rig = await ReadyRig();
+
+        await rig.Runtime.SendUserInputAsync("first").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        await rig.Host.SyncAsync();
+
+        rig.Host.Override = r => (string?)r["method"] is "turn/steer" or "turn/start"
+            ? MuseScriptedHost.ErrorResponse((long)r["id"]!, "session is closing")
+            : null;
+
+        var second = rig.Runtime.SendUserInputAsync("again");
+
+        await rig.Host.WaitForWriteAsync("turn/steer");
+        await rig.Host.SyncAsync();
+        await Assert.That(second.IsCompleted).IsFalse();
+
+        rig.Process.Push(MuseMspWire.TurnCompleted);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await second.WaitAsync(HangGuard));
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
+    }
+
+    /// <summary>A host that never answers an input fails it at the deadline and frees the lane for the next.</summary>
+    [Test]
+    public async Task Unanswered_input_fails_at_the_deadline_and_releases_the_lane() {
+        await using var rig = await ReadyRig();
+        rig.Host.Silent.Add("turn/start");
+
+        var first = rig.Runtime.SendUserInputAsync("first");
+        await rig.Host.WaitForWriteAsync("turn/start");
+        rig.Time.Advance(MuseMspHostedAgentRuntime.DefaultReadyDeadline + TimeSpan.FromSeconds(1));
+
+        await Assert.ThrowsAsync<TimeoutException>(async () => await first.WaitAsync(HangGuard));
+
+        rig.Host.Silent.Remove("turn/start");
+        await rig.Runtime.SendUserInputAsync("second").WaitAsync(HangGuard);
+
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
+    }
+
     [Test]
     public async Task Input_after_terminal_is_not_admitted() {
         await using var rig = await ReadyRig();

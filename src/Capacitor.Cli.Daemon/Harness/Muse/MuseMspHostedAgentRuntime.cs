@@ -579,35 +579,29 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
 
     // ---- Input ----
 
+    /// <summary>Completes on the host's acceptance of the input (the steer, or the turn a refused steer falls
+    /// back to), and faults on its refusal or when the host leaves a request unanswered past the deadline.</summary>
     public Task SendUserInputAsync(string text) {
         if (Volatile.Read(ref _terminal) != 0) throw new InputNotAdmittedException("Muse: the hosted session has ended.");
 
-        var written = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Track(DeliverAsync(text, written));
-        return written.Task;
+        return DeliverAsync(text);
     }
 
-    /// <summary>Completes on the host's answer to the input, not merely its write.</summary>
     public Task SendUserInputAndWaitForWriteAsync(string text) =>
         Volatile.Read(ref _terminal) != 0
             ? Task.FromException(new InputNotAdmittedException("Muse: the hosted session has ended."))
-            : DeliverAsync(text, written: null);
+            : DeliverAsync(text);
 
-    async Task DeliverAsync(string text, TaskCompletionSource? written) {
-        try {
-            await _sessionReady.Task.WaitAsync(_ownerToken).ConfigureAwait(false);
-            await _inputLock.WaitAsync(_ownerToken).ConfigureAwait(false);
-        } catch (Exception ex) {
-            written?.TrySetException(ex);
-            throw;
-        }
+    async Task DeliverAsync(string text) {
+        await _sessionReady.Task.WaitAsync(_ownerToken).ConfigureAwait(false);
+        await _inputLock.WaitAsync(_ownerToken).ConfigureAwait(false);
 
         try {
             var sessionId = _session!.SessionId;
 
             if (RunningTurnId is { } turnId) {
                 using var steer = await RequestAsync(
-                    id => MuseMsp.TurnSteer(id, MuseMsp.NewId(), sessionId, turnId, text), written).ConfigureAwait(false);
+                    id => MuseMsp.TurnSteer(id, MuseMsp.NewId(), sessionId, turnId, text), remaining: InputDeadline()).ConfigureAwait(false);
 
                 if (ErrorMessage(steer) is not { } refused) return;
 
@@ -622,15 +616,27 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             }
 
             using var start = await RequestAsync(
-                id => MuseMsp.TurnStart(id, MuseMsp.NewId(), sessionId, text), written, ApplyTurnStartAck).ConfigureAwait(false);
+                id => MuseMsp.TurnStart(id, MuseMsp.NewId(), sessionId, text), onPump: ApplyTurnStartAck, remaining: InputDeadline()).ConfigureAwait(false);
 
             if (ErrorMessage(start) is { } error) {
                 _logger.LogWarning("Muse: the input was not accepted: {Error} (agentId={AgentId}).", error, _agentId);
                 throw new InvalidOperationException($"Muse: the input was not accepted: {error}");
             }
+        } catch (TimeoutException ex) {
+            throw new TimeoutException($"Muse: the host did not answer the input within {_readyDeadline.TotalSeconds:0}s.", ex);
         } finally {
             _inputLock.Release();
         }
+    }
+
+    /// <summary>A fresh deadline for one input request, so a host that never answers cannot hold the input lane.</summary>
+    Func<TimeSpan> InputDeadline() {
+        var started = _time.GetTimestamp();
+
+        return () => {
+            var left = _readyDeadline - _time.GetElapsedTime(started);
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        };
     }
 
     public async Task SendSpecialKeyAsync(string key) {
