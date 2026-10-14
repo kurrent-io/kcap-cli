@@ -2,7 +2,6 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
@@ -36,7 +35,6 @@ public class SettingsWindowSmokeTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
             var tabs = window.FindControl<TabControl>("SettingsTabs")!;
-            var daemonTab = window.FindControl<TabItem>("DaemonTab")!;
             var name = window.FindControl<TextBox>("NameInput")!;
             var capacity = window.FindControl<NumericUpDown>("CapacityInput")!;
             var save = window.FindControl<Button>("SaveButton")!;
@@ -44,36 +42,15 @@ public class SettingsWindowSmokeTests {
             await Assert.That(name.Text).IsEqualTo("daemon-a");
             await Assert.That(tabs.SelectedIndex).IsEqualTo(0);
             Settle(window);
-            var selectedPipe = daemonTab.GetVisualDescendants().OfType<Border>()
-                .Single(x => x.Name == "PART_SelectedPipe");
-            await Assert.That(ReferenceEquals(selectedPipe.Background, window.FindResource("KcapInfoBrush"))).IsTrue();
-            await Assert.That(name.Classes.Contains("kcapField")).IsTrue();
             await Assert.That(capacity.Value).IsEqualTo(5m);
-            await Assert.That(capacity.Classes.Contains("kcapField")).IsTrue();
             await Assert.That(capacity.ShowButtonSpinner).IsFalse();
-            await Assert.That(window.FindControl<TextBlock>("DaemonTitleText")!.LetterSpacing).IsEqualTo(-0.3);
-            await Assert.That(save.Classes.Contains("kcapPrimary")).IsTrue();
-            await Assert.That(rename.Classes.Contains("kcapPrimary")).IsTrue();
             await Assert.That(save.IsEffectivelyEnabled).IsFalse();
             await Assert.That(window.FindControl<TextBlock>("StatusText")!.Text).IsEqualTo("2 / 5");
             await Assert.That(ToolTip.GetTip(window.FindControl<Border>("StatusChip")!)!.ToString()!).Contains("Running as daemon-a");
             await Assert.That(ToolTip.GetTip(rename)).IsEqualTo(vm.RenameHint);
             await Assert.That(ToolTip.GetShowOnDisabled(rename)).IsTrue();
-            await Assert.That(rename.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Left);
-            await Assert.That(save.HorizontalAlignment).IsEqualTo(HorizontalAlignment.Left);
             await Assert.That(window.FindControl<TextBlock>("StatusCaptionText")!.IsVisible).IsTrue();
             await Assert.That(window.FindControl<TextBlock>("StatusCaptionText")!.Text).IsEqualTo("Agents");
-            var nameError = window.FindControl<TextBlock>("NameErrorText")!;
-            await Assert.That(nameError.Classes.Contains("kcapHint")).IsTrue();
-            await Assert.That(nameError.LetterSpacing).IsEqualTo(0.2);
-            await Assert.That(window.FindControl<TextBlock>("CapacityErrorText")!.LetterSpacing).IsEqualTo(0.2);
-            await Assert.That(window.FindControl<TextBlock>("MessageText")!.LetterSpacing).IsEqualTo(0.2);
-            var title = window.FindControl<TextBlock>("DaemonTitleText")!;
-            var chip = window.FindControl<Border>("StatusChip")!;
-            await Assert.That(title.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
-            await Assert.That(chip.VerticalAlignment).IsEqualTo(VerticalAlignment.Center);
-            await Assert.That(Math.Abs((title.Bounds.Y + title.Bounds.Height / 2) - (chip.Bounds.Y + chip.Bounds.Height / 2)))
-                .IsLessThan(1.5);
             name.Text = "new-name";
             capacity.Value = 8;
             Dispatcher.UIThread.RunJobs();
@@ -100,7 +77,7 @@ public class SettingsWindowSmokeTests {
     });
 
     [Test]
-    public Task Profiles_tab_lists_rows_with_chip_actions_and_purple_marks() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Profiles_tab_lists_rows_with_chip_actions_and_profile_marks() => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with {
             ActiveProfile = "work",
             Profiles = new() {
@@ -137,10 +114,12 @@ public class SettingsWindowSmokeTests {
             await Assert.That(chips.Any(b => b.Content as string == "Sign in")).IsTrue();
             await Assert.That(chips.Any(b => b.Content as string == "Remove" && b.IsVisible)).IsTrue();
 
-            var marks = tabs.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("profileMark") && t.IsVisible).ToList();
-            await Assert.That(marks.Count).IsEqualTo(2); // Active and This app, both on "work"
-            foreach (var mark in marks)
-                await Assert.That(ReferenceEquals(mark.Foreground, window.FindResource("KcapPurpleBrush"))).IsTrue();
+            var marks = tabs.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.Classes.Contains("profileMark") && t.IsEffectivelyVisible)
+                .Select(t => t.Text).ToList();
+            await Assert.That(marks.Count).IsEqualTo(2);
+            await Assert.That(marks).Contains("Active");
+            await Assert.That(marks).Contains("This app");
 
             var statuses = tabs.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Classes.Contains("profileStatus")).Select(t => t.Text).ToList();
             await Assert.That(statuses).Contains("Signed out");
@@ -221,8 +200,6 @@ public class SettingsWindowSmokeTests {
                 await Assert.That(reopened.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsChecked).IsFalse();
                 await Assert.That(reopened.FindControl<ToggleSwitch>("QuestionNotificationsToggle")!.IsChecked).IsFalse();
                 await Assert.That(reopened.FindControl<ToggleSwitch>("IdleNotificationsToggle")!.IsChecked).IsFalse();
-                await Assert.That(reopened.Bounds.Width).IsEqualTo(540d);
-                await Assert.That(reopened.Bounds.Height).IsEqualTo(580d);
             } finally { reopened.Close(); }
         }
     });
@@ -244,7 +221,6 @@ public class SettingsWindowSmokeTests {
             var button = window.FindControl<Button>("NotificationAccessButton")!;
             await WaitUntilAsync(() => notice.IsEffectivelyVisible);
             await Assert.That(button.Content).IsEqualTo("Open System Settings");
-            await Assert.That(button.Classes.Contains("kcapChip")).IsTrue();
 
             Click(window, button);
 

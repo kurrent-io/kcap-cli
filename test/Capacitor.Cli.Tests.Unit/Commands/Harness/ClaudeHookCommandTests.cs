@@ -553,14 +553,14 @@ public class ClaudeHookCommandTests {
         // already carries.
         using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
-        fx.MemoryIndexDelay = TimeSpan.FromSeconds(30); // never resolves inside the session-start budget
+        fx.MemoryIndexDelay = TimeSpan.FromSeconds(10); // twice the asserted ceiling; teardown waits out this server delay
         fx.RespondJson = """{"top_clusters":[{"text":"seal secrets","category":"safety"}]}""";
 
         // A fresh budget, exactly like this file's other hung-server tests
         // (e.g. subagent_stop_against_hung_server_is_spooled_within_budget) — the full ~3.5s of
         // session-start's usable budget (5s ceiling minus the 1.5s safety margin) is comfortably
         // enough for watcher-start + repo enrichment + the fast, undelayed POST, but far short of
-        // the 30s memory-index delay above.
+        // the 10s memory-index delay above.
         var sid = Guid.NewGuid().ToString("N");
         var sw  = System.Diagnostics.Stopwatch.StartNew();
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -569,7 +569,7 @@ public class ClaudeHookCommandTests {
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5)); // did not wait out the 30s delay
+        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5)); // did not wait out the 10s delay
         await Assert.That(stdout).Contains("## Known patterns"); // lessons fragment still injected
         await Assert.That(stdout).DoesNotContain("Team memory"); // memory fragment never joined in time
     }

@@ -3,6 +3,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -32,7 +33,7 @@ public class CapacitorHttpContainerTests : IDisposable {
 
     public void Dispose() => _server.Stop();
 
-    ServiceProvider Container(string? serverUrl = null) {
+    ServiceProvider Container(string? serverUrl = null, TimeProvider? time = null) {
         var target   = serverUrl ?? Url;
         var services = new ServiceCollection();
 
@@ -43,6 +44,7 @@ public class CapacitorHttpContainerTests : IDisposable {
         services.AddSingleton(new CapacitorServer(target, Config.Root, profiles));
         // None so the credential source picks the token store — a machine credential wins over it,
         // and would mint against an endpoint no test here stubs.
+        if (time is not null) services.AddSingleton(time);
         services.AddCapacitorHttp(ProfileOverrides.None, MachineAuth.None);
 
         return services.BuildServiceProvider();
@@ -199,18 +201,23 @@ public class CapacitorHttpContainerTests : IDisposable {
 
     /// <summary>
     /// A server that never answered is the same one exception with no status, so a caller needs no
-    /// second catch. Slow by construction: the whole 30s retry budget is spent before the transport
-    /// failure is final.
+    /// second catch. Drive the retry budget with fake time; the container and transport stay real.
     /// </summary>
     [Test]
     public async Task An_unreachable_server_throws_with_no_status_at_all() {
         const string dead = "http://127.0.0.1:1";
 
-        using var sp  = Container(dead);
+        var time = new FakeTimeProvider();
+        using var sp  = Container(dead, time);
         var       api = sp.GetRequiredService<ISessionsApi>();
 
-        var ex = await Assert.That(async () => await api.DeleteSessionAsync("sess-6"))
-            .Throws<CapacitorApiException>();
+        var request = api.DeleteSessionAsync("sess-6");
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!request.IsCompleted) {
+            await Task.Delay(10, guard.Token);
+            time.Advance(TimeSpan.FromSeconds(1));
+        }
+        var ex = await Assert.That(async () => await request).Throws<CapacitorApiException>();
 
         await Assert.That(ex!.Status).IsNull();
         await Assert.That(ex.InnerException).IsTypeOf<HttpRequestException>();
