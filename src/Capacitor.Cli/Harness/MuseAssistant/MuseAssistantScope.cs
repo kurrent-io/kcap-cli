@@ -126,7 +126,7 @@ public sealed class MuseAssistantScope(
 
                 if (await runner.ExecuteAsync(store, MuseAssistantPlanner.Closure(state), state.ChatId, ct) is { } refused) {
                     failed = true;
-                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {refused}; recording stopped here, and `kcap muse-assistant sweep` tells the server chat={state.ChatId}");
+                    Console.Error.WriteLine($"kcap muse-assistant scope reset: {refused}; recording stopped here, and `kcap muse-assistant sweep` tells the server about \"{state.ChatId}\"");
                 }
             }
 

@@ -233,7 +233,7 @@ public class MuseAssistantScopeTests {
         var poster = await Record(async scope => await scope.AddAsync("chat-main", After(0), default));
         await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
         _time.SetUtcNow(DateTimeOffset.FromUnixTimeMilliseconds(T0 + 10 * Hour));
-        using var stdout = ConsoleOutput.StartCapture();
+        using var stdout = ConsoleOutput.StartCapture("\n");
 
         var sweeping = new RecordingPoster();
         await Assert.That(await (await ScopeAsync(sweeping)).SweepAsync(default)).IsEqualTo(0);
@@ -340,7 +340,7 @@ public class MuseAssistantScopeTests {
         var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); await scope.AddAsync("chat-c", History, default); });
         await (await ScopeAsync(poster)).RemoveAsync("chat-b", default);
         var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
-        using var output = ConsoleOutput.StartFullCapture();
+        using var output = ConsoleOutput.StartFullCapture("\n");
 
         // The system clock would let a waiting sweep run for the full lock wait; the test bounds it far below.
         var sweeping = await ScopeAsync(poster, time: TimeProvider.System);
@@ -368,6 +368,24 @@ public class MuseAssistantScopeTests {
 
         await Assert.That(stderr.GetCapturedError()).Contains("chat=chat-a");
         await Assert.That(stderr.GetCapturedError()).DoesNotContain("chat=chat-b");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Reset_marks_a_chat_with_chat_equals_only_when_it_may_still_be_recording() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); });
+        await (await IngestAsync(poster)).RunAsync(new WalkBuilder(Walks) { ChatId = "chat-a", FetchedAtMs = T0 + Minute }.AddPage(null, null, false, User(1, T0)).Write("a"), default);
+        var flaky = new RecordingPoster { Refuse = (a, _) => a is MuseAssistantEndSession ? "hooks/session-end/muse-assistant answered 503" : null };
+        var dir   = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        using var stderr = ConsoleOutput.StartErrorCapture("\n");
+
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b")))
+            await Assert.That(await TimedOut((await ScopeAsync(flaky)).ResetAsync(default))).IsEqualTo(4);
+
+        await Assert.That(State("chat-a").Grant.Revoked).IsTrue();
+        await Assert.That(stderr.GetCapturedError()).Contains("chat=chat-b");
+        await Assert.That(stderr.GetCapturedError()).DoesNotContain("chat=chat-a");
+        await Assert.That(stderr.GetCapturedError()).Contains("\"chat-a\"");
     }
 
     [Test]
@@ -503,7 +521,7 @@ public class MuseAssistantScopeTests {
         var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", After(3), default); });
         await (await IngestAsync(poster)).RunAsync(new WalkBuilder(Walks) { ChatId = "chat-b", FetchedAtMs = T0 + Minute }.AddPage(null, null, false, User(4, T0)).Write("b"), default);
         await (await ScopeAsync(new RecordingPoster { Refuse = (_, _) => "hooks/session-end/muse-assistant answered 503" })).RemoveAsync("chat-b", default);
-        using var stdout = ConsoleOutput.StartCapture();
+        using var stdout = ConsoleOutput.StartCapture("\n");
 
         var showing = new RecordingPoster();
         await Assert.That(await (await ScopeAsync(showing)).ShowAsync(default)).IsEqualTo(0);
