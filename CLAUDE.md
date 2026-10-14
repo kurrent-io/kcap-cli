@@ -96,8 +96,10 @@ running notes file that every PR edits.
 - **Desktop-app green / orange / yellow are status only.** `KcapSuccess*` is shipped, settled,
   passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
   key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip
-  in warning orange reads as attention. Location uses purple (in-flight, you-are-here); selection
-  uses info blue; labels and keys use text/muted/surface tokens.
+  in warning orange reads as attention. `KcapPurple*` is in-flight execution (a running session or
+  an in-progress task and its count); selection and open items (the selected rail session, selected
+  master-list row, or open document in `PLAN`) use `KcapInfo*` / `KcapSelectionBrush`; labels and
+  keys use text/muted/surface tokens.
 - **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
   in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
   `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
@@ -243,12 +245,26 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 
 - Status tokens: `KcapSuccess*` (green) and `KcapWarning*` (orange/yellow) only on badges, pills, and
   glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
-- Location / in-flight: `KcapPurple*`. Selection / open session: `KcapInfo*`. Everything else:
-  `KcapTextBrush`, `KcapMutedBrush`, surface brushes.
+- In-flight vs. selection: `KcapPurple*` is active execution (running session indicator, `InProgress`
+  plan task dot and count); `KcapInfo*` / `KcapSelectionBrush` is selection and open state (selected
+  rail session, selected list row, open document row in `PLAN`). Everything else uses `KcapTextBrush`,
+  `KcapMutedBrush`, `KcapFaintBrush`, and surface brushes.
 - Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
   `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
   Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
   Kcap class restyles it.
+- Hierarchy and chrome: chat tool rows and inline `ToolCard`s lead with a human verb in
+  `KcapTextBrush` and trailing target/path/detail in `KcapMutedBrush` (only rows with their own prose
+  description or question text omit the verb label). Inline cards inside `Border.toolGroup` sit flush
+  without a nested card border or fill. Do not repeat a document's kind pill or filename across the
+  sidebar, master list, and reader header when the surrounding section or markdown heading already
+  names it.
+- Avalonia layout and animation: match class selectors to every control type that carries the class
+  (`SelectableTextBlock.toolLine, TextBlock.toolLine`); set `UseLayoutRounding="False"` on concentric
+  geometric indicators of mixed odd/even sizes (e.g. a `5×5` dot inside a `12×12` ring); use
+  `MaxWidth`/`MaxHeight` rather than fixed `Width`/`Height` on `Stretch="Uniform"` `Path`s so
+  non-square icons center vertically; and gate continuous animations (`PulseClock.IsActive`) on live
+  session activity (`IsActive`), never on static task state alone.
 - Reactive and UI-thread discipline: filter `SourceCache.Connect()` streams *before* `.ObserveOn(RxSchedulers.MainThreadScheduler)` so irrelevant cache revisions do not schedule UI-thread work across every open workspace; use `SingleFlightReader<TState, TResult>` for session-keyed single-flight server reads rather than hand-rolling another `ReadLease` state machine; cache template parts (`ScrollViewer`, `TextPresenter`) on `TemplateApplied` instead of walking `GetVisualDescendants()` on keystrokes or layout ticks; and do not run uncached git/disk/hash I/O inside recompute loops or on the UI thread.
 
 ## Dos and donts
