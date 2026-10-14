@@ -18,9 +18,49 @@ public sealed class AssistantTextItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
-/// The model's reasoning, shown as plain text in the assistant column.
-public sealed class AssistantThinkingItem(string text) : ChatItemViewModel {
-    public string Text { get; } = text;
+/// The model's reasoning, rendered as collapsible muted Markdown in the assistant column.
+public sealed class AssistantThinkingItem : ChatItemViewModel {
+    public const string ThinkingLabel = "Thinking";
+
+    readonly string? _peek;
+    bool _isExpanded = true;
+
+    public AssistantThinkingItem(string text) {
+        Text = text;
+        _peek = PeekFirstLine(text);
+        ToggleCommand = ReactiveCommand.Create(Toggle);
+    }
+
+    public string Text { get; }
+
+    public bool IsExpanded {
+        get => _isExpanded;
+        private set {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HeaderLabel));
+        }
+    }
+
+    public string HeaderLabel =>
+        _isExpanded || string.IsNullOrEmpty(_peek) ? ThinkingLabel : $"{ThinkingLabel} · {_peek}";
+
+    public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
+
+    public void Toggle() => IsExpanded = !IsExpanded;
+
+    static string? PeekFirstLine(string text) {
+        foreach (var raw in text.AsSpan().EnumerateLines()) {
+            var line = raw.Trim().TrimStart("#>-* ").Trim();
+            if (line.IsEmpty) continue;
+            var cleaned = line.ToString()
+                .Replace("`", "", StringComparison.Ordinal)
+                .Replace("**", "", StringComparison.Ordinal);
+            return TextElision.End(cleaned, 56);
+        }
+        return null;
+    }
 }
 
 /// System-attributed text — a finished background task, a reconnect note, another agent's message

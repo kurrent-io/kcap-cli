@@ -39,6 +39,24 @@
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
     </Style>
+    <Style Selector="views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-paragraph,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-list-marker">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="LineHeight" Value="20" />
+    </Style>
+    <Style Selector="views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h1,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h2,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h3,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h4,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h5,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h6">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="views|MarkdownView.thinking mv|MarkdownViewer Run.markdown-code-inline">
+        <Setter Property="FontSize" Value="12.5" />
+    </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-code-block">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
