@@ -101,15 +101,31 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
         }
     }
 
+    const int ReplaceMaxAttempts   = 10;
+    const int ReplaceBackoffBaseMs = 20;
+
     static void WriteAtomic(string path, string json) {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Environment.ProcessId}.tmp";
 
-        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None)) {
-            stream.Write(new UTF8Encoding(false).GetBytes(json));
-            stream.Flush(true);
-        }
+        try {
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None)) {
+                stream.Write(new UTF8Encoding(false).GetBytes(json));
+                stream.Flush(true);
+            }
 
-        File.Move(temp, path, overwrite: true);
+            // Some reads take no lock (the ingest's scope check, a busy remove's state check), and on
+            // Windows a reader holding the target open fails the replace until it closes.
+            for (var attempt = 1; ; attempt++) {
+                try {
+                    File.Move(temp, path, overwrite: true);
+                    return;
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException && attempt < ReplaceMaxAttempts) {
+                    Thread.Sleep(ReplaceBackoffBaseMs * attempt + Random.Shared.Next(ReplaceBackoffBaseMs));
+                }
+            }
+        } finally {
+            try { File.Delete(temp); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
     }
 }

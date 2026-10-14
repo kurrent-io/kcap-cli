@@ -31,6 +31,37 @@ public class MuseAssistantStateStoreTests {
     }
 
     [Test]
+    public async Task A_write_that_cannot_replace_its_target_fails_without_leaving_a_temp_file() {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        dir.CreateDir(StateFileName("chat-main"));
+
+        Exception? thrown = null;
+        try { store.SaveState(State(Acme)); } catch (Exception e) { thrown = e; }
+
+        await Assert.That(thrown is IOException or UnauthorizedAccessException).IsTrue();
+        await Assert.That(Directory.EnumerateFiles(dir, "*.tmp")).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_write_waits_out_a_reader_holding_the_target_open() {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        store.SaveState(State(Acme));
+        var updated = State(Acme) with { Watermark = 99 };
+
+        Task saving;
+        using (new FileStream(MuseAssistantPaths.ChatState(dir, "chat-main"), FileMode.Open, FileAccess.Read, FileShare.Read)) {
+            saving = Task.Run(() => store.SaveState(updated));
+            await Task.Delay(50);
+        }
+
+        await saving.WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(store.LoadState("chat-main").State).IsEqualTo(updated);
+        await Assert.That(Directory.EnumerateFiles(dir, "*.tmp")).IsEmpty();
+    }
+
+    [Test]
     public async Task A_state_file_copied_from_another_profile_is_refused() {
         var theirs = new MuseAssistantStateStore(Tmp.PathTo("theirs"), Other);
         theirs.SaveState(State(Other));
