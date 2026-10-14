@@ -364,6 +364,10 @@ public class ChatTabViewSmokeTests {
                 host.Window.MouseWheel(center, new Vector(0, 1));
                 host.Settle();
             }
+            for (var i = 0; i < 16; i++) {
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                host.Settle();
+            }
             var row = items.ItemsPanelRoot!.FindAncestorOfType<IScrollAnchorProvider>()!.CurrentAnchor
                 ?? throw new InvalidOperationException("The scrolled chat has no anchor.");
             var item = row.DataContext!;
@@ -372,12 +376,45 @@ public class ChatTabViewSmokeTests {
             host.Window.Width = 360;
             host.Settle();
             await Assert.That(heights.Any(entry => items.ContainerFromItem(entry.Key) is { } container && Math.Abs(container.Bounds.Height - entry.Value) > 20)).IsTrue();
+            var ordered = items.Items.Cast<object>().Select(items.ContainerFromItem).OfType<Control>().ToArray();
+            for (var i = 1; i < ordered.Length; i++)
+                await Assert.That(Math.Abs(ordered[i].Bounds.Top - ordered[i - 1].Bounds.Bottom)).IsLessThan(0.5);
             await Assert.That(items.ContainerFromItem(item)).IsSameReferenceAs(row);
             await Assert.That(Math.Abs(row.TranslatePoint(default, host.Scroll)!.Value.Y - beforeY)).IsLessThan(2);
             await Assert.That(host.AtBottom()).IsFalse();
             var offset = host.Scroll.Offset.Y;
             await host.AppendAndTickAsync(path, 5);
             await Assert.That(Math.Abs(host.Scroll.Offset.Y - offset)).IsLessThan(2);
+        } finally { await host.CloseAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Wheel_notches_interpolate_across_animation_frames() => RunOnUiAsync(async () => {
+        var host = new Host();
+        try {
+            var path = Tmp.CreateFile("smooth-wheel.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
+            await host.LoadAsync(path);
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var center = PresentAndLocate(host, items);
+            var bottomRow = items.GetRealizedContainers().MaxBy(c => c.Bounds.Bottom)!;
+            var startY = bottomRow.TranslatePoint(default, host.Scroll)!.Value.Y;
+
+            host.Window.MouseWheel(center, new Vector(0, 1));
+            host.Settle();
+            var firstY = bottomRow.TranslatePoint(default, host.Scroll)!.Value.Y;
+            await Assert.That(firstY - startY).IsGreaterThan(5).And.IsLessThan(45);
+
+            var ys = new List<double> { firstY };
+            for (var frame = 0; frame < 30; frame++) {
+                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                host.Settle();
+                ys.Add(bottomRow.TranslatePoint(default, host.Scroll)!.Value.Y);
+            }
+            for (var i = 1; i < ys.Count; i++)
+                await Assert.That(ys[i]).IsGreaterThanOrEqualTo(ys[i - 1] - 0.01);
+            await Assert.That(ys[^1] - startY).IsGreaterThan(49).And.IsLessThan(51);
+            await Assert.That(ys.Distinct().Count()).IsGreaterThanOrEqualTo(4);
         } finally { await host.CloseAsync(); }
     });
 

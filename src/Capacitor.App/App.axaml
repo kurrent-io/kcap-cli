@@ -34,6 +34,21 @@
             <SolidColorBrush x:Key="KcapInfoBrush" Color="#7BA7F7" />
             <SolidColorBrush x:Key="KcapInfoDimBrush" Color="#1B2740" />
             <SolidColorBrush x:Key="KcapSelectionBrush" Color="#1E2E52" />
+            <Color x:Key="ScrollBarThumbBackgroundColor">#3A66B8</Color>
+            <Color x:Key="ScrollBarPanningThumbBackgroundColor">#3A66B8</Color>
+            <SolidColorBrush x:Key="ScrollBarPanningThumbBackground" Color="#3A66B8" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPointerOver" Color="#5989E3" />
+            <SolidColorBrush x:Key="ScrollBarThumbFillPressed" Color="#7BA7F7" />
+            <SolidColorBrush x:Key="ScrollBarTrackFill" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="#1B2740" />
+            <SolidColorBrush x:Key="ScrollBarTrackStroke" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarTrackStrokePointerOver" Color="#1E2E52" />
+            <SolidColorBrush x:Key="ScrollBarBackground" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarBackgroundPointerOver" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarButtonBackground" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarButtonBackgroundPointerOver" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollBarButtonBackgroundPressed" Color="#00000000" />
+            <SolidColorBrush x:Key="ScrollViewerScrollBarsSeparatorBackground" Color="#00000000" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingResources.axaml" />
@@ -595,6 +610,107 @@
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        </Style>
+        <Style Selector="ScrollBar">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="ContextFlyout" Value="{x:Null}" />
+        </Style>
+        <Style Selector="ScrollBar:vertical">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="MinWidth" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal">
+            <Setter Property="Height" Value="12" />
+            <Setter Property="MinHeight" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar /template/ Border#VerticalRoot,
+                         ScrollBar /template/ Border#HorizontalRoot,
+                         ScrollBar:pointerover /template/ Border#VerticalRoot,
+                         ScrollBar:pointerover /template/ Border#HorizontalRoot,
+                         ScrollBar:expanded /template/ Border#VerticalRoot,
+                         ScrollBar:expanded /template/ Border#HorizontalRoot">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="ScrollBar /template/ Rectangle#TrackRect">
+            <Setter Property="Fill" Value="Transparent" />
+            <Setter Property="Stroke" Value="Transparent" />
+            <Setter Property="StrokeThickness" Value="0" />
+            <Setter Property="RadiusX" Value="6" />
+            <Setter Property="RadiusY" Value="6" />
+            <Setter Property="Margin" Value="1,2" />
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="ScrollBar:expanded /template/ Rectangle#TrackRect">
+            <Setter Property="Fill" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="Stroke" Value="{StaticResource KcapSelectionBrush}" />
+            <Setter Property="StrokeThickness" Value="1" />
+            <Setter Property="Opacity" Value="0.65" />
+        </Style>
+        <Style Selector="ScrollBar /template/ RepeatButton#PART_LineUpButton,
+                         ScrollBar /template/ RepeatButton#PART_LineDownButton">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="ScrollBar /template/ RepeatButton#PART_PageUpButton,
+                         ScrollBar /template/ RepeatButton#PART_PageDownButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+        <Style Selector="ScrollBar /template/ Thumb,
+                         ScrollBar:vertical /template/ Thumb,
+                         ScrollBar:horizontal /template/ Thumb,
+                         ScrollBar:vertical:expanded /template/ Thumb,
+                         ScrollBar:horizontal:expanded /template/ Thumb">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="RenderTransform" Value="none" />
+            <Setter Property="Template">
+                <ControlTemplate TargetType="Thumb">
+                    <Border Name="ThumbPill"
+                            Background="{StaticResource KcapInfoBrush}"
+                            Opacity="0.45"
+                            CornerRadius="99"
+                            RenderTransformOrigin="50%,50%"
+                            RenderTransform="scale(1, 1)">
+                        <Border.Transitions>
+                            <Transitions>
+                                <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut" />
+                            </Transitions>
+                        </Border.Transitions>
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="MinWidth" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal /template/ Thumb">
+            <Setter Property="Height" Value="12" />
+            <Setter Property="MinHeight" Value="12" />
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb /template/ Border#ThumbPill">
+            <Setter Property="Margin" Value="3,2" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal /template/ Thumb /template/ Border#ThumbPill">
+            <Setter Property="Margin" Value="2,3" />
+        </Style>
+        <Style Selector="ScrollBar:expanded /template/ Thumb /template/ Border#ThumbPill,
+                         ScrollBar /template/ Thumb:pointerover /template/ Border#ThumbPill">
+            <Setter Property="Opacity" Value="0.75" />
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb:pressed /template/ Border#ThumbPill">
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="RenderTransform" Value="scale(0.72, 0.97)" />
+        </Style>
+        <Style Selector="ScrollBar:horizontal /template/ Thumb:pressed /template/ Border#ThumbPill">
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="RenderTransform" Value="scale(0.97, 0.72)" />
         </Style>
         <StyleInclude Source="avares://Kurrent Capacitor/Views/SectionStyles.axaml" />
     </Application.Styles>

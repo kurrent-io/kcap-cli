@@ -16,6 +16,7 @@ namespace Capacitor.App.Views;
 public sealed class ChatVirtualizingPanel : VirtualizingPanel {
     sealed record Row(object Item, Control Container, object? RecycleKey, bool OwnContainer);
     const double EstimatedHeight = 80;
+    const double KeepAliveOverscan = 240;
     readonly Dictionary<object, double> _measured = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<int, Row> _realized = [];
     readonly Dictionary<object, Stack<Control>> _pool = [];
@@ -51,6 +52,7 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
 
     protected override Size MeasureOverride(Size availableSize) {
         var scroll = this.FindAncestorOfType<ScrollViewer>();
+        var view = this.FindAncestorOfType<ChatTabView>();
         MeasuredAtEstimatedEnd = scroll is not null && scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - 2;
         if (Items.Count == 0) { _first = _last = -1; return default; }
         if (_starts.Length != Items.Count + 1) RebuildStarts();
@@ -65,16 +67,20 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
         if (availableSize.Width != _lastWidth && scrollAnchor is not null && scroll is not null)
             PreserveResizeAnchor(scroll, scrollAnchor);
         _lastWidth = availableSize.Width;
+        var overscan = view?.IsSmoothScrolling == true ? KeepAliveOverscan : 0;
         // Keep the presenter's anchor until arrange has compensated for any newly measured rows.
         foreach (var entry in _realized.ToArray())
-            if ((entry.Key < first || entry.Key > anchor && _starts[entry.Key] >= end) && !KeepAlive(entry.Value, focused, scrollAnchor))
+            if ((entry.Key < first || entry.Key > anchor && _starts[entry.Key] >= end) && !KeepAlive(entry.Value, focused, scrollAnchor, overscan))
                 Unrealize(entry.Key);
         var last = first;
         var width = 0.0;
         var adjustment = 0.0;
-        for (var i = first; i < Items.Count && (i <= anchor || _starts[i] + adjustment < end); i++) {
-            var oldHeight = _starts[i + 1] - _starts[i];
-            _starts[i] += adjustment;
+        var previousStart = _starts[first];
+        for (var i = first; i < Items.Count && (i <= anchor || previousStart + adjustment < end); i++) {
+            var nextStart = _starts[i + 1];
+            var oldHeight = nextStart - previousStart;
+            _starts[i] = previousStart + adjustment;
+            previousStart = nextStart;
             var row = Realize(i);
             row.Container.Measure(new Size(availableSize.Width, double.PositiveInfinity));
             var height = row.Container.DesiredSize.Height;
@@ -89,7 +95,7 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
         _last = last;
         foreach (var entry in _realized.ToArray()) {
             if (entry.Key >= first && entry.Key <= last) continue;
-            if (!KeepAlive(entry.Value, focused, scrollAnchor)) { Unrealize(entry.Key); continue; }
+            if (!KeepAlive(entry.Value, focused, scrollAnchor, overscan)) { Unrealize(entry.Key); continue; }
             entry.Value.Container.Measure(new Size(availableSize.Width, double.PositiveInfinity));
             var height = entry.Value.Container.DesiredSize.Height;
             var delta = height - (_starts[entry.Key + 1] - _starts[entry.Key]);
@@ -115,8 +121,8 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
         }, DispatcherPriority.Render);
     }
 
-    bool KeepAlive(Row row, Visual? focused, Control? scrollAnchor) => row.OwnContainer
-        || row.Container.Bounds.Intersects(_viewport)
+    bool KeepAlive(Row row, Visual? focused, Control? scrollAnchor, double overscan) => row.OwnContainer
+        || row.Container.Bounds.Intersects(overscan > 0 ? _viewport.Inflate(new Thickness(0, overscan)) : _viewport)
         || ReferenceEquals(row.Container, scrollAnchor)
         || focused is not null && (ReferenceEquals(focused, row.Container) || row.Container.IsVisualAncestorOf(focused));
 
