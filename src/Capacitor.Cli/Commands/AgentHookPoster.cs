@@ -327,11 +327,14 @@ internal sealed class AgentHookPoster(
     // that reaches the abandon path passes its own onAuthAbandoned instead.
     void HandOffRefresh() => RefreshTokenHandoff.Spawn(config, profiles.Name, SystemProcessStarter.Instance);
 
+    /// <param name="budget">When given, the POST's retries end at its <see cref="HookBudget.Remaining"/>
+    /// rather than the 30 s default, so a hook the host kills sooner spools instead of dying mid-POST.
+    /// Read after client creation, so the POST gets only what auth left.</param>
     internal async Task<HookPostOutcome> PostOrSpoolAsync(
             Func<Task<AuthAttempt>> clientFactory,
             string endpoint, string body, string agentTag,
             HookSpool spool, string sessionId, string route,
-            TimeSpan? authCap = null, Action? onAuthAbandoned = null) {
+            TimeSpan? authCap = null, Action? onAuthAbandoned = null, HookBudget? budget = null) {
         var created = await BoundedAuth.CreateClientWithinAsync(
             clientFactory, authCap ?? AuthCap, time, onAuthAbandoned ?? HandOffRefresh);
 
@@ -350,7 +353,7 @@ internal sealed class AgentHookPoster(
             using var content = new StringContent(body, Encoding.UTF8, "application/json");
 
             try {
-                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content, time);
+                using var resp = await client.PostWithRetryAsync($"{Url}/hooks/{endpoint}", content, time, timeout: budget?.Remaining);
 
                 if (resp.IsSuccessStatusCode) {
                     return HookPostOutcome.Posted;

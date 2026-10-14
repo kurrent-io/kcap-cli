@@ -322,6 +322,26 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(Encoding.UTF8.GetByteCount(written)).IsGreaterThan(MuseHookCommand.StdoutCapBytes - 1024);
     }
 
+    /// <summary>Muse kills the hook at 5 s, well inside the POST's default 30 s of retries. The memory
+    /// route answers, so a missing fragment could only mean the stalled POST kept the hook from writing.</summary>
+    [Test, NotInParallel("AuthProviderDiscoveryCache")]
+    public async Task SessionStart_against_a_stalled_server_spools_the_start_and_still_writes_the_fragment() {
+        _server.Given(Request.Create().WithPath("/hooks/*").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(30)));
+        StubMemoryIndex(3);
+        StageParentLog();
+        var stdout  = new StringWriter();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+
+        var exit = await Command().Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
+
+        elapsed.Stop();
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
+        await Assert.That(new HookSpool(Config.Root, TimeProvider.System).HasBacklog(ParentDashless)).IsTrue();
+        await Assert.That(stdout.ToString().StartsWith("<!-- kcap-memory-index:v1 -->\n", StringComparison.Ordinal)).IsTrue();
+    }
+
     [Test]
     public async Task SubagentStop_for_a_worker_posts_subagent_stop() {
         StubHooks();

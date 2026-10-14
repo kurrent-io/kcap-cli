@@ -280,9 +280,11 @@ sealed class MuseHookCommand(
         if (!HookHttp.IsPostable(Url))
             return await _poster.PostOrSpoolAsync(route, body, "muse-hook", spool, sessionId, route);
 
-        // Only client creation takes a cap; the POST itself runs on the poster's own retry timeout.
+        // Muse kills the hook at its ceiling, so the POST spools when the budget runs out rather than
+        // dying mid-retry. A redelivered payload is harmless: the server keys these events by content.
         var authCap = budget.Remaining < AgentHookPoster.AuthCap ? budget.Remaining : AgentHookPoster.AuthCap;
-        return await _poster.PostOrSpoolAsync(() => http.ForHookAsync(), route, body, "muse-hook", spool, sessionId, route, authCap);
+        return await _poster.PostOrSpoolAsync(() => http.ForHookAsync(), route, body, "muse-hook", spool, sessionId, route,
+            authCap, budget: budget);
     }
 
     static async Task WriteFragment(TextWriter stdout, string? fragment, string? nudge) {
