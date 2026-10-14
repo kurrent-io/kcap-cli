@@ -20,10 +20,12 @@ namespace Capacitor.App.ViewModels;
 /// {Attached -> Detached/Exited/Failed/SessionEnded}. Two independent linearizations guard it:
 ///
 /// * Resolve gate (_resolveState, CAS 0 pending/1 dto-won/2 timeout-won/3 disposed): the FIRST of
-///   {a DTO observed, the 10s TimeProvider timeout, TeardownAsync} wins; the loser no-ops. A
-///   timeout-win disposes the Agents subscription outright (a late DTO then has nothing to reach
-///   -- RetryResolveCommand is the only way back in). A dto-win leaves the subscription alive so a
-///   LATER removal can still render SessionEnded.
+///   {a DTO observed, the 10s TimeProvider timeout, TeardownAsync} claims the gate from pending.
+///   A timeout-win renders NotFound but keeps the Agents subscription: Claude (and similar) can
+///   take well past 10s to produce a transcript the daemon links as a session id, and a late DTO
+///   must still be able to claim timeout-won → dto-won and attach without Retry. Retry remains for
+///   a DTO that is already in the cache with no change notification. A dto-win leaves the
+///   subscription alive so a LATER removal can still render SessionEnded.
 /// * Attempt lifecycle (_attemptGeneration): every attach/reattach bumps it; a completion whose
 ///   captured generation no longer matches the current one is a retired attempt and mutates
 ///   nothing (silent, not an error). _attachLane (SemaphoreSlim(1,1), TRY-entered via Wait(0) --
@@ -353,8 +355,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         DetachCommand = ReactiveCommand.CreateFromTask(RunDetachAsync);
         RetryResolveCommand = ReactiveCommand.CreateFromTask(RetryResolveAsync);
 
-        // Alive for the VM's whole lifetime UNLESS the timeout wins (disposed there) or
-        // TeardownAsync runs -- a dto-win leaves it live so a LATER removal renders SessionEnded.
+        // Alive for the VM's whole lifetime until TeardownAsync -- including after a resolve
+        // timeout, so a late Agents-cache push can still recover from NotFound.
         _agentsSub = daemon.Agents.Connect()
             .Filter(dto => dto.Id == _agentId)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -378,17 +380,30 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     }
 
     void HandleDtoObserved(AgentStatusDto dto) {
-        // First observation wins the resolve gate; later updates only matter when the agent has
-        // already finished (Completed/Failed stay in the cache until teardown removes them).
-        var prior = Interlocked.CompareExchange(ref _resolveState, ResolveDtoWon, ResolvePending);
-        if (prior == ResolvePending) {
-            _resolveTimer?.Dispose();
-            _resolveTimer = null;
-            PendingResolveWorkForTesting = RunResolveWorkAsync(dto);
+        // Claim pending → dto-won, or recover timeout-won → dto-won when a late agent row lands
+        // after NotFound. A concurrent TeardownAsync's disposed state loses neither CAS.
+        for (;;) {
+            var state = Volatile.Read(ref _resolveState);
+            if (state == ResolvePending) {
+                if (Interlocked.CompareExchange(ref _resolveState, ResolveDtoWon, ResolvePending) != ResolvePending)
+                    continue;
+                _resolveTimer?.Dispose();
+                _resolveTimer = null;
+                PendingResolveWorkForTesting = RunResolveWorkAsync(dto);
+                return;
+            }
+            if (state == ResolveTimeoutWon) {
+                if (Interlocked.CompareExchange(ref _resolveState, ResolveDtoWon, ResolveTimeoutWon) != ResolveTimeoutWon)
+                    continue;
+                PendingResolveWorkForTesting = RunResolveWorkAsync(dto);
+                return;
+            }
+            // Later updates only matter once resolved: Completed/Failed stay in the cache until
+            // teardown removes them.
+            if (state == ResolveDtoWon && SessionStatusDots.IsTerminal(dto.Status))
+                HandleAgentEnded();
             return;
         }
-        if (prior == ResolveDtoWon && SessionStatusDots.IsTerminal(dto.Status))
-            HandleAgentEnded();
     }
 
     /// Fault-observing wrapper around ApplyResolvedDtoAsync: this Task is fire-and-forget from
@@ -406,7 +421,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             Console.Error.WriteLine($"kcap: terminal resolve failed: {ex.Message}");
             await Dispatcher.UIThread.InvokeAsync(() => {
                 if (Volatile.Read(ref _resolveState) == ResolveDisposed) return;
-                if (State.Phase != TerminalSessionPhase.Resolving) return;
+                // Resolving (first claim) or NotFound (late recovery after timeout).
+                if (State.Phase is not (TerminalSessionPhase.Resolving or TerminalSessionPhase.NotFound)) return;
                 Publish(TerminalSessionState.Failed($"couldn't open the terminal: {ex.Message}"), null);
             });
         }
@@ -426,8 +442,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     void OnResolveTimeout() {
         if (Interlocked.CompareExchange(ref _resolveState, ResolveTimeoutWon, ResolvePending) != ResolvePending) return;
 
-        _agentsSub?.Dispose();
-        _agentsSub = null;
+        // Keep _agentsSub: a daemon that links the Claude session after this budget still pushes
+        // an Agents-cache update, and HandleDtoObserved must see it to leave NotFound.
 
         // The timer callback fires off-thread in production and synchronously on the CALLING
         // thread under FakeTimeProvider.Advance -- Schedule (not a raw write) is what keeps this
