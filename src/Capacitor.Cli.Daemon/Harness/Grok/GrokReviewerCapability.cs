@@ -2,15 +2,6 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Daemon.Harness.Grok;
 
-internal enum GrokReviewerDecision {
-    Allowed,
-    Disabled,
-    VersionUnresolved,
-    VersionNoMinimum,
-    VersionBelowMinimum,
-    VersionIncomparable
-}
-
 /// <summary>
 /// Whether this daemon may run Grok Build as an unattended review-flow reviewer. Enabled by default,
 /// like the other gated reviewers; the switch is an opt-out.
