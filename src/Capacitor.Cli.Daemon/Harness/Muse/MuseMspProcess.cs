@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// </summary>
 internal sealed partial class MuseMspProcess : IMuseMspProcess {
     /// <summary>Over-cap stderr is dropped, never rotated: the explanation of a failed launch is at the start.</summary>
-    const int DiagnosticsCap = 4096;
+    internal const int DiagnosticsCap = 4096;
 
     readonly Process                 _process;
     readonly ILogger                 _logger;
@@ -114,11 +114,16 @@ internal sealed partial class MuseMspProcess : IMuseMspProcess {
     }
 
     void Capture(string line) {
-        lock (_diagnosticsGate) {
-            if (_diagnostics.Length >= DiagnosticsCap) return;
+        lock (_diagnosticsGate) AppendCapped(_diagnostics, line);
+    }
 
-            _diagnostics.Append(line).Append('\n');
-        }
+    /// <summary>A line that would cross the cap is cut at it.</summary>
+    internal static void AppendCapped(StringBuilder diagnostics, string line) {
+        var room = DiagnosticsCap - diagnostics.Length;
+        if (room <= 0) return;
+
+        if (line.Length < room) diagnostics.Append(line).Append('\n');
+        else diagnostics.Append(line, 0, room);
     }
 
     public async Task WaitForExitAsync(TimeSpan? timeout = null) {
