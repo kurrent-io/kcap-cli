@@ -112,6 +112,47 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
     }
 
+    /// <summary>A hook inherits no <c>KCAP_AGENT_ID</c> from a daemon-hosted Muse, so the marker the daemon
+    /// wrote is the only link to the agent.</summary>
+    [Test]
+    public async Task SessionStart_without_a_hosted_environment_takes_agent_host_id_from_the_marker() {
+        StubHooks();
+        StageParentLog();
+        MuseHostedSessionMarker.Write(Config.Root,
+            new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
+
+        await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-start/muse").Single()).RootElement;
+        await Assert.That(body.GetProperty("agent_host_id").GetString()).IsEqualTo("agent-from-marker");
+    }
+
+    [Test]
+    public async Task SessionStart_without_a_marker_or_hosted_environment_forwards_no_agent_host_id() {
+        StubHooks();
+        StageParentLog();
+
+        await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        var body = JsonDocument.Parse(HookPosts("/hooks/session-start/muse").Single()).RootElement;
+        await Assert.That(body.TryGetProperty("agent_host_id", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task SessionEnd_deletes_the_hosted_session_marker_after_posting() {
+        StubHooks();
+        StageParentLog();
+        MuseHostedSessionMarker.Write(Config.Root,
+            new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
+
+        await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"SessionEnd","reason":"other","session_id":"{{ParentId}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        await Assert.That(HookPosts("/hooks/session-end/muse").Count).IsEqualTo(1);
+        await Assert.That(MuseHostedSessionMarker.TryRead(Config.Root, ParentId)).IsNull();
+    }
+
     /// <summary>Stop only starts a watcher, so this is the start's one chance: it is posted without a
     /// path Muse has not written, and no watcher starts until the log exists.</summary>
     [Test]

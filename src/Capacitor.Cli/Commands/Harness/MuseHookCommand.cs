@@ -147,7 +147,8 @@ sealed class MuseHookCommand(
 
         if (log is not null) forwarded["transcript_path"] = log;
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
-        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if ((hosted.AgentId ?? MuseHostedSessionMarker.TryRead(config, sessionId)?.AgentId) is { } agentHostId)
+            forwarded["agent_host_id"] = agentHostId;
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
@@ -236,6 +237,7 @@ sealed class MuseHookCommand(
         if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
         await PostInOrderAsync("session-end/muse", forwarded.ToJsonString(), sessionId, budget);
+        MuseHostedSessionMarker.Delete(config, sessionId);
     }
 
     /// <summary>No child watcher starts here: the parent watcher's scan tails a child once its log
