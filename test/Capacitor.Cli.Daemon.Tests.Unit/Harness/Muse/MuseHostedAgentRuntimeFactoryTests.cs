@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Harness.Muse;
@@ -42,6 +43,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         ConfigRoot                    = KcapConfig.Root,
         Home                          = Home,
         Version                       = "9.9.9",
+        Profiles                      = Resolutions.At("http://kcap.test", KcapConfig.Root, UrlSource.Environment),
     };
 
     string MarkerDir => MuseHostedSessionMarker.DirectoryFor(Home);
@@ -330,33 +332,67 @@ public class MuseHostedAgentRuntimeFactoryTests {
     /// home's names its root and server in the marker; the rig's root is a separate temp directory.</summary>
     [Test]
     public async Task Marker_carries_a_non_default_config_root_and_the_server() {
-        var rig = NewRig();
-
-        var start = await StartAsync(rig, Ctx());
-        await using var _ = start.Runtime;
-
-        var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
-        var marker = MuseHostedSessionMarker.TryRead(Home, minted)!;
+        var marker = await MarkerOfAsync(NewRig());
 
         await Assert.That(marker.ConfigDir).IsEqualTo(KcapConfig.Root.Directory);
         await Assert.That(marker.ServerUrl).IsEqualTo("http://kcap.test");
+        await Assert.That(marker.Profile).IsNull();
     }
 
-    /// <summary>The twin: a hook already resolves a home-derived root, so the marker names nothing.</summary>
+    /// <summary>A default-root daemon pointed at its server by <c>KCAP_URL</c> talks to a server the root's
+    /// active profile need not name, so the marker carries the server even with no root to name.</summary>
     [Test]
-    public async Task Marker_names_no_connection_for_the_default_config_root() {
+    public async Task Marker_carries_the_server_of_a_default_root_daemon_chosen_by_url() {
         var config = Config();
         config.ConfigRoot = ConfigRoot.UnderHome(Home.Path);
+
+        var marker = await MarkerOfAsync(NewRig(config: config));
+
+        await Assert.That(marker.ConfigDir).IsNull();
+        await Assert.That(marker.ServerUrl).IsEqualTo("http://kcap.test");
+        await Assert.That(marker.Profile).IsNull();
+    }
+
+    /// <summary>A daemon that resolved its server through a profile names the profile, whose credential
+    /// the hook needs as much as its server.</summary>
+    [Test]
+    public async Task Marker_names_the_profile_the_daemon_resolved_through() {
+        var config = Config();
+        config.ConfigRoot = ConfigRoot.UnderHome(Home.Path);
+        config.Profiles   = Resolutions.Of(new Profile { ServerUrl = "http://kcap.test" }, "team-b");
+
+        var marker = await MarkerOfAsync(NewRig(config: config));
+
+        await Assert.That(marker.Profile).IsEqualTo("team-b");
+    }
+
+    /// <summary>A relative <c>KCAP_CONFIG_DIR</c> means nothing to a hook or MCP child running elsewhere, so
+    /// both the marker and the reviewer's servers carry it fully qualified.</summary>
+    [Test]
+    public async Task A_relative_config_root_is_recorded_fully_qualified() {
+        var config = Config();
+        config.ConfigRoot = new ConfigRoot("relative-kcap-config");
+        var expected = Path.GetFullPath("relative-kcap-config");
         var rig = NewRig(config: config);
 
+        var start = await StartAsync(rig, Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"]));
+        await using var _ = start.Runtime;
+
+        var session = Params(await rig.Host.WaitForWriteAsync("session/start"));
+        var marker  = MuseHostedSessionMarker.TryRead(Home, (string)session["sessionId"]!)!;
+        await Assert.That(marker.ConfigDir).IsEqualTo(expected);
+        await Assert.That(Path.IsPathFullyQualified(marker.ConfigDir!)).IsTrue();
+
+        foreach (var (_, server) in session["config"]!["mcpServers"]!.AsObject())
+            await Assert.That((string?)server!["env"]![ConfigRoot.ConfigDirEnvVar]).IsEqualTo(expected);
+    }
+
+    async Task<MuseHostedSessionMarker> MarkerOfAsync(Rig rig) {
         var start = await StartAsync(rig, Ctx());
         await using var _ = start.Runtime;
 
         var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
-        var marker = MuseHostedSessionMarker.TryRead(Home, minted)!;
-
-        await Assert.That(marker.ConfigDir).IsNull();
-        await Assert.That(marker.ServerUrl).IsNull();
+        return MuseHostedSessionMarker.TryRead(Home, minted)!;
     }
 
     /// <summary>Muse clears a hook's environment, so the hook finds the marker only under the root derived

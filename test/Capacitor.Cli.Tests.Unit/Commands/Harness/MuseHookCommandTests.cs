@@ -169,6 +169,57 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
     }
 
+    /// <summary>A default-root daemon pointed elsewhere by <c>KCAP_URL</c>: the hook shares its root, but the
+    /// root's active profile names another server, so only the marker's server lands the post on the stub.</summary>
+    [Test]
+    public async Task A_marker_server_redirects_a_default_root_hook_from_the_active_profile() {
+        StubHooks();
+        StageParentLog();
+        HomeRoot("http://127.0.0.1:9");
+        WriteMarker(configDir: null, _server.Url);
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(root.Directory).IsEqualTo(ConfigRoot.UnderHome(Home.Path).Directory);
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
+
+        await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>A daemon that resolved through a profile other than the active one: the hook selects that
+    /// profile, credential and server both, rather than the active profile's.</summary>
+    [Test]
+    public async Task A_marker_profile_selects_that_profile_over_the_active_one() {
+        StubHooks();
+        StageParentLog();
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: _server.Url), "http://127.0.0.1:9", profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Name).IsEqualTo("team-b");
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
+
+        await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
+
+        await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>An environment that chooses a server by either means keeps it; the marker's root still applies.</summary>
+    [Test]
+    public async Task An_environment_profile_outranks_the_marker_server_but_not_its_root() {
+        var daemonRoot = DaemonRoot(_server.Url!);
+        WriteMarker(daemonRoot, _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home,
+            k => k == ProfileOverrides.ProfileVar ? "mine" : null);
+
+        await Assert.That(connection).IsEqualTo(new MuseHookConnection(daemonRoot, null, null));
+    }
+
     /// <summary>A child's hook names its own session; the marker belongs to the parent it runs under.</summary>
     [Test]
     public async Task A_child_hook_finds_the_marker_under_its_parent_session() {
@@ -178,7 +229,7 @@ public class MuseHookCommandTests : IDisposable {
 
         var connection = MuseHookConnection.Resolve(child, Home, ParentEnv);
 
-        await Assert.That(connection).IsEqualTo(new MuseHookConnection(daemonRoot, _server.Url));
+        await Assert.That(connection).IsEqualTo(new MuseHookConnection(daemonRoot, _server.Url, null));
     }
 
     /// <summary>What the environment sets wins: a relayed hook already carries the daemon's own values.</summary>
@@ -192,17 +243,21 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(connection).IsEqualTo(MuseHookConnection.None);
     }
 
+    /// <summary>The absolute root is built from the temp directory: a POSIX literal is not fully qualified
+    /// on Windows.</summary>
     [Test]
-    [Arguments("relative/config", "https://kcap.example", null, "https://kcap.example")]
-    [Arguments("/abs/config", "file:///etc/passwd", "/abs/config", null)]
-    [Arguments("/abs/config", "not a url", "/abs/config", null)]
+    [Arguments(false, "https://kcap.example", true)]
+    [Arguments(true, "file:///etc/passwd", false)]
+    [Arguments(true, "not a url", false)]
     public async Task A_marker_value_that_is_not_an_absolute_root_or_http_url_is_ignored(
-            string configDir, string serverUrl, string? expectedDir, string? expectedUrl) {
+            bool absoluteDir, string serverUrl, bool urlAdopted) {
+        var configDir = absoluteDir ? Tmp.PathTo("abs-config") : Path.Join("relative", "config");
         WriteMarker(configDir, serverUrl);
 
         var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
 
-        await Assert.That(connection).IsEqualTo(new MuseHookConnection(expectedDir, expectedUrl));
+        await Assert.That(connection).IsEqualTo(
+            new MuseHookConnection(absoluteDir ? configDir : null, urlAdopted ? serverUrl : null, null));
     }
 
     [Test]
@@ -546,21 +601,30 @@ public class MuseHookCommandTests : IDisposable {
     }
 
     /// <summary>A config root of its own whose active profile points at <paramref name="serverUrl"/>.</summary>
-    string DaemonRoot(string serverUrl) {
-        Tmp.CreateFile(Path.Join("daemon-config", "config.json"), $$"""
-            {
-              "version": 2,
-              "active_profile": "default",
-              "profiles": { "default": { "server_url": "{{serverUrl}}" } },
-              "profile_bindings": {}
-            }
-            """);
+    string DaemonRoot(string serverUrl, string? teamBUrl = null) {
+        WriteRootConfig(Tmp.PathTo("daemon-config"), serverUrl, teamBUrl);
         return Tmp.PathTo("daemon-config");
     }
 
-    void WriteMarker(string? configDir, string? serverUrl) =>
+    /// <summary>The config the home-derived root holds: what a cleared-environment hook resolves by itself.</summary>
+    void HomeRoot(string serverUrl) => WriteRootConfig(ConfigRoot.UnderHome(Home.Path).Directory, serverUrl, null);
+
+    static void WriteRootConfig(string dir, string activeUrl, string? teamBUrl) {
+        Directory.CreateDirectory(dir);
+        var teamB = teamBUrl is null ? "" : $$""", "team-b": { "server_url": "{{teamBUrl}}" }""";
+        File.WriteAllText(Path.Join(dir, "config.json"), $$"""
+            {
+              "version": 2,
+              "active_profile": "default",
+              "profiles": { "default": { "server_url": "{{activeUrl}}" }{{teamB}} },
+              "profile_bindings": {}
+            }
+            """);
+    }
+
+    void WriteMarker(string? configDir, string? serverUrl, string? profile = null) =>
         MuseHostedSessionMarker.Write(Home, new MuseHostedSessionMarker(
-            ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow, configDir, serverUrl));
+            ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow, configDir, serverUrl, profile));
 
     /// <summary>The process-level resolution a cleared-environment hook gets, as the composition root builds it.</summary>
     static async Task<(ConfigRoot Root, ProfileContext Profiles)> Resolve(MuseHookConnection connection, Func<ConfigRoot> fallback) {

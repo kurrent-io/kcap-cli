@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// unattended review-flow reviewer.
 ///
 /// <para>The session is recorded from Muse's own log by <c>kcap hook --muse</c>, which finds the
-/// hosting agent, and a non-default config root and server, through a marker written here under the
+/// hosting agent, and the daemon's config root and server, through a marker written here under the
 /// session id this factory mints. When the daemon host has no kcap hooks in Muse's settings, the
 /// factory runs the hook itself.</para>
 ///
@@ -173,10 +173,12 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
         var plan = BuildPlan(ref ctx, _config);
 
-        var configDir = NonDefaultConfigDir(_config);
+        // An installed hook resolves its own root and profile, which need not be the daemon's.
         MuseHostedSessionMarker.Write(_config.Home, new(
             plan.MintedSessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, _time.GetUtcNow(),
-            configDir, configDir is not null && !string.IsNullOrEmpty(ctx.ServerUrl) ? ctx.ServerUrl : null));
+            NonDefaultConfigDir(_config),
+            string.IsNullOrEmpty(ctx.ServerUrl) ? null : ctx.ServerUrl,
+            _config.Profiles.Resolution.ProfileName is { Length: > 0 } profile ? profile : null));
 
         var relay        = !_hooksInstalled(_paths.SettingsJson);
         var relayedStart = false;
@@ -335,15 +337,13 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     }
 
     /// <summary>Muse gives an MCP child only <c>HOME</c> and the server's own <c>env</c>, so a kcap child
-    /// derives its root from the home; a daemon whose root is elsewhere has to name it.</summary>
+    /// derives its root from the home; a daemon whose root is elsewhere has to name it, fully qualified,
+    /// because neither that child nor a hook runs in the daemon's working directory.</summary>
     static string? NonDefaultConfigDir(DaemonConfig config) {
-        var root = config.ConfigRoot.Directory;
-        var derived = ConfigRoot.UnderHome(config.Home.Path).Directory;
+        var root    = Path.TrimEndingDirectorySeparator(Path.GetFullPath(config.ConfigRoot.Directory));
+        var derived = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ConfigRoot.UnderHome(config.Home.Path).Directory));
 
-        return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)),
-                             Path.TrimEndingDirectorySeparator(Path.GetFullPath(derived)), StringComparison.Ordinal)
-            ? null
-            : root;
+        return string.Equals(root, derived, StringComparison.Ordinal) ? null : root;
     }
 
     internal static ProcessStartInfo BuildPsi(DaemonConfig config, RuntimeStartContext ctx, bool reviewer) {

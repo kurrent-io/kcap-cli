@@ -8,13 +8,13 @@ namespace Capacitor.Cli.Commands.Harness;
 
 /// <summary>
 /// The config root and server a <c>kcap hook --muse</c> process runs against. Muse runs a hook with a
-/// cleared environment, so a hook for a session hosted by a daemon with a non-default config root would
-/// resolve the home's default profile; the session's marker names the daemon's root and server instead.
-/// Each applies only where the environment sets none. Resolved at the composition root, before anything
-/// reads the root.
+/// cleared environment, so a hook for a hosted session would resolve the home's root and its own
+/// profile, not the daemon's; the session's marker names the daemon's instead. The root applies unless
+/// the environment names one, and the server unless the environment chooses one by URL or profile.
+/// Resolved at the composition root, before anything reads the root.
 /// </summary>
-sealed record MuseHookConnection(string? ConfigDir, string? ServerUrl) {
-    public static readonly MuseHookConnection None = new(null, null);
+sealed record MuseHookConnection(string? ConfigDir, string? ServerUrl, string? Profile) {
+    public static readonly MuseHookConnection None = new(null, null, null);
 
     /// <summary>A child's hook carries its own id as <c>session_id</c>, so the marker is looked up under
     /// the top-level session <c>MUSE_SESSION_ID</c> names, falling back to the payload's.</summary>
@@ -27,19 +27,26 @@ sealed record MuseHookConnection(string? ConfigDir, string? ServerUrl) {
             ? d
             : null;
 
-        var url = string.IsNullOrEmpty(env(ProfileOverrides.UrlVar))
-               && Uri.TryCreate(marker.ServerUrl, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+        if (!string.IsNullOrEmpty(env(ProfileOverrides.UrlVar)) || !string.IsNullOrEmpty(env(ProfileOverrides.ProfileVar)))
+            return new(dir, null, null);
+
+        // The profile carries the credential; its server is the one the daemon resolved through it.
+        if (marker.Profile is { Length: > 0 } profile) return new(dir, null, profile);
+
+        var url = Uri.TryCreate(marker.ServerUrl, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
             ? marker.ServerUrl
             : null;
 
-        return new(dir, url);
+        return new(dir, url, null);
     }
 
     public ConfigRoot ConfigRootOr(Func<ConfigRoot> fromEnvironment) =>
         ConfigDir is { } dir ? new ConfigRoot(dir) : fromEnvironment();
 
     public ProfileOverrides Apply(ProfileOverrides fromEnvironment) =>
-        ServerUrl is null ? fromEnvironment : fromEnvironment with { Url = ServerUrl };
+        Profile is not null ? fromEnvironment with { Profile = Profile }
+      : ServerUrl is not null ? fromEnvironment with { Url = ServerUrl }
+      : fromEnvironment;
 
     static string? PayloadSessionId(string payload) {
         try {

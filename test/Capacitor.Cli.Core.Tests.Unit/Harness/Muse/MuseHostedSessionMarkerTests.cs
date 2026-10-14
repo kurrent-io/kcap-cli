@@ -31,7 +31,7 @@ public class MuseHostedSessionMarkerTests {
 
     [Test]
     public async Task A_marker_round_trips_the_daemon_connection() {
-        var marker = MarkerWrittenAt(Now) with { ConfigDir = "/srv/kcap-config", ServerUrl = "https://kcap.example" };
+        var marker = MarkerWrittenAt(Now) with { ConfigDir = "/srv/kcap-config", ServerUrl = "https://kcap.example", Profile = "team-b" };
 
         MuseHostedSessionMarker.Write(Home, marker);
 
