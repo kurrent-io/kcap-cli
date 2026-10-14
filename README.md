@@ -2017,7 +2017,7 @@ The daemon hosts Muse Code over `muse serve` (chat, no terminal) when `muse` is 
 KCAP_MUSE_MODEL=<model> kcap daemon
 ```
 
-- **Credentials stay on the daemon host.** The daemon never looks for them: set `META_API_KEY` or run `muse auth set` there. On Linux this is required; a macOS `auth.json` does not transfer.
+- **Credentials stay on the daemon host.** The daemon never looks for them, and one installed as a service inherits no `META_API_KEY` exported in your shell: run `muse auth set` as the user the daemon runs as, or set `META_API_KEY` in the service unit's own environment. On Linux this is required; a macOS `auth.json` does not transfer.
 - **Linux needs bubblewrap with user namespaces.** Without them a reviewer launch is refused, and an interactive agent runs without Muse's sandbox.
 - **Always in a daemon-owned worktree,** never your own checkout, because Muse's sandbox does not confine reads. The worktree is trusted, so its Muse hooks and MCP servers load; new network hosts ask for approval.
 - **Reminder child sessions run and bill on every launch.** Muse does not let `serve` disable them; each is recorded as a subagent of its parent.
