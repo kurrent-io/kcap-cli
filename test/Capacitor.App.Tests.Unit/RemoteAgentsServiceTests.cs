@@ -247,4 +247,31 @@ public class RemoteAgentsServiceTests {
         await Eventually(() => receivedEpoch is not null);
         await Assert.That(receivedEpoch).IsEqualTo(7);
     }
+
+    /// When the agents HTTP fetch finishes ahead of GetConnectedDaemonsAsync on Connect, Agents
+    /// must wait for Daemons to publish so AgentDirectory never observes remote rows against an
+    /// unseeded empty daemon list.
+    [Test]
+    public async Task ConnectPublishesDaemonsBeforeAgentsWhenAgentsFetchFinishesFirst() {
+        var daemonsGate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane { DaemonsHandler = () => daemonsGate.Task };
+        using var svc = new RemoteAgentsService(lane, _ => Task.FromResult(new RemoteFetch([Agent("a1")])), TimeSpan.Zero);
+
+        IReadOnlyList<DaemonInfo> seenDaemons = [];
+        IReadOnlyList<DaemonInfo>? daemonsWhenAgentsPublished = null;
+        using var daemonsSub = svc.Daemons.Subscribe(d => seenDaemons = d);
+        using var agentsSub = svc.Agents.Connect().Subscribe(changes => {
+            if (changes.Count > 0) daemonsWhenAgentsPublished = seenDaemons;
+        });
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+        await Task.Delay(50);
+        await Assert.That(svc.Agents.Count).IsEqualTo(0);
+
+        daemonsGate.SetResult([new DaemonInfo { Name = "work-mac", MachineId = "m1", OwnerUserId = "u1", Connected = true }]);
+
+        await Eventually(() => svc.Agents.Count == 1);
+        await Assert.That(daemonsWhenAgentsPublished).IsNotNull();
+        await Assert.That(daemonsWhenAgentsPublished!.Count).IsEqualTo(1);
+    }
 }

@@ -95,13 +95,29 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         remote.Daemons
             .Subscribe(d => { lock (_lock) _daemons = d; Recompute(); })
             .DisposeWith(_subscriptions);
-        local.Status
-            .Select(s => s.State == AttachState.Connected).DistinctUntilChanged()
-            .Subscribe(c => { lock (_lock) _localConnected = c; Recompute(); })
-            .DisposeWith(_subscriptions);
+        // Subscribed before Status so a replayed snapshot's connected flag is overridden when
+        // Status is currently Unreachable; on a live Connected event, Snapshots arrives ahead of
+        // Status (DaemonClientService.Apply) and marks _localConnected before Recompute runs, so
+        // remote twin rows do not flash while _localServerUrl is set and _localConnected is false.
         local.Snapshots
-            .Select(s => s.Daemon.ServerUrl).DistinctUntilChanged()
-            .Subscribe(u => { lock (_lock) _localServerUrl = u; Recompute(); })
+            .Subscribe(s => {
+                lock (_lock) {
+                    if (_localServerUrl == s.Daemon.ServerUrl && _localConnected) return;
+                    _localServerUrl = s.Daemon.ServerUrl;
+                    _localConnected = true;
+                }
+                Recompute();
+            })
+            .DisposeWith(_subscriptions);
+        local.Status
+            .Select(s => s.State == AttachState.Connected)
+            .Subscribe(c => {
+                lock (_lock) {
+                    if (_localConnected == c) return;
+                    _localConnected = c;
+                }
+                Recompute();
+            })
             .DisposeWith(_subscriptions);
     }
 

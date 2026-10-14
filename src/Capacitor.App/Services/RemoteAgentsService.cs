@@ -48,6 +48,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     bool _agentsRerun;
     bool _daemonsBusy;
     bool _daemonsRerun;
+    TaskCompletionSource? _daemonsInFlight;
     readonly Action<int>? _onUnauthorized;
 
     public RemoteAgentsService(
@@ -84,16 +85,19 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             });
 
         // Merge, not Concat: triggers must reach the refresh methods concurrently so a busy
-        // refresh's admission check can actually observe contention and coalesce.
-        var refreshAgents = connected.Merge(lane.AgentInstancesChanged.Throttle(wait))
-            .Select(_ => Observable.FromAsync(async () => await RefreshAgentsAsync(fetchAgents)))
-            .Merge()
-            .Subscribe();
+        // refresh's admission check can actually observe contention and coalesce. Daemons
+        // subscribes before Agents so a Connected edge starts the daemon refresh first and
+        // RefreshAgentsAsync can await its completion before publishing rows that AgentDirectory
+        // deduplicates against Daemons.
         var refreshDaemons = connected.Merge(lane.DaemonsChanged.Throttle(wait))
             .Select(_ => Observable.FromAsync(async () => await RefreshDaemonsAsync(lane)))
             .Merge()
             .Subscribe();
-        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(identityChange, refreshAgents, refreshDaemons);
+        var refreshAgents = connected.Merge(lane.AgentInstancesChanged.Throttle(wait))
+            .Select(_ => Observable.FromAsync(async () => await RefreshAgentsAsync(fetchAgents)))
+            .Merge()
+            .Subscribe();
+        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(identityChange, refreshDaemons, refreshAgents);
     }
 
     public IObservableCache<AgentInstanceDto, string> Agents => _agents.AsObservableCache();
@@ -113,6 +117,9 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             } catch (Exception) {
                 // Data-plane refresh: a throw here is a missed refresh, never an app fault.
             }
+            Task? daemonsInFlight;
+            lock (_lock) daemonsInFlight = _daemonsInFlight?.Task;
+            if (daemonsInFlight is not null) await daemonsInFlight.ConfigureAwait(false);
             var notifyUnauthorized = false;
             bool rerun;
             lock (_lock) {
@@ -141,6 +148,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         lock (_lock) {
             if (_daemonsBusy) { _daemonsRerun = true; return; }
             _daemonsBusy = true;
+            _daemonsInFlight = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
         while (true) {
             int generation;
@@ -150,13 +158,17 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 result = await lane.GetConnectedDaemonsAsync(CancellationToken.None).ConfigureAwait(false);
             } catch (Exception) {
             }
+            TaskCompletionSource? completed;
             lock (_lock) {
                 if (result is not null && generation == _generation)
                     _daemons.OnNext(result);
                 if (_daemonsRerun) { _daemonsRerun = false; continue; }
                 _daemonsBusy = false;
-                return;
+                completed = _daemonsInFlight;
+                _daemonsInFlight = null;
             }
+            completed?.TrySetResult();
+            return;
         }
     }
 
@@ -191,6 +203,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     public void Dispose() {
         _subscriptions.Dispose();
+        TaskCompletionSource? inFlight;
+        lock (_lock) {
+            inFlight = _daemonsInFlight;
+            _daemonsInFlight = null;
+        }
+        inFlight?.TrySetResult();
         _agents.Dispose();
         _daemons.Dispose();
     }
