@@ -6,7 +6,6 @@ namespace Capacitor.App.ViewModels;
 /// repository root, so the file name is cut on either separator rather than this platform's.
 public sealed class PlanDocumentRow(string kind, string path) : ReactiveObject {
     public string Kind { get; } = kind;
-    public string KindLabel { get; } = kind switch { "plan" => "Plan", "spec" => "Spec", "design" => "Design", _ => "Document" };
     public string Path { get; } = path;
     public string FileName { get; } = path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
 

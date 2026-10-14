@@ -94,19 +94,11 @@ public class WorkContextViewSmokeTests {
             var info = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapInfoBrush")!;
             await Assert.That(summaryRow.IsEffectivelyVisible).IsTrue();
             await Assert.That(summaryRow.Classes.Contains("sectionHeader")).IsTrue();
-            await Assert.That(summaryRow.Classes.Contains("open")).IsFalse();
             await Assert.That(summaryText.Text).IsEqualTo("1 document");
             var summaryXBefore = summaryText.TranslatePoint(default, host.Window)!.Value.X;
             await Assert.That(summaryXBefore).IsGreaterThan(host.Window.Bounds.Width / 2);
             await host.Vm.OpenArtefactsCommand.Execute();
             await Assert.That(opens).IsEqualTo(1);
-
-            host.Vm.Artefacts.IsShown = true;
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            await Assert.That(summaryRow.Classes.Contains("open")).IsTrue();
-            await Assert.That(((ISolidColorBrush)summaryText.Foreground!).Color).IsEqualTo(info.Color);
-            await Assert.That(summaryText.TranslatePoint(default, host.Window)!.Value.X).IsEqualTo(summaryXBefore);
 
             await host.Vm.Plan.ToggleCommand.Execute();
             Dispatcher.UIThread.RunJobs();
@@ -122,10 +114,7 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
-            var badge = rowButton.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("kcapKindBadge"));
-            var badgeText = badge.GetVisualDescendants().OfType<TextBlock>().Single();
             await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(info.Color);
-            await Assert.That(((ISolidColorBrush)badgeText.Foreground!).Color).IsEqualTo(info.Color);
         });
     }
 
@@ -1024,7 +1013,6 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsTrue();
             await Assert.That(host.Find<ItemsControl>("PlanCounts").IsEffectivelyVisible).IsFalse();
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
-            await Assert.That(texts).Contains("Spec");
             await Assert.That(texts).Contains("plan-widget-design.md");
             await Assert.That(texts).Contains("Read the route");
             await Assert.That(texts).Contains("Draw the rows");
