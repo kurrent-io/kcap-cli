@@ -17,10 +17,16 @@ public class FakeAcpAgentTests {
                 await Task.Delay(10, guard.Token);
 
             await Assert.That(fake.DispatchFault).IsTypeOf<JsonException>();
-        } finally {
             cts.Cancel();
             try { await run; } catch (OperationCanceledException) { }
-            await Assert.ThrowsAsync<JsonException>(async () => await fake.DisposeAsync());
+        } catch {
+            cts.Cancel();
+            // Cleanup must preserve the body failure, including a fault-capture timeout.
+            try { await run; } catch (Exception) { }
+            try { await fake.DisposeAsync(); } catch (Exception) { }
+            throw;
         }
+
+        await Assert.ThrowsAsync<JsonException>(async () => await fake.DisposeAsync());
     }
 }
