@@ -513,7 +513,11 @@
                             </Grid>
                         </Button>
                         <Border Classes="sectionBody">
-                            <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}" />
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Linked to this session" FontSize="11" LineHeight="16"
+                                           Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding PullRequests.HasPullRequest}" />
+                                <views:PullRequestCard x:Name="PullRequestCard" DataContext="{Binding PullRequests}" />
+                            </StackPanel>
                         </Border>
                     </StackPanel>
                     <ItemsControl x:Name="LinkCards" ItemsSource="{Binding Links}" ItemTemplate="{StaticResource LinkCard}"
@@ -594,6 +598,7 @@
                     <TextBlock Text="Loading plan…" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
                                Margin="0,4,0,0" IsVisible="{Binding Plan.IsLoading}" />
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable"
+                            ToolTip.Tip="Recorded task statuses. PR merges do not update this checklist."
                             IsVisible="{Binding Plan.HasPlan}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="PLAN" Classes="eyebrow" />
@@ -640,6 +645,14 @@
                             </StackPanel>
                         </Grid>
                     </Button>
+                    <TextBlock Text="Recorded task progress" FontSize="11" LineHeight="16" Margin="19,2,0,0"
+                               Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding Plan.HasTasks}" />
+                    <StackPanel x:Name="PlanMergeNote" Spacing="4" Margin="19,8,8,4" IsVisible="{Binding ShowsPlanMergeNote}">
+                        <TextBlock Text="{Binding PlanMergeHeading}" FontSize="12" LineHeight="17" FontWeight="SemiBold"
+                                   Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding PlanMergeNote}" FontSize="12" LineHeight="17"
+                                   Foreground="{StaticResource KcapMutedBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
                     <Border x:Name="PlanBody" Classes="sectionBody">
                         <Border.IsVisible>
                             <MultiBinding Converter="{x:Static BoolConverters.And}">
