@@ -125,7 +125,10 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
     }
 
     public string Vendor              => "muse";
-    public string RuntimeTransport    => "msp";
+
+    /// <summary>The server accepts only <c>pty</c> or <c>app-server</c> here and expects <c>pty</c> for
+    /// every vendor but Codex; anything else fails the registration.</summary>
+    public string RuntimeTransport    => "pty";
     public int    Pid                 => _process.Pid;
     public bool   HasExited           => _process.HasExited;
     public int?   ExitCode            => _process.ExitCode;

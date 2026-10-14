@@ -219,12 +219,14 @@ public class MuseMspHostedAgentRuntimeTests {
         await Assert.That(rig.Runtime.Session!.SessionId).IsEqualTo(resumeId);
     }
 
+    /// <summary>The server refuses a registration whose transport is not the one it expects, and it
+    /// expects <c>pty</c> for every vendor but Codex, so a Muse agent reports <c>pty</c>.</summary>
     [Test]
     public async Task Runtime_identity_is_the_msp_control_plane() {
         await using var rig = await ReadyRig();
 
         await Assert.That(rig.Runtime.Vendor).IsEqualTo("muse");
-        await Assert.That(rig.Runtime.RuntimeTransport).IsEqualTo("msp");
+        await Assert.That(rig.Runtime.RuntimeTransport).IsEqualTo("pty");
         await Assert.That(rig.Runtime.EmitsTerminalOutput).IsFalse();
         await Assert.That(rig.Runtime.Pid).IsEqualTo(4242);
         await Assert.ThrowsAsync<NotSupportedException>(async () => await rig.Runtime.SendRawInputAsync([1]));
