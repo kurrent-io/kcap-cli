@@ -41,8 +41,8 @@ public static class HostedHarnessCatalog {
     internal static IReadOnlyCollection<string> MappedVendors => TransportFamilies.Keys;
 
     /// Harnesses listed only when a daemon advertises one: no daemon hosts Mistral Vibe, and one too
-    /// old to host Grok says nothing about it, so a daemon's silence must not offer them.
-    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe", "grok" };
+    /// old to host Grok or Muse Code says nothing about it, so a daemon's silence must not offer them.
+    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe", "grok", "muse" };
 
     public static IReadOnlyList<HarnessOption> Build(string[]? supportedVendors) {
         // null = an older daemon that never sent the field: unknown, not empty.
