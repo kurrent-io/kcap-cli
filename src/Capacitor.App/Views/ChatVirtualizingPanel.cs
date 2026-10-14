@@ -96,6 +96,11 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
         foreach (var entry in _realized.ToArray()) {
             if (entry.Key >= first && entry.Key <= last) continue;
             if (!KeepAlive(entry.Value, focused, scrollAnchor, overscan)) { Unrealize(entry.Key); continue; }
+            // A warm row above the viewport keeps its stored height. Remeasuring it shifts every
+            // start below it, and the presenter follows by moving the reader's offset.
+            var pinned = entry.Value.OwnContainer || ReferenceEquals(entry.Value.Container, scrollAnchor)
+                || focused is not null && (ReferenceEquals(focused, entry.Value.Container) || entry.Value.Container.IsVisualAncestorOf(focused));
+            if (entry.Key < first && !pinned) continue;
             entry.Value.Container.Measure(new Size(availableSize.Width, double.PositiveInfinity));
             var height = entry.Value.Container.DesiredSize.Height;
             var delta = height - (_starts[entry.Key + 1] - _starts[entry.Key]);
@@ -217,7 +222,10 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
     protected override IEnumerable<Control> GetRealizedContainers() => _realized.Values.Select(row => row.Container);
     protected override IInputElement? GetControl(NavigationDirection direction, IInputElement? from, bool wrap) {
         if (Items.Count == 0 || from is null && direction is not NavigationDirection.First and not NavigationDirection.Last) return null;
-        var index = from is Control control ? IndexFromContainer(control) : -1;
+        // Directional navigation starts at the focused control inside the row, not the row.
+        var index = -1;
+        for (var visual = from as Visual; visual is not null && !ReferenceEquals(visual, this); visual = visual.GetVisualParent())
+            if (visual is Control control && IndexFromContainer(control) is var found and >= 0) { index = found; break; }
         int? next = direction switch {
             NavigationDirection.First => 0,
             NavigationDirection.Last => Items.Count - 1,

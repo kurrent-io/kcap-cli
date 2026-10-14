@@ -344,6 +344,11 @@ public class ChatTabViewSmokeTests {
             else await Assert.That(previous).IsLessThan(0.99);
             await Assert.That(peakRealized).IsLessThan(80);
             await Assert.That(host.AtBottom()).IsFalse();
+            if (!drag)
+                for (var frame = 0; frame < 30; frame++) {
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+                    host.Settle();
+                }
             var offset = host.Scroll.Offset.Y;
             await host.AppendAndTickAsync(path, 5);
             await Assert.That(Math.Abs(host.Scroll.Offset.Y - offset)).IsLessThan(2);
@@ -396,7 +401,10 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("smooth-wheel.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
             await host.LoadAsync(path);
             var items = host.View.FindControl<ItemsControl>("ChatItems")!;
-            var center = PresentAndLocate(host, items);
+            var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>()
+                .First(view => view.TranslatePoint(default, host.Scroll) is { } point
+                    && point.Y >= 0 && point.Y < host.Scroll.Viewport.Height);
+            var center = PresentAndLocate(host, markdown);
             var bottomRow = items.GetRealizedContainers().MaxBy(c => c.Bounds.Bottom)!;
             var startY = bottomRow.TranslatePoint(default, host.Scroll)!.Value.Y;
 

@@ -105,9 +105,12 @@ public partial class ChatTabView : UserControl {
         _listInputVersion++;
         // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
         // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
-        if (OriginatesFromTextBox(e)) return;
+        if (OriginatesFromTextBox(e)) {
+            CancelSmoothScroll();
+            return;
+        }
         if (e.RoutedEvent == PointerWheelChangedEvent || e.RoutedEvent == ScrollGestureEvent || e is KeyEventArgs) _thumbFraction = null;
-        if (e.RoutedEvent == ScrollGestureEvent || e.RoutedEvent == PointerPressedEvent) CancelSmoothScroll();
+        if (e.RoutedEvent == ScrollGestureEvent || e.RoutedEvent == PointerPressedEvent || e is KeyEventArgs) CancelSmoothScroll();
         // A press, or Enter or Space, inside a pending card is answering it — an option, Next, a step
         // chip — and the card then changes its own height in this layout pass. Read as the reader
         // scrolling up, that would stop following exactly when the next question lands below the
@@ -122,7 +125,7 @@ public partial class ChatTabView : UserControl {
     void OnChatWheelChanged(object? sender, PointerWheelEventArgs e) {
         if (e.Handled || e.KeyModifiers != KeyModifiers.None || OriginatesFromTextBox(e)) return;
         EnsureChatScroll();
-        if (_scroll is null || OriginatesFromInnerScrollViewer(e)) return;
+        if (_scroll is null || DefersToInnerScroll(e)) return;
         var delta = -e.Delta.Y * WheelStep;
         if (Math.Abs(delta) < 0.01) return;
         e.Handled = true;
@@ -188,8 +191,21 @@ public partial class ChatTabView : UserControl {
         _lastSmoothFrame = default;
     }
 
-    bool OriginatesFromInnerScrollViewer(RoutedEventArgs e) =>
-        e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<ScrollViewer>().FirstOrDefault() is { } inner && !ReferenceEquals(inner, _scroll);
+    // A markdown row hosts a ScrollViewer whose scrolling is disabled. Only an inner viewer
+    // that can still move in this direction owns the notch.
+    bool DefersToInnerScroll(PointerWheelEventArgs e) {
+        if (e.Source is not Visual visual) return false;
+        foreach (var inner in visual.GetSelfAndVisualAncestors().OfType<ScrollViewer>()) {
+            if (ReferenceEquals(inner, _scroll)) return false;
+            if (inner.VerticalScrollBarVisibility == ScrollBarVisibility.Disabled) continue;
+            var range = inner.Extent.Height - inner.Viewport.Height;
+            if (range <= 1) continue;
+            var towardStart = e.Delta.Y > 0;
+            if (towardStart ? inner.Offset.Y <= 0.5 : inner.Offset.Y >= range - 0.5) continue;
+            return true;
+        }
+        return false;
+    }
 
     void OnChatThumbDrag(object? sender, RoutedEventArgs e) {
         if (_scroll is null || e.Source is not Thumb thumb
