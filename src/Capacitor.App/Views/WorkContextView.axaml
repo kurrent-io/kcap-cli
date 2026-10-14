@@ -622,7 +622,7 @@
 
                 <!-- The Artefacts tab's summary; the tab itself lives in the centre. -->
                 <Button x:Name="ArtefactsSummaryRow" Classes="sectionHeader expandable"
-                        Margin="0,18,0,0"
+                        Margin="-8,18,-8,0"
                         Command="{Binding OpenArtefactsCommand}"
                         IsVisible="{Binding Artefacts.HasAny, FallbackValue=False}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">

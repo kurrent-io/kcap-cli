@@ -91,9 +91,12 @@ public class WorkContextViewSmokeTests {
 
             var summaryRow = host.Find<Button>("ArtefactsSummaryRow");
             var summaryText = host.Find<TextBlock>("ArtefactsSummaryText");
+            var planToggle = host.Find<Button>("PlanToggle");
             var info = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapInfoBrush")!;
             await Assert.That(summaryRow.IsEffectivelyVisible).IsTrue();
             await Assert.That(summaryRow.Classes.Contains("sectionHeader")).IsTrue();
+            await Assert.That(summaryRow.TranslatePoint(default, host.Window)!.Value.X)
+                .IsEqualTo(planToggle.TranslatePoint(default, host.Window)!.Value.X);
             await Assert.That(summaryText.Text).IsEqualTo("1 document");
             var summaryXBefore = summaryText.TranslatePoint(default, host.Window)!.Value.X;
             await Assert.That(summaryXBefore).IsGreaterThan(host.Window.Bounds.Width / 2);
