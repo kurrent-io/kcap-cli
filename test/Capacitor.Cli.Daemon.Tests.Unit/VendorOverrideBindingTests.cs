@@ -37,7 +37,8 @@ public class VendorOverrideBindingTests {
         (HarnessId.Kiro,        "KCAP_KIRO_MODEL",        c => c.KiroModel),
         (HarnessId.Pi,          "KCAP_PI_MODEL",          c => c.PiModel),
         (HarnessId.OpenCode,    "KCAP_OPENCODE_MODEL",    c => c.OpenCodeModel),
-        (HarnessId.Antigravity, "KCAP_ANTIGRAVITY_MODEL", c => c.AntigravityModel)
+        (HarnessId.Antigravity, "KCAP_ANTIGRAVITY_MODEL", c => c.AntigravityModel),
+        (HarnessId.Muse,        "KCAP_MUSE_MODEL",        c => c.MuseModel)
     ];
 
     static HarnessId[] EveryVendor => Enum.GetValues<HarnessId>();

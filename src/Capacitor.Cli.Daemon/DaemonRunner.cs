@@ -1283,6 +1283,7 @@ public static partial class DaemonRunner {
         "antigravity" => v => config.AntigravityUnattendedReviewerEnabled = v,
         "pi"          => v => config.PiUnattendedReviewerEnabled          = v,
         "grok"        => v => config.GrokUnattendedReviewerEnabled        = v,
+        MuseVendor    => v => config.MuseUnattendedReviewerEnabled        = v,
         _ => throw new NotSupportedException(
             $"Gated reviewer '{vendor}' is in GatedReviewers.All but no DaemonConfig flag is wired to "
           + $"its opt-out switch, so setting {GatedReviewers.Resolve(vendor)?.EnableEnvVar ?? "it"} "
@@ -1355,6 +1356,9 @@ public static partial class DaemonRunner {
         SeedReviewerAffirmation(
             stateDir, AcpVendorDescriptors.Grok.Vendor,
             config.GrokUnattendedReviewerEnabled, config.GrokPath, binaries);
+
+        SeedReviewerAffirmation(
+            stateDir, MuseVendor, config.MuseUnattendedReviewerEnabled, config.MusePath, binaries);
 
         SeedVersionFloor(stateDir, AntigravityVendor, config.AntigravityPath, binaries);
     }
@@ -1484,12 +1488,15 @@ public static partial class DaemonRunner {
     internal const string OpenCodeLauncherPolicyVersion = "opencode-unattended-v1";
     internal const string GrokLauncherPolicyVersion = "grok-unattended-v1";
     internal const string PiLauncherPolicyVersion = "pi-unattended-v1";
+    internal const string MuseLauncherPolicyVersion = "muse-unattended-v1";
 
     /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
     /// name, and the server routes on the vendor.</summary>
     internal const string AntigravityVendor = "antigravity";
 
     internal const string PiVendor = "pi";
+
+    internal const string MuseVendor = "muse";
 
     /// <param name="advertised">The already-classified advertised vendors, when the caller has them.
     /// Passing them avoids re-running a classification that spawns vendor binaries; omitting them
@@ -1525,6 +1532,7 @@ public static partial class DaemonRunner {
                 "opencode" => OpenCodeLauncherPolicyVersion,
                 "grok"    => GrokLauncherPolicyVersion,
                 PiVendor  => PiLauncherPolicyVersion,
+                MuseVendor => MuseLauncherPolicyVersion,
                 _         => $"{vendor}-unattended-v1"
             };
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,

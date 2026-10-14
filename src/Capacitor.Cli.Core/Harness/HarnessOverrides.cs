@@ -38,9 +38,10 @@ public static class HarnessOverrides {
             HarnessId.Pi          => "KCAP_PI_MODEL",
             HarnessId.OpenCode    => "KCAP_OPENCODE_MODEL",
             HarnessId.Antigravity => "KCAP_ANTIGRAVITY_MODEL",
+            HarnessId.Muse        => "KCAP_MUSE_MODEL",
 
             HarnessId.Claude or HarnessId.Codex or HarnessId.Copilot or HarnessId.Gemini
-                or HarnessId.MistralVibe or HarnessId.Grok or HarnessId.Muse => null,
+                or HarnessId.MistralVibe or HarnessId.Grok => null,
         };
     }
 }
