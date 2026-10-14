@@ -23,12 +23,13 @@ internal static class GrokTurnUsage {
             if (!model.Value.IsObject || model.Name.Length == 0) continue;
 
             (usage ??= []).Add(new AcpEventEnvelope(
-                Kind:                   AcpEventKind.TokenUsage,
-                Model:                  model.Name,
-                UsageInputTokens:       model.Value.Num("inputTokens"),
-                UsageCachedInputTokens: model.Value.Num("cachedReadTokens"),
-                UsageOutputTokens:      model.Value.Num("outputTokens"),
-                UsageReasoningTokens:   model.Value.Num("reasoningTokens")));
+                Kind:                       AcpEventKind.TokenUsage,
+                Model:                      model.Name,
+                UsageInputTokens:           model.Value.Num("inputTokens"),
+                UsageCachedInputTokens:     model.Value.Num("cachedReadTokens"),
+                UsageCacheWriteInputTokens: model.Value.Num("cacheCreationTokens"),
+                UsageOutputTokens:          model.Value.Num("outputTokens"),
+                UsageReasoningTokens:       model.Value.Num("reasoningTokens")));
         }
 
         return usage ?? [];

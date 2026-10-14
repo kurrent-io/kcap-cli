@@ -1547,10 +1547,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     bool IsThisSession(AcpNotification notification) =>
-        _sessionId is { Length: > 0 } sessionId
-     && notification.Params is { ValueKind: JsonValueKind.Object } p
-     && p.TryGetProperty("sessionId", out var id) && id.ValueKind == JsonValueKind.String
-     && id.GetString() == sessionId;
+        _sessionId is { Length: > 0 } sessionId && notification.Params?.Str("sessionId") == sessionId;
 
     // Standalone, like a usage_update: metadata, so it must not close an open chunk run.
     void EmitTurnUsage(IReadOnlyList<AcpEventEnvelope> usage) {

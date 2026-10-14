@@ -20,7 +20,7 @@ public class GrokTurnUsageTests {
 
     const string ModelUsage = """
         {"grok-4.5-build":{"inputTokens":44757,"outputTokens":139,"totalTokens":44896,"cachedReadTokens":21632,
-                           "cacheCreationTokens":0,"reasoningTokens":41,"modelCalls":2},
+                           "cacheCreationTokens":512,"reasoningTokens":41,"modelCalls":2},
          "grok-4.6-build":{"inputTokens":1000,"outputTokens":20,"cachedReadTokens":0,"reasoningTokens":5}}
         """;
 
@@ -45,6 +45,7 @@ public class GrokTurnUsageTests {
         await Assert.That(first.Kind).IsEqualTo(AcpEventKind.TokenUsage);
         await Assert.That(first.UsageInputTokens).IsEqualTo(44757);
         await Assert.That(first.UsageCachedInputTokens).IsEqualTo(21632);
+        await Assert.That(first.UsageCacheWriteInputTokens).IsEqualTo(512);
         await Assert.That(first.UsageOutputTokens).IsEqualTo(139);
         await Assert.That(first.UsageReasoningTokens).IsEqualTo(41);
 
