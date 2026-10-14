@@ -82,7 +82,7 @@
         ]
       },
       {
-        "matcher": "TaskCreate|TaskUpdate|TodoWrite|mcp__.*kcap-plans__.*",
+        "matcher": "TaskCreate|TaskUpdate|TodoWrite|Agent|mcp__.*kcap-plans__.*",
         "hooks": [
           {
             "type": "command",

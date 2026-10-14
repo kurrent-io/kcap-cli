@@ -22,7 +22,9 @@ public class ClaudeTaskListEventTests {
     public async Task TaskCreate_starts_the_list() {
         var evt = ClaudeTaskListEvent.Parse(Payload("TaskCreate", new JsonObject { ["subject"] = "one" }));
 
-        await Assert.That(evt).IsEqualTo(new ClaudeTaskListEvent(Sid.Replace("-", ""), ClaudeTaskListEvent.Moment.Created));
+        await Assert.That(evt?.SessionId).IsEqualTo(Sid.Replace("-", ""));
+        await Assert.That(evt?.Kind).IsEqualTo(ClaudeTaskListEvent.Moment.Created);
+        await Assert.That(evt?.FromLedger).IsFalse();
     }
 
     [Test]
@@ -70,7 +72,8 @@ public class ClaudeTaskListEventTests {
             ["command"] = "git commit -q -m \"Add CI\" && echo \"Task 4: complete (commits 480bc9b..)\" >> \"$S/progress.md\""
         }));
 
-        await Assert.That(started).IsEqualTo(new ClaudeTaskListEvent(Sid.Replace("-", ""), ClaudeTaskListEvent.Moment.Created, FromLedger: true));
+        await Assert.That(started?.Kind).IsEqualTo(ClaudeTaskListEvent.Moment.Created);
+        await Assert.That(started?.FromLedger).IsTrue();
         await Assert.That(finished?.Kind).IsEqualTo(ClaudeTaskListEvent.Moment.Completed);
     }
 
@@ -81,7 +84,8 @@ public class ClaudeTaskListEventTests {
         }));
         var other = ClaudeTaskListEvent.Parse(Payload("Write", new JsonObject { ["file_path"] = "/repo/README.md", ["content"] = "complete" }));
 
-        await Assert.That(ledger).IsEqualTo(new ClaudeTaskListEvent(Sid.Replace("-", ""), ClaudeTaskListEvent.Moment.Completed, FromLedger: true));
+        await Assert.That(ledger?.Kind).IsEqualTo(ClaudeTaskListEvent.Moment.Completed);
+        await Assert.That(ledger?.FromLedger).IsTrue();
         await Assert.That(other).IsNull();
     }
 
@@ -127,6 +131,60 @@ public class ClaudeTaskListEventTests {
 
         await Assert.That(nudge).Contains("ledger's first line");
         await Assert.That(nudge).Contains("`declare_plan_document`");
+    }
+
+    [Test]
+    public async Task Ledger_entries_become_task_moves() {
+        var evt = ClaudeTaskListEvent.Parse(Payload("Bash", new JsonObject {
+            ["command"] = "echo \"Task 1: dispatched (base 90377c69e)\" >> .superpowers/sdd/x/progress.md && echo \"Task 2: complete\" >> progress.md"
+        }));
+
+        await Assert.That(evt!.Moves).IsEquivalentTo(new[] {
+            new ClaudeTaskListEvent.TaskMove("1", PlanTaskState.InProgress),
+            new ClaudeTaskListEvent.TaskMove("2", PlanTaskState.Completed),
+        });
+    }
+
+    [Test]
+    public async Task An_implementer_dispatch_moves_its_task() {
+        var dispatch = ClaudeTaskListEvent.Parse(Payload("Agent", new JsonObject { ["description"] = "Implement Task 1: Eventuous 0.17.0" }));
+        var other    = ClaudeTaskListEvent.Parse(Payload("Agent", new JsonObject { ["description"] = "Find API endpoints" }));
+
+        await Assert.That(dispatch!.Moves).IsEquivalentTo(new[] { new ClaudeTaskListEvent.TaskMove("1", PlanTaskState.InProgress) });
+        await Assert.That(dispatch.Nudge()).IsNull();
+        await Assert.That(other).IsNull();
+    }
+
+    [Test]
+    public async Task A_plan_write_carries_the_tasks_its_result_reported() {
+        var hook = JsonNode.Parse(Payload("mcp__plugin_kcap_kcap-plans__update_plan_task"))!.AsObject();
+        hook["tool_response"] = new JsonArray(new JsonObject {
+            ["type"] = "text",
+            ["text"] = """{"plan_id":"p","task":{"task_id":"f553eb7d","ordinal":1,"title":"Task 1: Eventuous","status":"in_progress"}}"""
+        });
+
+        var evt = ClaudeTaskListEvent.Parse(hook.ToJsonString());
+
+        await Assert.That(evt!.Kind).IsEqualTo(ClaudeTaskListEvent.Moment.PlanWritten);
+        await Assert.That(evt.PlanTasksAreWhole).IsFalse();
+        await Assert.That(evt.PlanTasks).IsEquivalentTo(new[] { new PlanTaskState("f553eb7d", 1, "Task 1: Eventuous", "in_progress") });
+    }
+
+    [Test]
+    public async Task Only_moves_the_plan_has_not_caught_up_with_lag() {
+        var plan = new[] {
+            new PlanTaskState("a1", 1, "Task 1: one", "pending"),
+            new PlanTaskState("b2", 2, "Task 2: two", "in_progress"),
+            new PlanTaskState("c3", 3, null, "pending"),
+        };
+        var evt = new ClaudeTaskListEvent(Sid.Replace("-", ""), ClaudeTaskListEvent.Moment.Created, FromLedger: true) {
+            Moves = [new("1", PlanTaskState.InProgress), new("2", PlanTaskState.InProgress), new("3", PlanTaskState.Completed), new("9", PlanTaskState.Completed)]
+        };
+
+        var lagging = evt.Lagging(plan);
+
+        await Assert.That(lagging.Select(l => l.Task.TaskId)).IsEquivalentTo(new[] { "a1", "c3" });
+        await Assert.That(ClaudeTaskListEvent.PairingNudge(lagging)).Contains("`task_id` `a1` and `status` `in_progress`");
     }
 
     [Test]

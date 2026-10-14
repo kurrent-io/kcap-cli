@@ -850,6 +850,32 @@ public class ClaudeHookCommandTests {
         await Assert.That(new TaskListNudgeLedger(Config.Root).HasPlan(sid.Replace("-", ""))).IsFalse();
     }
 
+    static string PlanResult(string sid, string tool, string answer) {
+        var hook = JsonNode.Parse(TaskListPayload(sid, tool))!.AsObject();
+        hook["tool_response"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = answer });
+        return hook.ToJsonString();
+    }
+
+    [Test]
+    public async Task task_list_points_out_a_dispatch_the_plan_has_not_caught_up_with() {
+        using var fx = new Fixture(Config.Root);
+        fx.RegisterClaudeMcpServer("kcap-plans");
+        var sid = Guid.NewGuid().ToString();
+        await TaskListOnce(fx, PlanResult(sid, "mcp__plugin_kcap_kcap-plans__set_plan_tasks",
+            """{"plan_id":"p","tasks":[{"task_id":"a1","ordinal":1,"title":"Task 1: one","status":"pending"},{"task_id":"b2","ordinal":2,"title":"Task 2: two","status":"pending"}]}"""));
+        var dispatch = TaskListPayload(sid, "Agent", new JsonObject { ["description"] = "Implement Task 1: one" });
+
+        var first  = await TaskListOnce(fx, dispatch);
+        var second = await TaskListOnce(fx, dispatch);
+        await TaskListOnce(fx, PlanResult(sid, "mcp__plugin_kcap_kcap-plans__update_plan_task",
+            """{"plan_id":"p","task":{"task_id":"b2","ordinal":2,"title":"Task 2: two","status":"in_progress"}}"""));
+        var mirrored = await TaskListOnce(fx, TaskListPayload(sid, "Bash", new JsonObject { ["command"] = "echo \"Task 2: dispatched\" >> progress.md" }));
+
+        await Assert.That(JsonNode.Parse(first)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>()).Contains("`task_id` `a1`");
+        await Assert.That(second).IsEqualTo("");
+        await Assert.That(mirrored).IsEqualTo("");
+    }
+
     [Test]
     public async Task task_list_stays_silent_when_kcap_plans_is_not_registered() {
         using var fx = new Fixture(Config.Root);
