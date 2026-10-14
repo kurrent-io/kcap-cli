@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -273,10 +274,12 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
 
         // Children land before session-end so their lifecycle sits inside the parent's. An unfinished
         // log posts no end; the server's stale-session closers own an abandoned one.
-        var (sentChildContent, childrenRecorded) = await ImportChildrenAsync(ctx, classification.SessionId, log, ct);
+        var parentEndedAt = classification.SourceMeta![EndedAtKey] as DateTimeOffset?;
+
+        var (sentChildContent, childrenRecorded) = await ImportChildrenAsync(ctx, classification.SessionId, log, parentEndedAt is not null, ct);
         if (!childrenRecorded) return new ImportSessionResult(ImportOutcome.Failed, sentChildContent);
 
-        if (classification.SourceMeta![EndedAtKey] is DateTimeOffset endedAt
+        if (parentEndedAt is { } endedAt
          && !await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/muse",
                 BuildSessionEndPayload(classification.SessionId, classification.Meta.Cwd, endedAt), ct))
             return ImportOutcome.Failed;
@@ -289,9 +292,14 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
     /// <summary>Every child resends from line 0 (its server ids are deterministic), so
     /// <c>SentChildContent</c> reads true on any replay of a session that has one. A child whose start,
     /// content or stop the server did not record fails the import before the parent's session-end, so
-    /// a re-import retries it; a refused start skips that child's content.</summary>
-    async Task<(bool AnySent, bool AllRecorded)> ImportChildrenAsync(ImportContext ctx, string parentSessionId, string parentLog, CancellationToken ct) {
+    /// a re-import retries it; a refused start skips that child's content. Under an unfinished parent a
+    /// child is stopped only once the parent log reports its result, as the live watcher stops it: a
+    /// stop's id is deterministic, so one posted early cannot be taken back, and the parent's end
+    /// closes the rest.</summary>
+    async Task<(bool AnySent, bool AllRecorded)> ImportChildrenAsync(
+            ImportContext ctx, string parentSessionId, string parentLog, bool parentEnded, CancellationToken ct) {
         var labels      = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
+        var readyCounts = parentEnded ? FrozenDictionary<string, int>.Empty : MuseSubagentDiscovery.ResolveResultReadyCounts(parentLog);
         var anySent     = false;
         var allRecorded = true;
 
@@ -319,6 +327,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             }
 
             if (childSent > 0) anySent = true;
+
+            if (!parentEnded && !readyCounts.ContainsKey(label.ChildSessionId)) continue;
 
             if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop",
                     Strict(MuseSubagentDiscovery.BuildStopPayload(parentSessionId, label.AgentId, label.AgentType, childLog)), ct))
