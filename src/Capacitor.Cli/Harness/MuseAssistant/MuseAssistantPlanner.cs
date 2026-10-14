@@ -1,4 +1,4 @@
-using System.Text;
+using System.Text.Json;
 
 namespace Capacitor.Cli.Harness.MuseAssistant;
 
@@ -24,6 +24,25 @@ public static class MuseAssistantPlanner {
     /// selected item's.</summary>
     public static long SessionEndedAtMs(MuseAssistantChatState state, MuseAssistantOpenSession open) =>
         open.EndedAtMs ?? SessionLastSelectedAtMs(state, open);
+
+    /// <summary>What a line adds to a transcript batch request: its JSON-escaped form as a string value
+    /// (the serializer's default encoder, so a non-ASCII character costs its <c>\uXXXX</c> escape, not its
+    /// UTF-8 bytes), the quotes around it and the comma after it.</summary>
+    public static int WireSize(string line) => JsonEncodedText.Encode(line).EncodedUtf8Bytes.Length + 3;
+
+    /// <summary>Null when every item the walk would send fits in a batch of its own; otherwise names the
+    /// first one that does not, which no split can help.</summary>
+    public static string? OversizeProblem(MuseAssistantWalk walk, MuseAssistantChatState state) {
+        foreach (var item in walk.Items) {
+            if (state.Watermark is { } w && item.Seq <= w) continue;
+            if (!MuseAssistantRoles.IsSelected(item.Role) || state.Grant.Floor is { } f && item.Seq <= f) continue;
+
+            if (WireSize(item.Line) is var size && size > MaxBatchBytes)
+                return $"item seq {item.Seq} in turn {item.TurnId} is too large to send ({size} bytes > 4 MiB)";
+        }
+
+        return null;
+    }
 
     /// <summary>Null when the walk reaches the chat's beginning, the watermark, or — before any
     /// watermark — the grant's floor; otherwise why the watermark may not advance.</summary>
@@ -79,7 +98,7 @@ public static class MuseAssistantPlanner {
                 actions.Add(new MuseAssistantStartSession(session, intent, state));
             }
 
-            var size = Encoding.UTF8.GetByteCount(item.Line);
+            var size = WireSize(item.Line);
             if (lines.Count > 0 && (lines.Count >= MaxBatchLines || bytes + size > MaxBatchBytes)) Flush();
 
             lines.Add(item.Line);

@@ -51,6 +51,8 @@ public sealed class MuseAssistantIngest(
 
         if (MuseAssistantPlanner.CoverageProblem(walk, state) is { } gap) return Fail(MuseAssistantExitCodes.Malformed, gap);
 
+        if (MuseAssistantPlanner.OversizeProblem(walk, state) is { } oversize) return Fail(MuseAssistantExitCodes.Malformed, oversize);
+
         var actions = MuseAssistantPlanner.Plan(state, walk, principal.UserId, home.Path);
 
         return await runner.ExecuteAsync(store, actions, chatId, ct) is { } failure

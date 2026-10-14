@@ -110,6 +110,17 @@ public class MuseAssistantIngestTests {
     }
 
     [Test]
+    public async Task An_item_too_large_to_send_exits_2_and_posts_nothing_for_the_walk() {
+        Grant();
+        var poster = new RecordingPoster();
+        var dir    = new WalkBuilder(Walks).AddPage(null, null, false, User(1, T0), User(2, T0 + 1, new string('x', 4 * 1024 * 1024))).Write();
+
+        await Assert.That(await (await IngestAsync(poster)).RunAsync(dir, default)).IsEqualTo(2);
+        await Assert.That(poster.Accepted).IsEmpty();
+        await Assert.That(Store().LoadState("chat-main").State!.Watermark).IsNull();
+    }
+
+    [Test]
     public async Task A_walk_both_malformed_and_out_of_scope_reports_malformed() {
         var dir = TwoSessionWalk("missing");
         File.Delete(Path.Join(dir, "page-001.json"));

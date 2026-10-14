@@ -234,6 +234,32 @@ public class MuseAssistantPlannerTests {
     }
 
     [Test]
+    public async Task Batches_cap_on_the_escaped_size_each_line_has_in_the_request() {
+        // 'é' is 2 UTF-8 bytes raw but 6 bytes as the \u00e9 escape the serializer writes.
+        static MuseAssistantItem Wide(long seq) => Item(seq, T0 + seq) with { Line = new string('é', 500_000) };
+
+        var actions = Plan(Fresh(), Walk(T0 + Minute, Wide(1), Wide(2)));
+
+        var sends = actions.OfType<MuseAssistantSendLines>().ToList();
+        await Assert.That(sends.Select(s => s.Seqs.Length)).IsEquivalentTo([1, 1], CollectionOrdering.Matching);
+        await Assert.That(sends[0].After.Watermark).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_line_whose_escaped_size_exceeds_the_cap_is_a_problem_only_while_it_would_be_sent() {
+        var huge = Item(5, T0 + 5, turn: "t9") with { Line = new string('é', 700_000) };
+        var walk = Walk(T0 + Minute, Item(4, T0), huge);
+
+        var problem = MuseAssistantPlanner.OversizeProblem(walk, Fresh());
+
+        await Assert.That(problem).IsEqualTo("item seq 5 in turn t9 is too large to send (4200003 bytes > 4 MiB)");
+        await Assert.That(MuseAssistantPlanner.OversizeProblem(walk, Fresh() with { Watermark = 5 })).IsNull();
+        await Assert.That(MuseAssistantPlanner.OversizeProblem(walk, Fresh(MuseAssistantGrantBoundaries.AfterSeq, 5))).IsNull();
+        await Assert.That(MuseAssistantPlanner.OversizeProblem(Walk(T0, huge with { Role = "developer" }), Fresh())).IsNull();
+        await Assert.That(MuseAssistantPlanner.OversizeProblem(Walk(T0, Item(1, T0)), Fresh())).IsNull();
+    }
+
+    [Test]
     public async Task A_trailing_developer_item_is_covered_by_the_last_batch_and_needs_no_extra_step() {
         var actions = Plan(Fresh(), Walk(T0 + Minute, Item(1, T0), Item(2, T0 + 1, "developer")));
 
