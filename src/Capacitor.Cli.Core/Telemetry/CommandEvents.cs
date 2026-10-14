@@ -58,7 +58,6 @@ public static partial class CommandEvents {
         ["agent"]   = new(StringComparer.Ordinal) { "start", "stop", "list", "status" },
         ["page"]      = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
         ["artefact"]  = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
-        ["muse-assistant"] = new(StringComparer.Ordinal) { "ingest", "scope", "sweep" },
     };
 
     const int MaxFlags = 12;

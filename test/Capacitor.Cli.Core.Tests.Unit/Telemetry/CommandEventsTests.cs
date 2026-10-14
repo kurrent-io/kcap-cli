@@ -47,11 +47,8 @@ public class CommandEventsTests {
     }
 
     [Test]
-    public async Task Muse_assistant_is_a_known_verb_with_its_literal_subcommands() {
+    public async Task Muse_assistant_is_a_known_verb() {
         await Assert.That(CommandEvents.ReportableCommand("muse-assistant")).IsEqualTo("muse-assistant");
-        await Assert.That(CommandEvents.Subcommand("muse-assistant", ["muse-assistant", "scope", "add"])).IsEqualTo("scope");
-        await Assert.That(CommandEvents.Subcommand("muse-assistant", ["muse-assistant", "ingest", "/tmp/walk"])).IsEqualTo("ingest");
-        await Assert.That(CommandEvents.Subcommand("muse-assistant", ["muse-assistant", "chat-123"])).IsNull();
     }
 
     [Test]
