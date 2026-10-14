@@ -20,8 +20,9 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// unattended review-flow reviewer.
 ///
 /// <para>The session is recorded from Muse's own log by <c>kcap hook --muse</c>, which finds the
-/// hosting agent through a marker written here under the session id this factory mints. When the
-/// daemon host has no kcap hooks in Muse's settings, the factory runs the hook itself.</para>
+/// hosting agent, and a non-default config root and server, through a marker written here under the
+/// session id this factory mints. When the daemon host has no kcap hooks in Muse's settings, the
+/// factory runs the hook itself.</para>
 ///
 /// <para>One refusal ladder (<see cref="ReviewerRefusal"/>) answers both advertisement and launch, so
 /// the daemon never offers a reviewer it would refuse to start.</para>
@@ -172,8 +173,10 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
         var plan = BuildPlan(ref ctx, _config);
 
+        var configDir = NonDefaultConfigDir(_config);
         MuseHostedSessionMarker.Write(_config.Home, new(
-            plan.MintedSessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, _time.GetUtcNow()));
+            plan.MintedSessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, _time.GetUtcNow(),
+            configDir, configDir is not null && !string.IsNullOrEmpty(ctx.ServerUrl) ? ctx.ServerUrl : null));
 
         var relay        = !_hooksInstalled(_paths.SettingsJson);
         var relayedStart = false;

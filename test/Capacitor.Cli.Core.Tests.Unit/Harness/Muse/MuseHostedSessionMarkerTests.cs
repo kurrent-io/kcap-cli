@@ -30,6 +30,29 @@ public class MuseHostedSessionMarkerTests {
     }
 
     [Test]
+    public async Task A_marker_round_trips_the_daemon_connection() {
+        var marker = MarkerWrittenAt(Now) with { ConfigDir = "/srv/kcap-config", ServerUrl = "https://kcap.example" };
+
+        MuseHostedSessionMarker.Write(Home, marker);
+
+        await Assert.That(MuseHostedSessionMarker.TryRead(Home, Dashed)).IsEqualTo(marker);
+    }
+
+    /// <summary>A marker written without the connection fields still reads, naming none.</summary>
+    [Test]
+    public async Task A_marker_without_the_connection_fields_reads_with_none() {
+        var path = MuseHostedSessionMarker.PathFor(Home, Dashed);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path,
+            $$"""{"session_id":"{{Dashed}}","agent_id":"agent-1","daemon_id":"daemon-1","daemon_epoch":"epoch-1","written_at":"2026-10-13T12:00:00+00:00"}""");
+
+        var marker = MuseHostedSessionMarker.TryRead(Home, Dashed);
+
+        await Assert.That(marker).IsEqualTo(MarkerWrittenAt(Now));
+        await Assert.That(marker!.ConfigDir).IsNull();
+    }
+
+    [Test]
     public async Task A_missing_marker_reads_as_null() =>
         await Assert.That(MuseHostedSessionMarker.TryRead(Home, Dashed)).IsNull();
 

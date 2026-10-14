@@ -10,12 +10,17 @@ namespace Capacitor.Cli.Core.Harness.Muse;
 /// the marker lives under the config root derived from it, whatever <c>KCAP_CONFIG_DIR</c> the daemon
 /// runs under.
 /// </summary>
+/// <param name="ConfigDir">The daemon's config root when it is not the one the home derives, so the hook
+/// records to the daemon's profile; null otherwise, and in a marker written before it existed.</param>
+/// <param name="ServerUrl">The server the daemon talks to, recorded with <paramref name="ConfigDir"/>.</param>
 public sealed partial record MuseHostedSessionMarker(
         string         SessionId,
         string         AgentId,
         string         DaemonId,
         string         DaemonEpoch,
-        DateTimeOffset WrittenAt
+        DateTimeOffset WrittenAt,
+        string?        ConfigDir = null,
+        string?        ServerUrl = null
     ) {
     public static string DirectoryFor(UserHome home) => ConfigRoot.UnderHome(home.Path).Path("muse-hosted");
 

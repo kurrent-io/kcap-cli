@@ -326,6 +326,39 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await Assert.That(Guid.Parse(minted).Version).IsEqualTo(7);
     }
 
+    /// <summary>An installed hook runs with a cleared environment, so a daemon whose config root is not the
+    /// home's names its root and server in the marker; the rig's root is a separate temp directory.</summary>
+    [Test]
+    public async Task Marker_carries_a_non_default_config_root_and_the_server() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx());
+        await using var _ = start.Runtime;
+
+        var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
+        var marker = MuseHostedSessionMarker.TryRead(Home, minted)!;
+
+        await Assert.That(marker.ConfigDir).IsEqualTo(KcapConfig.Root.Directory);
+        await Assert.That(marker.ServerUrl).IsEqualTo("http://kcap.test");
+    }
+
+    /// <summary>The twin: a hook already resolves a home-derived root, so the marker names nothing.</summary>
+    [Test]
+    public async Task Marker_names_no_connection_for_the_default_config_root() {
+        var config = Config();
+        config.ConfigRoot = ConfigRoot.UnderHome(Home.Path);
+        var rig = NewRig(config: config);
+
+        var start = await StartAsync(rig, Ctx());
+        await using var _ = start.Runtime;
+
+        var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
+        var marker = MuseHostedSessionMarker.TryRead(Home, minted)!;
+
+        await Assert.That(marker.ConfigDir).IsNull();
+        await Assert.That(marker.ServerUrl).IsNull();
+    }
+
     /// <summary>Muse clears a hook's environment, so the hook finds the marker only under the root derived
     /// from the home — never under the daemon's own config dir, which here is somewhere else.</summary>
     [Test]
