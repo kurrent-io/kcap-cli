@@ -44,7 +44,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         Version                       = "9.9.9",
     };
 
-    string MarkerDir => KcapConfig.Root.Path("muse-hosted");
+    string MarkerDir => MuseHostedSessionMarker.DirectoryFor(Home);
 
     static RuntimeStartContext Ctx(
             bool         isReviewFlow     = false,
@@ -314,7 +314,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await Assert.That(atSpawn.Length).IsEqualTo(1);
 
         var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
-        var marker = MuseHostedSessionMarker.TryRead(KcapConfig.Root, minted);
+        var marker = MuseHostedSessionMarker.TryRead(Home, minted);
 
         await Assert.That(marker).IsNotNull();
         await Assert.That(Path.GetFileName(atSpawn[0])).IsEqualTo(Guid.Parse(minted).ToString("N") + ".json");
@@ -322,6 +322,22 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await Assert.That(marker.DaemonId).IsEqualTo("daemon-1");
         await Assert.That(marker.DaemonEpoch).IsEqualTo("epoch-1");
         await Assert.That(Guid.Parse(minted).Version).IsEqualTo(7);
+    }
+
+    /// <summary>Muse clears a hook's environment, so the hook finds the marker only under the root derived
+    /// from the home — never under the daemon's own config dir, which here is somewhere else.</summary>
+    [Test]
+    public async Task A_daemon_under_another_config_dir_writes_the_marker_where_a_cleared_environment_hook_reads_it() {
+        var rig = NewRig();
+
+        var start = await StartAsync(rig, Ctx());
+        await using var _ = start.Runtime;
+
+        var minted = (string)Params(await rig.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
+
+        await Assert.That(KcapConfig.Root.Directory).IsNotEqualTo(ConfigRoot.UnderHome(Home.Path).Directory);
+        await Assert.That(File.Exists(Home.PathTo(".config", "kcap", "muse-hosted", Guid.Parse(minted).ToString("N") + ".json"))).IsTrue();
+        await Assert.That(Directory.Exists(KcapConfig.Root.Path("muse-hosted"))).IsFalse();
     }
 
     [Test]
@@ -335,7 +351,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         var resume = Params(await rig.Host.WaitForWriteAsync("session/resume"));
         await Assert.That((string?)resume["sessionId"]).IsEqualTo(resumed);
         await Assert.That(rig.Host.WritesOf("session/start")).IsEmpty();
-        await Assert.That(MuseHostedSessionMarker.TryRead(KcapConfig.Root, resumed)?.AgentId).IsEqualTo("agent-1");
+        await Assert.That(MuseHostedSessionMarker.TryRead(Home, resumed)?.AgentId).IsEqualTo("agent-1");
     }
 
     [Test]
@@ -520,7 +536,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task Construction_sweeps_stale_markers() {
-        MuseHostedSessionMarker.Write(KcapConfig.Root, new(
+        MuseHostedSessionMarker.Write(Home, new(
             "01a13695-0736-75d0-8f4e-f121585b8453", "old", "d", "e", TimeProvider.System.GetUtcNow() - TimeSpan.FromDays(3)));
 
         _ = NewRig();

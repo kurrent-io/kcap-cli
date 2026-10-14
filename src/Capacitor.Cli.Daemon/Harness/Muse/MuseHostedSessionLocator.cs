@@ -8,8 +8,8 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 internal static class MuseHostedSessionLocator {
     /// <summary>The marked session's canonical id and log; null until Muse has created the log, so a
     /// caller never records a path that does not exist.</summary>
-    internal static (string SessionId, string Path)? TryLocate(ConfigRoot config, MusePaths paths, string agentId, DateOnly today) {
-        var dir = config.Path("muse-hosted");
+    internal static (string SessionId, string Path)? TryLocate(UserHome home, MusePaths paths, string agentId, DateOnly today) {
+        var dir = MuseHostedSessionMarker.DirectoryFor(home);
         if (!Directory.Exists(dir)) return null;
 
         IEnumerable<string> files;
@@ -22,7 +22,7 @@ internal static class MuseHostedSessionLocator {
         foreach (var file in files) {
             if (!Guid.TryParse(Path.GetFileNameWithoutExtension(file), out var id)) continue;
 
-            if (MuseHostedSessionMarker.TryRead(config, id.ToString("N")) is not { } marker
+            if (MuseHostedSessionMarker.TryRead(home, id.ToString("N")) is not { } marker
              || !string.Equals(marker.AgentId, agentId, StringComparison.Ordinal))
                 continue;
 

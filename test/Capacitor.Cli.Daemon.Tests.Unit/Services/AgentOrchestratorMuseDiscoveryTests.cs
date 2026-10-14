@@ -38,7 +38,7 @@ public class AgentOrchestratorMuseDiscoveryTests {
 
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             var cfg = config();
-            MuseHostedSessionMarker.Write(cfg.ConfigRoot, new(SessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, TimeProvider.System.GetUtcNow()));
+            MuseHostedSessionMarker.Write(cfg.Home, new(SessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, TimeProvider.System.GetUtcNow()));
 
             LogPath = new MusePaths(cfg.Home, null, null).SessionLogPath(SessionId, DateOnly.FromDateTime(TimeProvider.System.GetLocalNow().DateTime))!;
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);

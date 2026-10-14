@@ -5203,7 +5203,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
                 _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
-                _configRoot, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime)),
+                _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime)),
             _        => null,
         };
         if (locate is null) return Task.CompletedTask;

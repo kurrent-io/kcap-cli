@@ -8,13 +8,12 @@ public class MuseHostedSessionLocatorTests {
 
     static readonly DateOnly Today = new(2026, 10, 13);
 
-    [TempConfigRoot] public required TempConfigRoot KcapConfig { get; init; }
-    [TempHome]       public required TempHome       Home { get; init; }
+    [TempHome] public required TempHome Home { get; init; }
 
     MusePaths Paths => new(Home, null, null);
 
     void Mark(string sessionId, string agentId) =>
-        MuseHostedSessionMarker.Write(KcapConfig.Root, new(sessionId, agentId, "daemon-1", "epoch-1", TimeProvider.System.GetUtcNow()));
+        MuseHostedSessionMarker.Write(Home, new(sessionId, agentId, "daemon-1", "epoch-1", TimeProvider.System.GetUtcNow()));
 
     string CreateLog(string sessionId) {
         var path = Paths.SessionLogPath(sessionId, Today)!;
@@ -24,7 +23,7 @@ public class MuseHostedSessionLocatorTests {
     }
 
     (string SessionId, string Path)? Locate(string agentId) =>
-        MuseHostedSessionLocator.TryLocate(KcapConfig.Root, Paths, agentId, Today);
+        MuseHostedSessionLocator.TryLocate(Home, Paths, agentId, Today);
 
     [Test]
     public async Task Nothing_is_found_without_a_marker() =>
@@ -59,7 +58,7 @@ public class MuseHostedSessionLocatorTests {
 
     [Test]
     public async Task A_file_that_is_not_a_marker_is_skipped() {
-        KcapConfig.CreateFile(Path.Combine("muse-hosted", "not-a-guid.json"), "{}");
+        Home.CreateFile(Path.Combine(".config", "kcap", "muse-hosted", "not-a-guid.json"), "{}");
         Mark(SessionId, "agent-1");
         CreateLog(SessionId);
 

@@ -172,7 +172,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
         var plan = BuildPlan(ref ctx, _config);
 
-        MuseHostedSessionMarker.Write(_config.ConfigRoot, new(
+        MuseHostedSessionMarker.Write(_config.Home, new(
             plan.MintedSessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, _time.GetUtcNow()));
 
         var relay        = !_hooksInstalled(_paths.SettingsJson);
@@ -230,7 +230,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
                 await runtime.DisposeAsync().ConfigureAwait(false);
             } else {
                 if (process is not null) await process.DisposeAsync().ConfigureAwait(false);
-                MuseHostedSessionMarker.Delete(_config.ConfigRoot, plan.MintedSessionId);
+                MuseHostedSessionMarker.Delete(_config.Home, plan.MintedSessionId);
             }
 
             if (ex is OperationCanceledException && ct.IsCancellationRequested) throw;
@@ -383,7 +383,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     /// marker); otherwise removes the marker itself, which Muse's own end hook may already have done.</summary>
     void OnRuntimeDisposed(MuseMspHostedAgentRuntime? runtime, RuntimeStartContext ctx, MuseLaunchPlan plan, bool relayedStart) {
         if (!relayedStart || runtime?.Session is not { } session) {
-            MuseHostedSessionMarker.Delete(_config.ConfigRoot, plan.MintedSessionId);
+            MuseHostedSessionMarker.Delete(_config.Home, plan.MintedSessionId);
             return;
         }
 
@@ -409,7 +409,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
     void SweepStaleMarkers() {
         try {
-            MuseHostedSessionMarker.Sweep(_config.ConfigRoot, _time, MarkerMaxAge);
+            MuseHostedSessionMarker.Sweep(_config.Home, _time, MarkerMaxAge);
         } catch (Exception ex) {
             _logger.LogDebug(ex, "Muse: sweeping stale hosted-session markers failed.");
         }

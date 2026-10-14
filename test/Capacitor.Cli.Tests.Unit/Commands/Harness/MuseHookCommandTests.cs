@@ -113,12 +113,13 @@ public class MuseHookCommandTests : IDisposable {
     }
 
     /// <summary>A hook inherits no <c>KCAP_AGENT_ID</c> from a daemon-hosted Muse, so the marker the daemon
-    /// wrote is the only link to the agent.</summary>
+    /// wrote is the only link to the agent. The command's config root is not the home-derived one, so the
+    /// marker is found only by looking where a cleared-environment hook would.</summary>
     [Test]
     public async Task SessionStart_without_a_hosted_environment_takes_agent_host_id_from_the_marker() {
         StubHooks();
         StageParentLog();
-        MuseHostedSessionMarker.Write(Config.Root,
+        MuseHostedSessionMarker.Write(Home,
             new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
 
         await Command().Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
@@ -142,7 +143,7 @@ public class MuseHookCommandTests : IDisposable {
     public async Task SessionEnd_deletes_the_hosted_session_marker_after_posting() {
         StubHooks();
         StageParentLog();
-        MuseHostedSessionMarker.Write(Config.Root,
+        MuseHostedSessionMarker.Write(Home,
             new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
 
         await Command().Handle(new StringReader(
@@ -150,7 +151,7 @@ public class MuseHookCommandTests : IDisposable {
             new StringWriter(), ParentEnv, Today);
 
         await Assert.That(HookPosts("/hooks/session-end/muse").Count).IsEqualTo(1);
-        await Assert.That(MuseHostedSessionMarker.TryRead(Config.Root, ParentId)).IsNull();
+        await Assert.That(MuseHostedSessionMarker.TryRead(Home, ParentId)).IsNull();
     }
 
     /// <summary>Stop only starts a watcher, so this is the start's one chance: it is posted without a
