@@ -433,12 +433,15 @@ sealed class DaemonServiceCommands(
         var failed = false;
 
         foreach (var unit in manager.ListInstalled()) {
-            if (manager.Status(unit).BinaryPath is not { } binary || !IsUnder(binary, dir, OperatingSystem.IsWindows())) continue;
+            if (!Owned(unit)) continue;
 
             using var txn = await ServiceTxnLock.TryAcquireAsync(store, unit, TimeSpan.FromSeconds(5), time);
             if (txn is null) {
                 await Console.Error.WriteLineAsync($"Another service operation is in progress for '{unit}'. Try again shortly.");
                 failed = true;
+            } else if (!Owned(unit)) {
+                // An install holding the lock may have repointed the unit at another copy of kcap.
+                continue;
             } else if (!manager.Uninstall(unit, out var error)) {
                 await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
                 failed = true;
@@ -448,6 +451,9 @@ sealed class DaemonServiceCommands(
         }
 
         return failed ? 1 : 0;
+
+        bool Owned(string unit) =>
+            manager.Status(unit).BinaryPath is { } binary && IsUnder(binary, dir, OperatingSystem.IsWindows());
     }
 
     internal static bool IsUnder(string path, string dir, bool ignoreCase) {

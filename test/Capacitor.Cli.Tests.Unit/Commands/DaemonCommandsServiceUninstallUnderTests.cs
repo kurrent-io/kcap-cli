@@ -13,11 +13,16 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
     sealed class RecordingManager(Dictionary<string, string?> binaries) : IServiceManager {
         public readonly List<string> Uninstalled = [];
+        int _statusReads;
+        public int StatusReads => Volatile.Read(ref _statusReads);
         public string Describe() => "fake";
         public string UnitDirectory => "";
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
-        public ServiceStatus Status(string serviceId) => new(ServiceState.Installed, binaries[serviceId]);
+        public ServiceStatus Status(string serviceId) {
+            Interlocked.Increment(ref _statusReads);
+            return new(ServiceState.Installed, binaries[serviceId]);
+        }
         public ServiceQuery Query(string serviceId) => new(LabelProbe.Loaded, true, ServiceState.Installed, binaries[serviceId], null);
         public void Install(ServiceSpec spec, bool startNow) { }
         public void WriteAndBootstrap(ServiceSpec spec) { }
@@ -64,6 +69,24 @@ public class DaemonCommandsServiceUninstallUnderTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(manager.Uninstalled).IsEmpty();
         await Assert.That(console.GetCapturedError()).Contains("'laptop'");
+    }
+
+    [Test]
+    public async Task A_unit_repointed_while_the_lock_was_held_is_left_alone() {
+        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var binaries = new Dictionary<string, string?> { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") };
+        var manager = new RecordingManager(binaries);
+        var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var run = Commands(manager).UninstallUnder(app);
+        while (manager.StatusReads == 0) await Task.Delay(10);
+        binaries["laptop"] = Path.GetFullPath("/npm/node_modules/@kurrent/kcap/bin/kcap-daemon.exe");
+        held!.Dispose();
+        var exit = await run;
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(manager.Uninstalled).IsEmpty();
     }
 
     [Test]
