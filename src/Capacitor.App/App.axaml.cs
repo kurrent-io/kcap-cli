@@ -860,15 +860,16 @@ public partial class App : Application {
 
     static async Task<bool> RelaunchForSettingsAsync(
             IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
-        // Windows has no bundle to reopen: a second copy of this executable is the relaunch, as
-        // `open -n` starts a second instance on macOS.
+        // Windows has no bundle to reopen, so the relaunch is a new copy of this executable. It
+        // starts on Exit, once teardown is over: shutdown can outlast the new copy's wait for the
+        // single-instance lock.
         if (OperatingSystem.IsWindows()) {
             if (Environment.ProcessPath is not { } exe) return false;
-            try {
-                using var next = Process.Start(new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false });
-            } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
-                return false;
-            }
+            var start = new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false };
+            desktop.Exit += (_, _) => {
+                try { Process.Start(start)?.Dispose(); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not relaunch: {ex.Message}"); }
+            };
             desktop.TryShutdown();
             return true;
         }

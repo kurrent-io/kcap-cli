@@ -16,8 +16,8 @@ internal static class Program
     /// Held for the life of the process on Windows; null elsewhere.
     public static SingleInstanceGuard? Instance { get; private set; }
 
-    // Long enough for the old copy to finish shutting down; past it, that copy is taken to have
-    // cancelled its exit and is asked to show itself instead.
+    // A relaunch starts once the old copy's teardown is over, so this covers only its process exit.
+    // Past it, that copy is taken to be still running and is asked to show itself instead.
     static readonly TimeSpan RelaunchWait = TimeSpan.FromSeconds(30);
 
     [STAThread]
