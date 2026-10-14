@@ -31,10 +31,10 @@ Never start `kcap daemon` unless the user asks for hosted agents.
 
 ## Part A — any other machine
 
-1. Check what is there: `command -v kcap && kcap status`. A `Server:` line
-   naming the workspace the user wants (or any, if they named none) marked
-   `✓ reachable`, with `Auth:` saying `✓ token valid`, means nothing to do; say
-   so and stop. Anything else means step 3 runs.
+1. Check what is there: `command -v kcap && kcap whoami`. A `Server:` line
+   naming the workspace the user wants (or any, if they named none) plus
+   `Server:   accepts this token` means nothing to do; say so and stop.
+   Anything else means step 3 runs.
 2. Install: requires Node.js 18+ (`node -v`). `npm install -g @kurrent/kcap`,
    then `command -v kcap` must print a path (otherwise add `$(npm prefix -g)/bin`
    to PATH in the shell profile — the hooks run `kcap` by name).
@@ -72,14 +72,15 @@ for the card, then run the **same command again** unchanged.
 
 ```bash
 KCAP=~/workspace/kcap/node_modules/.bin/kcap
-[ -x "$KCAP" ] && "$KCAP" status --no-update-check
+[ -x "$KCAP" ] && "$KCAP" whoami
 ```
 
-B2 and B3 are done only when all three hold: the `Server:` line names the
-workspace the user asked for, it says `✓ reachable`, and the `Auth:` line says
-`✓ token valid`. Then continue at B4 and only create what is missing. A
-different server, an unreachable one (on this VM, usually a card not yet
-approved) or any other `Auth:` verdict means B3 still runs.
+B2 and B3 are done only when `whoami` prints a `Server:` line naming the
+workspace the user asked for **and** a `Server:   accepts this token` line —
+the workspace itself checked the sign-in. Then continue at B4 and only create
+what is missing. A different server, `could not verify` (on this VM, usually a
+card not yet approved), `REJECTS this token`, or no sign-in at all means B3
+still runs.
 
 ### B2. Install under the persistent workspace
 
