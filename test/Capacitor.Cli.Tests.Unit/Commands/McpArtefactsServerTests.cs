@@ -8,6 +8,8 @@ public class McpArtefactsServerTests {
 
     const string CapacitorSessionIdEnvVar = "KCAP_SESSION_ID";
     const string CodexThreadIdEnvVar      = "CODEX_THREAD_ID";
+    const string ClaudeSessionIdEnvVar    = "CLAUDE_CODE_SESSION_ID";
+    const string GrokSessionIdEnvVar      = "GROK_SESSION_ID";
 
     // Shares ArgParsingTests' NotInParallel key: both suites mutate the same process-global
     // KCAP_SESSION_ID / CODEX_THREAD_ID env vars, so tests in either must not interleave.
@@ -84,20 +86,25 @@ public class McpArtefactsServerTests {
     [Test]
     [NotInParallel(SessionEnvVarMutation)]
     public async Task Publish_body_cites_the_ambient_session_without_being_asked() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "ambientsess1");
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+        await WithoutAmbientSessionAsync(async () => {
+            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "ambientsess1");
 
-        try {
             var body = McpArtefactsServer.BuildPublishBody(Args("""{"title":"Plan"}"""), "<p>x</p>");
 
             await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
                         .IsEquivalentTo(new[] { "ambientsess1" });
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-        }
+        });
+    }
+
+    [Test]
+    public async Task Publish_body_cites_claude_code_session_id_in_mcp_stdio_env() {
+        var body = McpArtefactsServer.BuildPublishBody(
+            Args("""{"title":"Plan"}"""),
+            "<p>x</p>",
+            name => name == ClaudeSessionIdEnvVar ? "69849952-6dcc-484c-81cc-ccf504b1a807" : null);
+
+        await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
+                    .IsEquivalentTo(new[] { "698499526dcc484c81ccccf504b1a807" });
     }
 
     [Test]
@@ -340,14 +347,20 @@ public class McpArtefactsServerTests {
     static async Task WithoutAmbientSessionAsync(Func<Task> body) {
         var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
         var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
+        var savedCld = Environment.GetEnvironmentVariable(ClaudeSessionIdEnvVar);
+        var savedGrk = Environment.GetEnvironmentVariable(GrokSessionIdEnvVar);
         Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, null);
         Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
+        Environment.SetEnvironmentVariable(ClaudeSessionIdEnvVar, null);
+        Environment.SetEnvironmentVariable(GrokSessionIdEnvVar, null);
 
         try {
             await body();
         } finally {
             Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
             Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
+            Environment.SetEnvironmentVariable(ClaudeSessionIdEnvVar, savedCld);
+            Environment.SetEnvironmentVariable(GrokSessionIdEnvVar, savedGrk);
         }
     }
 }
