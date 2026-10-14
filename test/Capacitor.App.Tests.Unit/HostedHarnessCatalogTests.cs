@@ -133,6 +133,14 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.TileFor("zed").Glyph).IsEqualTo("Z");
     }
 
+    /// <summary>Grok's tint is its own off-white, the one the server's session chip uses, not the
+    /// neutral tint vendors without a brand colour share.</summary>
+    [Test]
+    public async Task Grok_has_its_own_tint() {
+        await Assert.That(HostedHarnessCatalog.TileFor("grok").Color).IsEqualTo("#F5F5F5");
+        await Assert.That(HostedHarnessCatalog.TileFor("grok").Color).IsNotEqualTo(HostedHarnessCatalog.TileFor("codex").Color);
+    }
+
     [Test]
     public async Task Model_label_prefers_the_curated_name_and_falls_back_to_the_slug() {
         await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "claude-fable-5")).IsEqualTo("Claude Fable 5");
