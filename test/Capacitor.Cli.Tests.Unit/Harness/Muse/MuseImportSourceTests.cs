@@ -398,6 +398,31 @@ public class MuseImportSourceTests : IDisposable {
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
     }
 
+    /// <summary>A parent watcher killed outright leaves its child watchers running; any one of them
+    /// alive means the stops are still the live scan's, for every child.</summary>
+    [Test]
+    public async Task Under_an_idle_unfinished_parent_with_a_child_watcher_still_running_no_child_is_stopped() {
+        var log = LayOutUnfinishedProbeWithWorkers();
+        LastWrittenAt(log, UnfinishedLastRecord);
+        StubServer();
+
+        var childLog   = MuseSubagentDiscovery.EnumerateChildLogs(log)[0];
+        var childLabel = MuseSubagentDiscovery.LabelFor(
+            Path.GetFileName(Path.GetDirectoryName(childLog))!, MuseSubagentDiscovery.ResolveChildLabels(log));
+
+        using var watcher = DummyProcess.StartSleep(30);
+        Directory.CreateDirectory(Watchers.Directory);
+        await File.WriteAllTextAsync(Watchers.PidFile($"{Guid.Parse(ParentId):N}-{childLabel.AgentId}"),
+            $"{watcher.Pid}\n{PidIdentity.Capture(watcher.Pid)}");
+
+        var now = UnfinishedLastRecord + MuseImportSource.AbandonedAfter + TimeSpan.FromHours(2);
+        var (_, result) = await ImportProbeAsync(new FakeTimeProvider(now));
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(PostedRoutes().Count(r => r == "/hooks/subagent-start")).IsEqualTo(4);
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
+    }
+
     /// <summary>A worker still writing its own log keeps an otherwise idle parent from reading as abandoned.</summary>
     [Test]
     public async Task A_child_written_within_the_stale_window_keeps_an_idle_parent_from_being_abandoned() {

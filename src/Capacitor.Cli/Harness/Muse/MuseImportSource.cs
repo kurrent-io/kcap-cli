@@ -359,16 +359,26 @@ internal sealed class MuseImportSource(MusePaths paths, WatcherPaths watchers, T
     }
 
     /// <summary>An unfinished parent no longer recorded live: its log and every child log have gone
-    /// unwritten past <see cref="AbandonedAfter"/>, and no watcher for it runs on this machine, the one
-    /// whose hooks would have started it. With no activity time to read, it is not.</summary>
+    /// unwritten past <see cref="AbandonedAfter"/>, and neither its watcher nor any child's runs on this
+    /// machine, the one whose hooks would have started them. A parent watcher killed outright leaves
+    /// its child watchers running, and those still own the stops. With no activity time to read, it is not.</summary>
     bool IsAbandoned(string sessionId, string parentLog, DateTimeOffset? lastRecordedAt) {
         var lastActivity = lastRecordedAt;
+        var childLogs    = MuseSubagentDiscovery.EnumerateChildLogs(parentLog);
 
-        foreach (var log in MuseSubagentDiscovery.EnumerateChildLogs(parentLog).Prepend(parentLog))
+        foreach (var log in childLogs.Prepend(parentLog))
             if (TryGetLastWriteUtc(log) is { } written && (lastActivity is null || written > lastActivity))
                 lastActivity = written;
 
-        return lastActivity is { } last && time.GetUtcNow() - last > AbandonedAfter && !WatcherManager.PidAlive(watchers, sessionId);
+        if (lastActivity is not { } last || time.GetUtcNow() - last <= AbandonedAfter) return false;
+        if (WatcherManager.PidAlive(watchers, sessionId)) return false;
+
+        var labels = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
+
+        return !childLogs.Any(childLog => {
+            var label = MuseSubagentDiscovery.LabelFor(Path.GetFileName(Path.GetDirectoryName(childLog))!, labels);
+            return WatcherManager.PidAlive(watchers, $"{sessionId}-{label.AgentId}");
+        });
     }
 
     // Without strict the server answers 200 when it fails to record a child's start or stop.
