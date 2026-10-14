@@ -199,6 +199,37 @@ partial class WatchCommand(
         return tail.Trim().Length == 0 || IsCompleteJsonRecord(tail);
     }
 
+    static readonly UTF8Encoding Utf8NoPreamble = new(encoderShouldEmitUTF8Identifier: false);
+
+    /// <summary>
+    /// The file's text from its last <c>'\n'</c> on, or all of it when it has none: what
+    /// <see cref="IsFinalLineComplete"/> decides on, read without decoding the lines before it.
+    /// </summary>
+    internal static async Task<string> ReadFinalLineSharedAsync(string path) {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        var end   = stream.Length;
+        var start = end;
+
+        while (start > 0) {
+            var chunk = new byte[(int)Math.Min(64 * 1024, start)];
+            stream.Position = start - chunk.Length;
+            if (await ReadFullyAsync(stream, chunk, CancellationToken.None) != chunk.Length) break;
+
+            var newline = chunk.AsSpan().LastIndexOf((byte)'\n');
+            start -= chunk.Length;
+            if (newline >= 0) {
+                start += newline;
+                break;
+            }
+        }
+
+        var tail = new byte[end - start];
+        stream.Position = start;
+        var text = tail.AsSpan(0, await ReadFullyAsync(stream, tail, CancellationToken.None));
+
+        return Utf8NoPreamble.GetString(start == 0 && text.StartsWith(Encoding.UTF8.Preamble) ? text[3..] : text);
+    }
+
     /// <summary>
     /// Bounded wait (≤2s, 4×500ms) for the shutdown final drain: re-reads <paramref name="path"/>
     /// looking for <see cref="IsFinalLineComplete"/> before the watcher decides whether it's safe to
@@ -212,7 +243,7 @@ partial class WatchCommand(
             string path, TimeProvider time, int attempts = 4, int delayMs = 500) {
         for (var i = 0; i < attempts; i++) {
             try {
-                if (IsFinalLineComplete(await File.ReadAllTextSharedAsync(path))) return true;
+                if (IsFinalLineComplete(await ReadFinalLineSharedAsync(path))) return true;
             } catch {
                 // Transient read failure (e.g. concurrent write) — try again on the next iteration.
             }
@@ -1033,7 +1064,7 @@ partial class WatchCommand(
             // instead of silently dropping it.
             await SpoolUndeliveredTranscriptTailAsync(
                 transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None,
-                ShutdownTailRedactionDeadline - time.GetElapsedTime(shutdownStarted));
+                ShutdownTailRedactionDeadline - time.GetElapsedTime(shutdownStarted), state.LineOffsets);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -2156,7 +2187,8 @@ partial class WatchCommand(
                     isFinalDrain ? IncompleteFinalLinePolicy.ConsumeIfComplete : IncompleteFinalLinePolicy.Hold,
                     ct, captureRawBytes: vendor == "cursor",
                     rawBytesReadFrom: cursorBoundedReadFrom,
-                    newRangeByteOffset: vendor == "cursor" ? cursorGuardOldOffset : null);
+                    newRangeByteOffset: vendor == "cursor" ? cursorGuardOldOffset : null,
+                    lineOffsets: state.LineOffsets);
             }
 
             // commit the cadence counter now that the guarded
@@ -2714,15 +2746,16 @@ partial class WatchCommand(
 
     /// <summary>Spool only records beyond the acknowledged source frontier.</summary>
     internal async Task<TranscriptSpool.AppendResult?> SpoolUndeliveredTranscriptTailAsync(
-            TranscriptSpool   transcriptSpool,
-            string            transcriptPath,
-            string            sessionId,
-            string?           agentId,
-            string            vendor,
-            int               linesProcessed,
-            CommitObservation commits,
-            CancellationToken ct,
-            TimeSpan?         redactionLimit = null
+            TranscriptSpool      transcriptSpool,
+            string               transcriptPath,
+            string               sessionId,
+            string?              agentId,
+            string               vendor,
+            int                  linesProcessed,
+            CommitObservation    commits,
+            CancellationToken    ct,
+            TimeSpan?            redactionLimit = null,
+            TranscriptLineIndex? lineOffsets    = null
         ) {
         if (!File.Exists(transcriptPath)) return null;
 
@@ -2739,7 +2772,7 @@ partial class WatchCommand(
             await using var stream = new FileStream(
                 transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             tail = await ReadNewCompleteLinesAsync(
-                stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct);
+                stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct, lineOffsets: lineOffsets);
         } catch (IOException ex) {
             Log(time, $"Shutdown-tail spool: failed to read transcript for {sessionId}: {ex.Message}");
 
@@ -4392,6 +4425,11 @@ partial class WatchCommand(
     /// lands exactly on a line boundary (true by construction for the Cursor watcher's own
     /// <c>CursorByteOffset</c> — see <see cref="ByteOffsetForAckedLines"/>).
     /// </param>
+    /// <param name="lineOffsets">
+    /// Ignored when <paramref name="captureRawBytes"/> is true. Otherwise lets the read start at
+    /// <paramref name="linesProcessed"/>'s byte offset rather than byte 0, and learns the offsets of
+    /// the lines it reads; the result is the same as without it.
+    /// </param>
     internal static async Task<NewTranscriptLines> ReadNewCompleteLinesAsync(
             FileStream                stream,
             int                       linesProcessed,
@@ -4399,7 +4437,8 @@ partial class WatchCommand(
             CancellationToken         ct,
             bool                      captureRawBytes    = false,
             long                      rawBytesReadFrom   = 0,
-            long?                     newRangeByteOffset = null) {
+            long?                     newRangeByteOffset = null,
+            TranscriptLineIndex?      lineOffsets        = null) {
         var length = stream.Length;
 
         bool endsWithNewline;
@@ -4482,7 +4521,19 @@ partial class WatchCommand(
                 }
             }
         } else {
-            using var reader = new StreamReader(new LengthLimitedReadStream(stream, length), leaveOpen: true);
+            var startOffset = 0L;
+            if (lineOffsets is not null) {
+                (lineIndex, startOffset) = await lineOffsets.StartAsync(stream, length, linesProcessed, ct);
+                stream.Position          = startOffset;
+            }
+
+            // Mid-file there is no byte-order mark to detect, and a line that happens to begin with
+            // the UTF-8 one must keep it, as it does when decoded from byte 0.
+            using var reader = startOffset == 0
+                ? new StreamReader(new LengthLimitedReadStream(stream, length, lineOffsets), leaveOpen: true)
+                : new StreamReader(new LengthLimitedReadStream(stream, length - startOffset, lineOffsets),
+                    Utf8NoPreamble, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+
             while (await reader.ReadLineAsync(ct) is { } line) {
                 if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
                     newLines.Add(line);
@@ -4491,6 +4542,8 @@ partial class WatchCommand(
 
                 lineIndex++;
             }
+
+            if (lineOffsets is not null) await lineOffsets.FinishAsync(stream, ct);
         }
 
         // `length` is the exact byte boundary this read was capped at
@@ -4578,7 +4631,7 @@ partial class WatchCommand(
 
     /// <summary>Read-only view of <c>inner</c> that reports EOF after <c>limit</c> bytes, so a
     /// StreamReader over it can't read past a length sampled before a concurrent append.</summary>
-    internal sealed class LengthLimitedReadStream(Stream inner, long limit) : Stream {
+    internal sealed class LengthLimitedReadStream(Stream inner, long limit, TranscriptLineIndex? observer = null) : Stream {
         long _consumed;
 
         public override int Read(byte[] buffer, int offset, int count) {
@@ -4586,6 +4639,7 @@ partial class WatchCommand(
             if (allowed <= 0) return 0;
             var n = inner.Read(buffer, offset, allowed);
             _consumed += n;
+            observer?.Observe(buffer.AsSpan(offset, n));
             return n;
         }
 
@@ -4594,6 +4648,7 @@ partial class WatchCommand(
             if (allowed <= 0) return 0;
             var n = await inner.ReadAsync(buffer[..allowed], ct);
             _consumed += n;
+            observer?.Observe(buffer.Span[..n]);
             return n;
         }
 
