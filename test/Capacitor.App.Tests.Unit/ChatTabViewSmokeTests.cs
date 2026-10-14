@@ -423,6 +423,8 @@ public class ChatTabViewSmokeTests {
             await Assert.That(label.Text).IsEqualTo("Published page");
             await Assert.That(label.FontFamily.Name).IsEqualTo(detail.FontFamily.Name);
             await Assert.That(label.LineHeight).IsEqualTo(detail.LineHeight);
+            await Assert.That(label.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
+            await Assert.That(detail.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await Assert.That(host.View.GetVisualDescendants().OfType<Control>().Any(c => c.Name == "ToolCard" && c.IsEffectivelyVisible)).IsFalse();
 
             await host.AppendLinesAndTickAsync(path, PublishResultLine);
@@ -435,6 +437,8 @@ public class ChatTabViewSmokeTests {
             var meta = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardMeta");
             await Assert.That(title.Text).IsEqualTo("Published page");
             await Assert.That(name.Text).IsEqualTo("Retention brief");
+            await Assert.That(title.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
+            await Assert.That(name.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await Assert.That(title.TranslatePoint(default, host.Window)!.Value.X)
                 .IsEqualTo(meta.TranslatePoint(default, host.Window)!.Value.X);
             await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen").IsEffectivelyVisible).IsTrue();
