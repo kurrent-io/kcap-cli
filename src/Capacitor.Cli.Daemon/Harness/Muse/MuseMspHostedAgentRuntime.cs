@@ -538,7 +538,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         // The gate runs this under its lock and publishes the verdict when it returns.
         await Task.Yield();
 
-        _logger.LogWarning("Muse: ending the unattended reviewer after a model failure (agentId={AgentId}).", _agentId);
+        _logger.LogWarning("Muse: ending the unattended reviewer, which cannot continue (agentId={AgentId}).", _agentId);
 
         await RequestGracefulStopAsync().ConfigureAwait(false);
         if (!_process.HasExited) await TerminateAsync(StopGrace).ConfigureAwait(false);
@@ -809,6 +809,22 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             return;
         }
 
+        if (await DecideAsync(approvalId, view, requirement, decision).ConfigureAwait(false) is not false) return;
+
+        // An unattended reviewer's turn waits on the approval, and nobody else will resolve it.
+        if (!_plan.IsReviewer || ct.IsCancellationRequested) return;
+
+        if (await DecideAsync(approvalId, view, requirement, Declined(view)).ConfigureAwait(false) is not false) return;
+
+        _gate.TryStartReap(
+            $"muse_reviewer_approval_refused: the Muse host refused every decision on approval {approvalId}, so the reviewer cannot continue.",
+            RunSelfStopAsync);
+    }
+
+    /// <summary>True when the host took the decision or had already resolved the approval, false when it
+    /// refused it, null when it was not delivered. A refusal leaves the approval open, so its requirement
+    /// is forgotten and a later update for it is decided again.</summary>
+    async Task<bool?> DecideAsync(string approvalId, JsonElement view, JsonElement requirement, MuseApprovalDecision decision) {
         // Recorded before the write: the update our own decision provokes can arrive before its response.
         _decidedRequirements[approvalId] = requirement;
 
@@ -816,16 +832,22 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
             using var response = await RequestAsync(id => MuseMsp.ApprovalDecide(
                 id, MuseMsp.NewId(), SessionIdOr(view), approvalId, requirement, decision.ChoiceId, decision.Feedback)).ConfigureAwait(false);
 
-            if (ErrorMessage(response) is not { } error) return;
+            if (ErrorMessage(response) is not { } error) return true;
 
             // The host can settle an approval by policy or judge before our decision lands.
-            if (IsAlreadyResolved(response))
+            if (IsAlreadyResolved(response)) {
                 _logger.LogDebug("Muse: approval {ApprovalId} was already resolved by the host (agentId={AgentId}).", approvalId, _agentId);
-            else
-                _logger.LogWarning("Muse: the decision on approval {ApprovalId} was refused: {Error} (agentId={AgentId}).", approvalId, error, _agentId);
+                return true;
+            }
+
+            _decidedRequirements.TryRemove(approvalId, out _);
+            _logger.LogWarning("Muse: the {Choice} decision on approval {ApprovalId} was refused: {Error} (agentId={AgentId}).",
+                decision.ChoiceId, approvalId, error, _agentId);
+            return false;
         } catch (Exception ex) {
             _decidedRequirements.TryRemove(approvalId, out _);
             _logger.LogDebug(ex, "Muse: the decision on approval {ApprovalId} was not delivered (agentId={AgentId}).", approvalId, _agentId);
+            return null;
         }
     }
 

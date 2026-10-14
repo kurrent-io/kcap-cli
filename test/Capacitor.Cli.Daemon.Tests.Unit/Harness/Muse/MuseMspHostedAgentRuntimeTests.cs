@@ -612,6 +612,80 @@ public class MuseMspHostedAgentRuntimeTests {
         await Assert.That(logger.Entries.Where(e => e.Exception is not null)).IsEmpty();
     }
 
+    /// <summary>A refused decision leaves the approval open, so the interactive lane forgets it and decides
+    /// the same requirement again when the host re-presents it.</summary>
+    [Test]
+    public async Task A_refused_interactive_decision_is_decided_again_on_the_next_update() {
+        var logger = new CaptureLogger();
+        var asks   = 0;
+        var decides = 0;
+        await using var rig = await ReadyRig(
+            interact: (_, _) => {
+                Interlocked.Increment(ref asks);
+                return Task.FromResult(new AcpInteractionDecision("allow", "allow_once", null, null, null, null));
+            },
+            configure: h => h.Override = r => (string?)r["method"] == "approval/decide" && Interlocked.Increment(ref decides) == 1
+                ? MuseScriptedHost.ErrorResponse((long)r["id"]!, "requirement is stale")
+                : null,
+            logger: logger);
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+        await logger.WaitForAsync(e => e.Message.Contains("was refused", StringComparison.Ordinal)).WaitAsync(HangGuard);
+
+        rig.Process.Push(ApprovalUpdated(sourceIndex: 0));
+
+        var second = Params(await rig.Host.WaitForWriteAsync("approval/decide", 2));
+        await Assert.That((long?)second["requirementId"]!["sourceIndex"]).IsEqualTo(0L);
+        await Assert.That(Volatile.Read(ref asks)).IsEqualTo(2);
+        await Assert.That(rig.Runtime.ReadVerdict()).IsNull();
+    }
+
+    /// <summary>The reviewer's turn waits on an approval nobody else will resolve, so a refused decision is
+    /// retried once as the abort choice.</summary>
+    [Test]
+    public async Task A_refused_reviewer_decision_is_retried_as_abort() {
+        var decides = 0;
+        await using var rig = await ReadyRig(
+            Plan(isReviewer: true, admitted: new HashSet<string> { SearchTool }.ToFrozenSet()),
+            configure: h => h.Override = r => (string?)r["method"] == "approval/decide" && Interlocked.Increment(ref decides) == 1
+                ? MuseScriptedHost.ErrorResponse((long)r["id"]!, "requirement is stale")
+                : null);
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+
+        var first = Params(await rig.Host.WaitForWriteAsync("approval/decide"));
+        var retry = Params(await rig.Host.WaitForWriteAsync("approval/decide", 2));
+        await rig.Host.SyncAsync();
+
+        await Assert.That((string?)first["choiceId"]).IsEqualTo("allow_once");
+        await Assert.That((string?)retry["choiceId"]).IsEqualTo("abort");
+        await Assert.That((string?)retry["approvalId"]).IsEqualTo(ApprovalId);
+        await Assert.That(rig.Runtime.ReadVerdict()).IsNull();
+    }
+
+    /// <summary>A reviewer whose abort is refused too can never finish its turn, so it ends with a coded
+    /// verdict, as a model failure does.</summary>
+    [Test]
+    public async Task A_reviewer_whose_abort_is_refused_too_is_a_coded_verdict_and_stops() {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var rig = await ReadyRig(
+            Plan(isReviewer: true, admitted: new HashSet<string> { SearchTool }.ToFrozenSet()),
+            configure: h => {
+                h.Override = r => (string?)r["method"] == "approval/decide"
+                    ? MuseScriptedHost.ErrorResponse((long)r["id"]!, "requirement is stale")
+                    : null;
+                h.Process.ExitsOnInputClose = true;
+                h.Process.OnInputClose      = () => closed.TrySetResult();
+            });
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+
+        await closed.Task.WaitAsync(HangGuard);
+
+        await Assert.That(rig.Host.WritesOf("approval/decide")).Count().IsEqualTo(2);
+        await Assert.That(rig.Runtime.ReadVerdict()!.Reason).StartsWith("muse_reviewer_approval_refused: ");
+    }
+
     [Test]
     public async Task A_reviewer_decider_that_throws_declines_the_approval() {
         await using var rig = await ReadyRig(Plan(isReviewer: true, admitted: new ThrowingSet()));
