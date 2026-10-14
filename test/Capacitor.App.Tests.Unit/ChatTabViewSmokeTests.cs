@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -51,6 +52,14 @@ public class ChatTabViewSmokeTests {
 
     static string CallLine(int n) => ToolCallLine.Replace("\"t1\"", $"\"t{n}\"");
     static string ResultLine(int n) => ToolResultLine.Replace("\"t1\"", $"\"t{n}\"");
+
+    // The short tail leaves its preceding tall reply unmeasured until the reader scrolls up.
+    static string[] UnevenHistory() {
+        var prose = string.Join("\\n\\n", Enumerable.Repeat("A longer reply whose paragraphs wrap across the chat column.", 20));
+        var tall = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + prose + "\"}]}}";
+        return Enumerable.Range(0, 60).SelectMany(_ => new[] { tall, UserLine, UserLine, UserLine, UserLine, UserLine })
+            .Concat([UserLine, UserLine]).ToArray();
+    }
 
     static List<Control> ToolRows(ChatTabView view) => view.GetVisualDescendants().OfType<Control>()
         .Where(c => c.Name == "ToolCallRow" && c.DataContext is ToolCallItem).ToList();
@@ -277,6 +286,100 @@ public class ChatTabViewSmokeTests {
             await host.CloseAsync();
         });
     }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Scrolling_uneven_history_does_not_reverse_the_scrollbar(bool drag, bool down) => RunOnUiAsync(async () => {
+        var host = new Host();
+        try {
+            var lines = UnevenHistory();
+            var path = Tmp.CreateFile("uneven-scroll.jsonl", lines);
+            await host.LoadAsync(path);
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            if (down) { WheelUp(host); host.Settle(); }
+            var direction = down ? 1 : -1;
+            var target = drag
+                ? (Control)host.Scroll.GetVisualDescendants().OfType<ScrollBar>().Single(bar => bar.Name == "PART_VerticalScrollBar" && ReferenceEquals(bar.TemplatedParent, host.Scroll))
+                    .GetVisualDescendants().OfType<Thumb>().Single()
+                : items;
+            var origin = PresentAndLocate(host, target);
+            if (drag) { host.Window.MouseMove(origin); host.Window.MouseDown(origin, MouseButton.Left); }
+            var previous = host.Scroll.Offset.Y / (host.Scroll.Extent.Height - host.Scroll.Viewport.Height);
+            var reversals = new List<string>();
+            var contentJumps = new List<string>();
+            var peakRealized = 0;
+            var allocated = GC.GetTotalAllocatedBytes();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            for (var i = 0; i < 80; i++) {
+                var middle = host.Scroll.Viewport.Height / 2;
+                var reading = drag ? null : items.GetRealizedContainers().FirstOrDefault(container =>
+                    container.TranslatePoint(default, host.Scroll) is { } point && point.Y <= middle && point.Y + container.Bounds.Height > middle);
+                var readingItem = reading?.DataContext;
+                var beforeY = reading?.TranslatePoint(default, host.Scroll)?.Y;
+                if (drag) host.Window.MouseMove(origin + new Vector(0, direction * (i + 1) * 2), RawInputModifiers.LeftMouseButton);
+                else host.Window.MouseWheel(origin, new Vector(0, -direction));
+                if (drag && i == 79) host.Window.MouseUp(origin + new Vector(0, direction * 160), MouseButton.Left);
+                host.Settle();
+                if (!drag) {
+                    var after = readingItem is null ? null : items.ContainerFromItem(readingItem);
+                    var shift = (after?.TranslatePoint(default, host.Scroll)?.Y - beforeY) * -direction;
+                    if (!ReferenceEquals(after, reading) || shift is null or < -1 or > 75)
+                        contentJumps.Add($"step {i}: reading row moved {shift:F1}px or was recycled");
+                }
+                var current = host.Scroll.Offset.Y / (host.Scroll.Extent.Height - host.Scroll.Viewport.Height);
+                if ((current - previous) * direction < -0.005) reversals.Add($"step {i}: {previous:F4} -> {current:F4}");
+                previous = current;
+                peakRealized = Math.Max(peakRealized, items.GetRealizedContainers().Count());
+            }
+            watch.Stop();
+            allocated = GC.GetTotalAllocatedBytes() - allocated;
+            Console.WriteLine($"CHAT_SCROLL drag={drag} down={down} steps=80 elapsed_ms={watch.Elapsed.TotalMilliseconds:F2} allocated_bytes={allocated} peak_realized={peakRealized} reversals={reversals.Count} content_jumps={contentJumps.Count} {string.Join("; ", reversals.Concat(contentJumps))}");
+            await Assert.That(reversals).IsEmpty();
+            await Assert.That(contentJumps).IsEmpty();
+            if (down) await Assert.That(previous).IsGreaterThan(0.01);
+            else await Assert.That(previous).IsLessThan(0.99);
+            await Assert.That(peakRealized).IsLessThan(80);
+            await Assert.That(host.AtBottom()).IsFalse();
+            var offset = host.Scroll.Offset.Y;
+            await host.AppendAndTickAsync(path, 5);
+            await Assert.That(Math.Abs(host.Scroll.Offset.Y - offset)).IsLessThan(2);
+        } finally { await host.CloseAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Resizing_uneven_history_preserves_the_readers_visible_row() => RunOnUiAsync(async () => {
+        var host = new Host();
+        try {
+            var lines = UnevenHistory();
+            var path = Tmp.CreateFile("resize-scroll.jsonl", lines);
+            await host.LoadAsync(path);
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var center = PresentAndLocate(host, items);
+            for (var i = 0; i < 40; i++) {
+                host.Window.MouseWheel(center, new Vector(0, 1));
+                host.Settle();
+            }
+            var row = items.ItemsPanelRoot!.FindAncestorOfType<IScrollAnchorProvider>()!.CurrentAnchor
+                ?? throw new InvalidOperationException("The scrolled chat has no anchor.");
+            var item = row.DataContext!;
+            var beforeY = row.TranslatePoint(default, host.Scroll)!.Value.Y;
+            var heights = items.GetRealizedContainers().ToDictionary(container => container.DataContext!, container => container.Bounds.Height);
+            host.Window.Width = 360;
+            host.Settle();
+            await Assert.That(heights.Any(entry => items.ContainerFromItem(entry.Key) is { } container && Math.Abs(container.Bounds.Height - entry.Value) > 20)).IsTrue();
+            await Assert.That(items.ContainerFromItem(item)).IsSameReferenceAs(row);
+            await Assert.That(Math.Abs(row.TranslatePoint(default, host.Scroll)!.Value.Y - beforeY)).IsLessThan(2);
+            await Assert.That(host.AtBottom()).IsFalse();
+            var offset = host.Scroll.Offset.Y;
+            await host.AppendAndTickAsync(path, 5);
+            await Assert.That(Math.Abs(host.Scroll.Offset.Y - offset)).IsLessThan(2);
+        } finally { await host.CloseAsync(); }
+    });
 
     /// Pins follow-tail's whole contract: it tracks the bottom, leaves a reader who scrolled up
     /// where they are, and does not follow an append that lands in the same layout pass as the
