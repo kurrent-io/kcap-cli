@@ -28,6 +28,7 @@ public static class ToolCategoryIcons {
         "Note"       => NoteIcon,
         "Permission" => PermissionIcon,
         "Question"   => ForCategory(ToolCategory.Question),
+        AssistantThinkingItem.ThinkingLabel => ThinkingIcon,
         SystemNoteItem.AgentReportLabel or SystemNoteItem.AgentMessageLabel => AgentMessageIcon,
         _            => null,
     };
@@ -37,4 +38,5 @@ public static class ToolCategoryIcons {
     public static LucideIconKind PermissionIcon => LucideIconKind.ShieldQuestionMark;
     public static LucideIconKind QuestionIcon => ForCategory(ToolCategory.Question);
     public static LucideIconKind AgentMessageIcon => LucideIconKind.BotMessageSquare;
+    public static LucideIconKind ThinkingIcon => LucideIconKind.Sparkles;
 }

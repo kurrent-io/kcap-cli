@@ -54,8 +54,8 @@ public class ChatTabViewSmokeTests {
 
     static List<Control> ToolRows(ChatTabView view) => view.GetVisualDescendants().OfType<Control>()
         .Where(c => c.Name == "ToolCallRow" && c.DataContext is ToolCallItem).ToList();
-    static Button Summary(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("toolSummary"));
-    static Button? SummaryOrNull(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Classes.Contains("toolSummary"));
+    static Button Summary(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("toolSummary") && b.DataContext is ToolGroupItem);
+    static Button? SummaryOrNull(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Classes.Contains("toolSummary") && b.DataContext is ToolGroupItem);
     static ToolGroupItem OnlyGroup(Host host) => host.Chat.Items.OfType<ToolGroupItem>().Single();
 
     /// A synthetic pointer event hit-tests the compositor's last committed scene, which layout alone
@@ -881,20 +881,50 @@ public class ChatTabViewSmokeTests {
         });
     }
 
-    /// Reasoning is plain muted text under its own chip, not Markdown: it reads like the terminal's
-    /// bullet and costs no document layout.
+    /// Reasoning renders as collapsible muted Markdown under a Thinking header and left rule.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_thinking_row_renders_its_text_under_a_thinking_chip() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("think.jsonl", [ThinkingLine]));
-            await Assert.That(host.Chat.Items.Select(i => i.GetType().Name)).IsEquivalentTo(new[] { nameof(AssistantThinkingItem) });
+            const string line = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Checking `LaunchMarkers.HasEntry` next.\nSecond line."}]}}""";
+            await host.LoadAsync(Tmp.CreateFile("think.jsonl", [line]));
+            var item = (AssistantThinkingItem)host.Chat.Items.Single();
+            await Assert.That(item.IsExpanded).IsTrue();
+            await Assert.That(item.HeaderLabel).IsEqualTo("Thinking");
 
-            var blocks = host.View.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).ToList();
-            await Assert.That(blocks.Select(t => t.Text)).Contains("Thinking");
-            var body = blocks.Single(t => t.Text == "weighing it");
-            await Assert.That(body.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
+            var bodyBorder = host.View.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("thinkingBody"));
+            await Assert.That(bodyBorder.IsEffectivelyVisible).IsTrue();
+            var paragraph = bodyBorder.GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Classes.Contains("markdown-paragraph") && t.IsEffectivelyVisible);
+            await Assert.That(paragraph.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
+            await Assert.That(paragraph.FontSize).IsEqualTo(13.5);
+
+            item.Toggle();
+            host.Settle();
+            await Assert.That(item.IsExpanded).IsFalse();
+            await Assert.That(item.HeaderLabel).IsEqualTo("Thinking · Checking LaunchMarkers.HasEntry next.");
+            await Assert.That(bodyBorder.IsEffectivelyVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    /// A bang fence in reasoning offers copy and no Run it. The same fence in the reply still does.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_thinking_bang_fence_has_no_run_button() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            const string thinking = """{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"```bash\n! kcap agent ls\n```"}]}}""";
+            const string reply = """{"type":"assistant","message":{"content":[{"type":"text","text":"```bash\n! kcap agent ls\n```"}]}}""";
+            await host.LoadAsync(Tmp.CreateFile("think-run.jsonl", [thinking, reply]));
+
+            var body = host.View.GetVisualDescendants().OfType<Border>()
+                .Single(b => b.Classes.Contains("thinkingBody"));
+            await Assert.That(body.GetVisualDescendants().OfType<Button>().Count(b => b.Classes.Contains("markdown-code-copy"))).IsEqualTo(1);
+            await Assert.That(body.GetVisualDescendants().OfType<Button>().Any(b => b.Classes.Contains("markdown-code-run"))).IsFalse();
+            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Count(b => b.Classes.Contains("markdown-code-run"))).IsEqualTo(1);
             await host.CloseAsync();
         });
     }

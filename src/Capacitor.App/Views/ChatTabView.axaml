@@ -75,6 +75,12 @@
         <Style Selector="ContentControl.pendingCard.packsWithPrevious">
             <Setter Property="Margin" Value="0,4,0,12" />
         </Style>
+        <Style Selector="Border.thinkingBody">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2,0,0,0" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="Padding" Value="14,0,0,0" />
+        </Style>
     </UserControl.Styles>
     <Grid RowDefinitions="*,Auto">
         <!-- The template owns the ScrollViewer: that is the shape Avalonia virtualizes. An
@@ -117,10 +123,25 @@
                     </StackPanel>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:AssistantThinkingItem">
-                    <StackPanel MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Spacing="6">
-                        <TextBlock Classes="toolKindChip" Text="Thinking" />
-                        <SelectableTextBlock Text="{Binding Text}" TextWrapping="Wrap" FontSize="13.5"
-                                             Foreground="{StaticResource KcapMutedBrush}" />
+                    <StackPanel MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Spacing="4">
+                        <Button Classes="toolSummary thinkingSummary" HorizontalAlignment="Left"
+                                Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
+                            <views:ChatKindHeader Label="{Binding HeaderLabel}"
+                                                  IconKind="{x:Static views:ToolCategoryIcons.ThinkingIcon}">
+                                <views:ChatKindHeader.Status>
+                                    <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                        <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
+                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                        <views:AppIcon Kind="ChevronRight" Size="12" IsVisible="{Binding !IsExpanded}"
+                                                       Foreground="{StaticResource KcapMutedBrush}" />
+                                    </Panel>
+                                </views:ChatKindHeader.Status>
+                            </views:ChatKindHeader>
+                        </Button>
+                        <Border Classes="thinkingBody" IsVisible="{Binding IsExpanded}">
+                            <views:MarkdownView Classes="thinking" Text="{Binding Text}"
+                                                OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}" />
+                        </Border>
                     </StackPanel>
                 </DataTemplate>
                 <DataTemplate x:DataType="vm:ShellCommandItem">
