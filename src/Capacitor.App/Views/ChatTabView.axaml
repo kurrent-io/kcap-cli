@@ -49,6 +49,7 @@
                          Border.shellOutput > StackPanel > SelectableTextBlock">
             <Setter Property="Margin" Value="22,0,22,0" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="ClipToBounds" Value="False" />
         </Style>
         <Style Selector="SelectableTextBlock.toolLine,
                          TextBlock.toolLine">

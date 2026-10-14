@@ -442,6 +442,11 @@ public class ChatTabViewSmokeTests {
                 .IsEqualTo(title.TranslatePoint(default, host.Window)!.Value.X);
             var openBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen");
             var copyBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink");
+            var callsList = card.FindAncestorOfType<ItemsControl>()!;
+            var header = host.View.GetVisualDescendants().OfType<ChatKindHeader>().Single(h => h.IsEffectivelyVisible);
+            var iconPath = header.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Single();
+            await Assert.That(callsList.ClipToBounds).IsFalse();
+            await Assert.That(iconPath.Bounds.Center.Y).IsEqualTo(7.0).Within(0.5);
             await Assert.That(openBtn.IsEffectivelyVisible).IsTrue();
             await Assert.That(copyBtn.IsEffectivelyVisible).IsTrue();
             await Assert.That(openBtn.TranslatePoint(default, host.Window)!.Value.X)

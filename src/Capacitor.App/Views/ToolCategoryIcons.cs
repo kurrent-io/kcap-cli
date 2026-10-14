@@ -26,8 +26,8 @@ public static class ToolCategoryIcons {
         ToolCategory.Memory    => "M7,3 H17 V21 L12,17 L7,21 Z",
         // Recall: a clock face with a reverse arrow.
         ToolCategory.Session   => "M12,7 V12 L15,14 M4,12 A8,8 0 1 0 6.5,6.3 M4,4 V8 H8",
-        // Flow: a centre box joined to two end stubs.
-        ToolCategory.Flow      => "M4,12 H9 M15,12 H20 M9,9 H15 V15 H9 Z M2,10 H4 V14 H2 Z M20,10 H22 V14 H20 Z",
+        // Flow: a root node branching to two downstream nodes.
+        ToolCategory.Flow      => "M3,5 H9 V10 H3 Z M15,5 H21 V10 H15 Z M15,14 H21 V19 H15 Z M9,7.5 H15 M12,7.5 V16.5 H15",
         // Extension / puzzle — Other, generic MCP and unknown tools; distinct from Edit and Agent at 12px.
         _                      => "M8,4 H16 V8 H20 V12 H16 V16 H8 V12 H12 V8 H8 V4 Z",
     };
