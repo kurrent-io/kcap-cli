@@ -37,6 +37,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
     public string? InstalledVersion { get; }
     public string? UpdateVersion { get; }
     public bool ShowVersionChange => UpdateVersion is not null;
+    public bool ShowInstalledVersion => InstalledVersion is not null;
 
     /// Fires once, on Accept or Decline — the window closes itself on this; the ViewModel owns no
     /// window.
@@ -49,9 +50,10 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
         Title             = TitleFor(prompt.Kind);
         Disclosure        = prompt.Disclosure;
         PathDegraded      = prompt.PathDegraded;
-        if (prompt is { Kind: LifecyclePrompt.KindUpdateReady, DaemonVersion: { } next, CliVersion: { } installed }) {
+        // The body text does not repeat the candidate, so it shows even without an installed version.
+        if (prompt is { Kind: LifecyclePrompt.KindUpdateReady, DaemonVersion: { } next }) {
             UpdateVersion    = next;
-            InstalledVersion = installed;
+            InstalledVersion = prompt.CliVersion;
         }
         ShowDeclineButton = prompt.Kind is not (LifecyclePrompt.KindQuarantine or LifecyclePrompt.KindUpdateInfo);
         AcceptButtonText  = prompt.Kind switch {

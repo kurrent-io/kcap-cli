@@ -190,4 +190,17 @@ public class LifecyclePromptViewModelTests {
             await Assert.That(vm.InstalledVersion).IsNull();
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Update_ready_without_an_installed_version_still_shows_the_candidate() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var prompt = new LifecyclePrompt(LifecyclePrompt.KindUpdateReady, "1.0.0", null, false, "restart to finish.");
+            var vm = new LifecyclePromptViewModel(prompt, new TaskCompletionSource<bool>());
+
+            await Assert.That(vm.ShowVersionChange).IsTrue();
+            await Assert.That(vm.UpdateVersion).IsEqualTo("1.0.0");
+            await Assert.That(vm.ShowInstalledVersion).IsFalse();
+        });
+    }
 }

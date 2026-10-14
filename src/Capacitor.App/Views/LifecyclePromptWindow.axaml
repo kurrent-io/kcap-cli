@@ -34,19 +34,21 @@
                     <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10"
                                 HorizontalAlignment="Center" IsVisible="{Binding ShowVersionChange}">
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
+                                IsVisible="{Binding ShowInstalledVersion}"
                                 Background="{StaticResource KcapSurfaceBrush}"
                                 BorderBrush="{StaticResource KcapBorderBrush}">
-                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
+                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
                                        Foreground="{StaticResource KcapMutedBrush}" />
                         </Border>
                         <Path VerticalAlignment="Center" Width="28" Height="12" Stretch="None"
+                              IsVisible="{Binding ShowInstalledVersion}"
                               Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.75"
                               StrokeLineCap="Round" StrokeJoin="Round"
                               Data="M2,6 L24,6 M19,1.5 L24,6 L19,10.5" />
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
                                 Background="{StaticResource KcapPurpleDimBrush}"
                                 BorderBrush="{StaticResource KcapPurpleBrush}">
-                            <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
+                            <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
                                        Foreground="{StaticResource KcapPurpleBrush}" />
                         </Border>
                     </StackPanel>
