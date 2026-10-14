@@ -31,8 +31,9 @@ Never start `kcap daemon` unless the user asks for hosted agents.
 
 ## Part A — any other machine
 
-1. Check what is there: `command -v kcap && kcap whoami`. A signed-in user means
-   nothing to do; say so and stop.
+1. Check what is there: `command -v kcap && kcap whoami`. Signed in, with a
+   `Server:` line naming the workspace the user wants (or no workspace named),
+   means nothing to do; say so and stop. A different server means step 3 runs.
 2. Install: requires Node.js 18+ (`node -v`). `npm install -g @kurrent/kcap`,
    then `command -v kcap` must print a path (otherwise add `$(npm prefix -g)/bin`
    to PATH in the shell profile — the hooks run `kcap` by name).
@@ -73,8 +74,9 @@ KCAP=~/workspace/kcap/node_modules/.bin/kcap
 [ -x "$KCAP" ] && "$KCAP" whoami
 ```
 
-A signed-in user means B2 and B3 are done; continue at B4 and only create what
-is missing.
+B2 and B3 are done only when `whoami` succeeds **and** its `Server:` line is
+the workspace the user asked for; then continue at B4 and only create what is
+missing. A different server means B3 still runs, which repoints this install.
 
 ### B2. Install under the persistent workspace
 
