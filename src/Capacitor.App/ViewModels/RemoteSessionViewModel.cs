@@ -259,10 +259,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Apply(row);
 
         directory.Rows.Connect()
+            .Filter(r => r.Key == row.Key)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(changes => {
                 foreach (var change in changes) {
-                    if (change.Key != row.Key) continue;
                     if (change.Reason == ChangeReason.Remove) {
                         // The local daemon took the agent over: the row ended, the session did not.
                         // A shared agent id is not evidence of that on its own — the dedup fails

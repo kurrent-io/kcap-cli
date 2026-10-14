@@ -356,6 +356,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         // Alive for the VM's whole lifetime UNLESS the timeout wins (disposed there) or
         // TeardownAsync runs -- a dto-win leaves it live so a LATER removal renders SessionEnded.
         _agentsSub = daemon.Agents.Connect()
+            .Filter(dto => dto.Id == _agentId)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(OnAgentsChanged);
 
@@ -458,6 +459,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         // this only guards a teardown landing in the tiny window between the CAS and here).
         if (Volatile.Read(ref _resolveState) == ResolveDisposed) return;
         _agentsSub ??= _daemon.Agents.Connect()
+            .Filter(dto => dto.Id == _agentId)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(OnAgentsChanged);
 

@@ -157,8 +157,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Filter(dto => dto.Id == agentId)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Scan(new AgentPresence(null, false), Accumulate)
             .Replay(1)
             .RefCount();
@@ -218,8 +218,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         var pendingRow = directory is null
             ? Observable.Return<AgentRow?>(null)
             : directory.Rows.Connect()
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Filter(row => row.Id == agentId && row.Origin == AgentOrigin.Pending)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .QueryWhenChanged(query => query.Items.FirstOrDefault())
                 .StartWith((AgentRow?)null);
         var header = presence.StartWith(new AgentPresence(null, false))

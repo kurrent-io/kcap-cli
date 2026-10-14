@@ -1,7 +1,6 @@
 using System.Reactive;
 using System.Reactive.Concurrency;
 using Avalonia.Collections;
-using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.Plans;
 using ReactiveUI.Reactive;
@@ -19,24 +18,14 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     /// write is read twice: at once, and again after this long.
     internal static readonly TimeSpan SettleDelay = TimeSpan.FromSeconds(2);
 
-    sealed class ReadLease(string sessionId) {
-        public string SessionId { get; } = sessionId;
-        public CancellationTokenSource Cts { get; } = new();
-        public Task? Pending;
-        public bool RefreshPending;
-        public bool Settled;
-        public bool IsReading => Pending is { IsCompleted: false };
-    }
-
     readonly IPlanSource? _source;
+    readonly SingleFlightReader<string, SessionPlansRead> _reader;
     readonly PlanActivity _activity;
     readonly AvaloniaList<PlanTaskRow> _tasks = [];
     readonly AvaloniaList<PlanTaskRow> _inProgress = [];
     readonly AvaloniaList<PlanDocumentRow> _documents = [];
-    readonly List<ReadLease> _outstanding = [];
     readonly ITimer _settle;
     IReadOnlyList<PlanTaskCount> _counts = [];
-    ReadLease? _current;
     bool _tornDown;
 
     public IAvaloniaReadOnlyList<PlanTaskRow> Tasks => _tasks;
@@ -46,7 +35,7 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     public bool HasPlan       => HasTasks || HasDocuments;
     /// Keeps the section chrome while a session switch's first read is in flight.
-    public bool IsLoading => _current is { Settled: false };
+    public bool IsLoading => _reader.IsLoading;
     public bool ShowsPlan => HasPlan || IsLoading;
     public bool HasTasks      => _tasks.Count > 0;
     public bool HasInProgress => _inProgress.Count > 0;
@@ -68,10 +57,19 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     string? _openPath;
 
     /// Test-only seam: the current lease's read, or the last one started.
-    internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
+    internal Task? PendingReadForTesting => _reader.PendingReadForTesting;
 
     public PlanSectionViewModel(IPlanSource? source, PlanActivity activity, TimeProvider time) {
         _source = source;
+        _reader = new SingleFlightReader<string, SessionPlansRead>(
+            (id, ct) => _source!.ReadAsync(id, ct),
+            ex => {
+                Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
+                return SessionPlansRead.Of(SessionPlansReadKind.Unreachable);
+            },
+            Apply,
+            "plan section",
+            onSettled: RaiseLoading);
         _activity = activity;
         ToggleCommand = ReactiveCommand.Create(() => { IsExpanded = !IsExpanded; });
         OpenDocumentCommand = ReactiveCommand.Create<PlanDocumentRow>(row => OpenDocument?.Invoke(row.Path));
@@ -82,20 +80,15 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     public void SwitchSession(string sessionId) {
         if (_tornDown || _source is null) return;
-        var old = _current;
-        _current = new ReadLease(sessionId);
-        old?.Cts.Cancel();
-        // Raise IsLoading before Clear so HasPlan || IsLoading does not briefly go false.
-        RaiseLoading();
-        Clear();
-        StartRead(_current);
+        _reader.Switch(sessionId, () => {
+            RaiseLoading();
+            Clear();
+        });
     }
 
     /// Reads now, or queues one follow-up behind the read in flight.
     public void Refresh() {
-        if (_tornDown || _current is not { } lease) return;
-        if (lease.IsReading) lease.RefreshPending = true;
-        else StartRead(lease);
+        if (!_tornDown) _reader.Refresh();
     }
 
     void OnPlanWritten() {
@@ -108,60 +101,15 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         foreach (var task in _tasks) task.Present(_activity.SessionOver);
     }
 
-    void StartRead(ReadLease lease) {
-        lease.RefreshPending = false;
-        lease.Pending = RunReadAsync(lease);
-        _outstanding.Add(lease);
-    }
-
-    async Task RunReadAsync(ReadLease lease) {
-        SessionPlansRead? read = null;
-        try {
-            read = await _source!.ReadAsync(lease.SessionId, lease.Cts.Token).ConfigureAwait(false);
-        } catch (OperationCanceledException) {
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
-            read = SessionPlansRead.Of(SessionPlansReadKind.Unreachable);
-        }
-        try {
-            await Dispatcher.UIThread.InvokeAsync(() => Settle(lease, read));
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
-        }
-    }
-
-    void Settle(ReadLease lease, SessionPlansRead? read) {
-        _outstanding.Remove(lease);
-        var current = ReferenceEquals(lease, _current) && !_tornDown;
-        if (!current) { lease.Cts.Dispose(); return; }
-        try {
-            if (read is not null) Apply(read);
-            else { lease.Settled = true; RaiseLoading(); }
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
-        }
-        if (lease.RefreshPending) StartRead(lease);
-    }
-
     void Apply(SessionPlansRead read) {
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
-                if (_current is { } ready) ready.Settled = true;
-                // The server lists most recently touched first, which stands in for a continued
-                // session that has not written to its predecessor's plan yet.
-                // Show before RaiseLoading so HasPlan || IsLoading does not briefly go false.
                 Show(read.Plans.FirstOrDefault(plan => plan.IsCurrent) ?? (read.Plans.Count > 0 ? read.Plans[0] : null));
-                RaiseLoading();
                 return;
             case SessionPlansReadKind.Unreachable:
-                // Keep last good rows (a mid-session refresh); after a switch Clear already ran.
-                if (_current is { } unreachable) unreachable.Settled = true;
-                RaiseLoading();
                 return;
             default:
-                if (_current is { } done) done.Settled = true;
                 Clear();
-                RaiseLoading();
                 return;
         }
     }
@@ -254,13 +202,6 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         _settle.Dispose();
         ToggleCommand.Dispose();
         OpenDocumentCommand.Dispose();
-        var leases = _outstanding.ToArray();
-        foreach (var lease in leases) lease.Cts.Cancel();
-        _current = null;
-        foreach (var lease in leases)
-            if (lease.Pending is { } pending) {
-                try { await pending; } catch (Exception) { }
-            }
-        foreach (var lease in leases) lease.Cts.Dispose();
+        await _reader.TeardownAsync();
     }
 }
