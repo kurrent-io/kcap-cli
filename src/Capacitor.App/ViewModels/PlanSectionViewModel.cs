@@ -78,8 +78,14 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         _activity.SessionOverChanged += OnSessionOverChanged;
     }
 
-    public void SwitchSession(string sessionId) {
+    public void SwitchSession(string? sessionId) {
         if (_tornDown || _source is null) return;
+        if (sessionId is null) {
+            _reader.ClearCurrent();
+            Clear();
+            RaiseLoading();
+            return;
+        }
         _reader.Switch(sessionId, () => {
             RaiseLoading();
             Clear();

@@ -183,7 +183,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
-    /// The header refresh on the open local workspace. Disabled with no workspace, no session
+    /// The header refresh on the open workspace. Disabled with no workspace, no session
     /// id, or a refresh the user already asked for still running — the same intervals the button is.
     public ReactiveCommand<Unit, Unit> RefreshWorkCommand { get; }
 
@@ -623,14 +623,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void CloseWorkspace() => SwapTo(null);
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
-        workspace is WorkspaceViewModel { WorkContext: var work }
+        workspace is { WorkContext: var work }
             ? work.WhenAnyValue(w => w.HasSession, w => w.IsRefreshing, (hasSession, refreshing) => hasSession && !refreshing)
             : Observable.Never<bool>().StartWith(false);
 
     // The menu gesture and the key binding can both deliver one press. IsRefreshing flips
     // inside the work command, before this returns, so the second delivery no-ops.
     void RefreshOpenWork() {
-        if (CurrentWorkspace is not WorkspaceViewModel { WorkContext: { HasSession: true, IsRefreshing: false } work }) return;
+        if (CurrentWorkspace is not { WorkContext: { HasSession: true, IsRefreshing: false } work }) return;
         work.RefreshCommand.Execute().Subscribe();
     }
 

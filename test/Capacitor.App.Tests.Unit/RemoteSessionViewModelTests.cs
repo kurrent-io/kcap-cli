@@ -3,6 +3,7 @@ using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Plans;
+using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.AspNetCore.SignalR;
@@ -19,6 +20,7 @@ namespace Capacitor.App.Tests.Unit;
 public class RemoteSessionViewModelTests {
     sealed class Harness : IDisposable {
         public readonly FakeServerLane Lane = new();
+        public readonly FakeWorkContextSource WorkSource = new();
         public readonly SessionAccessService Access;
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
@@ -38,9 +40,9 @@ public class RemoteSessionViewModelTests {
             });
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
-                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null) {
+                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, () => new FakeTerminalSurface(), planArtifacts, pullRequests: pullRequests);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, pullRequests: pullRequests, plans: plans);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -64,6 +66,167 @@ public class RemoteSessionViewModelTests {
             Permissions.Dispose();
             Directory.Dispose();
         }
+    }
+
+    static WorkContextRead LinkedWork(string id, string title) => WorkContextRead.Of(WorkContextReadKind.Ready) with {
+        Primary = new SessionWorkItemAssignmentDto { WorkItemId = id, Label = title, IsPrimary = true },
+        Item = new WorkItemDto { WorkItemId = id, Title = title },
+    };
+
+    [Test]
+    public async Task Remote_work_context_loads_the_linked_item_and_follows_session_changes() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Enqueue(LinkedWork("w1", "First task"), LinkedWork("w2", "Second task"));
+            var plans = new FakePlanSource();
+            var prs = new FakePullRequestSource(h.Time);
+            var row = Harness.Row() with { RepoPath = "/remote/repository" };
+            var vm = h.Build(row, pullRequests: prs, plans: plans);
+            await WaitUntilAsync(() => vm.WorkContext.IsReady, what: "remote work item loaded");
+            await Assert.That(vm.WorkContext.IsReady).IsTrue();
+            await Assert.That(vm.WorkContext.Title).IsEqualTo("First task");
+            await Assert.That(vm.WorkContext.Repository).IsEqualTo("repository");
+            await Assert.That(vm.WorkContext.WorktreePath).IsNull();
+            await Assert.That(vm.WorkContext.Branch).IsEqualTo("—");
+            await Assert.That(vm.WorkContext.PullRequests).IsSameReferenceAs(vm.PullRequests);
+            await Assert.That(plans.Requested).Contains("s1");
+
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = "s2" });
+            await WaitUntilAsync(() => vm.WorkContext.Title == "Second task", what: "replacement session work item loaded");
+            await Assert.That(vm.WorkContext.SessionIdText).IsEqualTo("s2");
+            await Assert.That(vm.WorkContext.Title).IsEqualTo("Second task");
+            await Assert.That(h.WorkSource.Requested).IsEquivalentTo(new[] { "s1", "s2" });
+            await Assert.That(plans.Requested).Contains("s2");
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = null });
+            await WaitUntilAsync(() => !vm.WorkContext.HasSession, what: "session identity cleared");
+            await Assert.That(vm.WorkContext.Title).IsEqualTo("");
+            await Assert.That(vm.WorkContext.Phase).IsEqualTo(WorkContextPhase.WaitingForSession);
+            await vm.TeardownAsync();
+            var count = h.WorkSource.Requested.Count;
+            h.Time.Advance(WorkContextViewModel.PollInterval);
+            await Assert.That(h.WorkSource.Requested.Count).IsEqualTo(count);
+        });
+    }
+
+    [Test]
+    public async Task Remote_work_context_waits_for_the_session_and_refreshes_the_linked_item() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row(sessionId: null);
+            var vm = h.Build(row);
+            await Assert.That(vm.WorkContext.HasSession).IsFalse();
+            await Assert.That(h.WorkSource.Requested).IsEmpty();
+            h.WorkSource.Enqueue(LinkedWork("w1", "Initial title"), LinkedWork("w1", "Updated title"));
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = "s1" });
+            await WaitUntilAsync(() => vm.WorkContext.IsReady, what: "session identity resolved");
+            vm.WorkContext.RefreshCommand.Execute().Subscribe();
+            await WaitUntilAsync(() => vm.WorkContext.Title == "Updated title", what: "work context refreshed");
+            await Assert.That(h.WorkSource.Requested.Count).IsEqualTo(2);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Remote_work_context_teardown_cancels_an_in_flight_read() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Gate();
+            var vm = h.Build(Harness.Row());
+            await WaitUntilAsync(() => h.WorkSource.InFlight == 1, what: "work context read started");
+            await vm.TeardownAsync();
+            await Assert.That(h.WorkSource.InFlight).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Missing_identity_or_denied_access_clears_work_prs_plans_artefacts_and_runs(bool denied) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Default = LinkedWork("w1", "Private task");
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var plans = new FakePlanSource { Default = new(SessionPlansReadKind.Ready, [new SessionPlanDto {
+                PlanId = "p1", IsCurrent = true,
+                Tasks = [new PlanLedgerTaskDto { TaskId = "t1", Title = "Private step", Ordinal = 0, Status = "pending" }],
+            }]) };
+            var artefacts = new FakePlanArtifactSource { Default = new(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
+                Artifacts = [new PlanArtifactDto {
+                    ArtifactId = "a1", Kind = "plan", Title = "Private plan", Source = "declared", SessionId = "s1", Path = "docs/p.md",
+                    Content = "Private content", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
+                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
+                }],
+            }) };
+            var prs = new FakePullRequestSource(h.Time);
+            var row = Harness.Row(vendor: "claude");
+            var vm = h.Build(row, artefacts, prs, plans);
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready && vm.WorkContext.IsReady
+                && vm.WorkContext.Plan.HasPlan && vm.Artefacts.HasAny && vm.PullRequests.HasPullRequest, what: "all context loaded");
+            await h.UntilAsync(vm, () => vm.WorkContext.HasRuns, "subagent loaded");
+            await WaitUntilAsync(() => !vm.WorkContext.IsReading, what: "initial work read settled");
+            h.WorkSource.Gate();
+            vm.WorkContext.RefreshCommand.Execute().Subscribe();
+            await WaitUntilAsync(() => h.WorkSource.InFlight == 1, what: "refresh pending");
+            if (denied) {
+                h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+                h.Lane.SessionAccessChangedSubject.OnNext("s1");
+                await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Denied, what: "access denied");
+            } else h.Directory.Rows.AddOrUpdate(row with { SessionId = null });
+            await WaitUntilAsync(() => !vm.WorkContext.HasSession && h.WorkSource.InFlight == 0, what: "context cleared and read cancelled");
+            await Assert.That(vm.ShowsPanes).IsFalse();
+            await Assert.That(vm.WorkContext.Title).IsEqualTo("");
+            await Assert.That(vm.WorkContext.HasRuns).IsFalse();
+            await Assert.That(vm.WorkContext.Plan.HasPlan).IsFalse();
+            await Assert.That(vm.Artefacts.HasAny).IsFalse();
+            await Assert.That(vm.PullRequests.Choices.Count).IsEqualTo(0);
+            await Assert.That(vm.PullRequests.Selected).IsNull();
+            await Assert.That(vm.ShowsPullRequestTab).IsFalse();
+            var reads = h.WorkSource.Requested.Count;
+            var lists = prs.Lists;
+            if (denied) h.Directory.Rows.AddOrUpdate(row with { Title = "Updated registry" });
+            h.Time.Advance(WorkContextViewModel.PollInterval);
+            await Task.Yield();
+            await Assert.That(h.WorkSource.Requested.Count).IsEqualTo(reads);
+            await Assert.That(prs.Lists).IsEqualTo(lists);
+            if (denied) {
+                h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+                h.Lane.SessionAccessChangedSubject.OnNext("s1");
+            } else h.Directory.Rows.AddOrUpdate(row);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready && vm.WorkContext.IsReady
+                && vm.PullRequests.HasPullRequest, what: "context restored");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Reconnect_refreshes_silently_without_resetting_stopped_pr_retries(bool stopped) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.WorkSource.Default = LinkedWork("w1", "Task");
+            var prs = new FakePullRequestSource(h.Time) { ListFailure = stopped ? "retries_stopped" : null };
+            var vm = h.Build(Harness.Row(), pullRequests: prs);
+            vm.PullRequests!.SetForeground(true);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready && vm.WorkContext.IsReady
+                && !vm.PullRequests.IsReading, what: "initial reads finished");
+            var lists = prs.Lists;
+            var reads = h.WorkSource.Requested.Count;
+            h.Time.Advance(TimeSpan.FromSeconds(15));
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+            h.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 2));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready && h.WorkSource.Requested.Count > reads
+                && !vm.PullRequests.IsReading, what: "reconnect reads finished");
+            await Assert.That(prs.Resets).IsEqualTo(0);
+            await Assert.That(prs.Lists).IsEqualTo(stopped ? lists : lists + 1);
+            await Assert.That(vm.WorkContext.IsRefreshing).IsFalse();
+            await Assert.That(vm.PullRequests.ShowsRefreshing).IsFalse();
+            if (stopped) await Assert.That(vm.PullRequests.Notice).Contains("Use Retry");
+            await vm.TeardownAsync();
+        });
     }
 
     [Test]

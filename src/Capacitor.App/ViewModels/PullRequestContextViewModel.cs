@@ -182,6 +182,27 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
+    internal void ClearSession() {
+        if (_disposed) return;
+        CancelReads();
+        _session = null;
+        _requestedSubject = null;
+        _choices.Clear();
+        _sessionItems.Clear();
+        _selected = null;
+        _explicitSelection = false;
+        _positions.Clear();
+        _lifecycles.Clear();
+        _hasListed = true;
+        _queuedRefresh = false;
+        _userRefresh = false;
+        _stopped = false;
+        _retryAt = null;
+        _lastRefresh = null;
+        ClearProtected();
+        SetNotice(WorkContextViewModel.WaitingNote);
+    }
+
     public void SetForeground(bool foreground) {
         if (_disposed || _foreground == foreground) return;
         _foreground = foreground;

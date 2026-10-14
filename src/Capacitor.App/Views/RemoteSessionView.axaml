@@ -9,7 +9,8 @@
              Background="{StaticResource KcapCanvasBrush}">
     <!-- The session's process lives on another machine: the header, the switch over the server's
          streams, and the two actions that reach across. -->
-    <Grid RowDefinitions="Auto,Auto,*">
+    <Grid ColumnDefinitions="*,320">
+    <Grid Grid.Column="0" RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1"
                 Padding="20,16,16,16" Background="Transparent" PointerPressed="OnHeaderPointerPressed">
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
@@ -105,5 +106,8 @@
             <ContentControl x:Name="PullRequestPane" IsVisible="{Binding ShowsPullRequestPane}" />
             <ContentControl x:Name="ArtefactsPane" IsVisible="{Binding ShowsArtefactsPane}" />
         </Grid>
+    </Grid>
+    <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}"
+                           IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsPanes}" />
     </Grid>
 </UserControl>

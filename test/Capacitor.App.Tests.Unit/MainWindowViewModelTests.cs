@@ -59,6 +59,7 @@ public class MainWindowViewModelTests {
         public RemoteHost() => _access = new SessionAccessService(_lane, new FakeTimeProvider());
 
         public FakeAgentDirectory Directory { get; } = new();
+        public FakeWorkContextSource WorkSource { get; } = new();
 
         // A separate overload rather than an optional parameter: the factory parameter takes this
         // as a method group, and that conversion needs an exact one-argument signature.
@@ -73,7 +74,7 @@ public class MainWindowViewModelTests {
             });
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
-                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(),
+                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(), WorkSource,
                 () => new FakeTerminalSurface(), pullRequests: pullRequests);
         }
 
@@ -867,6 +868,28 @@ public class MainWindowViewModelTests {
             vm.CloseWorkspace();
             await Assert.That(vm.CurrentWorkspace).IsNull();
             await Assert.That(torn).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Refresh_work_command_refreshes_the_remote_workspace() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service, originOf: _ => AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "s1"));
+            vm.OpenSession("r1");
+            var work = vm.CurrentWorkspace!.WorkContext;
+            await WorkspaceFixtures.WaitUntilAsync(() => host.WorkSource.Requested.Count == 1 && !work.IsReading,
+                what: "remote work context loaded");
+            await WorkspaceFixtures.WaitUntilAsync(() => ((System.Windows.Input.ICommand)vm.RefreshWorkCommand).CanExecute(null), what: "refresh enabled");
+            await vm.RefreshWorkCommand.Execute().ToTask();
+            await WorkspaceFixtures.WaitUntilAsync(() => host.WorkSource.Requested.Count == 2 && !work.IsReading,
+                what: "remote work context refreshed");
+            var workspace = vm.CurrentWorkspace;
+            vm.CloseWorkspace();
+            await workspace!.TeardownAsync();
         });
     }
 

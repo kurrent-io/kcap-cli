@@ -51,6 +51,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     internal const string NotInPlanNote    = "Work items are not in this workspace's plan.";
     internal const string UnreachableNote  = "Couldn't reach the server.";
 
+    readonly bool _isRemote;
     readonly IWorkContextSource _source;
     readonly SingleFlightReader<string, WorkContextRead> _reader;
     readonly IUrlOpener _opener;
@@ -173,7 +174,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     string? _reportedBranch;
     // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
     void ResolveBranch() {
-        var branch = GitRepository.CurrentBranch(WorktreePath) ?? _reportedBranch;
+        var branch = (_isRemote ? null : GitRepository.CurrentBranch(WorktreePath)) ?? _reportedBranch;
         Branch = string.IsNullOrWhiteSpace(branch) ? "—" : branch;
     }
 
@@ -238,7 +239,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
             SessionRuns runs, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
             Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
-            ArtefactsTabViewModel? artefacts = null) {
+            ArtefactsTabViewModel? artefacts = null, bool isRemote = false) {
+        _isRemote = isRemote;
         _source = source;
         _reader = new SingleFlightReader<string, WorkContextRead>(
             _source.ReadAsync,
@@ -295,6 +297,19 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         HasAgent = true;
         if (dto.SessionId is { Length: > 0 } id && !string.Equals(_reader.CurrentState, id, StringComparison.Ordinal))
             SwitchSession(id);
+        else if (_isRemote && string.IsNullOrEmpty(dto.SessionId) && HasSession) {
+            _reader.ClearCurrent();
+            HasSession = false;
+            IsReading = false;
+            SessionIdText = "resolving…";
+            PrimaryRepository = null;
+            ClearServerProjections();
+            IsStale = false;
+            Phase = WorkContextPhase.WaitingForSession;
+            Plan.SwitchSession(null);
+            Artefacts?.SwitchSession(null, null);
+            _runs.Clear();
+        }
         this.RaisePropertyChanged(nameof(PhaseNote));
     }
 
@@ -307,7 +322,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void UpdateFacts(AgentStatusDto dto) {
         Repository = RepoLabel.Leaf(dto.RepoPath);
         RepositoryPath = dto.RepoPath;
-        var checkout = CheckoutLabel.CheckoutPathFor(dto);
+        var checkout = _isRemote ? dto.WorktreePath : CheckoutLabel.CheckoutPathFor(dto);
         WorktreePath = checkout;
         Worktree = checkout is null
             ? "—"
@@ -330,7 +345,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Phase = WorkContextPhase.Loading;
         _reader.Switch(id);
         Plan.SwitchSession(id);
-        Artefacts?.SwitchSession(id, WorktreePath ?? RepositoryPath);
+        Artefacts?.SwitchSession(id, _isRemote ? null : WorktreePath ?? RepositoryPath);
     }
 
     void OnTick() {
@@ -338,6 +353,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Plan.Refresh();
         if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
         _reader.StartIfIdle();
+    }
+
+    internal void Reconnected() {
+        if (_tornDown) return;
+        Plan.Refresh();
+        Artefacts?.Refresh();
+        _reader.Refresh();
     }
 
     void OnSignInCompleted() {

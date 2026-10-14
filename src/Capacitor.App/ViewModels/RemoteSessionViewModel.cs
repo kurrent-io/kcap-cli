@@ -1,5 +1,4 @@
 using System.Reactive;
-using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -33,13 +32,16 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     // cards unsubscribe from these when the pane is torn down.
     readonly BehaviorSubject<string?> _sessionIds;
     readonly BehaviorSubject<ChatSessionInfo> _session;
+    readonly BehaviorSubject<AgentStatusDto?> _presence = new(null);
     /// The current lease's verdict, re-pointed whenever the lease moves; Unavailable in between.
     readonly BehaviorSubject<SessionAccessState> _accessStates = new(SessionAccessState.Unavailable);
+    bool _workAccessDenied;
     string? _leasedSession;
     AgentRow _row;
 
     public string AgentId { get; }
     public ChatTabViewModel Chat { get; }
+    public WorkContextViewModel WorkContext { get; }
     public ReactiveCommand<Unit, Unit> OpenInWebCommand { get; }
     public ReactiveCommand<Unit, Unit> StopCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowChatCommand { get; }
@@ -195,31 +197,16 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public RemoteSessionViewModel(
             AgentRow row, IAgentDirectory directory, SessionAccessService access, IPermissionService permissions,
-            AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time,
+            AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time, IWorkContextSource workContext,
             Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
-            Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null) {
+            Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null) {
         _row = row;
         _opener = opener;
         _access = access;
         AgentId = row.Id;
         _sessionIds = new BehaviorSubject<string?>(row.SessionId);
         _session = new BehaviorSubject<ChatSessionInfo>(ChatSessionInfo.FromRemote(row, ended: false));
-
-        PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
-            _sessionIds.Select(sid => (AgentStatusDto?)new AgentStatusDto(row.Id, "agent", row.Vendor, null,
-                row.Status, null, null, null, row.CreatedAt, null, null, SessionId: sid)),
-            pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
-            requestSignIn, linkGitHub, signInCompleted);
-        if (PullRequests is { } context)
-            context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
-                .Subscribe(state => {
-                    ShowsPullRequestTab = state.has;
-                    if (!state.has && IsPullRequestActive && state.listed) ActiveTab = RemoteTab.Chat;
-                }).DisposeWith(_disposables);
-        lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
-            .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
@@ -229,21 +216,34 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
             }).DisposeWith(_disposables);
-        _sessionIds.DistinctUntilChanged()
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(sid => Artefacts.SwitchSession(sid, null)).DisposeWith(_disposables);
-        _accessStates.Select(s => s == SessionAccessState.Established).DistinctUntilChanged().Where(ready => ready)
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
-        // No pane polls this lane, so a read the server could not answer is retried on the pane's
-        // cadence, and only while it stays unanswered.
-        _disposables.Add(time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => {
-            if (Artefacts.LastReadFailed) Artefacts.Refresh();
-        }), null, WorkContextViewModel.PollInterval, WorkContextViewModel.PollInterval));
-
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
         var runs = new SessionRuns(time);
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
+        WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
+            requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
+            artefacts: Artefacts, isRemote: true);
+        PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
+            _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
+            pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
+            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
+        if (PullRequests is { } context)
+            context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
+                .Subscribe(state => {
+                    ShowsPullRequestTab = state.has;
+                    if (!state.has && IsPullRequestActive && state.listed) ActiveTab = RemoteTab.Chat;
+                }).DisposeWith(_disposables);
+        lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
+            .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.Reconnected(); }).DisposeWith(_disposables);
+
+        WorkContext.PullRequests = PullRequests;
+        WorkContext.Plan.OpenDocument = path => {
+            if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();
+        };
+        Artefacts.WhenAnyValue(a => a.Selected).Subscribe(selected => WorkContext.Plan.MarkOpen(selected?.Path)).DisposeWith(_disposables);
+        _accessStates.Where(s => s == SessionAccessState.Established)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
@@ -317,6 +317,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     void Apply(AgentRow row) {
         _row = row;
+        PublishWorkPresence();
         if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
@@ -344,6 +345,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         PublishSession(ended: false);
     }
 
+    void PublishWorkPresence() {
+        var sessionId = _workAccessDenied ? null : _row.SessionId;
+        _presence.OnNext(new AgentStatusDto(_row.Id, _row.Kind, _row.Vendor, _row.RepoPath, _row.Status,
+            null, null, null, _row.CreatedAt, _row.Model, _row.RequesterDisplay,
+            Title: _row.Title, SessionId: sessionId));
+        if (string.IsNullOrEmpty(sessionId)) PullRequests?.ClearSession();
+    }
+
     void AcquireLease(string sessionId) {
         _leasedSession = sessionId;
         // The lease's first state arrives asynchronously; without this the pane keeps the previous
@@ -352,6 +361,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var lease = _access.Acquire(sessionId);
         var states = lease.State.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(s => {
             _accessStates.OnNext(s);
+            if (s == SessionAccessState.Denied) {
+                _workAccessDenied = true;
+                PublishWorkPresence();
+            } else if (s == SessionAccessState.Established && _workAccessDenied) {
+                _workAccessDenied = false;
+                PublishWorkPresence();
+            }
             Access = s switch {
                 SessionAccessState.Established => RemoteSessionAccess.Ready,
                 SessionAccessState.Denied => RemoteSessionAccess.Denied,
@@ -377,6 +393,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Artefacts.OpenRequested -= ShowArtefacts;
         await Chat.TeardownAsync();
         if (Terminal is { } terminal) await terminal.TeardownAsync();
+        await WorkContext.TeardownAsync();
         await Artefacts.TeardownAsync();
         if (PullRequests is { } pullRequests) await pullRequests.TeardownAsync();
     }
