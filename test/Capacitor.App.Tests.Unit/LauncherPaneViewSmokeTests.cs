@@ -60,8 +60,8 @@ public class LauncherPaneViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Headline_keeps_a_fixed_question_and_a_repo_subtitle() {
-        var (question, subtitleBefore, subtitleVisibleBefore, subtitleAfter, subtitleVisibleAfter) =
+    public async Task Headline_shows_Whats_next_and_RepositoryChip_updates_on_selection() {
+        var (question, fontSize, chipBefore, chipAfter) =
             await AvaloniaSession.DispatchAsync(async () => {
                 var (vm, _, _, tmp) = Build();
                 using var _tmp = tmp;
@@ -70,28 +70,27 @@ public class LauncherPaneViewSmokeTests {
                 Dispatcher.UIThread.RunJobs();
 
                 var headline = Find<TextBlock>(window, "LauncherHeadline")!;
-                var subtitle = Find<TextBlock>(window, "LauncherRepoSubtitle")!;
-                var beforeText = subtitle.Text;
-                var beforeVisible = subtitle.IsVisible;
+                var repoChip = Find<Button>(window, "RepositoryChip")!;
+                var repoChipText = repoChip.GetVisualDescendants().OfType<TextBlock>().First();
+                var beforeText = repoChipText.Text;
 
                 await vm.SelectRepositoryAsync("/repos/Kurrent-Capacitor-New-Machine");
                 Dispatcher.UIThread.RunJobs();
 
-                var afterText = subtitle.Text;
-                var afterVisible = subtitle.IsVisible;
+                var afterText = repoChipText.Text;
                 var q = headline.Text;
+                var size = headline.FontSize;
 
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
                 vm.Dispose();
-                return (q, beforeText, beforeVisible, afterText, afterVisible);
+                return (q, size, beforeText, afterText);
             });
 
-        await Assert.That(question).IsEqualTo("What should we build?");
-        await Assert.That(subtitleVisibleBefore).IsFalse();
-        await Assert.That(subtitleBefore ?? "").IsEqualTo("");
-        await Assert.That(subtitleVisibleAfter).IsTrue();
-        await Assert.That(subtitleAfter).IsEqualTo("Kurrent-Capacitor-New-Machine");
+        await Assert.That(question).IsEqualTo("What's next?");
+        await Assert.That(fontSize).IsEqualTo(24);
+        await Assert.That(chipBefore).IsEqualTo("Repo · No repository");
+        await Assert.That(chipAfter).IsEqualTo("Repo · Kurrent-Capacitor-New-Machine");
     }
 
     [Test]
@@ -690,6 +689,73 @@ public class LauncherPaneViewSmokeTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
             vm.Dispose();
+        });
+    }
+
+    sealed class FakeNextWorkSource(NextWorkFeedDto feed) : INextWorkSource {
+        public Task<NextWorkRead> FetchAsync(int limit = 20, CancellationToken ct = default) =>
+            Task.FromResult(NextWorkRead.Success(feed));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task WorktreeChip_and_WhatsNext_lanes_and_StartFrom_cards_render_and_bind() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var _tmp = tmp;
+            var service = new FakeDaemonClientService();
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            var feed = new NextWorkFeedDto("2026-10-14T00:00:00Z", [
+                new NextWorkFeedRowDto(
+                    "pr:0123456789abcdef#42", "ReviewRequested", "PR #42 · Auth refresh",
+                    "0123456789abcdef", 100, "Requested from you.", [],
+                    Group: "waiting", LaunchPrompt: "Review PR #42"),
+                new NextWorkFeedRowDto(
+                    "wi:AI-700", "FinishYours", "AI-700 · Launcher UX",
+                    "0123456789abcdef", 90, "CI green.", [],
+                    Group: "finish", WorkItemId: "wi-700", LaunchPrompt: "Finish AI-700"),
+                new NextWorkFeedRowDto(
+                    "le:le-1", "LooseEnd", "Unlinked branch",
+                    "0123456789abcdef", 70, "Recent commit.", [],
+                    Group: "pick_up", LaunchPrompt: "Pick up loose end")
+            ]);
+
+            using var vm = new HomeViewModel(
+                service, new AppStateStore(path), new RecordingLaunchClient(),
+                () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
+                nextWork: new FakeNextWorkSource(feed));
+            await vm.RefreshWhatsNextAsync();
+
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var worktreeChip = Find<Button>(window, "WorktreeChip")!;
+            var worktreeChipText = worktreeChip.GetVisualDescendants().OfType<TextBlock>().First();
+            await Assert.That(worktreeChipText.Text).IsEqualTo("New worktree · automatic");
+
+            var waitingSection = Find<ContentControl>(window, "WaitingOnYouSection")!;
+            var finishSection  = Find<ContentControl>(window, "FinishSection")!;
+            var pickUpSection  = Find<ContentControl>(window, "PickUpSection")!;
+            var startFrom      = Find<StackPanel>(window, "StartFromSection")!;
+
+            await Assert.That(waitingSection.IsVisible).IsTrue();
+            await Assert.That(finishSection.IsVisible).IsTrue();
+            await Assert.That(pickUpSection.IsVisible).IsTrue();
+            await Assert.That(startFrom.IsVisible).IsTrue();
+
+            var blueprintButtons = startFrom.GetVisualDescendants().OfType<Button>()
+                .Where(b => b.Classes.Contains("kcapStartFromCard")).ToList();
+            await Assert.That(blueprintButtons.Count).IsEqualTo(3);
+
+            Click(window, blueprintButtons[2]);
+            await Assert.That(vm.SelectedWorktreeMode).IsEqualTo(WorktreeLaunchMode.NoBranch);
+            await Assert.That(worktreeChipText.Text).IsEqualTo("No branch until you ask for one");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
         });
     }
 }
