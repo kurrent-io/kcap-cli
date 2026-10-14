@@ -245,20 +245,51 @@ public class MuseImportSourceTests : IDisposable {
         await Assert.That(PostedRoutes().Count(r => r == "/hooks/transcript")).IsEqualTo(2);
     }
 
+    /// <summary>The import fails rather than reporting a loaded parent, and holds the parent's end
+    /// back, so a re-import retries the children inside the parent's lifecycle.</summary>
     [Test]
-    public async Task A_refused_subagent_start_leaves_that_child_without_content_or_stop() {
+    public async Task A_refused_subagent_start_fails_the_import_without_that_childs_content_stop_or_the_end() {
         LayOutProbe();
         StubServer();
         _server.Given(Request.Create().WithPath("/hooks/subagent-start").UsingPost())
             .AtPriority(-1)
-            .RespondWith(Response.Create().WithStatusCode(400));
+            .RespondWith(Response.Create().WithStatusCode(500));
 
         var (_, result) = await ImportProbeAsync();
 
-        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Failed);
         await Assert.That(result.SentChildContent).IsFalse();
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
         await Assert.That(PostedRoutes().Count(r => r == "/hooks/transcript")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_refused_subagent_stop_fails_the_import_and_holds_back_the_end() {
+        LayOutProbe();
+        StubServer();
+        _server.Given(Request.Create().WithPath("/hooks/subagent-stop").UsingPost())
+            .AtPriority(-1)
+            .RespondWith(Response.Create().WithStatusCode(500));
+
+        var (_, result) = await ImportProbeAsync();
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(result.SentChildContent).IsTrue();
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
+    }
+
+    /// <summary>Only a strict request makes the server refuse a child lifecycle write it failed to record.</summary>
+    [Test]
+    public async Task Child_lifecycle_posts_are_strict() {
+        LayOutProbe();
+        StubServer();
+
+        await ImportProbeAsync();
+
+        foreach (var route in new[] { "/hooks/subagent-start", "/hooks/subagent-stop" })
+            for (var i = 0; i < 2; i++)
+                await Assert.That((bool?)PostedBody(route, i)["strict"]).IsTrue();
     }
 
     [Test]

@@ -273,7 +273,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
 
         // Children land before session-end so their lifecycle sits inside the parent's. An unfinished
         // log posts no end; the server's stale-session closers own an abandoned one.
-        var sentChildContent = await ImportChildrenAsync(ctx, classification.SessionId, log, ct);
+        var (sentChildContent, childrenRecorded) = await ImportChildrenAsync(ctx, classification.SessionId, log, ct);
+        if (!childrenRecorded) return new ImportSessionResult(ImportOutcome.Failed, sentChildContent);
 
         if (classification.SourceMeta![EndedAtKey] is DateTimeOffset endedAt
          && !await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "session-end/muse",
@@ -286,12 +287,13 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
     }
 
     /// <summary>Every child resends from line 0 (its server ids are deterministic), so
-    /// <c>SentChildContent</c> reads true on any replay of a session that has one. A refused
-    /// subagent-start skips the child's content, and a failed batch leaves its subagent-stop unsent,
-    /// so a re-import retries both; neither fails the already-imported parent.</summary>
-    async Task<bool> ImportChildrenAsync(ImportContext ctx, string parentSessionId, string parentLog, CancellationToken ct) {
-        var labels = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
-        var anySent = false;
+    /// <c>SentChildContent</c> reads true on any replay of a session that has one. A child whose start,
+    /// content or stop the server did not record fails the import before the parent's session-end, so
+    /// a re-import retries it; a refused start skips that child's content.</summary>
+    async Task<(bool AnySent, bool AllRecorded)> ImportChildrenAsync(ImportContext ctx, string parentSessionId, string parentLog, CancellationToken ct) {
+        var labels      = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
+        var anySent     = false;
+        var allRecorded = true;
 
         foreach (var childLog in MuseSubagentDiscovery.EnumerateChildLogs(parentLog)) {
             ct.ThrowIfCancellationRequested();
@@ -299,25 +301,37 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
             var label = MuseSubagentDiscovery.LabelFor(Path.GetFileName(Path.GetDirectoryName(childLog))!, labels);
 
             if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-start",
-                    MuseSubagentDiscovery.BuildStartPayload(parentSessionId, label.AgentId, label.AgentType, childLog), ct))
+                    Strict(MuseSubagentDiscovery.BuildStartPayload(parentSessionId, label.AgentId, label.AgentType, childLog)), ct)) {
+                allRecorded = false;
                 continue;
+            }
 
             int childSent;
             try {
                 childSent = await SessionImporter.SendTranscriptBatches(
                     httpClient: ctx.HttpClient, baseUrl: ctx.BaseUrl, sessionId: parentSessionId, filePath: childLog,
                     agentId: label.AgentId, startLine: 0, time: time, vendor: Vendor, failOnError: true, progress: ctx.Progress);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                throw;
             } catch {
+                allRecorded = false;
                 continue;
             }
 
             if (childSent > 0) anySent = true;
 
-            await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop",
-                MuseSubagentDiscovery.BuildStopPayload(parentSessionId, label.AgentId, label.AgentType, childLog), ct);
+            if (!await PostSyntheticHookAsync(ctx.HttpClient, ctx.BaseUrl, "subagent-stop",
+                    Strict(MuseSubagentDiscovery.BuildStopPayload(parentSessionId, label.AgentId, label.AgentType, childLog)), ct))
+                allRecorded = false;
         }
 
-        return anySent;
+        return (anySent, allRecorded);
+    }
+
+    // Without strict the server answers 200 when it fails to record a child's start or stop.
+    static JsonObject Strict(JsonObject payload) {
+        payload["strict"] = true;
+        return payload;
     }
 
     static JsonObject BuildSessionStartPayload(string sessionId, string log, string? cwd, DateTimeOffset? startedAt) {
