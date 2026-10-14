@@ -48,7 +48,10 @@ public sealed class MuseAssistantScope(
                 if (await runner.ExecuteAsync(store, MuseAssistantPlanner.Closure(state), chatId, ct) is { } refused)
                     return Fail("scope add", MuseAssistantExitCodes.Server, refused);
 
-                state = store.LoadState(chatId).State! with { Grant = NewGrant(boundary, now) };
+                var (reloaded, reloadProblem) = store.LoadState(chatId);
+                if (reloaded is null) return Fail("scope add", MuseAssistantExitCodes.OutOfScope, reloadProblem ?? "the state file for this chat disappeared");
+
+                state = reloaded with { Grant = NewGrant(boundary, now) };
                 store.SaveState(state);
             } else if (!Matches(boundary, state.Grant)) {
                 // Exit 0 would confirm a consent the grant does not carry: a wider boundary promises items it
