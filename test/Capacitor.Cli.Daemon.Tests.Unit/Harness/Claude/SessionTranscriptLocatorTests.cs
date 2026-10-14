@@ -302,4 +302,21 @@ public class SessionTranscriptLocatorTests {
         await Assert.That(winner).IsNull();
         await Assert.That(ruledOut).Count().IsEqualTo(1);
     }
+
+    [Test]
+    public async Task A_pre_spawn_transcript_is_cached_in_ruled_out_on_first_scan() {
+        using var tmp = new TempDir();
+        var projectDir = tmp.CreateDir("projects", "-repo").Path;
+        var worktree = tmp.PathTo("wt");
+        var file = tmp.CreateFile(["projects", "-repo", "0123456789abcdef0123456789abcdef.jsonl"], TranscriptLine(worktree) + "\n");
+        var old = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetCreationTimeUtc(file, old);
+        File.SetLastWriteTimeUtc(file, old);
+        var ruledOut = new HashSet<string>();
+
+        var winner = SessionTranscriptLocator.TryLocateWinner(projectDir, worktree, old.AddHours(1), ruledOut);
+
+        await Assert.That(winner).IsNull();
+        await Assert.That(ruledOut).Contains(file);
+    }
 }

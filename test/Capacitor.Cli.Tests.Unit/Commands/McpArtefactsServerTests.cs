@@ -87,7 +87,7 @@ public class McpArtefactsServerTests {
     [NotInParallel(SessionEnvVarMutation)]
     public async Task Publish_body_cites_the_ambient_session_without_being_asked() {
         await WithoutAmbientSessionAsync(async () => {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "ambientsess1");
+            using var kap = new EnvScope(CapacitorSessionIdEnvVar, "ambientsess1");
 
             var body = McpArtefactsServer.BuildPublishBody(Args("""{"title":"Plan"}"""), "<p>x</p>");
 
@@ -110,20 +110,15 @@ public class McpArtefactsServerTests {
     [Test]
     [NotInParallel(SessionEnvVarMutation)]
     public async Task An_explicit_session_list_beats_the_ambient_one() {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, "ambientsess1");
+        using var kap = new EnvScope(CapacitorSessionIdEnvVar, "ambientsess1");
 
-        try {
-            var body = McpArtefactsServer.BuildPublishBody(
-                Args("""{"title":"Plan","session_ids":["1234abcd-56ef-78ab-90cd-1234567890ab"]}"""), "<p>x</p>");
+        var body = McpArtefactsServer.BuildPublishBody(
+            Args("""{"title":"Plan","session_ids":["1234abcd-56ef-78ab-90cd-1234567890ab"]}"""), "<p>x</p>");
 
-            // Canonicalized the way the server files sessions, so a dashed GUID cites the session
-            // the caller meant rather than silently citing nothing.
-            await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
-                        .IsEquivalentTo(new[] { "1234abcd56ef78ab90cd1234567890ab" });
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-        }
+        // Canonicalized the way the server files sessions, so a dashed GUID cites the session
+        // the caller meant rather than silently citing nothing.
+        await Assert.That(body["sources"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray())
+                    .IsEquivalentTo(new[] { "1234abcd56ef78ab90cd1234567890ab" });
     }
 
     [Test]
@@ -345,22 +340,11 @@ public class McpArtefactsServerTests {
     }
 
     static async Task WithoutAmbientSessionAsync(Func<Task> body) {
-        var savedKap = Environment.GetEnvironmentVariable(CapacitorSessionIdEnvVar);
-        var savedCdx = Environment.GetEnvironmentVariable(CodexThreadIdEnvVar);
-        var savedCld = Environment.GetEnvironmentVariable(ClaudeSessionIdEnvVar);
-        var savedGrk = Environment.GetEnvironmentVariable(GrokSessionIdEnvVar);
-        Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, null);
-        Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, null);
-        Environment.SetEnvironmentVariable(ClaudeSessionIdEnvVar, null);
-        Environment.SetEnvironmentVariable(GrokSessionIdEnvVar, null);
+        using var kap = new EnvScope(CapacitorSessionIdEnvVar, null);
+        using var cdx = new EnvScope(CodexThreadIdEnvVar, null);
+        using var cld = new EnvScope(ClaudeSessionIdEnvVar, null);
+        using var grk = new EnvScope(GrokSessionIdEnvVar, null);
 
-        try {
-            await body();
-        } finally {
-            Environment.SetEnvironmentVariable(CapacitorSessionIdEnvVar, savedKap);
-            Environment.SetEnvironmentVariable(CodexThreadIdEnvVar, savedCdx);
-            Environment.SetEnvironmentVariable(ClaudeSessionIdEnvVar, savedCld);
-            Environment.SetEnvironmentVariable(GrokSessionIdEnvVar, savedGrk);
-        }
+        await body();
     }
 }

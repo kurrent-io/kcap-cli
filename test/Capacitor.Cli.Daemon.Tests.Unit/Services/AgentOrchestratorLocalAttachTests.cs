@@ -244,12 +244,13 @@ public class AgentOrchestratorLocalAttachTests {
 
         var run = orch.RunDiscoveryForTest(agent, _ => {
             agent.ExitedCts.Cancel();
-            return null;
+            return ("sid-after-exit", "/late.jsonl");
         });
 
         await run;
         await Assert.That(agent.SessionId).IsNull();
         await Assert.That(agent.TranscriptPath).IsNull();
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
     }
 
     [Test]

@@ -254,10 +254,11 @@ internal record AgentInstance(
     /// attached, so the clamp grows back to the local-only size. Guarded by <see cref="SinksLock"/>.</summary>
     internal Dim? WebDims { get; set; }
 
-    /// <summary>Tripped when the agent terminates (CleanupAgentAsync) so an attached local
-    /// client that's blocked waiting on the user's keystrokes wakes, flushes the last output,
-    /// and sends an Exited frame instead of hanging.</summary>
+    /// <summary>Tripped when the agent terminates so an attached local client blocked on stdin wakes
+    /// and flushes its final output, and transcript discovery stops before terminal status events are sent.</summary>
     internal CancellationTokenSource ExitedCts { get; } = new();
+
+    internal Task? DiscoveryTask { get; set; }
 
     /// <summary>
     /// True for locally-launched agents: the orchestrator makes no per-agent server call
@@ -3314,6 +3315,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Wait briefly for the process to finalize so we get a real exit code.
             await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(5));
 
+            // Stop and drain transcript discovery before setting terminal status or appending
+            // AgentRunStopped, so a late discovery callback cannot send AgentRunHeartbeat after stop.
+            try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
+            if (agent.DiscoveryTask is { } discoveryTask) await discoveryTask;
+
             var exitCode = agent.Runtime.ExitCode;
 
             var status = agent.Runtime.HasExited
@@ -3461,6 +3467,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await CleanupAgentAsync(agent.Id);
         } catch (Exception ex) {
             LogCleanupError(ex, agent.Id);
+        } finally {
+            try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
         }
     }
 
@@ -5202,11 +5210,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (locate is null) return Task.CompletedTask;
 
         Interlocked.Increment(ref _discoveryStarts);
-        return RunDiscoveryAsync(agent, locate);
+        var task = RunDiscoveryAsync(agent, locate);
+        agent.DiscoveryTask = task;
+        return task;
     }
 
-    internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) =>
-        RunDiscoveryAsync(agent, locate);
+    internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
+        var task = RunDiscoveryAsync(agent, locate);
+        agent.DiscoveryTask = task;
+        return task;
+    }
 
     async Task RunDiscoveryAsync(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
         try {
@@ -5219,6 +5232,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             try {
                 await discovery.RunAsync(locate, async winner => {
+                    if (cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
+
                     // Mutation first, pulse second — and the pulse before any server call, which can
                     // stall on a reconnect and must never hold the app's status push hostage.
                     agent.SessionId ??= winner.SessionId;
@@ -5226,7 +5241,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     _statusNotifier.Pulse();
                     LogSessionIdDetected(agent.Id, winner.SessionId);
 
-                    if (agent.IsPrivate) return;
+                    if (agent.IsPrivate || cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
                     await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(winner.SessionId));
                     if (TrySendAgentStatus(agent, agent.Status, winner.SessionId, out var detected)) await detected;
                 }, cts.Token);
