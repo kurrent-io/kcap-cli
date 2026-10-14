@@ -68,8 +68,8 @@ public class GrokHostedLaunchTests {
 
         await start.Runtime.DisposeAsync();
         await cts.CancelAsync();
+        try { await run.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await fake.DisposeAsync();
-        try { await run; } catch (OperationCanceledException) { }
     }
 
     /// <summary>Grok reports a turn's usage only on its own extension method, so a launch that did not
@@ -104,8 +104,8 @@ public class GrokHostedLaunchTests {
 
         await start.Runtime.DisposeAsync();
         await cts.CancelAsync();
+        try { await run.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
         await fake.DisposeAsync();
-        try { await run; } catch (OperationCanceledException) { }
     }
 
     [Test]
