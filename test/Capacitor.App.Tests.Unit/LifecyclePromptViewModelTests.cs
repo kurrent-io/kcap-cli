@@ -152,7 +152,7 @@ public class LifecyclePromptViewModelTests {
                 new LifecyclePrompt(LifecyclePrompt.KindUpdateInfo, null, "0.12.0-beta.2", false, "up to date"), new TaskCompletionSource<bool>());
 
             await Assert.That(vm.Title).IsEqualTo("Software update");
-            await Assert.That(vm.AcceptButtonText).IsEqualTo("OK");
+            await Assert.That(vm.AcceptButtonText).IsEqualTo("Dismiss");
             await Assert.That(vm.ShowDeclineButton).IsFalse();
         });
     }
@@ -164,5 +164,43 @@ public class LifecyclePromptViewModelTests {
         await Assert.That(vm.Title).IsEqualTo("Reload the daemon service");
         await Assert.That(vm.AcceptButtonText).IsEqualTo("Reload now");
         await Assert.That(vm.ShowDeclineButton).IsTrue();
+    }
+
+    /// Prompt() passes DaemonVersion "1.0.0" and CliVersion "1.1.0"; for update-ready those are
+    /// the candidate and the installed build.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Update_ready_shows_installed_to_candidate_versions() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = new LifecyclePromptViewModel(Prompt(LifecyclePrompt.KindUpdateReady), new TaskCompletionSource<bool>());
+
+            await Assert.That(vm.ShowVersionChange).IsTrue();
+            await Assert.That(vm.InstalledVersion).IsEqualTo("1.1.0");
+            await Assert.That(vm.UpdateVersion).IsEqualTo("1.0.0");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Other_kinds_show_no_version_change_even_with_versions_set() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var vm = new LifecyclePromptViewModel(Prompt(LifecyclePrompt.KindTakeover), new TaskCompletionSource<bool>());
+
+            await Assert.That(vm.ShowVersionChange).IsFalse();
+            await Assert.That(vm.InstalledVersion).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Update_ready_without_an_installed_version_still_shows_the_candidate() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var prompt = new LifecyclePrompt(LifecyclePrompt.KindUpdateReady, "1.0.0", null, false, "restart to finish.");
+            var vm = new LifecyclePromptViewModel(prompt, new TaskCompletionSource<bool>());
+
+            await Assert.That(vm.ShowVersionChange).IsTrue();
+            await Assert.That(vm.UpdateVersion).IsEqualTo("1.0.0");
+            await Assert.That(vm.ShowInstalledVersion).IsFalse();
+        });
     }
 }

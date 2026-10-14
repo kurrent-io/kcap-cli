@@ -13,10 +13,11 @@
 
         <StackPanel Margin="36,52,36,28" Spacing="0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="14">
-                <Border Width="64" Height="64" CornerRadius="14" ClipToBounds="True"
-                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
-                    <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png" Stretch="UniformToFill" />
-                </Border>
+                <Panel Width="64" Height="64">
+                    <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                           RenderOptions.BitmapInterpolationMode="HighQuality" />
+                    <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+                </Panel>
                 <Path VerticalAlignment="Center" Width="56" Height="16" Stretch="None"
                       Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="2"
                       StrokeLineCap="Round" StrokeJoin="Round"

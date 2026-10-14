@@ -13,7 +13,7 @@ public sealed class UpdateCoordinator {
     internal static readonly TimeSpan DefaultInterval = TimeSpan.FromHours(4);
     internal const string CheckLabel = "Check for Updates…";
     internal const string ReadyDisclosure =
-        "Restart Kurrent Capacitor to finish installing it. Running agents keep running; the daemon restarts on its own once it is idle.";
+        "Restart Kurrent Capacitor to finish installing the update. Running agents keep running; the daemon restarts on its own once it is idle.";
 
     readonly IAppUpdater _updater;
     readonly ILifecycleSurface _surface;
@@ -154,7 +154,7 @@ public sealed class UpdateCoordinator {
 
             var prompt = new LifecyclePrompt(
                 LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
-                $"Kurrent Capacitor {candidate.Version} is ready. {ReadyDisclosure}");
+                ReadyDisclosure);
             var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
             ConsumeManual(manual);
             if (accepted) RequestRestart(candidate);
