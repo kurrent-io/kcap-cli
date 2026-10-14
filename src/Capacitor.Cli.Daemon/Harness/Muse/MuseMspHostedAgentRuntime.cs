@@ -804,12 +804,22 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
 
         var sessionId = SessionIdOr(p);
 
-        using var response = await RequestAsync(id => answers is null
-            ? MuseMsp.UserInputCancel(id, MuseMsp.NewId(), sessionId, userInputId)
-            : MuseMsp.UserInputAnswer(id, MuseMsp.NewId(), sessionId, userInputId, answers)).ConfigureAwait(false);
+        if (answers is not null) {
+            using var answered = await RequestAsync(id => MuseMsp.UserInputAnswer(id, MuseMsp.NewId(), sessionId, userInputId, answers)).ConfigureAwait(false);
 
-        if (ErrorMessage(response) is { } error)
-            _logger.LogWarning("Muse: the reply to question {UserInputId} was refused: {Error} (agentId={AgentId}).", userInputId, error, _agentId);
+            if (ErrorMessage(answered) is not { } refusal) return;
+
+            // A refused answer leaves the question open, and the agent waits on it until someone cancels it.
+            _logger.LogWarning("Muse: the answer to question {UserInputId} was refused: {Error}; cancelling it (agentId={AgentId}).",
+                userInputId, refusal, _agentId);
+
+            if (ct.IsCancellationRequested) return;
+        }
+
+        using var cancelled = await RequestAsync(id => MuseMsp.UserInputCancel(id, MuseMsp.NewId(), sessionId, userInputId)).ConfigureAwait(false);
+
+        if (ErrorMessage(cancelled) is { } error)
+            _logger.LogWarning("Muse: the cancel of question {UserInputId} was refused: {Error} (agentId={AgentId}).", userInputId, error, _agentId);
     }
 
     /// <summary>The session the interaction route knows this launch by.</summary>

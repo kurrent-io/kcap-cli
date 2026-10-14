@@ -559,6 +559,24 @@ public class MuseMspHostedAgentRuntimeTests {
         var cancel = Params(await rig.Host.WaitForWriteAsync("userInput/cancel"));
         await Assert.That((string?)cancel["userInputId"]).IsEqualTo("01a13696-9fe2-7cf0-9559-4c92d2d22e4e");
         await Assert.That(rig.Host.WritesOf("userInput/answer")).Count().IsEqualTo(1);
+        await Assert.That(rig.Host.WritesOf("userInput/cancel")).Count().IsEqualTo(1);
+    }
+
+    /// <summary>Muse refuses an answer that does not cover every question it asked, and the question stays
+    /// open with the agent waiting on it, so a refused answer must be followed by a cancel.</summary>
+    [Test]
+    public async Task A_refused_answer_cancels_the_question() {
+        await using var rig = await ReadyRig(interact: (_, _) =>
+            Task.FromResult(new AcpInteractionDecision("allow", "Blue", "Blue", 1, null, null)));
+
+        rig.Host.Override = r =>
+            (string?)r["method"] == "userInput/answer" ? MuseScriptedHost.ErrorResponse((long)r["id"]!, "missing answers") : null;
+
+        rig.Process.Push(MuseMspWire.UserInputRequested);
+
+        await rig.Host.WaitForWriteAsync("userInput/answer");
+        var cancel = Params(await rig.Host.WaitForWriteAsync("userInput/cancel"));
+        await Assert.That((string?)cancel["userInputId"]).IsEqualTo("01a13696-9fe2-7cf0-9559-4c92d2d22e4e");
     }
 
     [Test]

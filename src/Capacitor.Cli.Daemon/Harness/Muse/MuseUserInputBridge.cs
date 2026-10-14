@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// <summary>Maps a Muse <c>userInput/requested</c> payload onto the daemon's elicitation route and the answer back.</summary>
 internal static class MuseUserInputBridge {
     /// <summary>Only the first question is asked and answered; <c>userInput/answer</c> wants an answer for every
-    /// question, so a prompt with more than one is a known gap.</summary>
+    /// question, so a prompt with more than one is refused and the runtime then cancels it.</summary>
     public static AcpInteractionRequest ToInteraction(string agentId, string sessionId, JsonElement userInputParams) {
         var question = FirstQuestion(userInputParams);
         var header   = MuseApprovalBridge.StringOf(question, "header");
