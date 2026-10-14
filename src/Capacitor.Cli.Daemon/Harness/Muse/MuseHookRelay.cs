@@ -16,6 +16,10 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 internal static class MuseHookRelay {
     static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(20);
 
+    /// <summary>The hook can leave a detached child holding its output pipes open after it exits, so the
+    /// drain is bounded separately from the exit.</summary>
+    internal static readonly TimeSpan DrainCeiling = TimeSpan.FromSeconds(3);
+
     /// <summary>Never throws: a relay that fails leaves the session unrecorded, not the launch failed.</summary>
     internal static async Task RelayAsync(
             string            capacitorPath,
@@ -80,11 +84,18 @@ internal static class MuseHookRelay {
                 return;
             }
 
-            await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
+            try {
+                await Task.WhenAll(stdout, stderr).WaitAsync(DrainCeiling, TimeProvider.System, ct).ConfigureAwait(false);
+            } catch (TimeoutException) {
+                logger.LogDebug("Muse hook relay: {Event} output was still open {Seconds}s after exit (agentId={AgentId}).",
+                    hookEvent, DrainCeiling.TotalSeconds, agentId);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            }
 
             if (process.ExitCode != 0)
                 logger.LogWarning("Muse hook relay: {Event} exited {ExitCode} (agentId={AgentId}): {Stderr}",
-                    hookEvent, process.ExitCode, agentId, stderr.Result);
+                    hookEvent, process.ExitCode, agentId, stderr.IsCompletedSuccessfully ? stderr.Result : "");
         } catch (Exception ex) {
             logger.LogWarning(ex, "Muse hook relay: {Event} failed (agentId={AgentId}).", hookEvent, agentId);
         } finally {
