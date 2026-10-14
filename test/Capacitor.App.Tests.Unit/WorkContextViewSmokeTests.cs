@@ -85,23 +85,10 @@ public class WorkContextViewSmokeTests {
                     DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
                 }],
             }));
-            var opens = 0;
-            host.Vm.Artefacts!.OpenRequested += () => opens++;
             await host.ShowAsync(KeyOnlyRead());
 
-            var summaryRow = host.Find<Button>("ArtefactsSummaryRow");
-            var summaryText = host.Find<TextBlock>("ArtefactsSummaryText");
-            var planToggle = host.Find<Button>("PlanToggle");
             var info = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapInfoBrush")!;
-            await Assert.That(summaryRow.IsEffectivelyVisible).IsTrue();
-            await Assert.That(summaryRow.Classes.Contains("sectionHeader")).IsTrue();
-            await Assert.That(summaryRow.TranslatePoint(default, host.Window)!.Value.X)
-                .IsEqualTo(planToggle.TranslatePoint(default, host.Window)!.Value.X);
-            await Assert.That(summaryText.Text).IsEqualTo("1 document");
-            var summaryXBefore = summaryText.TranslatePoint(default, host.Window)!.Value.X;
-            await Assert.That(summaryXBefore).IsGreaterThan(host.Window.Bounds.Width / 2);
-            await host.Vm.OpenArtefactsCommand.Execute();
-            await Assert.That(opens).IsEqualTo(1);
+            await Assert.That(host.Window.GetVisualDescendants().OfType<Button>().Any(b => b.Name == "ArtefactsSummaryRow")).IsFalse();
 
             await host.Vm.Plan.ToggleCommand.Execute();
             Dispatcher.UIThread.RunJobs();

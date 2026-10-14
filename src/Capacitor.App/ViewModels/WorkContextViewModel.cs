@@ -222,10 +222,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ? $"Refresh this work · {RefreshShortcut.Label} or {fromTerminal}"
             : $"Refresh this work · {RefreshShortcut.Label}";
 
-    /// The Artefacts tab's model, when this pane's workspace has one; the pane shows its summary
-    /// row and switches its session beside the plan's.
+    /// The Artefacts tab's model, when this pane's workspace has one; the pane switches and
+    /// refreshes its session beside the plan's.
     public ArtefactsTabViewModel? Artefacts { get; }
-    public ReactiveCommand<Unit, Unit> OpenArtefactsCommand { get; }
 
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     /// The item's own page in the web UI; enabled once a read has named the item.
@@ -249,8 +248,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             reading => IsReading = reading);
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         Artefacts = artefacts;
-        OpenArtefactsCommand = ReactiveCommand.Create(() => Artefacts?.RequestOpen());
-        _disposables.Add(OpenArtefactsCommand);
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
