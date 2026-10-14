@@ -6,7 +6,9 @@
     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
         <Panel Width="14" Height="14" VerticalAlignment="Center" ClipToBounds="False"
                IsVisible="{Binding #Root.IconKind, Converter={x:Static ObjectConverters.IsNotNull}}">
-            <views:AppIcon Kind="{Binding #Root.IconKind}" Size="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+            <!-- Align optically with the heading's visible letters, above the line-box centre. -->
+            <views:AppIcon Kind="{Binding #Root.IconKind}" Size="12" RenderTransform="translateY(-1px)"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
                            Foreground="{StaticResource KcapMutedBrush}" />
         </Panel>
         <TextBlock Grid.Column="1" Classes="toolKindChip" Text="{Binding #Root.Label}"

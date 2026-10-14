@@ -250,6 +250,11 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 
 **Desktop app UI** lives under `src/Capacitor.App/`. Palette and control classes are in `App.axaml`.
 
+- Icons: use Lucide through `Views/AppIcon.cs`, with named `LucideIconKind` mappings.
+  Reuse `ToolCategoryIcons` for system/chat headings. No custom UI icon paths, copied SVG
+  geometry, text/emoji stand-ins, or additional icon families. Existing vendor/product
+  branding, native control glyphs, and activity dots are exceptions. Size and semantic
+  conventions are in `src/Capacitor.App/AGENTS.md`.
 - Status tokens: `KcapSuccess*` (green) and `KcapWarning*` (orange/yellow) only on badges, pills, and
   glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
 - In-flight vs. selection: `KcapPurple*` is active execution (running session indicator, `InProgress`
@@ -269,8 +274,8 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 - Avalonia layout and animation: match class selectors to every control type that carries the class
   (`SelectableTextBlock.toolLine, TextBlock.toolLine`); set `UseLayoutRounding="False"` on concentric
   geometric indicators of mixed odd/even sizes (e.g. a `5×5` dot inside a `12×12` ring); use
-  `MaxWidth`/`MaxHeight` rather than fixed `Width`/`Height` on `Stretch="Uniform"` `Path`s so
-  non-square icons center vertically; and gate continuous animations (`PulseClock.IsActive`) on live
+  `AppIcon.Size` for UI icons and `MaxWidth`/`MaxHeight` on `Stretch="Uniform"` branding paths;
+  and gate continuous animations (`PulseClock.IsActive`) on live
   session activity (`IsActive`), never on static task state alone.
 - Reactive and UI-thread discipline: filter `SourceCache.Connect()` streams *before* `.ObserveOn(RxSchedulers.MainThreadScheduler)` so irrelevant cache revisions do not schedule UI-thread work across every open workspace; use `SingleFlightReader<TState, TResult>` for session-keyed single-flight server reads rather than hand-rolling another `ReadLease` state machine; cache template parts (`ScrollViewer`, `TextPresenter`) on `TemplateApplied` instead of walking `GetVisualDescendants()` on keystrokes or layout ticks; and do not run uncached git/disk/hash I/O inside recompute loops or on the UI thread.
 
