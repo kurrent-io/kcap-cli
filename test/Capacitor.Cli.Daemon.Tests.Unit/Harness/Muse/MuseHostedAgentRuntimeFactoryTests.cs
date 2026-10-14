@@ -492,6 +492,20 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await Assert.That(rig.Spawned).IsEmpty();
     }
 
+    /// <summary>session/resume cannot carry the reviewer's posture, so a reviewer never resumes.</summary>
+    [Test]
+    public async Task A_reviewer_resume_is_refused_before_anything_spawns() {
+        var rig = NewRig();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Factory.StartAsync(
+            Ctx(isReviewFlow: true, prompt: "review this", allowlist: ["kcap-sessions"], resume: "01a13695-0736-75d0-8f4e-f121585b8453"),
+            CancellationToken.None));
+
+        await Assert.That(ex!.Message).StartsWith("muse_reviewer_resume_unsupported");
+        await Assert.That(rig.Spawned).IsEmpty();
+        await Assert.That(Directory.Exists(MarkerDir) ? Directory.GetFiles(MarkerDir) : []).IsEmpty();
+    }
+
     [Test]
     public async Task A_reviewer_allowlist_naming_a_writing_server_is_refused() {
         var rig = NewRig();

@@ -275,6 +275,13 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
             return new MuseLaunchPlan(false, ":ask-me", "onRequest", null, ctx.ResumeSessionId is null ? null : minted,
                 FrozenSet<string>.Empty, minted);
 
+        // session/resume carries no permission profile, approval mode or MCP servers, so nothing would
+        // re-apply the reviewer's posture to a resumed session.
+        if (ctx.ResumeSessionId is not null)
+            throw new InvalidOperationException(
+                "muse_reviewer_resume_unsupported: a resumed Muse session cannot be given the reviewer's read-only "
+              + "profile, approval mode or MCP servers, so a reviewer always starts a new session.");
+
         if (string.IsNullOrWhiteSpace(ctx.ServerUrl) || string.IsNullOrWhiteSpace(ctx.CapacitorPath) || string.IsNullOrWhiteSpace(ctx.AgentId))
             throw new InvalidOperationException(
                 "muse_reviewer_launch_context_incomplete: the result channel needs a server url, a kcap path and an agent id.");
@@ -299,7 +306,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
         // Under denyUnmatched Muse resolves an MCP approval by policy before the daemon can answer it,
         // so the result channel could never be allowed; the daemon decides every approval itself.
         return new MuseLaunchPlan(true, ":read-only", "onRequest", RenderMcpServers(servers, NonDefaultConfigDir(config)),
-            ctx.ResumeSessionId is null ? null : minted, MuseUnattendedApprovals.AdmittedFor(servers, identity), minted);
+            null, MuseUnattendedApprovals.AdmittedFor(servers, identity), minted);
     }
 
     /// <summary>Each server under <see cref="MuseUnattendedApprovals.ServerKey"/>, <c>required</c> so a
