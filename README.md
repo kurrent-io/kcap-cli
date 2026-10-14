@@ -301,6 +301,13 @@ kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-cursor-hook
 kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-codex-hooks   # only Cursor
 ```
 
+**Muse Assistant.** Muse runs kcap inside its own VM, where the only persistent place is `~` and the image ships a Codex that Muse itself never uses. `kcap setup <tenant> --muse-assistant` is the posture for that machine: it implies `--no-prompt`, `--device` and `--skip-import`, installs nothing for any harness (no Codex hooks, no `~/.codex/config.toml` MCP or network allowlist, no `~/.agents/skills`), defaults visibility to `private` (an explicit `--default-visibility` still wins), and prints — before its first network call — the hosts Muse's egress filter will ask the user to approve in the chat: the server's host and `phog.kurrent.io` first, then, once the server names its sign-in provider, `api.workos.com` and `signin.kcap.ai` (WorkOS) or `github.com` (GitHub). Choose **Always allow this site** on each card. Until a host is approved it resolves to a placeholder address, so a "cannot reach server" from this run means "not yet approved": approve the cards and run the same command again. The whole connection — install under `~/workspace`, this sign-in, the kcap MCP servers as a Muse custom connector, a `capacitor` skill and an hourly `kcap status` cron — is driven by the `connect-capacitor` skill (`kcap/skills/connect-capacitor/SKILL.md`): paste it into Muse, or ask Muse to read it from `https://raw.githubusercontent.com/kurrent-io/kcap-cli/main/kcap/skills/connect-capacitor/SKILL.md`, and say "Connect Capacitor".
+
+```bash
+npm install --prefix ~/workspace/kcap @kurrent/kcap
+~/workspace/kcap/node_modules/.bin/kcap setup --server-url https://<tenant>.kcap.ai --device --no-prompt --muse-assistant
+```
+
 > **`--no-prompt` imports this machine's history.** The step 6 import defaults to yes like every other prompt, so `kcap setup --no-prompt` uploads every session on this machine (not only the current repository's), synchronously and without the agent handoff, when authentication requirements are satisfied. Add `--skip-import` to opt out.
 
 #### After setup
@@ -1493,6 +1500,7 @@ Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--c
 | `kcap-plans` | `kcap mcp plans` | Declare the plan document and task list a session executes |
 | `kcap-guided-tour` | analytics + sessions + flows MCP | Card-by-card onboarding tour of what Kcap does |
 | `kcap-start-agents` | `kcap mcp flows` | Hand tasks to separate hosted agents that run on their own: check this machine's daemon, ask which harness, one `start_agent` call each |
+| `kcap-connect-capacitor` | `kcap setup` / `kcap login` | Install and sign in kcap for the agent asking; on a Muse Assistant VM also registers the kcap MCP servers as a custom connector, writes the `capacitor` skill and an hourly `kcap status` cron |
 
 The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows`; only the two status tools fall back to the session (from `CODEX_THREAD_ID`, or an explicit `session_id`) when no flow ID is passed; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-start-agents` also goes through `kcap mcp flows`; its tools take the calling session from the harness, or from an explicit `session_id`. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics`, `kcap-sessions` and `kcap-flows` MCP servers, so it needs those registered (setup does it) rather than a session id. On a plan without Insights its team table falls back to the user's own session count.
 
