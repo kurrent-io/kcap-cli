@@ -434,11 +434,15 @@ public class ChatTabViewSmokeTests {
             await Assert.That(card.Margin.Right).IsEqualTo(0);
             var title = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardTitle");
             var name = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardName");
+            var meta = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardMeta");
             await Assert.That(title.Text).IsEqualTo("Published page");
             await Assert.That(name.Text).IsEqualTo("Retention brief");
-            await Assert.That(name.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
-            await Assert.That(title.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
+            await Assert.That(title.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
+            await Assert.That(name.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
+            await Assert.That(meta.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapFaintBrush"));
             await Assert.That(name.TranslatePoint(default, host.Window)!.Value.X)
+                .IsGreaterThan(title.TranslatePoint(default, host.Window)!.Value.X);
+            await Assert.That(meta.TranslatePoint(default, host.Window)!.Value.X)
                 .IsEqualTo(title.TranslatePoint(default, host.Window)!.Value.X);
             var openBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen");
             var copyBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink");
@@ -908,9 +912,13 @@ public class ChatTabViewSmokeTests {
                 .Single(b => b.Classes.Contains("toolRunning") && b.IsVisible);
             await Assert.That(pulse.Background).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapWarningBrush"));
             await Assert.That(PulseClock.GetIsActive(pulse)).IsTrue();
+            var rowLabel = ToolRows(host.View)[0].GetVisualDescendants().OfType<TextBlock>()
+                .Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
             var detail = ToolRows(host.View)[0].GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.IsEffectivelyVisible && t.Text == "ls -la");
-            await Assert.That(detail.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
+            await Assert.That(rowLabel.Text).IsEqualTo("Searched files");
+            await Assert.That(rowLabel.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
+            await Assert.That(detail.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await host.CloseAsync();
         });
     }

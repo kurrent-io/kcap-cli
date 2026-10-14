@@ -107,6 +107,27 @@ public static class ToolSummary {
         _                      => "Tool",
     };
 
+    /// Human verb for a built-in tool row whose input carries no prose description of its own.
+    public static string? RowLabel(string name, ToolCategory category, string? inputJson) {
+        if (category == ToolCategory.Question || ToolDetail.RawForKey(inputJson, "description").Length > 0) return null;
+        if (name.Equals("Write", StringComparison.OrdinalIgnoreCase) || name.Equals("write_file", StringComparison.OrdinalIgnoreCase))
+            return "Wrote file";
+        if (name.Equals("LS", StringComparison.OrdinalIgnoreCase))
+            return "Listed files";
+        return category switch {
+            ToolCategory.Read      => "Read file",
+            ToolCategory.Edit      => "Edited file",
+            ToolCategory.Command   => "Ran command",
+            ToolCategory.Search    => "Searched files",
+            ToolCategory.WebSearch => "Searched the web",
+            ToolCategory.Fetch     => "Fetched page",
+            ToolCategory.Skill     => "Loaded skill",
+            ToolCategory.Agent     => "Ran agent",
+            ToolCategory.Plan      => "Updated the plan",
+            _                      => null,
+        };
+    }
+
     static bool IsSkillFile(string? path) =>
         path is not null && (path == "SKILL.md" || path.EndsWith("/SKILL.md", StringComparison.Ordinal));
 }

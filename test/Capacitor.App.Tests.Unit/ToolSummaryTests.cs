@@ -101,4 +101,20 @@ public class ToolSummaryTests {
         await Assert.That(ToolSummary.ChipLabel(ToolCategory.Session)).IsEqualTo("Recall");
         await Assert.That(ToolSummary.ChipLabel(ToolCategory.Flow)).IsEqualTo("Flow");
     }
+
+    [Test]
+    [Arguments("Write", ToolCategory.Edit, """{"file_path":"docs/plan.md"}""", "Wrote file")]
+    [Arguments("write_file", ToolCategory.Edit, """{"path":"docs/plan.md"}""", "Wrote file")]
+    [Arguments("Edit", ToolCategory.Edit, """{"file_path":"src/a.cs"}""", "Edited file")]
+    [Arguments("Read", ToolCategory.Read, """{"file_path":"src/a.cs"}""", "Read file")]
+    [Arguments("LS", ToolCategory.Search, """{"path":"src"}""", "Listed files")]
+    [Arguments("Grep", ToolCategory.Search, """{"pattern":"foo"}""", "Searched files")]
+    [Arguments("Bash", ToolCategory.Command, """{"command":"git status"}""", "Ran command")]
+    [Arguments("Bash", ToolCategory.Command, """{"command":"git status","description":"Check repo status"}""", null)]
+    [Arguments("Task", ToolCategory.Agent, """{"prompt":"Reply pong","description":"Reply pong"}""", null)]
+    [Arguments("Task", ToolCategory.Agent, """{"prompt":"Inspect src/"}""", "Ran agent")]
+    [Arguments("AskUserQuestion", ToolCategory.Question, """{"questions":[{"question":"Pick one"}]}""", null)]
+    public async Task Row_label_names_built_in_tools_without_their_own_prose_description(string name, ToolCategory category, string? input, string? expected) {
+        await Assert.That(ToolSummary.RowLabel(name, category, input)).IsEqualTo(expected);
+    }
 }

@@ -200,18 +200,14 @@
                         <Border x:Name="ToolCard" Classes="toolCard" IsVisible="{Binding HasCard}">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                 <StackPanel Spacing="2" VerticalAlignment="Center">
-                                    <TextBlock x:Name="ToolCardName" Text="{Binding Card.Name}" FontWeight="SemiBold" FontSize="13.5"
-                                               Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                    <Grid ColumnDefinitions="Auto,Auto,*">
-                                        <TextBlock x:Name="ToolCardTitle" Text="{Binding Card.Title}" FontSize="12"
-                                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                                        <TextBlock Grid.Column="1" Text=" · " FontSize="12"
-                                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
-                                                   IsVisible="{Binding Card.HasDistinctMeta}" />
-                                        <TextBlock x:Name="ToolCardMeta" Grid.Column="2" Text="{Binding Card.Meta}" FontSize="12"
-                                                   Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" IsVisible="{Binding Card.HasDistinctMeta}" />
+                                    <Grid ColumnDefinitions="Auto,*">
+                                        <TextBlock x:Name="ToolCardTitle" Classes="toolLine" Text="{Binding Card.Title}"
+                                                   Foreground="{StaticResource KcapTextBrush}" Margin="0,0,8,0" />
+                                        <TextBlock x:Name="ToolCardName" Grid.Column="1" Classes="toolLine" Text="{Binding Card.Name}"
+                                                   Foreground="{StaticResource KcapMutedBrush}" />
                                     </Grid>
+                                    <TextBlock x:Name="ToolCardMeta" Classes="toolLine" FontSize="12" Text="{Binding Card.Meta}"
+                                               Foreground="{StaticResource KcapFaintBrush}" IsVisible="{Binding Card.HasDistinctMeta}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                                     <Button x:Name="ToolCardCopyLink" Content="Copy link" Classes="kcapGhost kcapQuiet"
