@@ -51,6 +51,14 @@ sealed record MuseHookConnection(string? ConfigDir, string? ServerUrl, string? P
             ? new(resolved.Resolution with { ProfileName = name, Profile = profile }, resolved.Snapshot)
             : resolved;
 
+    /// <summary>Set when the marker's profile is gone from the config. Credential lookup falls back to
+    /// the active profile's, which would record the session under another user, so the hook must not
+    /// post or spool at all.</summary>
+    public string? MissingProfileWarning(ProfileContext resolved) =>
+        Profile is { } name && !resolved.Snapshot.Profiles.ContainsKey(name)
+            ? $"[kcap] muse hook skipped: profile '{name}', which this session was started under, no longer exists."
+            : null;
+
     static string? PayloadSessionId(string payload) {
         try {
             return JsonNode.Parse(payload)?["session_id"] is JsonValue v && v.TryGetValue<string>(out var s)

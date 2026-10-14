@@ -209,6 +209,29 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
     }
 
+    /// <summary>A profile removed mid-session leaves only the active profile's credential to fall back on,
+    /// so the hook is refused rather than recorded under another user.</summary>
+    [Test]
+    public async Task A_marker_profile_removed_from_the_config_refuses_the_hook() {
+        WriteMarker(DaemonRoot(_server.Url!), _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (_, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Name).IsEqualTo("default");
+        await Assert.That(connection.MissingProfileWarning(profiles)).Contains("'team-b'");
+    }
+
+    [Test]
+    public async Task A_marker_profile_present_in_the_config_is_not_refused() {
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: _server.Url), _server.Url, profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (_, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(connection.MissingProfileWarning(profiles)).IsNull();
+    }
+
     /// <summary>A marker that names a profile but no usable server leaves the destination to the profile.</summary>
     [Test]
     public async Task A_marker_profile_without_a_server_resolves_through_the_profile() {

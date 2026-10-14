@@ -166,6 +166,13 @@ var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
 var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
+
+if (museHook.MissingProfileWarning(profiles) is { } missingProfile) {
+    Console.Error.WriteLine(missingProfile);
+
+    return 0;
+}
+
 var baseUrl  = profiles.Resolution.ServerUrl;
 
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
