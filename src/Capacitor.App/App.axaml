@@ -596,6 +596,79 @@
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
+        <Style Selector="Button.kcapWhatsNextCard">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14,12" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Top" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.kcapWhatsNextCard /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.kcapWhatsNextCard:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapWhatsNextCard:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapWhatsNextCard.selected">
+            <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapWhatsNextCard.selected /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapWhatsNextCard.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapWhatsNextCard.selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapStartFromCard">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.kcapStartFromCard /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapStartFromCard:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapStartFromCard:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.kcapStartFromCard Rectangle.startFromDash">
+            <Setter Property="Stroke" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Fill" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.kcapStartFromCard:pointerover Rectangle.startFromDash,
+                         Button.kcapStartFromCard:pressed Rectangle.startFromDash">
+            <Setter Property="Stroke" Value="{StaticResource KcapBorderStrongBrush}" />
+            <Setter Property="Fill" Value="{StaticResource KcapSurfaceBrush}" />
+        </Style>
+        <Style Selector="Button.kcapStartFromCard.selected Rectangle.startFromDash,
+                         Button.kcapStartFromCard.selected:pointerover Rectangle.startFromDash,
+                         Button.kcapStartFromCard.selected:pressed Rectangle.startFromDash">
+            <Setter Property="Stroke" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Fill" Value="{StaticResource KcapInfoDimBrush}" />
+        </Style>
         <StyleInclude Source="avares://Kurrent Capacitor/Views/SectionStyles.axaml" />
     </Application.Styles>
 </Application>

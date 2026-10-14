@@ -10,4 +10,6 @@ namespace Capacitor.App.ViewModels;
 public sealed record LaunchDraft(
     string Machine, bool Remote, string RepoPath, string Vendor, string Goal, int GoalEdits,
     string Model, string? Effort, string? PermissionMode, CodexLaunchPosture? CodexPosture,
-    IReadOnlyList<StagedAttachment> Files, int TrayGeneration);
+    IReadOnlyList<StagedAttachment> Files, int TrayGeneration,
+    string? TargetKey = null, string? WorkItemId = null, bool Borrowed = false,
+    string? BorrowCwd = null, string? ResumeSessionId = null);

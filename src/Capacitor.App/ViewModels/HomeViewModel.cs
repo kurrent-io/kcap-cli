@@ -43,7 +43,7 @@ internal enum LaunchAvailability { Ready, Pending, DaemonUnavailable, ServerDisc
 /// on the daemon client's own background thread (same as MainWindowViewModel/
 /// ConsentPromptViewModel), so projections ObserveOn RxSchedulers.MainThreadScheduler BEFORE the
 /// operator that touches bound state — a binding must never see a mutation off the UI thread.
-public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink {
+public sealed partial class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink {
     /// A repository with no remembered choice falls back to this — never to whatever vendor was
     /// selected for a DIFFERENT repository, which would leak a preference across repositories.
     public const string DefaultVendor = "claude";
@@ -99,6 +99,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         get => _selectedRepoPath;
         set {
             this.RaiseAndSetIfChanged(ref _selectedRepoPath, value);
+            this.RaisePropertyChanged(nameof(RepositoryChipLabel));
             _selectedRepoPathChanges.OnNext(value);
         }
     }
@@ -192,6 +193,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _goalEdits++;
             ClearIntakeNotice();
             this.RaiseAndSetIfChanged(ref _goal, value);
+            OnGoalChangedByUser(value);
         }
     }
 
@@ -366,7 +368,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
     /// stamps come from the same clock, so one TimeProvider governs every expiry.
-    sealed record PendingLaunch(DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt);
+    sealed record PendingLaunch(DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt, string? TargetKey = null);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -437,8 +439,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
             IObservable<LaunchFailure>? launchFailures = null, IAgentDirectory? directory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
-            IAttachmentUploader? uploader = null, string? appServerUrl = null, Action<string>? launchFailed = null) {
+            IAttachmentUploader? uploader = null, string? appServerUrl = null, Action<string>? launchFailed = null,
+            INextWorkSource? nextWork = null, LocalRepoHashIndex? repoHashIndex = null) {
         _launchFailed = launchFailed;
+        WhatsNextLanes = [WaitingOnYouLane, FinishLane, PickUpLane];
+        StartFromBlueprints = BuildStartFromBlueprints();
         _daemon = daemon;
         _state = state;
         _launch = launch;
@@ -690,6 +695,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // Adopt a recent known repo when the launcher starts empty — fire-and-forget; the picker
         // also calls EnsureDefaultRepositoryAsync before listing.
         _ = EnsureDefaultRepositoryAsync();
+        InitializeWhatsNext(nextWork, repoHashIndex);
     }
 
     /// MainWindow owns Start/Reconnect (lifecycle startAction + shutdown token). The launcher banner
@@ -729,6 +735,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _signInRequired.OnNext(false);
         _awaitingServerAfterSignIn.OnNext(true);
         RestartCatchUp();
+        _ = RefreshWhatsNextAsync();
     }
 
     void ArmOrResetCatchUp(string? rawNotice) {
@@ -1117,7 +1124,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// when none — never the vendor a DIFFERENT repository had selected. In remote mode the local
     /// HarnessByRepo store is never consulted: the vendor is instead revalidated against the
     /// selected remote machine's own advertised set (RevalidateVendorAgainst).
-    public async Task SelectRepositoryAsync(string repoPath) {
+    public Task SelectRepositoryAsync(string repoPath) =>
+        SelectRepositoryCoreAsync(repoPath, fromPastedLink: false, preserveWorktree: false);
+
+    async Task SelectRepositoryCoreAsync(string repoPath, bool fromPastedLink, bool preserveWorktree) {
+        RepoSelectionFromPastedLink = fromPastedLink;
+        if (!preserveWorktree) SelectedExistingWorktreePath = null;
         SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath : PlatformPaths.Normalize(repoPath);
         if (RemoteMachineSelected) {
             RevalidateVendorAgainst(_selectedRemoteMachine?.SupportedVendors);
@@ -1136,13 +1148,23 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     async Task StartAsync() {
+        if (!string.IsNullOrWhiteSpace(SelectedTargetKey) && IsTargetLaunchInFlight(SelectedTargetKey)) {
+            StartError = DuplicateTargetLaunchMessage;
+            return;
+        }
+
+        var (borrowed, borrowCwd) = ResolveWorktreeBorrowForLaunch(SelectedRepoPath);
+        var effectiveGoal         = NextWorkPromptBuilder.FrameWithBlueprint(Goal, SelectedBlueprintKind);
+
         // Captured before anything can await: an upload takes time the user can spend re-pointing
         // the launcher, and the files must reach the machine the composer was aimed at.
         var draft = new LaunchDraft(
-            SelectedMachine, RemoteMachineSelected, SelectedRepoPath, SelectedVendor, Goal, _goalEdits,
-            SelectedModel, SelectedEffort, PermissionModeFor(SelectedVendor, SelectedPermissionMode),
-            CodexPostureFor(SelectedVendor, SelectedCodexSandbox, SelectedCodexApproval),
-            Tray.Snapshot(), Tray.Generation);
+            SelectedMachine, RemoteMachineSelected, SelectedRepoPath, SelectedVendor, effectiveGoal, _goalEdits,
+            SelectedModel, SelectedEffort, PermissionModeFor(SelectedVendor, SelectedPermissionMode, borrowed),
+            CodexPostureFor(SelectedVendor, SelectedCodexSandbox, SelectedCodexApproval, borrowed),
+            Tray.Snapshot(), Tray.Generation,
+            TargetKey: SelectedTargetKey, WorkItemId: SelectedWorkItemId,
+            Borrowed: borrowed, BorrowCwd: borrowCwd, ResumeSessionId: SelectedResumeSessionId);
 
         if (draft.Files.Count > 0 && !CanAttachFor(draft)) {
             StartError = AttachHintFor(_signedIn, false);
@@ -1194,13 +1216,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var request = new LaunchRequest(
             draft.Machine, draft.RepoPath, draft.Vendor, draft.Goal, draft.Model, draft.Effort,
-            draft.PermissionMode, attachmentIds, draft.CodexPosture);
+            draft.PermissionMode, attachmentIds, draft.CodexPosture,
+            TargetKey: draft.TargetKey, WorkItemId: draft.WorkItemId,
+            Borrowed: draft.Borrowed, BorrowCwd: draft.BorrowCwd, ResumeSessionId: draft.ResumeSessionId);
         // Captured BEFORE the call, never after: the whole point is to notice a navigation that
         // changed WHILE the launch was in flight.
         var generation = _navigationGeneration?.Invoke() ?? 0;
 
+        MarkTargetLaunching(draft.TargetKey, true);
         var outcome = await _launch.StartAsync(request, _shutdown);
         if (!outcome.Started) {
+            MarkTargetLaunching(draft.TargetKey, false);
             // Every finished attempt is fresh evidence, so the flag follows it both ways. An
             // unauthorized outcome renders as the sign-in notice, never as raw transport text.
             _signInRequired.OnNext(outcome.Unauthorized);
@@ -1213,7 +1239,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // The launch really did start, so what it sent is spent — but only what it sent: a goal
         // typed into since, and chips staged since, belong to the next one.
         var clearedGoal = _goalEdits == draft.GoalEdits;
-        if (clearedGoal) Goal = "";
+        if (clearedGoal) {
+            Goal = "";
+            ClearSelectedWhatsNextCard(clearGoal: false);
+        }
         var trayUntouched = Tray.Generation == draft.TrayGeneration;
         Tray.RemoveAll([.. draft.Files.Select(f => f.Id)]);
         var clearedTray = trayUntouched && Tray.Count == 0;
@@ -1234,7 +1263,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             lock (_launchTrackingLock)
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
-        var tracked = RecordPendingLaunch(agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0, uploadedAt);
+        var tracked = RecordPendingLaunch(agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0, uploadedAt, draft.TargetKey);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
         // an agent that isn't there — auto-open and the placeholder row only ever apply to a
         // local target.
@@ -1251,7 +1280,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         .Any(d => string.Equals(d.Name, machine, StringComparison.Ordinal) && d.Connected);
 
     /// False when a row or a buffered failure has already settled the launch.
-    bool RecordPendingLaunch(string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt) {
+    bool RecordPendingLaunch(string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt, string? targetKey = null) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -1265,7 +1294,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), lane, hadAttachments, uploadedAt);
+            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), lane, hadAttachments, uploadedAt, targetKey);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (_time.GetUtcNow().UtcDateTime - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1278,7 +1307,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             ForgetLaunch(agentId);
             return false;
         }
-        if (bufferedReason is not null) ApplyLaunchFailure(agentId, hadAttachments, bufferedReason);
+        if (bufferedReason is not null) {
+            MarkTargetLaunching(targetKey, false);
+            ApplyLaunchFailure(agentId, hadAttachments, bufferedReason);
+        }
         return bufferedReason is null;
     }
 
@@ -1335,6 +1367,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _pendingLaunches.Remove(agentId);
         }
         if (pending is null) return;
+        MarkTargetLaunching(pending.TargetKey, false);
         ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
         _directory?.RemovePlaceholder(agentId);
         _launchFailed?.Invoke(agentId);
@@ -1401,8 +1434,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             : reason;
 
     /// Null for Manual (the harness's own default) and for any vendor that takes no mode.
-    internal static string? PermissionModeFor(string vendor, string mode) =>
-        HostedHarnessCatalog.SupportsPermissionMode(vendor)
+    internal static string? PermissionModeFor(string vendor, string mode, bool borrowed = false) =>
+        !borrowed
+     && HostedHarnessCatalog.SupportsPermissionMode(vendor)
      && !string.Equals(mode, ClaudePermissionModes.Manual, StringComparison.Ordinal)
             ? mode
             : null;
@@ -1410,8 +1444,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Null for any vendor but codex, and for the daemon's own default pair, so an untouched
     /// launcher sends no posture and a daemon without posture support still accepts the launch.
     /// Both halves go together once either differs — the daemon rejects a partial posture.
-    internal static CodexLaunchPosture? CodexPostureFor(string vendor, string sandbox, string approval) =>
-        HostedHarnessCatalog.SupportsCodexPosture(vendor)
+    internal static CodexLaunchPosture? CodexPostureFor(string vendor, string sandbox, string approval, bool borrowed = false) =>
+        !borrowed
+     && HostedHarnessCatalog.SupportsCodexPosture(vendor)
      && !(string.Equals(sandbox, HostedHarnessCatalog.DefaultCodexSandbox, StringComparison.Ordinal)
        && string.Equals(approval, HostedHarnessCatalog.DefaultCodexApproval, StringComparison.Ordinal))
             ? new CodexLaunchPosture(sandbox, approval)

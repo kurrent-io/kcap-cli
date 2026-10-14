@@ -9,7 +9,9 @@ namespace Capacitor.App.Services;
 public sealed record LaunchRequest(
     string DaemonName, string RepoPath, string Vendor, string? Prompt,
     string Model = "", string? Effort = null, string? PermissionMode = null,
-    IReadOnlyList<string>? AttachmentIds = null, CodexLaunchPosture? CodexPosture = null);
+    IReadOnlyList<string>? AttachmentIds = null, CodexLaunchPosture? CodexPosture = null,
+    string? TargetKey = null, string? WorkItemId = null, bool Borrowed = false,
+    string? BorrowCwd = null, string? ResumeSessionId = null);
 
 /// Unauthorized marks a server 401 — the caller routes it to sign-in instead of rendering the
 /// raw transport message.
@@ -42,6 +44,16 @@ public sealed record LaunchAgentRequestV2Payload {
     // Omitted when null, so an unchosen mode leaves the payload an older server expects untouched.
     [JsonPropertyName("permission_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PermissionMode { get; init; }
+    [JsonPropertyName("target_key"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TargetKey { get; init; }
+    [JsonPropertyName("work_item_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkItemId { get; init; }
+    [JsonPropertyName("borrowed"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Borrowed { get; init; }
+    [JsonPropertyName("borrow_cwd"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BorrowCwd { get; init; }
+    [JsonPropertyName("resume_session_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ResumeSessionId { get; init; }
 }
 
 /// The RequestLaunchAgentV2 argument, split from the transport so its shape is testable.
@@ -54,8 +66,13 @@ public static class LaunchPayload {
         RepoPath   = r.RepoPath,
         Vendor     = r.Vendor,
         // Null, not an empty array: the server reads an empty array as "these ids, none of them".
-        AttachmentIds = r.AttachmentIds is { Count: > 0 } ids ? [.. ids] : null,
-        PermissionMode = string.IsNullOrWhiteSpace(r.PermissionMode) ? null : r.PermissionMode,
-        CodexPosture   = r.CodexPosture,
+        AttachmentIds   = r.AttachmentIds is { Count: > 0 } ids ? [.. ids] : null,
+        PermissionMode  = string.IsNullOrWhiteSpace(r.PermissionMode) ? null : r.PermissionMode,
+        CodexPosture    = r.CodexPosture,
+        TargetKey       = string.IsNullOrWhiteSpace(r.TargetKey) ? null : r.TargetKey,
+        WorkItemId      = string.IsNullOrWhiteSpace(r.WorkItemId) ? null : r.WorkItemId,
+        Borrowed        = r.Borrowed,
+        BorrowCwd       = string.IsNullOrWhiteSpace(r.BorrowCwd) ? null : r.BorrowCwd,
+        ResumeSessionId = string.IsNullOrWhiteSpace(r.ResumeSessionId) ? null : r.ResumeSessionId,
     };
 }

@@ -620,7 +620,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// The coordinator's close paths. Bumps unconditionally — a close-to-hide with no workspace
     /// open must still retire an in-flight launch's captured generation.
-    public void CloseWorkspace() => SwapTo(null);
+    public void CloseWorkspace() {
+        var hadWorkspace = CurrentWorkspace is not null;
+        SwapTo(null);
+        if (hadWorkspace && !_navigation.ShutdownLatched)
+            _ = Home?.RefreshWhatsNextAsync();
+    }
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
         workspace is { WorkContext: var work }

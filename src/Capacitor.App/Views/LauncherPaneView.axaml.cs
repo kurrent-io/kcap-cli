@@ -90,6 +90,73 @@ public partial class LauncherPaneView : UserControl {
         flyout.ShowAt(anchor);
     }
 
+    void OnWorktreeChipClick(object? sender, RoutedEventArgs e) {
+        if (DataContext is not HomeViewModel vm || sender is not Control anchor) return;
+
+        var muted = Brush("KcapMutedBrush");
+        var rows = new StackPanel { Spacing = 2, Margin = new Thickness(6) };
+        var flyout = PanelFlyout(rows, minWidth: 280);
+
+        foreach (var mode in WorktreeModeChoice.All) {
+            var current = mode;
+            var selected = vm.SelectedWorktreeMode == current;
+            var title = new TextBlock {
+                Text = current.MenuLabel(vm.ContinuesInExistingWorktree),
+                FontSize = 13.5,
+                FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal,
+                Foreground = Brush("KcapTextBrush"),
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            var check = new TextBlock {
+                Text = "✓", FontSize = 13, IsVisible = selected,
+                Foreground = Brush("KcapInfoBrush"), Margin = new Thickness(12, 0, 0, 0),
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            var subtitle = new TextBlock {
+                Text = current.Description(),
+                FontSize = 10.5, Foreground = muted, Margin = new Thickness(0, 2, 0, 0),
+            };
+            var grid = new Grid {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                RowDefinitions = new RowDefinitions("Auto,Auto"),
+                MinWidth = 240,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+            };
+            grid.Children.Add(title);
+            Grid.SetColumn(check, 1);
+            grid.Children.Add(check);
+            Grid.SetRow(subtitle, 1);
+            grid.Children.Add(subtitle);
+
+            rows.Children.Add(ChoiceButton(grid, () => {
+                vm.SelectedWorktreeMode = current;
+                flyout.Hide();
+            }));
+        }
+
+        flyout.ShowAt(anchor);
+    }
+
+    void OnLanePointerEntered(object? sender, PointerEventArgs e) {
+        if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
+            lane.Pin();
+    }
+
+    void OnLanePointerExited(object? sender, PointerEventArgs e) {
+        if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
+            lane.Release();
+    }
+
+    void OnLaneGotFocus(object? sender, RoutedEventArgs e) {
+        if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
+            lane.Pin();
+    }
+
+    void OnLaneLostFocus(object? sender, RoutedEventArgs e) {
+        if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
+            lane.Release();
+    }
+
     Button RepositoryRow(HomeViewModel vm, RepositoryOption option, IBrush muted, Flyout flyout) {
         var isScratch = option.RepoPath.Length == 0;
         var title = new TextBlock {
