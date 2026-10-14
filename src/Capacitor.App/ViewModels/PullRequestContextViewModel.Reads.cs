@@ -27,7 +27,6 @@ public sealed partial class PullRequestContextViewModel {
         _refreshing = true;
         _lastRefresh = _time.GetTimestamp();
         Notify();
-        var repository = _primaryRepo?.Invoke();
         var worktree = _worktree;
         var reportedBranch = _branch;
         var generation = _generation;
@@ -38,7 +37,7 @@ public sealed partial class PullRequestContextViewModel {
                 if (_disposed || generation != _generation) throw new OperationCanceledException(ct);
                 // A reported branch can advance while the filesystem lookup is in flight.
                 branch = _worktree == worktree && _branch == reportedBranch ? branch ?? reportedBranch : _branch;
-                _readers?.DescribeSession(session, repository, branch);
+                _readers?.DescribeSession(session, _primaryRepo?.Invoke(), branch);
             });
             var capability = await _source.DiscoverAsync(refresh, ct).ConfigureAwait(false);
             var links = capability.Kind switch {

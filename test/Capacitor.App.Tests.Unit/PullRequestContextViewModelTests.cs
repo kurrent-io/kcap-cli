@@ -14,6 +14,38 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_repository_updated_during_branch_lookup_is_described_to_the_registry(bool initiallyKnown) => RunOnUiAsync(async () => {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var finished = new ManualResetEventSlim();
+        var latest = new PullRequestRepository("github", "github.com", "example", "latest", "latest-hash");
+        PullRequestRepository? repository = initiallyKnown
+            ? new("github", "github.com", "example", "earlier", "earlier-hash") : null;
+        var h = new Harness(primary: () => repository, readBranch: _ => {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            finished.Set();
+            return "feature";
+        });
+        try {
+            h.Push();
+            h.Vm.SetForeground(true);
+            await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(entered.IsSet).IsTrue();
+            repository = latest;
+            release.Set();
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "current repository described");
+            await Assert.That(h.Source.Descriptions.Single().Repository).IsEqualTo(latest);
+        } finally {
+            release.Set();
+            if (entered.IsSet) await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
+            await h.Dispose();
+        }
+    });
+
+    [Test]
     public Task Teardown_does_not_wait_for_a_stalled_branch_lookup_or_publish_its_result() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
