@@ -91,19 +91,30 @@ public class WorkContextViewSmokeTests {
 
             var summaryRow = host.Find<Button>("ArtefactsSummaryRow");
             var summaryText = host.Find<TextBlock>("ArtefactsSummaryText");
+            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
             await Assert.That(summaryRow.IsEffectivelyVisible).IsTrue();
             await Assert.That(summaryRow.Classes.Contains("sectionHeader")).IsTrue();
+            await Assert.That(summaryRow.Classes.Contains("open")).IsFalse();
             await Assert.That(summaryText.Text).IsEqualTo("1 document");
             await Assert.That(summaryText.TranslatePoint(default, host.Window)!.Value.X).IsGreaterThan(host.Window.Bounds.Width / 2);
             await host.Vm.OpenArtefactsCommand.Execute();
             await Assert.That(opens).IsEqualTo(1);
 
+            host.Vm.Artefacts.IsShown = true;
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+            await Assert.That(summaryRow.Classes.Contains("open")).IsTrue();
+            await Assert.That(((ISolidColorBrush)summaryText.Foreground!).Color).IsEqualTo(purple.Color);
+
             await host.Vm.Plan.ToggleCommand.Execute();
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
+            var docList = host.Find<ItemsControl>("PlanDocumentList");
+            await Assert.That(docList.ClipToBounds).IsFalse();
             var rowButton = host.Window.GetVisualDescendants().OfType<Button>().Single(b => b.DataContext is PlanDocumentRow);
             await Assert.That(rowButton.Classes.Contains("copyValue")).IsTrue();
             await Assert.That(rowButton.Classes.Contains("planDocRow")).IsTrue();
+            await Assert.That(rowButton.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
 
             host.Vm.Plan.MarkOpen("docs/x-design.md");
             Dispatcher.UIThread.RunJobs();
@@ -111,7 +122,6 @@ public class WorkContextViewSmokeTests {
             var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
             var badge = rowButton.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("docKindBadge"));
             var badgeText = badge.GetVisualDescendants().OfType<TextBlock>().Single();
-            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
             await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(purple.Color);
             await Assert.That(((ISolidColorBrush)badgeText.Foreground!).Color).IsEqualTo(purple.Color);
         });

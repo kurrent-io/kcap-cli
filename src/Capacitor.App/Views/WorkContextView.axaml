@@ -52,22 +52,25 @@
             <Setter Property="RenderTransform" Value="scale(1)" />
         </Style>
         <Style Selector="Button.copyValue.planDocRow">
-            <Setter Property="Padding" Value="8,5" />
-            <Setter Property="Margin" Value="-8,0" />
-            <Setter Property="CornerRadius" Value="7" />
-            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="Margin" Value="-6,0,0,0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
         </Style>
         <Style Selector="Button.copyValue.planDocRow /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="CornerRadius" Value="6" />
         </Style>
         <Style Selector="Button.copyValue.planDocRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.copyValue.planDocRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
         </Style>
-        <Style Selector="Button.copyValue.open /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.copyValue.open:pointerover /template/ ContentPresenter#PART_ContentPresenter,
-                         Button.copyValue.open:pressed /template/ ContentPresenter#PART_ContentPresenter">
+        <Style Selector="Button.copyValue.planDocRow.open /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.copyValue.planDocRow.open:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.copyValue.planDocRow.open:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
         </Style>
         <Style Selector="Border.docKindBadge">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
@@ -98,7 +101,31 @@
             <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
             <Setter Property="FontWeight" Value="Medium" />
         </Style>
-        <Style Selector="Button.copyValue.open Path.chevron">
+        <Style Selector="Path.openArrow">
+            <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="StrokeThickness" Value="1.5" />
+            <Setter Property="StrokeLineCap" Value="Round" />
+            <Setter Property="StrokeJoin" Value="Round" />
+            <Setter Property="Data" Value="M3.5,8.5 L8.5,3.5 M5,3.5 H8.5 V7" />
+        </Style>
+        <Style Selector="Button.copyValue.open Path.openArrow">
+            <Setter Property="Stroke" Value="{StaticResource KcapPurpleBrush}" />
+        </Style>
+        <Style Selector="Border.artefactsSummaryPill">
+            <Setter Property="CornerRadius" Value="999" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button.sectionHeader.open Border.artefactsSummaryPill">
+            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+            <Setter Property="Padding" Value="8,2" />
+        </Style>
+        <Style Selector="Button.sectionHeader.open TextBlock.eyebrow,
+                         Button.sectionHeader.open TextBlock.sectionMeta">
+            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+        </Style>
+        <Style Selector="Button.sectionHeader.open Path.openArrow">
             <Setter Property="Stroke" Value="{StaticResource KcapPurpleBrush}" />
         </Style>
         <Style Selector="Border.pill.shipped">
@@ -640,17 +667,21 @@
                 </StackPanel>
 
                 <!-- The Artefacts tab's summary; the tab itself lives in the centre. -->
-                <Button x:Name="ArtefactsSummaryRow" Classes="sectionHeader expandable" Margin="0,18,0,0"
+                <Button x:Name="ArtefactsSummaryRow" Classes="sectionHeader expandable"
+                        Classes.open="{Binding Artefacts.IsShown, FallbackValue=False}"
+                        Margin="0,18,0,0"
                         Command="{Binding OpenArtefactsCommand}"
                         IsVisible="{Binding Artefacts.HasAny, FallbackValue=False}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <TextBlock Text="ARTEFACTS" Classes="eyebrow" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
-                            <Panel Classes="chevronBox" Width="12" Height="12">
-                                <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" />
-                            </Panel>
-                        </StackPanel>
+                        <Border Grid.Column="1" Classes="artefactsSummaryPill">
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
+                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                    <Path Classes="openArrow" />
+                                </Panel>
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Button>
 
@@ -713,7 +744,8 @@
                             </MultiBinding>
                         </Border.IsVisible>
                         <StackPanel Spacing="12">
-                            <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}" IsVisible="{Binding Plan.HasDocuments}">
+                            <ItemsControl x:Name="PlanDocumentList" ItemsSource="{Binding Plan.Documents}"
+                                          IsVisible="{Binding Plan.HasDocuments}" ClipToBounds="False">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
                                         <StackPanel Spacing="4" />
@@ -721,17 +753,17 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:PlanDocumentRow">
-                                        <Button Classes="copyValue planDocRow" Classes.open="{Binding IsOpen}" HorizontalAlignment="Stretch"
+                                        <Button Classes="copyValue planDocRow" Classes.open="{Binding IsOpen}"
                                                 Command="{Binding $parent[ItemsControl].((vm:WorkContextViewModel)DataContext).Plan.OpenDocumentCommand}"
                                                 CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
-                                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
                                                 <Border Classes="docKindBadge">
                                                     <TextBlock Text="{Binding KindLabel}" />
                                                 </Border>
                                                 <TextBlock Grid.Column="1" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"
                                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                                 <Panel Grid.Column="2" Classes="chevronBox" Width="12" Height="12" VerticalAlignment="Center">
-                                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" />
+                                                    <Path Classes="openArrow" />
                                                 </Panel>
                                             </Grid>
                                         </Button>
