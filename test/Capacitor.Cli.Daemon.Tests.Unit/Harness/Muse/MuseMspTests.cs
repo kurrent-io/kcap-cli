@@ -202,14 +202,18 @@ public class MuseMspTests {
     }
 
     [Test]
-    public async Task UserInputAnswer_encodes_each_answer_as_selectedLabel() {
-        using var doc = Parse(MuseMsp.UserInputAnswer(8, Cmd, Sid, "input-1", [("q1", "red"), ("q2", "blue")]));
+    public async Task UserInputAnswer_emits_exactly_one_value_member_per_answer() {
+        using var doc = Parse(MuseMsp.UserInputAnswer(8, Cmd, Sid, "input-1", [
+            new MuseUserInputAnswer("q1", SelectedLabel: "red"),
+            new MuseUserInputAnswer("q2", SelectedLabels: ["a", "b"]),
+            new MuseUserInputAnswer("q3", FreeText: "green"),
+        ]));
         var p = doc.RootElement.Obj("params")!.Value;
 
         await Assert.That(doc.RootElement.Str("method")).IsEqualTo("userInput/answer");
         await Assert.That(p.Str("userInputId")).IsEqualTo("input-1");
         await Assert.That(p.Arr("answers")!.Value.GetRawText()).IsEqualTo(
-            """[{"questionId":"q1","selectedLabel":"red"},{"questionId":"q2","selectedLabel":"blue"}]""");
+            """[{"questionId":"q1","selectedLabel":"red"},{"questionId":"q2","selectedLabels":["a","b"]},{"questionId":"q3","freeText":"green"}]""");
     }
 
     [Test]

@@ -59,23 +59,17 @@ internal static class MuseApprovalBridge {
             }
         }
 
-        return new MuseApprovalDecision(AbortChoiceId(choices, fallToLast: true), DeclinedFeedback);
+        return new MuseApprovalDecision(AbortChoiceId(choices), DeclinedFeedback);
     }
 
-    /// <summary>The choice with <c>decision == "abort"</c>. Without one: the last choice when <paramref name="fallToLast"/>,
-    /// else the literal <c>abort</c> id, which a host rejects rather than reads as a grant.</summary>
-    internal static string AbortChoiceId(List<JsonElement> choices, bool fallToLast) {
-        string? last = null;
-
+    /// <summary>The first choice with <c>decision == "abort"</c>, else the literal <c>abort</c> id, which a host
+    /// rejects rather than reads as a grant.</summary>
+    internal static string AbortChoiceId(List<JsonElement> choices) {
         foreach (var choice in choices) {
-            var id = StringOf(choice, "choiceId");
-            if (id is null) continue;
-            if (StringOf(choice, "decision") == AbortChoice) return id;
-
-            last = id;
+            if (StringOf(choice, "choiceId") is { } id && StringOf(choice, "decision") == AbortChoice) return id;
         }
 
-        return fallToLast ? last ?? AbortChoice : AbortChoice;
+        return AbortChoice;
     }
 
     internal static List<JsonElement> Choices(JsonElement approvalParams) {

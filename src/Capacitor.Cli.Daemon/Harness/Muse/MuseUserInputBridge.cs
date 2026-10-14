@@ -38,18 +38,30 @@ internal static class MuseUserInputBridge {
             IsMultiSelect: multiple);
     }
 
-    /// <summary>Null means the question was dismissed; the caller sends <c>userInput/cancel</c>.</summary>
-    public static IReadOnlyList<(string QuestionId, string SelectedLabel)>? ToAnswers(
-            AcpInteractionDecision decision, JsonElement userInputParams) {
-        var answered = decision.Outcome == "answered" || decision.SelectedOptionId is not null || decision.SelectedOptionLabel is not null;
-        if (!answered) return null;
+    /// <summary>Null means nothing usable was chosen; the caller sends <c>userInput/cancel</c>.</summary>
+    public static IReadOnlyList<MuseUserInputAnswer>? ToAnswers(AcpInteractionDecision decision, JsonElement userInputParams) {
+        if (decision.Outcome is "cancel" or "timeout" or "deny") return null;
 
-        var label      = decision.SelectedOptionLabel ?? decision.SelectedOptionId ?? decision.FreeText;
-        var questionId = MuseApprovalBridge.StringOf(FirstQuestion(userInputParams), "id");
+        var question   = FirstQuestion(userInputParams);
+        var questionId = MuseApprovalBridge.StringOf(question, "id");
+        if (string.IsNullOrEmpty(questionId)) return null;
 
-        if (string.IsNullOrEmpty(label) || string.IsNullOrEmpty(questionId)) return null;
+        var multiple = question.TryGetProperty("selection", out var selection)
+                    && MuseApprovalBridge.StringOf(selection, "mode") == "multiple";
 
-        return [(questionId, label)];
+        var single = decision.SelectedOptionLabel ?? decision.SelectedOptionId;
+
+        if (multiple) {
+            string[] labels = decision.SelectedOptionLabels is { Length: > 0 } many ? many
+                            : !string.IsNullOrEmpty(single)                        ? [single]
+                            : [];
+
+            if (labels.Length > 0) return [new MuseUserInputAnswer(questionId, SelectedLabels: labels)];
+        } else if (!string.IsNullOrEmpty(single)) {
+            return [new MuseUserInputAnswer(questionId, SelectedLabel: single)];
+        }
+
+        return string.IsNullOrWhiteSpace(decision.FreeText) ? null : [new MuseUserInputAnswer(questionId, FreeText: decision.FreeText)];
     }
 
     static JsonElement FirstQuestion(JsonElement userInputParams) =>

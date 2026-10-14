@@ -85,20 +85,31 @@ internal static class MuseMsp {
     }
 
     public static string UserInputAnswer(
-        long                                                   id,
-        string                                                 commandId,
-        string                                                 sessionId,
-        string                                                 userInputId,
-        IReadOnlyList<(string QuestionId, string SelectedLabel)> answers
+        long                             id,
+        string                           commandId,
+        string                           sessionId,
+        string                           userInputId,
+        IReadOnlyList<MuseUserInputAnswer> answers
     ) {
-        var items = new JsonArray(answers
-            .Select(a => (JsonNode)new JsonObject { ["questionId"] = a.QuestionId, ["selectedLabel"] = a.SelectedLabel })
-            .ToArray());
+        var items = new JsonArray(answers.Select(a => (JsonNode)AnswerItem(a)).ToArray());
 
         var p = Command(commandId, sessionId);
         p["userInputId"] = userInputId;
         p["answers"]     = items;
         return Request(id, "userInput/answer", p);
+    }
+
+    static JsonObject AnswerItem(MuseUserInputAnswer a) {
+        var item = new JsonObject { ["questionId"] = a.QuestionId };
+
+        if (a.SelectedLabels is { Count: > 0 } labels)
+            item["selectedLabels"] = new JsonArray(labels.Select(l => (JsonNode)JsonValue.Create(l)!).ToArray());
+        else if (a.SelectedLabel is not null)
+            item["selectedLabel"] = a.SelectedLabel;
+        else if (a.FreeText is not null)
+            item["freeText"] = a.FreeText;
+
+        return item;
     }
 
     public static string UserInputCancel(long id, string commandId, string sessionId, string userInputId) {

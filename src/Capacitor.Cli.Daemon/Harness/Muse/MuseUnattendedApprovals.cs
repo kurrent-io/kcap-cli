@@ -46,6 +46,6 @@ internal static class MuseUnattendedApprovals {
             }
         }
 
-        return new MuseApprovalDecision(MuseApprovalBridge.AbortChoiceId(MuseApprovalBridge.Choices(approvalParams), fallToLast: false), NotAdmitted);
+        return new MuseApprovalDecision(MuseApprovalBridge.AbortChoiceId(MuseApprovalBridge.Choices(approvalParams)), NotAdmitted);
     }
 }

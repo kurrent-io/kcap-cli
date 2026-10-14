@@ -126,12 +126,15 @@ public class MuseApprovalBridgeTests {
     }
 
     [Test]
-    public async Task Without_an_abort_choice_the_last_choice_is_the_fallback() {
+    [Arguments("cancel", null)]
+    [Arguments("allow_once", "no_such_choice")]
+    [Arguments("timeout", "a")]
+    public async Task Without_an_abort_choice_the_fallback_is_the_literal_abort_never_an_approving_choice(string outcome, string? optionId) {
         var p = JsonDocument.Parse(
             """{"availableChoices":[{"choiceId":"a","label":"A","decision":"approved"},{"choiceId":"b","label":"B","decision":"approvedForSession"}]}""").RootElement;
 
-        var decision = MuseApprovalBridge.ToDecision(Decision("cancel"), p);
+        var decision = MuseApprovalBridge.ToDecision(Decision(outcome, optionId), p);
 
-        await Assert.That(decision.ChoiceId).IsEqualTo("b");
+        await Assert.That(decision).IsEqualTo(new MuseApprovalDecision("abort", "kcap: declined"));
     }
 }
