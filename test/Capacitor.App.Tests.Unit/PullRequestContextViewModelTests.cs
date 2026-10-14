@@ -14,6 +14,75 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task An_explicit_pr_choice_survives_sign_in(bool alreadyListed) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        if (alreadyListed) await h.Show();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        h.Source.Capability = PullRequestCapabilityKind.SignedOut;
+        if (alreadyListed) { h.Time.Advance(TimeSpan.FromSeconds(4)); h.Vm.Refresh(); }
+        else h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Notice == "Sign in to see pull requests.", what: "sign-in notice");
+        await Assert.That(h.Vm.Choices).Count().IsEqualTo(0);
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        h.Source.Capability = PullRequestCapabilityKind.Supported;
+        h.SignIn.OnNext(System.Reactive.Unit.Default);
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "signed-in PR reader");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 2);
+        h.Time.Advance(TimeSpan.FromSeconds(4));
+        h.Source.Capability = PullRequestCapabilityKind.SignedOut;
+        h.Vm.Refresh();
+        await WaitUntilAsync(() => h.Vm.Notice == "Sign in to see pull requests.", what: "second sign-out");
+        h.Source.Capability = PullRequestCapabilityKind.Supported;
+        h.SignIn.OnNext(System.Reactive.Unit.Default);
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new choice recovered");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task An_explicit_choice_from_a_previous_session_is_not_reused() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        await h.Show();
+        h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "another-session", branch: "feature"));
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new session reader");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_menu_choice_survives_initial_session_and_link_loading(bool beforePresence) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        if (!beforePresence) h.Push();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        if (beforePresence) h.Push();
+        await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        await Assert.That(h.Vm.Selected.IsAvailable).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_menu_choice_removed_from_the_list_does_not_open_another_pr() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(99)));
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasListed, what: "links loaded");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(99);
+        await Assert.That(h.Vm.Selected.IsAvailable).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Reads_start_only_in_the_foreground_and_focus_loss_masks_already_loaded_bodies() => RunOnUiAsync(async () => {
         var h = new Harness();
         h.Push();
@@ -390,12 +459,13 @@ public class PullRequestContextViewModelTests {
         internal FakePullRequestSource Source { get; }
         internal RecordingOpener Opener { get; } = new();
         internal PullRequestContextViewModel Vm { get; }
+        internal Subject<System.Reactive.Unit> SignIn { get; } = new();
         internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null) {
             Source = new(Time);
-            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary);
+            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
-        internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); }
+        internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); SignIn.Dispose(); }
     }
 }

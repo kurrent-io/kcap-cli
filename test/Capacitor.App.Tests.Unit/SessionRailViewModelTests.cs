@@ -34,14 +34,61 @@ public class SessionRailViewModelTests {
             service, remote, new FakeServerLane(), new RepoIdentityResolver(originUrl ?? (_ => null)),
             resolveRepoRoot ?? Resolve, null, null, TimeProvider.System);
         var rail = new SessionRailViewModel(
-            directory, open ?? (_ => { }), openRemote ?? (_ => { }), TimeProvider.System,
-            resolveRepoRoot ?? Resolve);
+            directory, open ?? (_ => { }), openRemote ?? (_ => { }), TimeProvider.System);
         return (service, remote, rail);
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Groups_repo_worktree_session_with_no_repository_last() {
+    public async Task Revealing_a_session_honors_origin_and_covers_pending_sessions() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("same", "/local"), new RepoIdentity("path:/local", "local")));
+            directory.Rows.AddOrUpdate(AgentRow.FromRemote(RemoteDto("same", "owner", "remote")));
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(new PendingLaunchDto("pending", "claude", "/pending", "Title", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/pending", "pending")));
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("same", AgentOrigin.Remote);
+            await Assert.That(rail.Repos.Single(r => r.IsExpanded).Label).IsEqualTo("owner/remote");
+            rail.Repos.Single(r => r.IsExpanded).ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("same", AgentOrigin.Local);
+            await Assert.That(rail.Repos.Single(r => r.IsExpanded).Label).IsEqualTo("local");
+            rail.Repos.Single(r => r.IsExpanded).ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("pending", AgentOrigin.Local);
+            await Assert.That(rail.Repos.Single(r => r.IsExpanded).Label).IsEqualTo("pending");
+            rail.Repos.Single(r => r.IsExpanded).ToggleCommand.Execute().Subscribe();
+            rail.NotifySessionOpened("missing", AgentOrigin.Local);
+            await Assert.That(rail.Repos.Any(r => r.IsExpanded)).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Creation_time_order_survives_updates_and_reversed_refreshes() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (service, _, rail) = Build();
+            using (rail) {
+                var created = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+                var rows = new[] { Dto("c", "/repo", created: created.AddHours(1)),
+                    Dto("b", "/repo", created: created), Dto("a", "/repo", created: created) };
+                service.Agents.AddOrUpdate(rows);
+                await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
+                    .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+                service.Agents.AddOrUpdate(rows[1] with { Title = "Updated title", AwaitingInput = true });
+                await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
+                    .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+                service.Agents.Clear();
+                service.Agents.AddOrUpdate(rows.Reverse());
+                await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
+                    .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Groups_sessions_under_repository_with_no_repository_last() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();
             using (rail) {
@@ -54,13 +101,11 @@ public class SessionRailViewModelTests {
                     .IsEquivalentTo(["alpha", "zeta", "No repository"], CollectionOrdering.Matching);
 
                 var alpha = rail.Repos[0];
-                await Assert.That(alpha.Worktrees.Select(w => w.Label))
-                    .IsEquivalentTo(["main checkout", "feature-x"], CollectionOrdering.Matching);
+                await Assert.That(alpha.Sessions.Select(row => row.Id)).IsEquivalentTo(["a2", "a3"]);
 
                 var noRepo = rail.Repos[2];
                 await Assert.That(noRepo.IsNoRepository).IsTrue();
-                await Assert.That(noRepo.Worktrees).Count().IsEqualTo(1);
-                await Assert.That(noRepo.Worktrees[0].ShowHeader).IsFalse();
+                await Assert.That(noRepo.Sessions.Select(row => row.Id)).IsEquivalentTo(["a4"]);
             }
         });
     }
@@ -79,16 +124,14 @@ public class SessionRailViewModelTests {
                 await Assert.That(rail.Repos).Count().IsEqualTo(1);
                 await Assert.That(rail.Repos[0].RootPath).IsEqualTo("path:/dev/alpha");
                 await Assert.That(rail.Repos[0].RootDisplay).IsEqualTo("/dev/alpha");
-                await Assert.That(rail.Repos[0].Worktrees).Count().IsEqualTo(1);
-                await Assert.That(rail.Repos[0].Worktrees[0].Sessions.Select(s => s.Id))
+                await Assert.That(rail.Repos[0].Sessions.Select(s => s.Id))
                     .IsEquivalentTo(["a1", "a2"]);
             }
         });
     }
 
     /// A reviewer that borrowed a checkout belongs on that checkout's node, beside the session it
-    /// reviews — a snapshot reviewer too, which runs elsewhere but names what it borrowed. The
-    /// collapse key follows the same rule, so opening the reviewer expands that node.
+    /// reviews, including a snapshot reviewer that names its borrowed checkout.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_borrowed_reviewer_files_under_the_worktree_it_reviews() {
@@ -102,14 +145,10 @@ public class SessionRailViewModelTests {
                 service.Agents.AddOrUpdate(Dto("s1", "/dev/alpha") with {
                     WorktreePath = "/snapshots/borrowed-1", WorkLocation = "borrowed", BorrowedFrom = worktree });
 
-                var node = rail.Repos.Single().Worktrees.Single();
-                await Assert.That(node.Label).IsEqualTo("agent-1");
+                var node = rail.Repos.Single();
                 await Assert.That(node.Sessions.Select(s => s.Id)).IsEquivalentTo(["p1", "r1", "s1"]);
 
-                node.ToggleCommand.Execute().Subscribe();
-                await Assert.That(node.IsExpanded).IsFalse();
-                rail.NotifySessionOpened("s1");
-                await Assert.That(node.IsExpanded).IsTrue();
+                await Assert.That(node.Sessions.Single(row => row.Id == "s1").CheckoutPath).IsEqualTo(worktree);
             }
         });
     }
@@ -134,57 +173,48 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Empty_repo_group_disappears_and_collapse_survives_recreation() {
+    public async Task Selecting_a_session_does_not_reorder_the_directory_rows() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();
             using (rail) {
-                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha"));
-                rail.Repos[0].Worktrees[0].ToggleCommand.Execute().Subscribe(); // explicit collapse
-
-                service.Agents.RemoveKey("a1"); // the whole repo group dies
-                await Assert.That(rail.Repos).Count().IsEqualTo(0);
-
-                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha")); // and re-forms
-                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsFalse();
-            }
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task NotifySessionOpened_expands_the_collapsed_worktree_and_selects() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (service, _, rail) = Build();
-            using (rail) {
-                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha"));
-                rail.Repos[0].Worktrees[0].ToggleCommand.Execute().Subscribe(); // explicit collapse
-                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsFalse();
-
-                rail.NotifySessionOpened("a1"); // opening beats the collapse — never a hidden highlight
+                var old = Dto("a1", "/dev/alpha", created: DateTime.UtcNow.AddHours(-2));
+                service.Agents.AddOrUpdate(old);
+                service.Agents.AddOrUpdate(Dto("a2", "/dev/alpha", created: DateTime.UtcNow.AddHours(-1)));
+                await Assert.That(rail.Repos[0].Sessions[0].Id).IsEqualTo("a1");
+                await Assert.That(rail.Repos[0].Sessions[1].Id).IsEqualTo("a2");
                 rail.SelectedAgentId = "a1";
-
-                var wt = rail.Repos[0].Worktrees[0];
-                await Assert.That(wt.IsExpanded).IsTrue();
-                await Assert.That(wt.HoldsSelected).IsTrue();
-                await Assert.That(wt.Sessions[0].IsSelected).IsTrue();
+                await Assert.That(rail.Repos[0].Sessions[0].Id).IsEqualTo("a1");
+                await Assert.That(rail.Repos[0].Sessions[0].IsSelected).IsTrue();
+                await Assert.That(rail.Repos[0].Sessions[0].Id).IsEqualTo("a1");
+                await Assert.That(rail.Repos[0].Sessions[1].Id).IsEqualTo("a2");
             }
         });
     }
 
-    /// The launch auto-open lands while the row is still the daemon's pending entry.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task NotifySessionOpened_expands_the_worktree_of_a_pending_row() {
+    public async Task Repository_collapse_survives_updates_and_group_recreation() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (service, _, rail) = Build();
             using (rail) {
-                service.Pending.AddOrUpdate(new PendingLaunchDto("p1", "claude", "/dev/alpha", null, DateTime.UtcNow, null));
-                rail.Repos[0].Worktrees[0].ToggleCommand.Execute().Subscribe();
-                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsFalse();
-
-                rail.NotifySessionOpened("p1");
-
-                await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsTrue();
+                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha"));
+                service.Agents.AddOrUpdate(Dto("b1", "/dev/beta"));
+                var alpha = rail.Repos[0];
+                await Assert.That(alpha.IsExpanded).IsTrue();
+                alpha.ToggleCommand.Execute().Subscribe();
+                service.Agents.AddOrUpdate(Dto("a2", "/dev/alpha"));
+                rail.SelectedAgentId = "a2";
+                await Assert.That(alpha.IsExpanded).IsFalse();
+                await Assert.That(alpha.CountText).IsEqualTo("2 sessions");
+                await Assert.That(rail.Repos[1].IsExpanded).IsTrue();
+                service.Agents.RemoveKeys(["a1", "a2"]);
+                service.Agents.AddOrUpdate(Dto("a3", "/dev/alpha"));
+                var recreated = rail.Repos[0];
+                await Assert.That(recreated.IsExpanded).IsFalse();
+                recreated.ToggleCommand.Execute().Subscribe();
+                service.Agents.RemoveKey("a3");
+                service.Agents.AddOrUpdate(Dto("a4", "/dev/alpha"));
+                await Assert.That(rail.Repos[0].IsExpanded).IsTrue();
             }
         });
     }
@@ -201,20 +231,6 @@ public class SessionRailViewModelTests {
         });
     }
 
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Repo_pip_reaches_the_worktree_row_when_a_session_fails() {
-        await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (service, _, rail) = Build();
-            using (rail) {
-                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha/wt/feature-x"));
-                await Assert.That(rail.Repos[0].Worktrees[0].NeedsYou).IsFalse();
-                service.Agents.AddOrUpdate(Dto("a1", "/dev/alpha/wt/feature-x", status: "Failed"));
-                await Assert.That(rail.Repos[0].Worktrees[0].NeedsYou).IsTrue();
-            }
-        });
-    }
-
     /// A local checkout and a remote agent on the same GitHub repo land in one repo group — the
     /// remote session carries the machine badge, the local one doesn't.
     [Test]
@@ -228,7 +244,7 @@ public class SessionRailViewModelTests {
 
                 await Assert.That(rail.Repos).Count().IsEqualTo(1);
                 await Assert.That(rail.Repos.Single().RootDisplay).IsEqualTo("kurrent-io/kcap-cli");
-                var sessions = rail.Repos.Single().Worktrees.SelectMany(w => w.Sessions).ToList();
+                var sessions = rail.Repos.Single().Sessions.ToList();
                 await Assert.That(sessions).Count().IsEqualTo(2);
 
                 var local = sessions.Single(s => s.Id == "a1");
@@ -249,7 +265,7 @@ public class SessionRailViewModelTests {
             using (rail) {
                 remote.Cache.AddOrUpdate(RemoteDto("b1", "o", "r"));
 
-                var session = rail.Repos.Single().Worktrees.Single().Sessions.Single();
+                var session = rail.Repos.Single().Sessions.Single();
                 session.OpenCommand.Execute().Subscribe();
 
                 await Assert.That(openedRemote).IsEqualTo("b1");

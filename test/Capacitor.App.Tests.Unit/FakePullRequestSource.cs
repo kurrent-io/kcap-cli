@@ -6,6 +6,7 @@ namespace Capacitor.App.Tests.Unit;
 
 internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullRequestSource {
     public PullRequestLinkDto[] Links = [Link(1), Link(2)];
+    public int AccessSeconds = 30;
     public int Lists;
     public int Overviews;
     public int Pages;
@@ -44,7 +45,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         new() { Title = title ?? TitleFor?.Invoke(subject) ?? OverviewTitle, Description = "Private description", HeadSha = HeadSha,
             Lifecycle = Lifecycles.GetValueOrDefault(subject.Number, "open"),
             Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = RollupFor?.Invoke(subject) ?? "success" } },
-        subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
+        subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: AccessSeconds, RequestStarted: time.GetTimestamp());
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
         string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
         Pages++;
@@ -67,7 +68,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
             Coverage = "complete", HeadSha = section == "checks" ? HeadSha : null, Total = new() { Kind = "exact", Value = TotalPages },
             ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
-        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
+        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: AccessSeconds, RequestStarted: time.GetTimestamp());
         return PageGate is { } gate ? gate.Task.ContinueWith(_ => read, TaskScheduler.Default) : Task.FromResult(read);
     }
     public static PullRequestLinkDto Link(int number) => new() { Provider = "github", Host = "github.com", RepoHash = "hash",
