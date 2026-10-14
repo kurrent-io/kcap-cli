@@ -43,12 +43,14 @@
                                 <Button Classes="artefactRow" Classes.selected="{Binding IsSelected}"
                                         Command="{Binding $parent[ItemsControl].((vm:ArtefactsTabViewModel)DataContext).SelectCommand}"
                                         CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
-                                    <StackPanel Spacing="2">
+                                    <StackPanel Spacing="4">
                                         <TextBlock Text="{Binding FileName}" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                         <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <TextBlock Text="{Binding Kind}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                            <Border IsVisible="{Binding HasStateChip}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="4" Padding="5,0">
-                                                <TextBlock Text="{Binding StateChip}" FontSize="10.5" Foreground="{StaticResource KcapWarningBrush}" />
+                                            <Border Classes="kcapKindBadge">
+                                                <TextBlock Text="{Binding KindLabel}" />
+                                            </Border>
+                                            <Border IsVisible="{Binding HasStateChip}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="999" Padding="7,1" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding StateChip}" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource KcapWarningBrush}" />
                                             </Border>
                                         </StackPanel>
                                     </StackPanel>

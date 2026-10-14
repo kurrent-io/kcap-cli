@@ -69,36 +69,21 @@
         <Style Selector="Button.copyValue.planDocRow.open /template/ ContentPresenter#PART_ContentPresenter,
                          Button.copyValue.planDocRow.open:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.copyValue.planDocRow.open:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
             <Setter Property="CornerRadius" Value="6" />
         </Style>
-        <Style Selector="Border.docKindBadge">
-            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="999" />
-            <Setter Property="Padding" Value="7,1" />
-            <Setter Property="VerticalAlignment" Value="Center" />
+        <Style Selector="Button.copyValue.open Border.kcapKindBadge">
+            <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
         </Style>
-        <Style Selector="Border.docKindBadge > TextBlock">
-            <Setter Property="FontSize" Value="10" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="LetterSpacing" Value="0.4" />
-            <Setter Property="LineHeight" Value="14" />
-            <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-        </Style>
-        <Style Selector="Button.copyValue.open Border.docKindBadge">
-            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapPurpleBrush}" />
-        </Style>
-        <Style Selector="Button.copyValue.open Border.docKindBadge > TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+        <Style Selector="Button.copyValue.open Border.kcapKindBadge > TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
         </Style>
         <Style Selector="Button.copyValue TextBlock.docName">
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <Style Selector="Button.copyValue.open TextBlock.docName">
-            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
             <Setter Property="FontWeight" Value="Medium" />
         </Style>
         <Style Selector="Path.openArrow">
@@ -109,24 +94,19 @@
             <Setter Property="Data" Value="M3.5,8.5 L8.5,3.5 M5,3.5 H8.5 V7" />
         </Style>
         <Style Selector="Button.copyValue.open Path.openArrow">
-            <Setter Property="Stroke" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Stroke" Value="{StaticResource KcapInfoBrush}" />
         </Style>
-        <Style Selector="Border.artefactsSummaryPill">
-            <Setter Property="CornerRadius" Value="999" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Button.sectionHeader.open Border.artefactsSummaryPill">
-            <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
-            <Setter Property="Padding" Value="8,2" />
+        <Style Selector="Button.sectionHeader.open /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.sectionHeader.open:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.sectionHeader.open:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
         </Style>
         <Style Selector="Button.sectionHeader.open TextBlock.eyebrow,
                          Button.sectionHeader.open TextBlock.sectionMeta">
-            <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
         </Style>
         <Style Selector="Button.sectionHeader.open Path.openArrow">
-            <Setter Property="Stroke" Value="{StaticResource KcapPurpleBrush}" />
+            <Setter Property="Stroke" Value="{StaticResource KcapInfoBrush}" />
         </Style>
         <Style Selector="Border.pill.shipped">
             <Setter Property="Background" Value="{StaticResource KcapSuccessDimBrush}" />
@@ -287,7 +267,7 @@
             <Panel Width="12" Height="12">
                 <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapFaintBrush}" StrokeThickness="1.5"
                          IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Pending}}" />
-                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapWarningBrush}" StrokeThickness="1.5"
+                <Ellipse Width="12" Height="12" Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="1.5"
                          IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.InProgress}}" />
                 <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:PlanTaskState.Completed}}">
                     <Ellipse Width="12" Height="12" Fill="{StaticResource KcapSuccessBrush}" />
@@ -307,7 +287,7 @@
                      ring stays so the task still reads as started. -->
                 <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
-                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
                             HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
                             IsVisible="{Binding IsActive}" views:PulseClock.IsActive="{Binding IsActive}" />
                 </Panel>
@@ -674,14 +654,12 @@
                         IsVisible="{Binding Artefacts.HasAny, FallbackValue=False}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                         <TextBlock Text="ARTEFACTS" Classes="eyebrow" />
-                        <Border Grid.Column="1" Classes="artefactsSummaryPill">
-                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
-                                <Panel Classes="chevronBox" Width="12" Height="12">
-                                    <Path Classes="openArrow" />
-                                </Panel>
-                            </StackPanel>
-                        </Border>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <TextBlock x:Name="ArtefactsSummaryText" Text="{Binding Artefacts.SummaryText}" Classes="sectionMeta" />
+                            <Panel Classes="chevronBox" Width="12" Height="12">
+                                <Path Classes="openArrow" />
+                            </Panel>
+                        </StackPanel>
                     </Grid>
                 </Button>
 
@@ -720,7 +698,7 @@
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
                                                 <Panel Width="12" Height="12" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
                                                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
-                                                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
+                                                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
                                                             HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
                                                             IsVisible="{Binding IsActive}" views:PulseClock.IsActive="{Binding IsActive}" />
                                                 </Panel>
@@ -757,7 +735,7 @@
                                                 Command="{Binding $parent[ItemsControl].((vm:WorkContextViewModel)DataContext).Plan.OpenDocumentCommand}"
                                                 CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
                                             <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
-                                                <Border Classes="docKindBadge">
+                                                <Border Classes="kcapKindBadge">
                                                     <TextBlock Text="{Binding KindLabel}" />
                                                 </Border>
                                                 <TextBlock Grid.Column="1" Classes="docName" Text="{Binding FileName}" FontSize="13" LineHeight="16"

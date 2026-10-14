@@ -91,12 +91,13 @@ public class WorkContextViewSmokeTests {
 
             var summaryRow = host.Find<Button>("ArtefactsSummaryRow");
             var summaryText = host.Find<TextBlock>("ArtefactsSummaryText");
-            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
+            var info = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapInfoBrush")!;
             await Assert.That(summaryRow.IsEffectivelyVisible).IsTrue();
             await Assert.That(summaryRow.Classes.Contains("sectionHeader")).IsTrue();
             await Assert.That(summaryRow.Classes.Contains("open")).IsFalse();
             await Assert.That(summaryText.Text).IsEqualTo("1 document");
-            await Assert.That(summaryText.TranslatePoint(default, host.Window)!.Value.X).IsGreaterThan(host.Window.Bounds.Width / 2);
+            var summaryXBefore = summaryText.TranslatePoint(default, host.Window)!.Value.X;
+            await Assert.That(summaryXBefore).IsGreaterThan(host.Window.Bounds.Width / 2);
             await host.Vm.OpenArtefactsCommand.Execute();
             await Assert.That(opens).IsEqualTo(1);
 
@@ -104,7 +105,8 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             await Assert.That(summaryRow.Classes.Contains("open")).IsTrue();
-            await Assert.That(((ISolidColorBrush)summaryText.Foreground!).Color).IsEqualTo(purple.Color);
+            await Assert.That(((ISolidColorBrush)summaryText.Foreground!).Color).IsEqualTo(info.Color);
+            await Assert.That(summaryText.TranslatePoint(default, host.Window)!.Value.X).IsEqualTo(summaryXBefore);
 
             await host.Vm.Plan.ToggleCommand.Execute();
             Dispatcher.UIThread.RunJobs();
@@ -120,10 +122,10 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             host.Window.UpdateLayout();
             var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
-            var badge = rowButton.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("docKindBadge"));
+            var badge = rowButton.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("kcapKindBadge"));
             var badgeText = badge.GetVisualDescendants().OfType<TextBlock>().Single();
-            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(purple.Color);
-            await Assert.That(((ISolidColorBrush)badgeText.Foreground!).Color).IsEqualTo(purple.Color);
+            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(info.Color);
+            await Assert.That(((ISolidColorBrush)badgeText.Foreground!).Color).IsEqualTo(info.Color);
         });
     }
 
@@ -963,11 +965,11 @@ public class WorkContextViewSmokeTests {
             await Assert.That(VisibleTexts(counts)).IsEquivalentTo(new[] { "2", "1", "2" }, CollectionOrdering.Matching);
 
             var faint = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapFaintBrush")!).Color;
-            var warning = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapWarningBrush")!).Color;
+            var purple = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!).Color;
             var success = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapSuccessBrush")!).Color;
             var marks = counts.GetVisualDescendants().OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToList();
             await Assert.That(marks.Select(e => ((ISolidColorBrush)(e.Fill ?? e.Stroke)!).Color))
-                .IsEquivalentTo(new[] { faint, warning, success }, CollectionOrdering.Matching);
+                .IsEquivalentTo(new[] { faint, purple, success }, CollectionOrdering.Matching);
 
             await Assert.That(host.Find<Border>("PlanBody").IsEffectivelyVisible).IsFalse();
             await Assert.That(host.Find<ItemsControl>("PlanInProgressList").IsEffectivelyVisible).IsTrue();

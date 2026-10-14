@@ -8,10 +8,8 @@
     <Grid RowDefinitions="Auto,*">
         <StackPanel Margin="24,20,24,12" Spacing="8">
             <StackPanel Orientation="Horizontal" Spacing="10">
-                <Border Background="{StaticResource KcapPurpleDimBrush}"
-                        CornerRadius="999" Padding="8,2" VerticalAlignment="Center">
-                    <TextBlock x:Name="DocumentKind" Text="{Binding KindLabel}" FontSize="10.5" FontWeight="SemiBold"
-                               LetterSpacing="0.4" Foreground="{StaticResource KcapPurpleBrush}" />
+                <Border Classes="kcapKindBadge">
+                    <TextBlock x:Name="DocumentKind" Text="{Binding KindLabel}" />
                 </Border>
                 <TextBlock Text="{Binding Path}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip.Tip="{Binding Path}" />

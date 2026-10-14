@@ -8,6 +8,7 @@ namespace Capacitor.App.ViewModels;
 public sealed class DocumentRow(string kind, string title, string path, string source, string contentState, string? content,
         string contentHash, long? originalBytes, DateTimeOffset discoveredAt, bool isPrimary) : ReactiveObject {
     public string Kind { get; } = kind;
+    public string KindLabel { get; } = kind switch { "plan" => "Plan", "spec" => "Spec", "design" => "Design", _ => "Document" };
     public string Title { get; } = title;
     public string Path { get; } = path;
     public string FileName { get; } = ToolCards.FileName(path);
