@@ -13,12 +13,11 @@ internal static class MuseLaunchArgs {
             argv.Add(model);
         }
 
-        argv.Add("--trust-workspace");
-
-        // Proxy-only makes every new host an approval the user sees; the reviewer has nobody to ask.
+        // A trusted workspace's hooks and MCP servers run as the daemon user, so a reviewed repository
+        // is never trusted. Proxy-only makes every new host an approval the user sees.
         argv.AddRange(reviewer
             ? ["--sandbox-network", "restricted", "--disable-write"]
-            : ["--sandbox-network", "proxy-only"]);
+            : ["--trust-workspace", "--sandbox-network", "proxy-only"]);
 
         return argv;
     }

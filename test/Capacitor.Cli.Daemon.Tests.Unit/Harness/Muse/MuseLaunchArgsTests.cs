@@ -23,7 +23,7 @@ public class MuseLaunchArgsTests {
     [Test]
     public async Task Reviewer_argv_is_exact() =>
         await Assert.That(Argv(new DaemonConfig(), Ctx(), reviewer: true))
-            .IsEqualTo("serve --provider meta --trust-workspace --sandbox-network restricted --disable-write");
+            .IsEqualTo("serve --provider meta --sandbox-network restricted --disable-write");
 
     [Test]
     public async Task A_launch_model_goes_right_after_the_provider() =>
@@ -33,7 +33,7 @@ public class MuseLaunchArgsTests {
     [Test]
     public async Task The_daemon_default_model_applies_when_the_launch_names_none() =>
         await Assert.That(Argv(new DaemonConfig { MuseModel = "muse-wonder-1.0" }, Ctx(), reviewer: true))
-            .IsEqualTo("serve --provider meta --model muse-wonder-1.0 --trust-workspace --sandbox-network restricted --disable-write");
+            .IsEqualTo("serve --provider meta --model muse-wonder-1.0 --sandbox-network restricted --disable-write");
 
     [Test]
     [Arguments("default")]

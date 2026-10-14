@@ -190,7 +190,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await Assert.That(sessions["args"]!.AsArray().Select(a => (string)a!)).IsEquivalentTo(new[] { "mcp", "sessions" });
 
         await Assert.That(string.Join(" ", rig.Spawned.Single().ArgumentList))
-            .IsEqualTo("serve --provider meta --trust-workspace --sandbox-network restricted --disable-write");
+            .IsEqualTo("serve --provider meta --sandbox-network restricted --disable-write");
 
         var turn = Params(await rig.Host.WaitForWriteAsync("turn/start"));
         await Assert.That((string?)turn["input"]![0]!["text"]).IsEqualTo("review this");
