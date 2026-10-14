@@ -628,8 +628,7 @@
                                         </MultiBinding>
                                     </TextBlock.IsVisible>
                                 </TextBlock>
-                                <!-- The digits and marks are nudged toward each other as the subagent counts are,
-                                     and the nudge lifts the marks past the top an ItemsControl clips to. -->
+                                <!-- ItemsControl clips by default, and the marks' nudge lifts them past its top. -->
                                 <ItemsControl x:Name="PlanCounts" ItemsSource="{Binding Plan.Counts}" VerticalAlignment="Center" ClipToBounds="False">
                                     <ItemsControl.IsVisible>
                                         <MultiBinding Converter="{x:Static BoolConverters.And}">
@@ -646,8 +645,8 @@
                                         <DataTemplate x:DataType="vm:PlanTaskCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
                                                 <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center"
-                                                                RenderTransform="translateY(-1px)" />
-                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                                                RenderTransform="translateY(-1.5px)" />
+                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -736,11 +735,9 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:RunCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
-                                                <!-- Digits have no descender, so a centred line box sets them above the mark's
-                                                     middle: each moves a pixel toward the other, and onto the eyebrow's caps. -->
                                                 <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center"
-                                                                RenderTransform="translateY(-1px)" />
-                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" RenderTransform="translateY(1px)" />
+                                                                RenderTransform="translateY(-1.5px)" />
+                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
