@@ -189,9 +189,8 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
     }
 
-    /// <summary>A daemon that resolved through a profile other than the active one: the hook takes that
-    /// profile's credential, and posts to the server the daemon recorded even after the profile's own URL
-    /// has been edited to another.</summary>
+    /// <summary>The hook takes the marker profile's credential and posts to the marker's server, even
+    /// when the profile's own URL differs.</summary>
     [Test]
     public async Task A_marker_profile_supplies_the_credential_while_the_marker_server_stays_the_destination() {
         StubHooks();

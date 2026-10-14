@@ -43,17 +43,15 @@ sealed record MuseHookConnection(string? ConfigDir, string? ServerUrl, string? P
     public ProfileOverrides Apply(ProfileOverrides fromEnvironment) =>
         fromEnvironment with { Url = ServerUrl ?? fromEnvironment.Url, Profile = Profile ?? fromEnvironment.Profile };
 
-    /// <summary>A URL outranks a profile, which drops the profile's name and with it the credential. When
-    /// the marker pins both, the URL stays the destination and the profile still supplies the credential,
-    /// so editing the profile's URL mid-session cannot move the recording.</summary>
+    /// <summary>A URL outranks a profile and drops its credential. When the marker pins both, the URL stays
+    /// the destination and the profile still supplies the credential.</summary>
     public ProfileContext Bind(ProfileContext resolved) =>
         Profile is { } name && ServerUrl is not null && resolved.Snapshot.Profiles.TryGetValue(name, out var profile)
             ? new(resolved.Resolution with { ProfileName = name, Profile = profile }, resolved.Snapshot)
             : resolved;
 
-    /// <summary>Set when the marker's profile is gone from the config. Credential lookup falls back to
-    /// the active profile's, which would record the session under another user, so the hook must not
-    /// post or spool at all.</summary>
+    /// <summary>Set when the marker's profile is gone: the credential would fall back to the active
+    /// profile's and record the session under another user, so the hook must not post or spool.</summary>
     public string? MissingProfileWarning(ProfileContext resolved) =>
         Profile is { } name && !resolved.Snapshot.Profiles.ContainsKey(name)
             ? $"[kcap] muse hook skipped: profile '{name}', which this session was started under, no longer exists."
