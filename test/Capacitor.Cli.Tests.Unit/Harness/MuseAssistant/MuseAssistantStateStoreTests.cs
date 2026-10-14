@@ -100,9 +100,27 @@ public class MuseAssistantStateStoreTests {
     }
 
     [Test]
-    public async Task A_manifest_with_missing_fields_deserializes_to_nulls() {
-        var manifest = System.Text.Json.JsonSerializer.Deserialize("{}", MuseAssistantJsonContext.Default.MuseAssistantManifest);
+    public async Task A_sparse_manifest_still_reads_with_nulls_for_what_is_missing() {
+        var empty  = System.Text.Json.JsonSerializer.Deserialize("{}", MuseAssistantJsonContext.Default.MuseAssistantManifest);
+        var sparse = System.Text.Json.JsonSerializer.Deserialize("""{"chat_id":"c","pages":[{"file":"p1.json"}]}""", MuseAssistantJsonContext.Default.MuseAssistantManifest);
 
-        await Assert.That(manifest).IsEqualTo(new MuseAssistantManifest(null, null, null, null));
+        await Assert.That(empty).IsEqualTo(new MuseAssistantManifest(null, null, null, null));
+        await Assert.That(sparse!.ChatId).IsEqualTo("c");
+        await Assert.That(sparse.Pages).IsEquivalentTo([new MuseAssistantManifestPage("p1.json", null)]);
+    }
+
+    [Test]
+    public async Task A_state_file_missing_a_required_field_is_unreadable_and_skipped() {
+        var dir   = Tmp.CreateDir("scope");
+        var store = new MuseAssistantStateStore(dir, Acme);
+        var noGrant = $$"""{"chat_id":"chat-main","server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","watermark":null,"last_selected_at_ms":null,"open":null}""";
+        var noChat  = $$"""{"server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","grant":{"id":"g","boundary":"history","after_seq":null,"granted_at_ms":1,"revoked_at_ms":null},"watermark":null,"last_selected_at_ms":null,"open":null}""";
+        File.WriteAllText(MuseAssistantPaths.ChatState(dir, "chat-main"), noGrant);
+        File.WriteAllText(Path.Join(dir, "no-chat.json"), noChat);
+        File.WriteAllText(MuseAssistantPaths.ScopeFile(dir), $$"""{"server_url":"{{Acme.ServerUrl}}","user_id":"{{Acme.UserId}}","chats":["chat-main"]}""");
+
+        await Assert.That(store.LoadState("chat-main").Problem).Contains("unreadable");
+        await Assert.That(store.EnumerateStates()).IsEmpty();
+        await Assert.That(store.LoadScope().Chats).IsEmpty();
     }
 }

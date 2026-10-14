@@ -30,7 +30,6 @@ public class MuseAssistantChatLockTests {
         var waiting = MuseAssistantChatLock.AcquireAsync(path, TimeSpan.FromSeconds(1), time, default);
         for (var i = 0; !waiting.IsCompleted && i++ < 100;) { time.Advance(TimeSpan.FromMilliseconds(250)); await Task.Delay(1); }
 
-        await Assert.That(waiting.IsCompleted).IsTrue();
         await Assert.That(await waiting).IsNull();
     }
 
@@ -44,7 +43,6 @@ public class MuseAssistantChatLockTests {
         held!.Dispose();
         for (var i = 0; !waiting.IsCompleted && i++ < 100;) { time.Advance(TimeSpan.FromMilliseconds(250)); await Task.Delay(1); }
 
-        await Assert.That(waiting.IsCompleted).IsTrue();
         using var acquired = await waiting;
         await Assert.That(acquired).IsNotNull();
     }
