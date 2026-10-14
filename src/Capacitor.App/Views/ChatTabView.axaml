@@ -212,17 +212,17 @@
                                                    TextTrimming="CharacterEllipsis" IsVisible="{Binding Card.HasDistinctMeta}" />
                                     </Grid>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                    <Button x:Name="ToolCardOpen" Classes="kcapGhost kcapQuiet"
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                                    <Button x:Name="ToolCardCopyLink" Content="Copy link" Classes="kcapGhost kcapQuiet"
+                                            Tag="{Binding Card.Url}" Click="OnCopyLinkClick"
+                                            IsVisible="{Binding Card.Url, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    <Button x:Name="ToolCardOpen" Classes="kcapGhost kcapQuiet" Margin="0,0,-8,0"
                                             Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}">
                                         <StackPanel Orientation="Horizontal" Spacing="5">
                                             <TextBlock Text="Open" VerticalAlignment="Center" />
                                             <Path Classes="toolCardOpenArrow" />
                                         </StackPanel>
                                     </Button>
-                                    <Button x:Name="ToolCardCopyLink" Content="Copy link" Classes="kcapGhost kcapQuiet"
-                                            Tag="{Binding Card.Url}" Click="OnCopyLinkClick"
-                                            IsVisible="{Binding Card.Url, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                 </StackPanel>
                             </Grid>
                         </Border>

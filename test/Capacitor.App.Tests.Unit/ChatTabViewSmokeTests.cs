@@ -440,8 +440,12 @@ public class ChatTabViewSmokeTests {
             await Assert.That(title.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await Assert.That(name.TranslatePoint(default, host.Window)!.Value.X)
                 .IsEqualTo(title.TranslatePoint(default, host.Window)!.Value.X);
-            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink").IsEffectivelyVisible).IsTrue();
+            var openBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardOpen");
+            var copyBtn = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "ToolCardCopyLink");
+            await Assert.That(openBtn.IsEffectivelyVisible).IsTrue();
+            await Assert.That(copyBtn.IsEffectivelyVisible).IsTrue();
+            await Assert.That(openBtn.TranslatePoint(default, host.Window)!.Value.X)
+                .IsGreaterThan(copyBtn.TranslatePoint(default, host.Window)!.Value.X);
             await Assert.That(ToolRows(host.View).Any(r => r.IsEffectivelyVisible)).IsFalse();
             await host.CloseAsync();
         });
