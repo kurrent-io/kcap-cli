@@ -97,10 +97,12 @@ npm install --prefix ~/workspace/kcap @kurrent/kcap
 
 ### B3. Sign in by device code
 
-The workspace address goes into a shell command, so check it first: it must be
-`https://` (or `http://`) followed only by letters, digits, `.` and `-`, with
-an optional `:port` and nothing after it. Refuse anything else — quotes,
-spaces, `$`, `;` or a path — and ask the user for the plain address.
+The workspace address goes into a shell command, and the sign-in travels to it,
+so check it first: it must be `https://` followed only by letters, digits, `.`
+and `-`, with an optional `:port` and nothing after it. `http://` is acceptable
+only for `localhost` or `127.0.0.1`. Refuse anything else — plain `http://` to
+a remote host, quotes, spaces, `$`, `;` or a path — and ask the user for the
+plain `https://` address.
 
 Run setup in the background and read its output while it waits for the user:
 
