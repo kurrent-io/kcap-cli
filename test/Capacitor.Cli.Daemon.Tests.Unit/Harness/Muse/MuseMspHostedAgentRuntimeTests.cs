@@ -1,9 +1,11 @@
 using System.Collections.Frozen;
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -20,6 +22,7 @@ public class MuseMspHostedAgentRuntimeTests {
     const string MintedId = "01a136a0-0000-7000-8000-000000000001";
     const string ApprovalId = "01a13695-6ad8-7313-9d2b-57f03aebbb24";
     const string SearchTool = "mcp__kcap_sessions__search_sessions";
+    const string ShellApprovalId = "01a13696-a953-7bd0-bedc-c5bf1ef3b309";
 
     static MuseLaunchPlan Plan(
             bool        isReviewer = false,
@@ -48,14 +51,15 @@ public class MuseMspHostedAgentRuntimeTests {
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? interact = null,
             Action<MuseScriptedHost>? configure = null,
             TimeSpan? readyDeadline = null,
-            string? requestedModel = "muse-spark-1.3") {
+            string? requestedModel = "muse-spark-1.3",
+            ILogger? logger = null) {
         var host = new MuseScriptedHost();
         configure?.Invoke(host);
 
         var time = new FakeTimeProvider();
         var rt = new MuseMspHostedAgentRuntime(
             host.Process,
-            NullLogger.Instance,
+            logger ?? NullLogger.Instance,
             "agent-1",
             "/workspace/project",
             requestedModel,
@@ -71,8 +75,9 @@ public class MuseMspHostedAgentRuntimeTests {
     static async Task<Rig> ReadyRig(
             MuseLaunchPlan? plan = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? interact = null,
-            Action<MuseScriptedHost>? configure = null) {
-        var rig = NewRig(plan, interact, configure);
+            Action<MuseScriptedHost>? configure = null,
+            ILogger? logger = null) {
+        var rig = NewRig(plan, interact, configure, logger: logger);
         await rig.Runtime.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
         return rig;
     }
@@ -339,6 +344,19 @@ public class MuseMspHostedAgentRuntimeTests {
         await idle.WaitAsync(HangGuard);
     }
 
+    /// <summary>Nothing clears a turn after terminal, so a late <c>turn/started</c> must not mark one running
+    /// and park the next idle waiter forever.</summary>
+    [Test]
+    public async Task A_turn_started_after_the_session_closed_leaves_the_runtime_idle() {
+        await using var rig = await ReadyRig();
+
+        rig.Process.Push(MuseMspWire.SessionClosed);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        await rig.Host.SyncAsync();
+
+        await Assert.That(rig.Runtime.WaitForTurnIdleAsync(CancellationToken.None).IsCompleted).IsTrue();
+    }
+
     // ---- Approvals ----
 
     [Test]
@@ -394,12 +412,17 @@ public class MuseMspHostedAgentRuntimeTests {
         rig.Process.Push(MuseMspWire.ApprovalRequested);
         await rig.Host.WaitForWriteAsync("approval/decide");
 
+        // The pump starts any prompt for the update before it reads the shell approval, and dispose joins
+        // every started prompt, so a re-ask is always counted by the time asks is read.
         rig.Process.Push(ApprovalUpdated(sourceIndex: 0));
-        await rig.Host.SyncAsync();
+        rig.Process.Push(MuseMspWire.ShellApprovalRequested);
+
+        var shell = Params(await rig.Host.WaitForWriteAsync("approval/decide", 2));
+        await Assert.That((string?)shell["approvalId"]).IsEqualTo(ShellApprovalId);
         await rig.DisposeAsync();
 
-        await Assert.That(rig.Host.WritesOf("approval/decide")).Count().IsEqualTo(1);
-        await Assert.That(Volatile.Read(ref asks)).IsEqualTo(1);
+        await Assert.That(rig.Host.WritesOf("approval/decide").Count(d => (string?)Params(d)["approvalId"] == ApprovalId)).IsEqualTo(1);
+        await Assert.That(Volatile.Read(ref asks)).IsEqualTo(2);
     }
 
     [Test]
@@ -473,8 +496,37 @@ public class MuseMspHostedAgentRuntimeTests {
 
         var byApproval = new[] { allowed, refused }.ToDictionary(p => (string)p["approvalId"]!);
         await Assert.That((string?)byApproval[ApprovalId]["choiceId"]).IsEqualTo("allow_once");
-        await Assert.That((string?)byApproval["01a13696-a953-7bd0-bedc-c5bf1ef3b309"]["choiceId"]).IsEqualTo("abort");
+        await Assert.That((string?)byApproval[ShellApprovalId]["choiceId"]).IsEqualTo("abort");
         await Assert.That(Volatile.Read(ref asks)).IsEqualTo(0);
+    }
+
+    /// <summary>The host can settle an approval by policy before the daemon's decision lands; the
+    /// refusal that follows is expected, not a failure.</summary>
+    [Test]
+    public async Task A_decision_on_an_already_resolved_approval_is_benign() {
+        var logger = new CaptureLogger();
+        await using var rig = await ReadyRig(
+            Plan(isReviewer: true, admitted: new HashSet<string> { SearchTool }.ToFrozenSet()),
+            configure: h => h.Override = r => (string?)r["method"] == "approval/decide" ? AlreadyResolved((long)r["id"]!) : null,
+            logger: logger);
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+        await rig.Host.WaitForWriteAsync("approval/decide");
+
+        await logger.WaitForAsync(e => e.Message.Contains("already resolved", StringComparison.Ordinal)).WaitAsync(HangGuard);
+
+        await Assert.That(logger.Entries.Where(e => e.Level >= LogLevel.Warning)).IsEmpty();
+        await Assert.That(logger.Entries.Where(e => e.Exception is not null)).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_reviewer_decider_that_throws_declines_the_approval() {
+        await using var rig = await ReadyRig(Plan(isReviewer: true, admitted: new ThrowingSet()));
+
+        rig.Process.Push(MuseMspWire.ApprovalRequested);
+
+        var decide = Params(await rig.Host.WaitForWriteAsync("approval/decide"));
+        await Assert.That((string?)decide["choiceId"]).IsEqualTo("abort");
     }
 
     // ---- Questions ----
@@ -689,6 +741,39 @@ public class MuseMspHostedAgentRuntimeTests {
     }
 
     [Test]
+    public async Task Reviewer_quota_failure_is_a_coded_verdict() {
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var rig = await ReadyRig(Plan(isReviewer: true), configure: h => {
+            h.Process.ExitsOnInputClose = true;
+            h.Process.OnInputClose      = () => closed.TrySetResult();
+        });
+
+        await rig.Runtime.SendUserInputAndWaitForWriteAsync("review").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        rig.Process.Push(FailedTurn("modelError", "usage exhausted", ""","quota":{"limitKind":"daily","resetsAtMs":1791917124377}"""));
+
+        await closed.Task.WaitAsync(HangGuard);
+
+        await Assert.That(rig.Runtime.ReadVerdict()!.Reason).IsEqualTo("muse_reviewer_model_failed: usage exhausted");
+    }
+
+    [Test]
+    [Arguments("""{"kind":"modelError","message":"provider returned 429 Too Many Requests","retryable":true}""", true)]
+    [Arguments("""{"kind":"modelError","message":"rate_limit_exceeded","retryable":true}""", true)]
+    [Arguments("""{"kind":"modelError","message":"auth token expired","retryable":false}""", true)]
+    [Arguments("""{"kind":"modelError","message":"Unauthorized","retryable":false}""", true)]
+    [Arguments("""{"kind":"authRequired","message":"sign in again","retryable":false}""", true)]
+    [Arguments("""{"kind":"modelError","message":"out of credit","quota":{"limitKind":"monthly","resetsAtMs":1},"retryable":false}""", true)]
+    [Arguments("""{"kind":"modelError","message":"the author of this file is unknown","retryable":false}""", false)]
+    [Arguments("""{"kind":"modelError","message":"see authority record 14290","retryable":false}""", false)]
+    [Arguments("""{"kind":"stepLimit","message":"step limit reached","retryable":false}""", false)]
+    public async Task A_model_failure_is_recognised_by_type_or_whole_word(string error, bool expected) {
+        using var doc = JsonDocument.Parse(error);
+
+        await Assert.That(MuseMspHostedAgentRuntime.IsModelFailure(doc.RootElement)).IsEqualTo(expected);
+    }
+
+    [Test]
     public async Task Reviewer_failure_of_another_kind_leaves_no_verdict() {
         await using var rig = await ReadyRig(Plan(isReviewer: true));
 
@@ -712,6 +797,61 @@ public class MuseMspHostedAgentRuntimeTests {
     static string ApprovalResolved() =>
         """{"jsonrpc":"2.0","method":"approval/resolved","params":{"sessionId":"@0@","viewCursor":"v:3","sourceRange":{},"approvalId":"@1@","itemId":"@2@","turnId":"@3@","decision":"approved","policyResult":"allow","resolvedBy":"judge","stageEvidence":[]}}""".Replace("@0@", MuseMspWire.WireSessionId).Replace("@1@", ApprovalId).Replace("@2@", ApprovalId).Replace("@3@", MuseMspWire.WireTurnId);
 
-    static string FailedTurn(string kind, string message) =>
-        """{"jsonrpc":"2.0","method":"turn/completed","params":{"sessionId":"@0@","viewCursor":"v:4","sourceRange":{},"turnId":"@1@","terminal":"failed","error":{"kind":"@2@","message":"@3@","retryable":false}}}""".Replace("@0@", MintedId).Replace("@1@", MuseMspWire.WireTurnId).Replace("@2@", kind).Replace("@3@", message);
+    static string FailedTurn(string kind, string message, string extra = "") =>
+        """{"jsonrpc":"2.0","method":"turn/completed","params":{"sessionId":"@0@","viewCursor":"v:4","sourceRange":{},"turnId":"@1@","terminal":"failed","error":{"kind":"@2@","message":"@3@","retryable":false@4@}}}""".Replace("@0@", MintedId).Replace("@1@", MuseMspWire.WireTurnId).Replace("@2@", kind).Replace("@3@", message).Replace("@4@", extra);
+
+    static string AlreadyResolved(long id) =>
+        """{"jsonrpc":"2.0","id":@0@,"error":{"code":-32051,"message":"approval already resolved","data":{"kind":"approvalAlreadyResolved","retryable":false}}}""".Replace("@0@", id.ToString(CultureInfo.InvariantCulture));
+
+    sealed class ThrowingSet : IReadOnlySet<string> {
+        public int Count => throw new InvalidOperationException("admission set unavailable");
+        public bool Contains(string item) => throw new InvalidOperationException("admission set unavailable");
+        public bool IsProperSubsetOf(IEnumerable<string> other) => throw new NotSupportedException();
+        public bool IsProperSupersetOf(IEnumerable<string> other) => throw new NotSupportedException();
+        public bool IsSubsetOf(IEnumerable<string> other) => throw new NotSupportedException();
+        public bool IsSupersetOf(IEnumerable<string> other) => throw new NotSupportedException();
+        public bool Overlaps(IEnumerable<string> other) => throw new NotSupportedException();
+        public bool SetEquals(IEnumerable<string> other) => throw new NotSupportedException();
+        public IEnumerator<string> GetEnumerator() => throw new NotSupportedException();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
+
+    sealed class CaptureLogger : ILogger {
+        readonly Lock           _gate    = new();
+        readonly List<LogEntry> _entries = [];
+        TaskCompletionSource    _logged  = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<LogEntry> Entries {
+            get { lock (_gate) return _entries.ToArray(); }
+        }
+
+        public async Task WaitForAsync(Func<LogEntry, bool> match) {
+            while (true) {
+                Task signal;
+                lock (_gate) {
+                    if (_entries.Any(match)) return;
+                    signal = _logged.Task;
+                }
+
+                await signal;
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) {
+            TaskCompletionSource signal;
+            lock (_gate) {
+                _entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
+                signal  = _logged;
+                _logged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            signal.TrySetResult();
+        }
+    }
 }

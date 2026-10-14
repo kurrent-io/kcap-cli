@@ -3,6 +3,7 @@ using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -21,7 +22,7 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// <para><see cref="ReadOutputAsync"/> parks on one constructor-owned signal completed on entry to
 /// terminal; its ending is what drives the orchestrator's finalize.</para>
 /// </summary>
-internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminationVerdictSource {
+internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminationVerdictSource {
     internal static readonly TimeSpan DefaultReadyDeadline = TimeSpan.FromSeconds(30);
 
     static readonly TimeSpan StopGrace        = TimeSpan.FromSeconds(3);
@@ -30,6 +31,8 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
 
     const string ProviderId       = "meta";
     const string DeclinedFeedback = "kcap: declined";
+
+    const int ApprovalAlreadyResolvedCode = -32051;
 
     readonly IMuseMspProcess _process;
     readonly ILogger         _logger;
@@ -157,6 +160,7 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
 
     TaskCompletionSource<MuseMspFrame> RegisterPending(long id, Action<MuseMspFrame>? onPump) {
         var waiter = new TaskCompletionSource<MuseMspFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ObserveFault(waiter.Task);
         _pending[id] = (waiter, onPump);
 
         // EnterTerminal faults a snapshot of the keys; re-checking after the entry is visible covers an
@@ -470,17 +474,22 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
         if (_plan.IsReviewer
          && terminal == "failed"
          && p.Obj("error") is { } error
-         && IsModelFailure(error.GetRawText()))
+         && IsModelFailure(error))
             _gate.TryStartReap($"muse_reviewer_model_failed: {error.Str("message") ?? error.GetRawText()}", RunSelfStopAsync);
 
         if (terminal == "completed") Interlocked.Exchange(ref _turnSucceeded, 1);
     }
 
-    static bool IsModelFailure(string errorJson) =>
-        errorJson.Contains("429", StringComparison.Ordinal)
-     || errorJson.Contains("401", StringComparison.Ordinal)
-     || errorJson.Contains("rate_limit", StringComparison.OrdinalIgnoreCase)
-     || errorJson.Contains("auth", StringComparison.OrdinalIgnoreCase);
+    /// <summary>A typed quota detail or an <c>authRequired</c> kind decides it; the message is matched on
+    /// whole words only, so "author" or a digit run inside a longer number is not a model failure.</summary>
+    internal static bool IsModelFailure(JsonElement error) =>
+        error.Obj("quota") is not null
+     || error.Str("kind") == "authRequired"
+     || (error.Str("message") is { } message && ModelFailureText().IsMatch(message));
+
+    [GeneratedRegex(@"\b(?:401|429|auth|unauthorized|unauthenticated|authentication|authorization)\b|rate[_ ]?limit",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ModelFailureText();
 
     async Task RunSelfStopAsync() {
         // The gate runs this under its lock and publishes the verdict when it returns.
@@ -494,8 +503,14 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
 
     // ---- Turn tracking ----
 
+    /// <summary>Ignored after terminal: nothing would clear a turn marked running then, and an idle waiter
+    /// would park forever.</summary>
     void SetRunningTurn(string turnId) {
-        lock (_turnGate) _runningTurnId = turnId;
+        lock (_turnGate) {
+            if (Volatile.Read(ref _terminal) != 0) return;
+            _runningTurnId = turnId;
+        }
+
         ActivityClock?.SetTurnInFlight(true);
     }
 
@@ -532,7 +547,7 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
             return;
 
         lock (_turnGate) {
-            if (_runningTurnId is not null || turnId == _lastCompletedTurnId) return;
+            if (Volatile.Read(ref _terminal) != 0 || _runningTurnId is not null || turnId == _lastCompletedTurnId) return;
             _runningTurnId = turnId;
         }
 
@@ -543,7 +558,7 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
         TaskCompletionSource waiter;
 
         lock (_turnGate) {
-            if (_runningTurnId is null) return Task.CompletedTask;
+            if (_runningTurnId is null || Volatile.Read(ref _terminal) != 0) return Task.CompletedTask;
 
             waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _idleWaiters.Add(waiter);
@@ -708,18 +723,24 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
     async Task HandleApprovalAsync(string approvalId, JsonElement view, CancellationToken ct) {
         MuseApprovalDecision decision;
 
-        try {
-            if (_plan.IsReviewer) {
+        if (_plan.IsReviewer) {
+            // Synchronous and never cancelled: the reviewer answers every approval it is shown.
+            try {
                 decision = MuseUnattendedApprovals.Decide(view, _plan.AdmittedTools);
-            } else {
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Muse: approval {ApprovalId} could not be decided; declining it (agentId={AgentId}).", approvalId, _agentId);
+                decision = Declined(view);
+            }
+        } else {
+            try {
                 var answer = await _requestInteraction(MuseApprovalBridge.ToInteraction(_agentId, LaunchSessionId, view), ct).ConfigureAwait(false);
                 decision = MuseApprovalBridge.ToDecision(answer, view);
+            } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Muse: approval {ApprovalId} could not be decided; declining it (agentId={AgentId}).", approvalId, _agentId);
+                decision = Declined(view);
             }
-        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            return;
-        } catch (Exception ex) {
-            _logger.LogWarning(ex, "Muse: approval {ApprovalId} could not be decided; declining it (agentId={AgentId}).", approvalId, _agentId);
-            decision = new MuseApprovalDecision(MuseApprovalBridge.AbortChoiceId(MuseApprovalBridge.Choices(view)), DeclinedFeedback);
         }
 
         // Resolved by the host, superseded by an update, or torn down while the human was deciding.
@@ -737,13 +758,30 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
             using var response = await RequestAsync(id => MuseMsp.ApprovalDecide(
                 id, MuseMsp.NewId(), SessionIdOr(view), approvalId, requirement, decision.ChoiceId, decision.Feedback)).ConfigureAwait(false);
 
-            if (ErrorMessage(response) is { } error)
+            if (ErrorMessage(response) is not { } error) return;
+
+            // The host can settle an approval by policy or judge before our decision lands.
+            if (IsAlreadyResolved(response))
+                _logger.LogDebug("Muse: approval {ApprovalId} was already resolved by the host (agentId={AgentId}).", approvalId, _agentId);
+            else
                 _logger.LogWarning("Muse: the decision on approval {ApprovalId} was refused: {Error} (agentId={AgentId}).", approvalId, error, _agentId);
-        } catch {
+        } catch (Exception ex) {
             _decidedRequirements.TryRemove(approvalId, out _);
-            throw;
+            _logger.LogDebug(ex, "Muse: the decision on approval {ApprovalId} was not delivered (agentId={AgentId}).", approvalId, _agentId);
         }
     }
+
+    static MuseApprovalDecision Declined(JsonElement view) {
+        try {
+            return new MuseApprovalDecision(MuseApprovalBridge.AbortChoiceId(MuseApprovalBridge.Choices(view)), DeclinedFeedback);
+        } catch (Exception) {
+            return new MuseApprovalDecision("abort", DeclinedFeedback);
+        }
+    }
+
+    static bool IsAlreadyResolved(MuseMspFrame response) =>
+        response.Error is { ValueKind: JsonValueKind.Object } error
+     && (error.Num("code") == ApprovalAlreadyResolvedCode || error.Obj("data")?.Str("kind") == "approvalAlreadyResolved");
 
     async Task HandleUserInputAsync(string userInputId, JsonElement p, CancellationToken ct) {
         IReadOnlyList<MuseUserInputAnswer>? answers = null;

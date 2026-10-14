@@ -28,7 +28,7 @@ internal static class MuseMspWire {
     /// <summary>The turn id the captured <c>turn/started</c> and <c>turn/completed</c> carry.</summary>
     public const string WireTurnId = "01a13695-08e6-743d-8b85-cffc838ef5fc";
 
-    /// <summary>The <c>result</c> of the <c>session/start</c> response (wire line 5), session id <see cref="WireSessionId"/>.</summary>
+    /// <summary>The <c>result</c> of the <c>session/start</c> response, session id <see cref="WireSessionId"/>.</summary>
     public const string SessionStartResult =
         """{"session":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","path":"/muse-home/sessions/2026/10/13/01a13695-0736-75d0-8f4e-f121585b8453/session.jsonl","status":"idle","activeTurnId":null,"createdAt":"2026-10-13T18:44:58.835129Z","updatedAt":"2026-10-13T18:44:58.835133Z","workspaceRoot":"/workspace/project","providerId":"meta","modelId":"muse-spark-1.3","turnCount":0,"forkedFrom":null,"sideFrom":null,"approvalMode":{"mode":"onRequest","source":"startup","lastCommandId":null},"createdByClient":{"name":"kcap_probe","version":"0.0.1"},"kind":"root","permissionState":{"profileId":":read-only","reviewerAuthority":"human","reviewerAttached":true}},"viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:1"}""";
 
