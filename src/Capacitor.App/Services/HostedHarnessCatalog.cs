@@ -179,7 +179,7 @@ public static class HostedHarnessCatalog {
         ["pi"]          = ("π", "#A994FF"),
         ["mistral-vibe"] = ("Mv", "#FA520F"),
         ["muse-assistant"] = ("MA", "#2F6FE0"),
-        ["grok"]        = ("Gk", "#F1F3F7"),
+        ["grok"]        = ("Gk", "#F5F5F5"),
         ["muse"]         = ("Mu", "#4B93FF"),
     };
 
