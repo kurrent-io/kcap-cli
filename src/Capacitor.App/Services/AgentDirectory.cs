@@ -159,9 +159,16 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         public int GetHashCode(IReadOnlyDictionary<string, string> obj) => obj.Count;
     }
 
-    RepoIdentity RepoFor(string? repoPath) => repoPath is { Length: > 0 } path
-        ? _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)))
-        : new RepoIdentity("path:", "No repository");
+    static readonly RepoIdentity NoRepositoryIdentity = new("path:", "No repository");
+    readonly Dictionary<string, RepoIdentity> _repoByPath = new(StringComparer.Ordinal);
+
+    RepoIdentity RepoFor(string? repoPath) {
+        if (repoPath is not { Length: > 0 } path) return NoRepositoryIdentity;
+        if (_repoByPath.TryGetValue(path, out var cached)) return cached;
+        var resolved = _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)));
+        _repoByPath[path] = resolved;
+        return resolved;
+    }
 
     AgentRow ProjectLocal(AgentStatusDto dto) => AgentRow.FromLocal(dto, RepoFor(dto.RepoPath));
 

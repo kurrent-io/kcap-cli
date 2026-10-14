@@ -6,7 +6,6 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Collections;
-using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
@@ -52,23 +51,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     internal const string NotInPlanNote    = "Work items are not in this workspace's plan.";
     internal const string UnreachableNote  = "Couldn't reach the server.";
 
-    sealed class ReadLease(string sessionId) {
-        public string SessionId { get; } = sessionId;
-        public CancellationTokenSource Cts { get; } = new();
-        public Task? Pending;
-        public bool RefreshPending;
-        public bool IsReading => Pending is { IsCompleted: false };
-    }
-
     readonly IWorkContextSource _source;
+    readonly SingleFlightReader<string, WorkContextRead> _reader;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly Action<string>? _openWorkItem;
     readonly SessionRuns _runs;
     readonly BehaviorSubject<bool> _canOpenWorkItem = new(false);
     readonly CompositeDisposable _disposables = new();
-    readonly List<ReadLease> _outstanding = [];
-    ReadLease? _current;
     ITimer? _timer;
     bool _tornDown;
     AgentStatusDto? _dto;
@@ -243,7 +233,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     /// Test-only seam: the current lease's read, or the last one started.
-    internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
+    internal Task? PendingReadForTesting => _reader.PendingReadForTesting;
 
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
@@ -251,6 +241,12 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
             ArtefactsTabViewModel? artefacts = null) {
         _source = source;
+        _reader = new SingleFlightReader<string, WorkContextRead>(
+            _source.ReadAsync,
+            ex => WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message),
+            Apply,
+            "work context",
+            reading => IsReading = reading);
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         Artefacts = artefacts;
         OpenArtefactsCommand = ReactiveCommand.Create(() => Artefacts?.RequestOpen());
@@ -274,10 +270,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 PullRequests?.Refresh();
                 Plan.Refresh();
                 Artefacts?.Refresh();
-                if (_current is null) return;
+                if (!_reader.HasCurrent) return;
                 IsRefreshing = true;
-                if (_current.IsReading) _current.RefreshPending = true;
-                else StartRead(_current);
+                _reader.Refresh();
             },
             _hasSessionChanges);
         _disposables.Add(RefreshCommand);
@@ -301,7 +296,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _dto = dto;
         UpdateFacts(dto);
         HasAgent = true;
-        if (dto.SessionId is { Length: > 0 } id && (_current is null || !string.Equals(_current.SessionId, id, StringComparison.Ordinal)))
+        if (dto.SessionId is { Length: > 0 } id && !string.Equals(_reader.CurrentState, id, StringComparison.Ordinal))
             SwitchSession(id);
         this.RaisePropertyChanged(nameof(PhaseNote));
     }
@@ -325,75 +320,34 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        if (_current is null) SessionIdText = dto.SessionId ?? "resolving…";
+        if (!_reader.HasCurrent) SessionIdText = dto.SessionId ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }
 
     void SwitchSession(string id) {
-        var old = _current;
-        _current = new ReadLease(id);
-        old?.Cts.Cancel();
         HasSession = true;
         SessionIdText = id;
         PrimaryRepository = null;
         ClearServerProjections();
         IsStale = false;
         Phase = WorkContextPhase.Loading;
-        StartRead(_current);
+        _reader.Switch(id);
         Plan.SwitchSession(id);
         Artefacts?.SwitchSession(id, WorktreePath ?? RepositoryPath);
-    }
-
-    void StartRead(ReadLease lease) {
-        lease.RefreshPending = false;
-        lease.Pending = RunReadAsync(lease);
-        _outstanding.Add(lease);
-        if (ReferenceEquals(lease, _current)) IsReading = true;
-    }
-
-    async Task RunReadAsync(ReadLease lease) {
-        WorkContextRead? read = null;
-        try {
-            read = await _source.ReadAsync(lease.SessionId, lease.Cts.Token).ConfigureAwait(false);
-        } catch (OperationCanceledException) {
-        } catch (Exception ex) {
-            read = WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message);
-        }
-        try {
-            await Dispatcher.UIThread.InvokeAsync(() => Settle(lease, read));
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: work context: {ex.Message}");
-        }
-    }
-
-    void Settle(ReadLease lease, WorkContextRead? read) {
-        _outstanding.Remove(lease);
-        var current = ReferenceEquals(lease, _current) && !_tornDown;
-        if (!current) { lease.Cts.Dispose(); return; }
-        try {
-            if (read is not null) Apply(read);
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: work context: {ex.Message}");
-        }
-        // A queued refresh keeps the pane reading, so the click that queued it keeps its progress.
-        if (lease.RefreshPending) { StartRead(lease); return; }
-        IsReading = false;
     }
 
     void OnTick() {
         if (_tornDown) return;
         Plan.Refresh();
         if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
-        if (_current is { IsReading: false } lease) StartRead(lease);
+        _reader.StartIfIdle();
     }
 
     void OnSignInCompleted() {
         if (_tornDown) return;
         Plan.Refresh();
         Artefacts?.Refresh();
-        if (_current is not { } lease) return;
-        if (lease.IsReading) lease.RefreshPending = true;
-        else StartRead(lease);
+        _reader.Refresh();
     }
 
     /// Applies one read for the current lease. Section-level merging lives in the projections half.
@@ -429,14 +383,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _timer?.Dispose();
         _timer = null;
         _disposables.Dispose();
-        var leases = _outstanding.ToArray();
-        foreach (var lease in leases) lease.Cts.Cancel();
-        _current = null;
-        foreach (var lease in leases)
-            if (lease.Pending is { } pending) {
-                try { await pending; } catch (Exception) { }
-            }
-        foreach (var lease in leases) lease.Cts.Dispose();
+        await _reader.TeardownAsync();
         await Plan.TeardownAsync();
     }
 }

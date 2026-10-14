@@ -423,11 +423,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// facts under a Completed status. Identical revisions are not republished.
     static IObservable<ChatSessionInfo> LocalSession(string agentId, IDaemonClientService daemon) =>
         daemon.Agents.Connect()
+            .Filter(dto => dto.Id == agentId)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Scan((ChatSessionInfo?)null, (last, changes) => {
                 var info = last;
                 foreach (var change in changes) {
-                    if (change.Key != agentId) continue;
                     if (change.Reason == ChangeReason.Remove)
                         info = (info ?? ChatSessionInfo.Gone) with {
                             Status = "Completed", StatusLabel = "Done", Ended = true, UsageLimit = null, WaitsOnUser = false,
@@ -725,11 +725,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (info.FeedKey != _queueKey) {
             _queueKey = info.FeedKey;
             foreach (var foreign in _queuedMessages.Where(q => q.IsForeign).ToList()) _queuedMessages.Remove(foreign);
-            RefreshQueue();
         }
-        if (_openFeed is { } open && info.FeedKey is { } key && key != _feedKey) SwitchFeed(key, open);
+        var switched = _openFeed is { } open && info.FeedKey is { } key && key != _feedKey;
+        if (switched) SwitchFeed(info.FeedKey!, _openFeed!);
         RefreshActivityNote();
-        RefreshQueue();
+        if (!switched) RefreshQueue();
     }
 
     void ApplyUsageLimit(UsageLimitNoticeDto? notice) {
@@ -891,12 +891,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
-        foreach (var queued in Tracked.Where(q => !q.HasBaseline && !q.IsForeign))
+        var rebased = false;
+        foreach (var queued in Tracked.Where(q => !q.HasBaseline && !q.IsForeign)) {
             queued.Rebase(_inputGeneration, read.SnapshotOffset ?? CurrentOffset ?? 0);
-        RefreshQueue();
+            rebased = true;
+        }
+        if (rebased) RefreshQueue();
         if (read.Lines.Count == 0) {
-            SyncPendingCardItems();
-            RefreshActivityNote();
+            if (read.Status == FeedStatus.Reset) {
+                SyncPendingCardItems();
+                RefreshActivityNote();
+            }
             return;
         }
 

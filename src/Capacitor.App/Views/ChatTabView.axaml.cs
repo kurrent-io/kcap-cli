@@ -24,6 +24,7 @@ public partial class ChatTabView : UserControl {
     const double BottomTolerance = 2;
 
     ScrollViewer? _scroll;
+    TextPresenter? _composerPresenter;
     AttachmentDropPaste? _attachments;
     bool _followTail = true;
     /// Armed by a gesture inside the list and released once the dispatcher queue drains past
@@ -53,6 +54,8 @@ public partial class ChatTabView : UserControl {
         // Bubble-only events: a tunnel registration for these never fires.
         ChatItems.AddHandler(ScrollGestureEvent, OnReaderGesture, RoutingStrategies.Bubble, handledEventsToo: true);
         ChatItems.AddHandler(Thumb.DragDeltaEvent, OnReaderGesture, RoutingStrategies.Bubble, handledEventsToo: true);
+        ComposerInput.TemplateApplied += (_, e) =>
+            _composerPresenter = e.NameScope.Find<TextPresenter>("PART_TextPresenter");
         // The ScrollViewer is the list template's; it exists only once the list is first measured,
         // which for a surface built before its first layout is later than the first rows.
         ChatItems.TemplateApplied += (_, _) => {
@@ -242,7 +245,7 @@ public partial class ChatTabView : UserControl {
     (int Line, int Lines) ComposerCaretLine() {
         var text = ComposerInput.Text ?? "";
         var caret = Math.Clamp(ComposerInput.CaretIndex, 0, text.Length);
-        var layout = ComposerInput.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault()?.TextLayout;
+        var layout = _composerPresenter?.TextLayout;
         if (layout is { TextLines.Count: > 0 })
             return (layout.GetLineIndexFromCharacterIndex(caret, false), layout.TextLines.Count);
         return (text.AsSpan(0, caret).Count('\n'), text.AsSpan().Count('\n') + 1);

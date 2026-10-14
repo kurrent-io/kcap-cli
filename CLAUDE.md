@@ -143,6 +143,7 @@ dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj
 - Spawning the real `kcap` binary goes through Helpers' `KcapProcess`, which requires a `DaemonStore` and pins it for the child. The assembly-wide `KCAP_DAEMONS_DIR` pin is a path that cannot be created, so a hand-rolled spawn dies with a bare ENOTDIR `IOException` instead of quietly resolving the developer's own daemons directory.
 - Capture console output with `ConsoleOutput.StartCapture()` / `StartErrorCapture()`, never a hand-rolled `Console.SetOut`/`SetError` save-restore — TUnit0055 is an error. Console is process-global, so every caller needs bare `[NotInParallel]`; a group key is not enough.
 - Never assert that an environment variable is *absent* from a built `ProcessStartInfo`: its environment is seeded from the current process, and the repo's own `.envrc` exports several. Assert what the code under test contributed, by comparing against the inherited value.
+- Do not write tests for test-only fakes/mocks, dedicated test files for one-line wrappers/constants already exercised by their callers, or headless XAML smoke tests that only assert `x:Name` lookups, static typography/margin values, or Avalonia layout math. Keep `*SmokeTests` to real view interactions (focus, keyboard/pointer routing, flyouts, accessibility peers) and keep data-projection permutations in ViewModel unit tests.
 
 **Parallelism:** bare `[NotInParallel]` is exclusive against the whole assembly and its tests run last, one at a time; keyed `[NotInParallel("k")]` excludes only tests carrying `k`.
 
@@ -248,6 +249,7 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
   `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
   Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
   Kcap class restyles it.
+- Reactive and UI-thread discipline: filter `SourceCache.Connect()` streams *before* `.ObserveOn(RxSchedulers.MainThreadScheduler)` so irrelevant cache revisions do not schedule UI-thread work across every open workspace; use `SingleFlightReader<TState, TResult>` for session-keyed single-flight server reads rather than hand-rolling another `ReadLease` state machine; cache template parts (`ScrollViewer`, `TextPresenter`) on `TemplateApplied` instead of walking `GetVisualDescendants()` on keystrokes or layout ticks; and do not run uncached git/disk/hash I/O inside recompute loops or on the UI thread.
 
 ## Dos and donts
 
