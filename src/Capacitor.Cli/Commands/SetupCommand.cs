@@ -1005,11 +1005,7 @@ sealed class SetupCommand(
             RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml),
             InstallGrokHooks:         GrokHooksInstaller.Install,
             // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
-            InstallMuseHooks:         p => {
-                var installed = (MuseHooksInstaller.Install(p) is SettingsEdit.Changed or SettingsEdit.Unchanged) && MuseHooksInstaller.HasAllHooks(p);
-                if (MuseHooksInstaller.IsInstalled(p)) MuseHookRoots.Persist(home, muse);
-                return installed;
-            },
+            InstallMuseHooks:         p => InstallMuseHooks(p, home, muse, WriteLine),
             RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
@@ -2751,6 +2747,21 @@ sealed class SetupCommand(
           + "Commits are filed from the agent's shell commands until you upgrade git.",
         _ => "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]"
     };
+
+    /// <summary>
+    /// True only once every event carries kcap's hook. The roots are written whenever any kcap hook is in
+    /// the file, complete or not: a hook Muse runs finds its session log only through them.
+    /// </summary>
+    internal static bool InstallMuseHooks(string settingsPath, UserHome home, MusePaths muse, Action<string> writeLine) {
+        var installed = MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged
+                     && MuseHooksInstaller.HasAllHooks(settingsPath);
+
+        if (MuseHooksInstaller.IsWired(settingsPath) && !MuseHookRoots.Persist(home, muse))
+            writeLine($"  [yellow]⚠[/] Could not write {Markup.Escape(MuseHookRoots.PathFor(home))} — "
+                    + "Muse hooks may look for sessions outside this shell's XDG roots.");
+
+        return installed;
+    }
 
     /// <summary>
     /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the
