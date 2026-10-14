@@ -95,7 +95,8 @@ Run setup in the background and read its output while it waits for the user:
 
 ```bash
 KCAP=~/workspace/kcap/node_modules/.bin/kcap
-nohup "$KCAP" setup --server-url https://<tenant>.kcap.ai --device --no-prompt --muse-assistant \
+SERVER='<the workspace address the user gave, exactly>'
+nohup "$KCAP" setup --server-url "$SERVER" --device --no-prompt --muse-assistant \
   > ~/workspace/capacitor/setup.log 2>&1 &
 sleep 8; cat ~/workspace/capacitor/setup.log
 ```
@@ -109,6 +110,9 @@ unreachable server as "not yet approved".
   hosts. If it then says **Cannot reach server** and **not yet approved**, or
   sign-in fails while a card is waiting: ask the user to approve it, then run
   the same command again.
+- If the user declined the code, or it expired before they entered it, the log
+  says **Login failed**: run the same command again, which starts a fresh
+  sign-in, and show the user the new URL and code.
 - Once the server answers, the log shows a **verification URL and a code**.
   **Show both to the user** and ask them to open the URL on their own device and
   enter the code. Keep reading the log (`sleep 15; tail -20 …`) until it reaches
@@ -232,12 +236,15 @@ Capacitor's tools are the `kcap` custom connector
    `list_repo_sessions` (`repo:"all"`, a period).
 2. **Always `"repo": "all"`** for `search_sessions` and `list_repo_sessions`.
    This VM is not a git checkout, so the default repo scope is empty.
-3. **Check `hit_kind`.** A hit is a `session` or a `subagent` transcript; open a
-   session with `get_session_summary` first, and only then `list_turns` /
-   `get_turn` / `get_session_transcript` for detail.
+3. **Check `hit_kind`.** `transcript` and `title` hits contain your terms;
+   `turn_prose` and `semantic` hits can be near neighbours that do not, so check
+   the snippet first. Open a session with `get_session_summary`, then drill in:
+   a `transcript` hit's `hit_event_index` (with its `agent_id`) goes to
+   `get_session_transcript`, a `turn_prose` hit's `hit_turn_index` to `get_turn`.
 4. **Analytics:** call `get_analytics_schema` once per conversation, then write
-   Postgres `SELECT`s for `query_analytics`; a rejection names the reason — fix
-   the SQL and retry.
+   Postgres `SELECT`s for `query_analytics` with `"scope": "global"` — this VM
+   has no repository, so the default repo scope refuses the query. A rejection
+   names the reason — fix the SQL and retry.
 5. **Memory:** search before saving; save with an explicit `audience` and
    `global: true`, since nothing here is scoped to a repository.
 6. **Never paste `~/.config/kcap/` or any token** into the chat or a file.
@@ -253,9 +260,14 @@ Capacitor's tools are the `kcap` custom connector
 
 ### B6. Keep the sign-in warm: an hourly `kcap status` cron
 
+Ask the user first: the cron runs every hour while they are away, uses the
+Capacitor sign-in to refresh it, appends to `~/workspace/capacitor/cron.log`,
+and survives a VM replacement. Create it only once they agree; without it the
+sign-in can lapse on a VM left idle, and "reconnect Capacitor" restores it.
+
 Create a cron (title `kcap-hourly-status`, every hour) whose instruction is:
 
-> Run `~/workspace/kcap/node_modules/.bin/kcap status >> ~/workspace/capacitor/cron.log 2>&1`,
+> Run `~/workspace/kcap/node_modules/.bin/kcap status --no-update-check >> ~/workspace/capacitor/cron.log 2>&1`,
 > then keep only the last 500 lines of that file. Do nothing else and do not
 > wake the user — unless the output says the token is expired, missing or the
 > server rejected it, in which case add one line to the chat: "Capacitor
@@ -263,6 +275,8 @@ Create a cron (title `kcap-hourly-status`, every hour) whose instruction is:
 
 `kcap status` refreshes the token when it can, so the hourly run is what keeps a
 long-idle VM signed in; `~/workspace/capacitor/cron.log` is where a lapse shows.
+`--no-update-check` keeps it from contacting `registry.npmjs.org`, a host an
+unattended run has no one to approve.
 
 ### B7. Tell the user
 
@@ -271,5 +285,6 @@ long-idle VM signed in; `~/workspace/capacitor/cron.log` is where a lapse shows.
 - Nothing on this VM is recorded; Capacitor is read (and team memory written)
   from here. Anything this install does record would be private by default.
 - Everything lives under your home — `~/workspace/kcap`, `~/.config/kcap`,
-  the connector, the skill and the cron — so it survives a VM replacement.
+  the connector, the skill and the cron (if you agreed to it) — so it survives
+  a VM replacement.
 - If a tool ever says the sign-in lapsed, say "reconnect Capacitor".

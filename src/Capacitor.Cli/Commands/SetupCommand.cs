@@ -732,15 +732,8 @@ sealed class SetupCommand(
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
-        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile);
-
-        if (loginStepResult != 0) {
-            if (museAssistant)
-                foreach (var line in MuseAssistantPosture.LoginFailedHintLines(MuseAssistantPosture.SignInHosts(provider)))
-                    await Console.Out.WriteLineAsync(line);
-
-            return loginStepResult;
-        }
+        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
+        if (loginStepResult != 0) return loginStepResult;
 
         // Ahead of the browser leg, whose import decides the eval-watch handoff from them.
         var pluginPath = ResolvePluginPath();
@@ -1044,7 +1037,8 @@ sealed class SetupCommand(
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
         OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
         OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
-        new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
+        // The posture offers no harness, so nothing may be recorded as offered.
+        if (!museAssistant) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -1354,7 +1348,7 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
+        if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -2010,7 +2004,8 @@ sealed class SetupCommand(
     /// since setup's whole job is configuring that profile for the chosen server.
     /// </summary>
     internal async Task<int> RunLoginStepAsync(
-            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile) {
+            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile,
+            bool museAssistant = false) {
         if (loginComplete) {
             // Discovery's WorkOS leg reports the sign-in itself, naming the workspace it picked. Every
             // other provider's discovery reports a tenant count and no identity, so this is its only one.
@@ -2028,6 +2023,9 @@ sealed class SetupCommand(
 
         if (result is not AuthResult.Committed { CredentialSaved: true }) {
             await Console.Error.WriteLineAsync("  Login failed.");
+
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.LoginFailedHintLines(result, provider)) await Console.Out.WriteLineAsync(line);
 
             return 1;
         }

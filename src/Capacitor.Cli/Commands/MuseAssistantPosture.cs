@@ -97,12 +97,18 @@ internal static class MuseAssistantPosture {
         yield return "  then run the same command again.";
     }
 
-    /// <summary>Worded for both causes: a sign-in host still awaiting approval and a declined or
-    /// expired code end the same way here, and a re-run is the remedy for each.</summary>
-    public static IEnumerable<string> LoginFailedHintLines(IReadOnlyList<string> hosts) {
+    /// <summary>Only for a device sign-in that did not complete: a host still awaiting approval and a
+    /// declined or expired code end the same way there, and a re-run is the remedy for each. Every
+    /// other failure keeps its own remedy, which a re-run would not fix.</summary>
+    public static IEnumerable<string> LoginFailedHintLines(AuthResult result, string provider) {
+        if (result is not AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }) yield break;
+
+        var hosts = SignInHosts(provider);
+
         if (hosts.Count > 0)
             yield return $"  On Muse Assistant, if a card for {string.Join(", ", hosts)} is still waiting, ask the user to approve it.";
 
-        yield return "  If the code expired or was declined, a re-run shows a fresh one: run the same command again.";
+        yield return "  If the code expired or was declined, a re-run shows a fresh one.";
+        yield return "  Either way, run the same command again.";
     }
 }

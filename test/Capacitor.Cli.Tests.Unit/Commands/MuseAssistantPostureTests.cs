@@ -74,12 +74,26 @@ public class MuseAssistantPostureTests {
     /// not assert the host is the cause.</summary>
     [Test]
     public async Task The_login_failure_hint_covers_a_declined_code_without_blaming_approval() {
-        var text = string.Join("\n", MuseAssistantPosture.LoginFailedHintLines(["api.workos.com"]));
+        var denied = new AuthResult.Failed("WorkOS sign-in did not complete.", AuthFailureReason.SigninDenied);
+        var text   = string.Join("\n", MuseAssistantPosture.LoginFailedHintLines(denied, AuthProvider.WorkOS));
 
         await Assert.That(text).Contains("api.workos.com");
         await Assert.That(text).Contains("expired or was declined");
         await Assert.That(text).Contains("run the same command again");
         await Assert.That(text).DoesNotContain("not yet approved");
+    }
+
+    /// <summary>A failure a re-run cannot fix keeps only its own remedy.</summary>
+    [Test]
+    public async Task The_login_failure_hint_is_silent_for_a_failure_a_re_run_cannot_fix() {
+        AuthResult[] others = [
+            new AuthResult.Failed("Unknown auth provider 'x'"),
+            new AuthResult.Failed("Token exchange failed."),
+            new AuthResult.Cancelled(),
+        ];
+
+        foreach (var result in others)
+            await Assert.That(MuseAssistantPosture.LoginFailedHintLines(result, AuthProvider.WorkOS).ToList()).IsEmpty();
     }
 
     [Test]

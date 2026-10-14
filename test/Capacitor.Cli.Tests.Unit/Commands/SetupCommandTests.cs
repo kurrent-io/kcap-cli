@@ -9,6 +9,7 @@ using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.PrDetection;
 using Spectre.Console;
 
@@ -1535,6 +1536,9 @@ public class SetupCommandTests {
         await Assert.That(File.Exists(codex.ConfigToml)).IsFalse();
         await Assert.That(File.Exists(codex.UserHooksJson)).IsFalse();
         await Assert.That(Directory.Exists(skills)).IsFalse();
+
+        // Detected but never offered, so the later new-harness nudge must still be free to ask.
+        await Assert.That(new HarnessOfferStore(Config.Root, TimeProvider.System).Load().Entry(HarnessId.Codex)?.LastOffered).IsNull();
 
         var output = capture.GetCapturedOutput();
         await Assert.That(output).Contains(new Uri(server.Url!).Host);
