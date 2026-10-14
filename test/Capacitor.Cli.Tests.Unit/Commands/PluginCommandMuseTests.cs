@@ -76,6 +76,34 @@ public class PluginCommandMuseTests {
     }
 
     [Test]
+    public async Task Refresh_leaves_out_hooks_removed_by_hand() {
+        var env      = Env();
+        var settings = env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+        await Run(env, "plugin", "install", "--muse");
+        var root = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(settings))!;
+        root.Remove("hooks");
+        await File.WriteAllTextAsync(settings, root.ToJsonString());
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse", "--if-installed")).IsEqualTo(0);
+
+        var after = (JsonObject)JsonNode.Parse(await File.ReadAllTextAsync(settings))!;
+        await Assert.That(MuseHooksParser.InstalledEvents(after)).IsEmpty();
+        await Assert.That(env.Harnesses.Of<MuseHarness>().Signals.IsWired).IsFalse();
+    }
+
+    [Test]
+    public async Task Refresh_rewrites_the_hooks_when_settings_json_is_gone_but_the_marker_is_not() {
+        var env      = Env();
+        var settings = env.Harnesses.Of<MuseHarness>().Paths.SettingsJson;
+        await Run(env, "plugin", "install", "--muse");
+        File.Delete(settings);
+
+        await Assert.That(await Run(env, "plugin", "install", "--muse", "--if-installed")).IsEqualTo(0);
+
+        await Assert.That(MuseHooksInstaller.HasAllHooks(settings)).IsTrue();
+    }
+
+    [Test]
     public async Task Refresh_that_cannot_complete_the_hooks_warns_skips_mcp_and_exits_zero() {
         var stderr   = new StringWriter();
         var env      = Env(stderr);

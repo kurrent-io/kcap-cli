@@ -8,17 +8,14 @@ namespace Capacitor.Cli.Core.Harness.Muse;
 public static class MuseHooksInstaller {
     public const string MarkerFileName = ".kcap-hooks-version";
 
-    public static bool IsInstalled(string settingsPath) {
-        var dir = Path.GetDirectoryName(settingsPath);
-        if (!string.IsNullOrEmpty(dir) && File.Exists(Path.Combine(dir, MarkerFileName))) return true;
-        if (!File.Exists(settingsPath)) return false;
-        try {
-            return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
-                && MuseHooksParser.InstalledEvents(root).Count > 0;
-        } catch (JsonException) { return false; }
-        catch (IOException) { return false; }
-        catch (UnauthorizedAccessException) { return false; }
-    }
+    /// <summary>Whether the user opted in to capture. The file answers whenever it can be read, so hooks
+    /// removed by hand read as opted out and a refresh does not put them back; the marker answers only
+    /// for a file that is missing or unreadable.</summary>
+    public static bool IsInstalled(string settingsPath) =>
+        ReadInstalledEvents(settingsPath) is { } events ? events.Count > 0 : HasMarker(settingsPath);
+
+    /// <summary>Whether Muse will run kcap's hook for any event: the file alone, never the marker.</summary>
+    public static bool IsWired(string settingsPath) => ReadInstalledEvents(settingsPath) is { Count: > 0 };
 
     /// <summary>Whether every lifecycle event carries kcap's hook. <see cref="Install"/> reports
     /// Unchanged for a <c>hooks</c> value it will not overwrite, so only the file says whether the
@@ -54,7 +51,7 @@ public static class MuseHooksInstaller {
             return changed;
         });
 
-        if (outcome is (SettingsEdit.Changed or SettingsEdit.Unchanged) && IsInstalled(settingsPath)) WriteMarker(settingsPath);
+        if (outcome is (SettingsEdit.Changed or SettingsEdit.Unchanged) && IsWired(settingsPath)) WriteMarker(settingsPath);
         return outcome;
     }
 
@@ -100,6 +97,20 @@ public static class MuseHooksInstaller {
         }
         groupEmptied = removed && hooks.Count == 0;
         return removed;
+    }
+
+    static IReadOnlySet<string>? ReadInstalledEvents(string settingsPath) {
+        if (!File.Exists(settingsPath)) return null;
+        try {
+            return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root ? MuseHooksParser.InstalledEvents(root) : null;
+        } catch (JsonException) { return null; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    static bool HasMarker(string settingsPath) {
+        var dir = Path.GetDirectoryName(settingsPath);
+        return !string.IsNullOrEmpty(dir) && File.Exists(Path.Combine(dir, MarkerFileName));
     }
 
     public static string? ReadMarker(string settingsPath) {

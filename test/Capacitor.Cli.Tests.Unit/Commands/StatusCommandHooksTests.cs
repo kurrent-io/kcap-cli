@@ -149,7 +149,7 @@ public class StatusCommandHooksTests {
         await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).IsNull();
     }
 
-    /// <summary>An unparseable file with no marker reads as unwired, so this is the case the line must
+    /// <summary>An unparseable file reads as unwired, marker or not, so this is the case the line must
     /// still reach; a valid file with no hooks leaves it to the not-configured line.</summary>
     [Test]
     public async Task MuseHooksDetailLine_reports_an_unparseable_file_for_an_installed_but_unwired_muse() {

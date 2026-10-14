@@ -131,4 +131,42 @@ public class MuseHooksInstallerTests {
         await Assert.That(MuseHooksInstaller.Remove(path)).IsEqualTo(SettingsEdit.Malformed);
         await Assert.That(File.Exists(marker)).IsTrue();
     }
+
+    /// <summary>The marker survives a hand edit, so it cannot be what says the hooks are there.</summary>
+    [Test]
+    public async Task Hooks_removed_by_hand_read_as_neither_wired_nor_installed_despite_the_marker() {
+        var path = Tmp.PathTo("settings.json");
+        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Changed);
+        File.WriteAllText(path, """{"schema_version":1}""");
+
+        await Assert.That(MuseHooksInstaller.ReadMarker(path)).IsNotNull();
+        await Assert.That(MuseHooksInstaller.IsWired(path)).IsFalse();
+        await Assert.That(MuseHooksInstaller.IsInstalled(path)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_partial_install_reads_as_wired_and_installed() {
+        var path = Tmp.PathTo("settings.json");
+        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Changed);
+        var root = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
+        root["hooks"]!.AsObject().Remove("Stop");
+        File.WriteAllText(path, root.ToJsonString());
+
+        await Assert.That(MuseHooksInstaller.IsWired(path)).IsTrue();
+        await Assert.That(MuseHooksInstaller.IsInstalled(path)).IsTrue();
+    }
+
+    [Test]
+    public async Task The_marker_keeps_a_missing_or_unparseable_file_installed_but_not_wired() {
+        var path = Tmp.PathTo("settings.json");
+        Tmp.CreateFile(MuseHooksInstaller.MarkerFileName, "1.2.3");
+
+        await Assert.That(MuseHooksInstaller.IsInstalled(path)).IsTrue();
+        await Assert.That(MuseHooksInstaller.IsWired(path)).IsFalse();
+
+        Tmp.CreateFile("settings.json", "{not json");
+
+        await Assert.That(MuseHooksInstaller.IsInstalled(path)).IsTrue();
+        await Assert.That(MuseHooksInstaller.IsWired(path)).IsFalse();
+    }
 }

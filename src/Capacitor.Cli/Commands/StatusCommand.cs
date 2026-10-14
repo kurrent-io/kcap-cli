@@ -435,7 +435,7 @@ public sealed class StatusCommand(
         var label = HarnessRegistry.LabelOf(HarnessId.Muse);
 
         try {
-            if (!File.Exists(settingsPath)) return wired ? MuseHookGapLine(System.Collections.Frozen.FrozenSet<string>.Empty) : null;
+            if (!File.Exists(settingsPath)) return null;
 
             return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
                 ? wired ? MuseHookGapLine(MuseHooksParser.InstalledEvents(root)) : null

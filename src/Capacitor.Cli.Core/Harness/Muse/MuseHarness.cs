@@ -26,7 +26,7 @@ public sealed class MuseHarness : IHarness<MuseHarness> {
     public HarnessSignals Signals => new() {
         LaunchSignal   = probe => probe.Finds(CliBinary),
         UserDataSignal = Paths.HasUserData,
-        Wired          = () => MuseHooksInstaller.IsInstalled(Paths.SettingsJson),
+        Wired          = () => MuseHooksInstaller.IsWired(Paths.SettingsJson),
     };
 
     static string? Set(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
