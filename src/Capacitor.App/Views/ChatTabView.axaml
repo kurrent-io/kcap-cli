@@ -50,7 +50,8 @@
             <Setter Property="Margin" Value="22,0,22,0" />
             <Setter Property="HorizontalAlignment" Value="Stretch" />
         </Style>
-        <Style Selector="SelectableTextBlock.toolLine">
+        <Style Selector="SelectableTextBlock.toolLine,
+                         TextBlock.toolLine">
             <Setter Property="FontSize" Value="13.5" />
             <Setter Property="LineHeight" Value="18" />
             <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
@@ -250,7 +251,7 @@
                                         </views:ChatKindHeader.Status>
                                     </views:ChatKindHeader>
                                 </Button>
-                                <ItemsControl ItemsSource="{Binding VisibleCalls}" IsVisible="{Binding HasVisibleCalls}" ClipToBounds="False" />
+                                <ItemsControl ItemsSource="{Binding VisibleCalls}" IsVisible="{Binding HasVisibleCalls}" />
                             </StackPanel>
                         </Border>
                     </views:ChatCardRow>

@@ -419,12 +419,17 @@ public class ChatTabViewSmokeTests {
             await host.LoadAsync(path);
 
             var label = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
+            var detail = host.View.GetVisualDescendants().OfType<SelectableTextBlock>().Single(t => t.IsEffectivelyVisible && t.Text == "Retention brief");
             await Assert.That(label.Text).IsEqualTo("Published page");
+            await Assert.That(label.FontFamily.Name).IsEqualTo(detail.FontFamily.Name);
+            await Assert.That(label.LineHeight).IsEqualTo(detail.LineHeight);
             await Assert.That(host.View.GetVisualDescendants().OfType<Control>().Any(c => c.Name == "ToolCard" && c.IsEffectivelyVisible)).IsFalse();
 
             await host.AppendLinesAndTickAsync(path, PublishResultLine);
 
-            await Assert.That(host.View.GetVisualDescendants().OfType<Border>().Count(b => b.Name == "ToolCard" && b.IsEffectivelyVisible)).IsEqualTo(1);
+            var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "ToolCard" && b.IsEffectivelyVisible);
+            await Assert.That(card.Margin.Left).IsEqualTo(0);
+            await Assert.That(card.Margin.Right).IsEqualTo(0);
             var title = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardTitle");
             var name = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "ToolCardName");
             await Assert.That(title.Text).IsEqualTo("Published page");
