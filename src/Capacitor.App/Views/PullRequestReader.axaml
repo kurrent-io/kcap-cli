@@ -18,7 +18,7 @@
                         AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
-                        <Path Classes="prExternal prAfterLabel" />
+                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal prAfterLabel" />
                     </StackPanel>
                 </Button>
             </Grid>
@@ -87,11 +87,11 @@
                 <TextBlock Text="{Binding PageNote}" Classes="prNote" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <!-- Loading and empty share one slot, glyph size and type so the one gives way to the other in place. -->
                 <StackPanel x:Name="LoadingState" Classes="prSectionState" Classes.shown="{Binding ShowsLoading}">
-                    <Path Classes="prStateGlyph kcapSpinning" Data="M11,2 A9,9 0 1 1 2,11" />
+                    <views:AppIcon Kind="LoaderCircle" Size="20" Classes="prStateGlyph kcapSpinning" />
                     <TextBlock Text="{Binding LoadingNote}" Classes="prNote" TextAlignment="Center" />
                 </StackPanel>
                 <StackPanel x:Name="EmptyState" Classes="prSectionState" Classes.shown="{Binding HasEmptyNote}">
-                    <Path Classes="prStateGlyph" Data="M2,9 L5,3 H15 L18,9 V16 Q18,17 17,17 H3 Q2,17 2,16 Z M2,9 H7 L8,11 H12 L13,9 H18" />
+                    <views:AppIcon Kind="Inbox" Size="20" Classes="prStateGlyph" />
                     <TextBlock Text="{Binding EmptyNote}" Classes="prNote" TextAlignment="Center" />
                 </StackPanel>
                 <Button Content="Reload earlier" Command="{Binding ReloadEarlierCommand}" IsVisible="{Binding CanReloadEarlier}" HorizontalAlignment="Left" Classes="kcapGhost kcapQuiet prFlushLeft" />
@@ -104,9 +104,8 @@
                                         <Panel>
                                             <TextBlock Text="{Binding Initial}" IsVisible="{Binding !IsBot}" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                        Foreground="{StaticResource KcapMutedBrush}" FontSize="12" />
-                                            <Path Width="16" Height="16" Stretch="Uniform" IsVisible="{Binding IsBot}" Stroke="{StaticResource KcapMutedBrush}"
-                                                  StrokeThickness="1.4" StrokeLineCap="Round" StrokeJoin="Round"
-                                                  Data="M3,5 H13 V13 H3 Z M8,5 V2 H6 M5.5,8 V10 M10.5,8 V10 M3,8 H1 M13,8 H15" />
+                                            <views:AppIcon Kind="Bot" Size="16" IsVisible="{Binding IsBot}"
+                                                           Foreground="{StaticResource KcapMutedBrush}" />
                                             <views:RemoteAvatar Url="{Binding AvatarUrl}" />
                                         </Panel>
                                     </Border>
@@ -118,7 +117,7 @@
                                     <Button Grid.Column="3" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                             CommandParameter="{Binding}" AutomationProperties.Name="Open review in browser" ToolTip.Tip="Open review in browser">
-                                        <Path Classes="prExternal" />
+                                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal" />
                                     </Button>
                                     <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
                                 </Grid>
@@ -140,7 +139,7 @@
                                     <Button Grid.Column="2" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Center"
                                             Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                             CommandParameter="{Binding}" AutomationProperties.Name="Open check in browser" ToolTip.Tip="Open check in browser">
-                                        <Path Classes="prExternal" />
+                                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal" />
                                     </Button>
                                 </Grid>
                             </Border>
@@ -160,7 +159,7 @@
                                         <Button Grid.Column="1" Classes="kcapGhost kcapIcon" IsVisible="{Binding HasLink}" VerticalAlignment="Top"
                                                 Command="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenRowCommand}"
                                                 CommandParameter="{Binding}" AutomationProperties.Name="Open comment in browser" ToolTip.Tip="Open in browser">
-                                            <Path Classes="prExternal" />
+                                            <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal" />
                                         </Button>
                                     </Grid>
                                     <Border IsVisible="{Binding HasHunk}" Background="{StaticResource KcapSurfaceRaisedBrush}" Padding="10" CornerRadius="5">
@@ -195,9 +194,8 @@
                         </ToolTip.Tip>
                     </TextBlock>
                     <StackPanel Orientation="Horizontal" Spacing="7" IsVisible="{Binding ShowsRefreshing}">
-                        <Path x:Name="ReadingGlyph" Width="12" Height="12" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.5"
-                              StrokeLineCap="Round" Data="M11,2 A9,9 0 1 1 2,11" VerticalAlignment="Center" Margin="0,0,0,3"
-                              Classes.kcapSpinning="{Binding ShowsRefreshing}" />
+                        <views:AppIcon Kind="LoaderCircle" Size="12" x:Name="ReadingGlyph" VerticalAlignment="Center" Margin="0,0,0,3"
+                                       Classes.kcapSpinning="{Binding ShowsRefreshing}" Foreground="{StaticResource KcapMutedBrush}" />
                         <TextBlock Text="Refreshing…" Classes="prNote" />
                     </StackPanel>
                 </Grid>
@@ -209,8 +207,7 @@
                             <TextBlock Text="Read here; reply, resolve, review and see the full diff on GitHub" Classes="kcapTipCaption" />
                         </StackPanel>
                     </ToolTip.Tip>
-                    <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.4"
-                          Data="M8,1 A7,7 0 1 0 8,15 A7,7 0 1 0 8,1 M8,7 V12 M8,4 V5" />
+                    <views:AppIcon Kind="Info" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
                 </Border>
             </Grid>
         </Border>

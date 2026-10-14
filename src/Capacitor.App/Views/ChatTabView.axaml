@@ -136,7 +136,7 @@
                         <Border Classes="shellOutput chatSystemCard" Margin="0,8,0,0"
                                 IsVisible="{Binding HasOutput}">
                             <StackPanel Spacing="6">
-                                <views:ChatKindHeader Label="Output" IconData="{x:Static views:ToolCategoryIcons.CommandIcon}" />
+                                <views:ChatKindHeader Label="Output" IconKind="{x:Static views:ToolCategoryIcons.CommandIcon}" />
                                 <SelectableTextBlock Classes="toolLine prose" Text="{Binding Output}" />
                             </StackPanel>
                         </Border>
@@ -146,7 +146,7 @@
                     <views:ChatCardRow>
                         <Border Classes="systemNote chatSystemCard" Margin="0,8,0,12">
                             <StackPanel Spacing="6">
-                                <views:ChatKindHeader Label="{Binding Label}" IconData="{Binding IconData}" />
+                                <views:ChatKindHeader Label="{Binding Label}" IconKind="{Binding IconKind}" />
                                 <views:MarkdownView Text="{Binding Text}"
                                                     OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                     RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
@@ -190,10 +190,9 @@
                                         CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
                                         IsVisible="{Binding IsRunning}" views:PulseClock.IsActive="{Binding IsRunning}"
                                         Background="{StaticResource KcapWarningBrush}" />
-                                <TextBlock Text="?" FontSize="11" Margin="16,0,0,0"
-                                           VerticalAlignment="Center"
-                                           IsVisible="{Binding IsAwaitingPermission}"
-                                           Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
+                                <views:AppIcon Kind="CircleQuestionMark" Size="14" Margin="16,0,0,0" VerticalAlignment="Center"
+                                               IsVisible="{Binding IsAwaitingPermission}"
+                                               Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
                             </Panel>
                         </Grid>
                         <Border x:Name="ToolCard" Classes="toolCard" IsVisible="{Binding HasCard}">
@@ -216,7 +215,7 @@
                                             Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}">
                                         <StackPanel Orientation="Horizontal" Spacing="5">
                                             <TextBlock Text="Open" VerticalAlignment="Center" />
-                                            <Path Classes="toolCardOpenArrow" />
+                                            <views:AppIcon Kind="ArrowUpRight" Size="12" Classes="toolCardOpenArrow" />
                                         </StackPanel>
                                     </Button>
                                 </StackPanel>
@@ -235,22 +234,18 @@
                                 ClipToBounds="True">
                             <StackPanel Spacing="6">
                                 <views:ChatKindHeader IsVisible="{Binding ShowsKindChip}"
-                                                      Label="{Binding KindChip}" IconData="{Binding HeaderIconData}" />
+                                                      Label="{Binding KindChip}" IconKind="{Binding HeaderIconKind}" />
                                 <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}"
                                         Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
-                                    <views:ChatKindHeader Label="{Binding SummaryLine}" IconData="{Binding HeaderIconData}">
+                                    <views:ChatKindHeader Label="{Binding SummaryLine}" IconKind="{Binding HeaderIconKind}">
                                         <views:ChatKindHeader.Status>
                                             <!-- Both chevrons are drawn centred in their own 12x12 box, so
                                                  the glyph must not carry a nudge of its own. -->
                                             <Panel Width="12" Height="12" VerticalAlignment="Center">
-                                                <Path Width="12" Height="12" Stretch="None"
-                                                      Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
-                                                      StrokeLineCap="Round" StrokeJoin="Round"
-                                                      Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
-                                                <Path Width="12" Height="12" Stretch="None"
-                                                      Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.8"
-                                                      StrokeLineCap="Round" StrokeJoin="Round"
-                                                      Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
+                                                <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
+                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                                <views:AppIcon Kind="ChevronRight" Size="12" IsVisible="{Binding !IsExpanded}"
+                                                               Foreground="{StaticResource KcapMutedBrush}" />
                                             </Panel>
                                         </views:ChatKindHeader.Status>
                                     </views:ChatKindHeader>
@@ -394,13 +389,15 @@
                         <Grid ColumnDefinitions="Auto,*,Auto">
                             <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
                                  is suppressed by default. -->
-                            <Button x:Name="AttachButton" Content="+" IsVisible="{Binding ShowsComposer}"
+                            <Button x:Name="AttachButton" IsVisible="{Binding ShowsComposer}"
                                     IsEnabled="{Binding Attachments.CanAttach}" ToolTip.Tip="{Binding Attachments.AttachHint}"
                                     ToolTip.ShowOnDisabled="True" AutomationProperties.Name="Attach files"
                                     Width="24" Height="24" Padding="0" FontSize="15" CornerRadius="7" Cursor="Hand"
                                     Margin="0,0,10,0" HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                     Background="Transparent" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
-                                    Foreground="{StaticResource KcapMutedBrush}" />
+                                    Foreground="{StaticResource KcapMutedBrush}">
+                                <views:AppIcon Kind="Plus" Size="16" />
+                            </Button>
                             <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             <Button x:Name="SendButton" Grid.Column="2" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"

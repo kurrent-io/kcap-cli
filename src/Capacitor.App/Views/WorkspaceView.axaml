@@ -48,9 +48,7 @@
                     </Border>
                     <Button x:Name="OpenInWebButton" Command="{Binding OpenInWebCommand}" IsVisible="{Binding HasAgent}"
                             Classes="kcapGhost kcapIcon" ToolTip.Tip="Open in web" AutomationProperties.Name="Open in web">
-                        <Path Width="14" Height="14" Stretch="Uniform" Stroke="{StaticResource KcapMutedBrush}" StrokeThickness="1.6"
-                              StrokeLineCap="Round" StrokeJoin="Round"
-                              Data="M14,3 H21 V10 M21,3 L11,13 M18,13 V20 H4 V6 H11" />
+                        <views:AppIcon Kind="ExternalLink" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
                     </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
                             IsVisible="{Binding HasAgent}" Padding="10,5" FontSize="13.5" />

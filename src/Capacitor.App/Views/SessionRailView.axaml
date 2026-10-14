@@ -124,8 +124,7 @@
                         <TextBlock x:Name="RailNewSessionShortcut" DockPanel.Dock="Right" Text="{x:Static views:ShortcutLabels.NewSession}" FontSize="11"
                                    Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="+" FontSize="15" FontWeight="SemiBold"
-                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                            <views:AppIcon Kind="Plus" Size="14" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                             <TextBlock Text="New session" FontSize="13" FontWeight="SemiBold"
                                        Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                         </StackPanel>
@@ -197,8 +196,7 @@
                                 Width="22" Height="22" Padding="0" CornerRadius="6" Margin="10,0,0,0"
                                 ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support"
                                 VerticalAlignment="Bottom">
-                            <PathIcon Width="14" Height="14" Foreground="{StaticResource KcapMutedBrush}"
-                                      Data="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 1.8a7.2 7.2 0 1 1 0 14.4 7.2 7.2 0 0 1 0-14.4zm0 3.2a3 3 0 0 0-3 3h1.8a1.2 1.2 0 1 1 1.7 1.1c-.9.4-1.4 1.1-1.4 2.2h1.8c0-.5.2-.8.7-1a3 3 0 0 0-1.6-5.3zM11 15.5v1.8h1.8v-1.8z" />
+                            <views:AppIcon Kind="CircleQuestionMark" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
                             <Button.Flyout>
                                 <!-- Same kcapPanel + ghost rows as the launcher pickers; MenuFlyout
                                      keeps Fluent MenuItem chrome (grey hover bar on this surface). -->
@@ -304,8 +302,10 @@
                                                 </Border>
                                                 <TextBlock Text="{Binding CountText}" Classes="sectionMeta" />
                                                 <Panel Classes="chevronBox" Width="12" Height="12">
-                                                    <Path Classes="chevron" Data="M3,4.5 L6,7.5 L9,4.5" IsVisible="{Binding IsExpanded}" />
-                                                    <Path Classes="chevron" Data="M4.5,3 L7.5,6 L4.5,9" IsVisible="{Binding !IsExpanded}" />
+                                                    <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron"
+                                                                   IsVisible="{Binding IsExpanded}" />
+                                                    <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron"
+                                                                   IsVisible="{Binding !IsExpanded}" />
                                                 </Panel>
                                             </StackPanel>
                                         </Grid>

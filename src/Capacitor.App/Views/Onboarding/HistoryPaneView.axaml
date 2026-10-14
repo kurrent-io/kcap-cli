@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.Onboarding.HistoryPaneView"
              x:DataType="vm:HistoryStepViewModel">
     <StackPanel Spacing="14">
@@ -13,8 +14,8 @@
                     <StackPanel Orientation="Horizontal" Spacing="14">
                         <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource FrAccentWashBrush}">
                             <Panel Classes="frSpinner">
-                                <Ellipse />
-                                <Path Classes.kcapSpinning="{Binding Looking}" />
+                                <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding Looking}"
+                                               Foreground="{StaticResource FrAccentBrush}" />
                             </Panel>
                         </Border>
                         <StackPanel VerticalAlignment="Center" Spacing="2">
@@ -49,9 +50,11 @@
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="x:String">
-                                        <TextBlock FontFamily="{StaticResource FrMonoFont}" FontSize="10.5">
-                                            <Run Text="✓ " Foreground="{StaticResource KcapSuccessBrush}" /><Run Text="{Binding}" Foreground="{StaticResource KcapTextBrush}" />
-                                        </TextBlock>
+                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                            <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
+                                            <TextBlock Text="{Binding}" FontFamily="{StaticResource FrMonoFont}" FontSize="10.5"
+                                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -157,8 +160,13 @@
                         Foreground="{StaticResource FrMutedBrush}" /><Run Text=" or " /><Run Text="excluded_repos" FontFamily="{StaticResource FrMonoFont}"
                         Foreground="{StaticResource FrMutedBrush}" /><Run Text=" in your configuration." />
                 </TextBlock>
-                <Button x:Name="RepoSettingsDocsButton" Classes="frLink" HorizontalAlignment="Left" Content="Repository settings in the docs →"
-                        Click="OnDocsClick" IsVisible="{Binding HasRepos}" Margin="0,-6,0,0" />
+                <Button x:Name="RepoSettingsDocsButton" Classes="frLink" HorizontalAlignment="Left"
+                        Click="OnDocsClick" IsVisible="{Binding HasRepos}" Margin="0,-6,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="Repository settings in the docs" VerticalAlignment="Center" />
+                        <icons:AppIcon Kind="ArrowRight" Size="14" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Border>
 

@@ -14,6 +14,7 @@
     <PackageVersion Include="DynamicData" Version="9.4.33" />
     <PackageVersion Include="Eventuous.SignalR.Client" Version="0.17.0" />
     <PackageVersion Include="Markdig" Version="1.4.0" />
+    <PackageVersion Include="Lucide.Avalonia" Version="0.2.24" />
     <PackageVersion Include="MarkView.Avalonia" Version="12.2.1" />
     <PackageVersion Include="MarkView.Avalonia.SyntaxHighlighting" Version="12.2.1" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.13" />

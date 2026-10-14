@@ -58,7 +58,7 @@ public class ToolGroupItemTests {
             await Assert.That(group.ShowsSummaryHeader).IsFalse();
             await Assert.That(group.ShowsKindChip).IsTrue();
             await Assert.That(group.KindChip).IsEqualTo("Command");
-            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
         });
     }
@@ -73,9 +73,9 @@ public class ToolGroupItemTests {
             group.Add(a);
             group.Add(b);
             b.Outcome = ToolOutcome.Done;
-            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
             a.Outcome = ToolOutcome.Done;
-            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
         });
     }
 

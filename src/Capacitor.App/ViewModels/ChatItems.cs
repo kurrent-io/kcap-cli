@@ -1,3 +1,4 @@
+using Lucide.Avalonia;
 using System.ComponentModel;
 using System.Reactive;
 using Avalonia.Collections;
@@ -31,7 +32,7 @@ public sealed class SystemNoteItem(string text, string label = SystemNoteItem.No
 
     public string Text { get; } = text;
     public string Label { get; } = label;
-    public string IconData => Label == NoteLabel ? ToolCategoryIcons.NoteIcon : ToolCategoryIcons.ForCategory(ToolCategory.Agent);
+    public LucideIconKind IconKind => Label == NoteLabel ? ToolCategoryIcons.NoteIcon : ToolCategoryIcons.ForCategory(ToolCategory.Agent);
 }
 
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
@@ -194,11 +195,11 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public string KindChip =>
         _calls.Count == 1 ? ToolSummary.ChipLabel(_calls[0].Category) : "";
 
-    public string HeaderIconData {
+    public LucideIconKind? HeaderIconKind {
         get {
             if (_calls.Count == 1) return ToolCategoryIcons.ForCategory(_calls[0].Category);
             var firstSettled = _calls.FirstOrDefault(c => c.IsSettled);
-            return firstSettled is null ? "" : ToolCategoryIcons.ForCategory(firstSettled.Category);
+            return firstSettled is null ? null : ToolCategoryIcons.ForCategory(firstSettled.Category);
         }
     }
 
@@ -246,7 +247,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     void RefreshLoneChrome() {
         this.RaisePropertyChanged(nameof(ShowsKindChip));
         this.RaisePropertyChanged(nameof(KindChip));
-        this.RaisePropertyChanged(nameof(HeaderIconData));
+        this.RaisePropertyChanged(nameof(HeaderIconKind));
     }
 
     void OnCallChanged(object? sender, PropertyChangedEventArgs e) {
@@ -278,7 +279,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         HasFailure = failed;
         HasSummary = settled.Count > 0;
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
-        this.RaisePropertyChanged(nameof(HeaderIconData));
+        this.RaisePropertyChanged(nameof(HeaderIconKind));
         NotifyVisible();
     }
 

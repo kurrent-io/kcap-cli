@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views">
     <!-- The browser first-run setup's register, for the onboarding pane only (fr-prefixed classes):
          an accent kept for what you can press, a rose eyebrow that is never interactive, and frosted
          cards over a purple bloom. Outcome colours stay the app's KcapSuccess / KcapDanger, so a
@@ -302,7 +303,6 @@
                      CheckBox.frCheck:checked:pointerover /template/ Path#CheckGlyph,
                      CheckBox.frCheck:checked:pressed /template/ Path#CheckGlyph">
         <Setter Property="Fill" Value="{StaticResource FrAccentOnBrush}" />
-        <Setter Property="Data" Value="M5.5 10.586 1.707 6.793A1 1 0 0 0 .293 8.207l4.5 4.5a1 1 0 0 0 1.414 0l11-11A1 1 0 0 0 15.793.293L5.5 10.586Z" />
         <Setter Property="Width" Value="10" />
         <Setter Property="Opacity" Value="1" />
     </Style>
@@ -409,11 +409,11 @@
         <Setter Property="Background" Value="{StaticResource FrAccentWashBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
     </Style>
-    <Style Selector="Path.frChoiceMark">
+    <Style Selector="views|AppIcon.frChoiceMark">
         <Setter Property="IsVisible" Value="False" />
     </Style>
-    <Style Selector="ListBox.frList ListBoxItem:selected Path.frChoiceMark,
-                     ListBox.frList ListBoxItem:selected:pointerover Path.frChoiceMark">
+    <Style Selector="ListBox.frList ListBoxItem:selected views|AppIcon.frChoiceMark,
+                     ListBox.frList ListBoxItem:selected:pointerover views|AppIcon.frChoiceMark">
         <Setter Property="IsVisible" Value="True" />
     </Style>
 
@@ -421,16 +421,5 @@
     <Style Selector="Panel.frSpinner">
         <Setter Property="Width" Value="20" />
         <Setter Property="Height" Value="20" />
-    </Style>
-    <Style Selector="Panel.frSpinner > Ellipse">
-        <Setter Property="Stroke" Value="{StaticResource FrControlBorderBrush}" />
-        <Setter Property="StrokeThickness" Value="2.5" />
-    </Style>
-    <Style Selector="Panel.frSpinner > Path">
-        <Setter Property="Stroke" Value="{StaticResource FrAccentBrush}" />
-        <Setter Property="StrokeThickness" Value="2.5" />
-        <Setter Property="StrokeLineCap" Value="Round" />
-        <Setter Property="Data" Value="M10,1.25 A8.75,8.75 0 0 1 18.75,10" />
-        <Setter Property="RenderTransformOrigin" Value="50%,50%" />
     </Style>
 </Styles>

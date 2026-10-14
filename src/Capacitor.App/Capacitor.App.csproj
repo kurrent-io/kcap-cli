@@ -23,6 +23,7 @@
         <PackageReference Include="ReactiveUI.Avalonia.Reactive" />
         <PackageReference Include="DynamicData" />
         <PackageReference Include="Markdig" />
+        <PackageReference Include="Lucide.Avalonia" />
         <PackageReference Include="MarkView.Avalonia" />
         <PackageReference Include="MarkView.Avalonia.SyntaxHighlighting" />
         <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
@@ -37,6 +38,8 @@
              assets (the product-mark bitmap) need an explicit AvaloniaResource entry
              to ship inside the assembly's avares:// resource set. -->
         <AvaloniaResource Include="Assets\kcap-icon.png" />
+        <!-- Embed icon licenses so they also travel with the single-file macOS bundle. -->
+        <AvaloniaResource Include="Assets\Lucide*-LICENSE.txt" />
     </ItemGroup>
     <ItemGroup>
         <AdditionalFiles Include="BannedSymbols.App.txt" Visible="false" />

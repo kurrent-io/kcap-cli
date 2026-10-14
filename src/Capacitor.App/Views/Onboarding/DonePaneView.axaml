@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              x:Class="Capacitor.App.Views.Onboarding.DonePaneView"
              x:DataType="vm:DoneStepViewModel">
@@ -31,8 +32,8 @@
 
                 <Border Classes="frWarning" IsVisible="{Binding FailedVisible}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                        <Path Data="M12 3 2 21h20L12 3Zm0 6v6m0 3v.5" Stroke="{StaticResource KcapDangerBrush}" StrokeThickness="2"
-                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Top" Margin="0,2,0,0" />
+                        <views:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                                       Foreground="{StaticResource KcapDangerBrush}" />
                         <StackPanel Grid.Column="1" Spacing="5">
                             <TextBlock x:Name="FailedTitleText" Classes="frLabel" FontSize="12.5" Text="{Binding FailedTitle}" />
                             <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}" Text="{Binding FailedBody}" />
@@ -102,8 +103,13 @@
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
             <TextBlock Classes="frNote" VerticalAlignment="Center"
                        Text="Agents you already have open pick this up when they next start." />
-            <Button Grid.Column="1" x:Name="OpenWorkspaceButton" Classes="frLink" Content="Open your workspace →"
-                    Command="{Binding OpenWorkspaceCommand}" IsVisible="{Binding WorkspaceVisible}" />
+            <Button Grid.Column="1" x:Name="OpenWorkspaceButton" Classes="frLink"
+                    Command="{Binding OpenWorkspaceCommand}" IsVisible="{Binding WorkspaceVisible}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="Open your workspace" VerticalAlignment="Center" />
+                    <views:AppIcon Kind="ArrowRight" Size="14" />
+                </StackPanel>
+            </Button>
         </Grid>
     </StackPanel>
 </UserControl>
