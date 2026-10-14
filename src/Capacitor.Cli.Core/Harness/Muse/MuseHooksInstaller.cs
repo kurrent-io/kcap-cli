@@ -34,7 +34,10 @@ public static class MuseHooksInstaller {
 
     public static SettingsEdit Install(string settingsPath) {
         var outcome = JsonSettingsFile.Edit(settingsPath, root => {
+            // All or nothing: a partial merge would read as installed while the install reports failure.
             if (root["hooks"] is not null and not JsonObject) return false;
+            if (root["hooks"] is JsonObject existing
+             && MuseHooksParser.MuseHookEvents.Any(e => existing[e] is not null and not JsonArray)) return false;
             var changed = false;
             if (root["schema_version"] is null) { root["schema_version"] = 1; changed = true; }
 
@@ -42,7 +45,6 @@ public static class MuseHooksInstaller {
             if (hooks is null) { hooks = new JsonObject(); root["hooks"] = hooks; changed = true; }
 
             foreach (var eventName in MuseHooksParser.MuseHookEvents) {
-                if (hooks[eventName] is not null and not JsonArray) continue;
                 var groups = hooks[eventName] as JsonArray;
                 if (groups is null) { groups = new JsonArray(); hooks[eventName] = groups; changed = true; }
                 if (groups.Any(MuseHooksParser.EntryReferencesCapacitorMuseHook)) continue;

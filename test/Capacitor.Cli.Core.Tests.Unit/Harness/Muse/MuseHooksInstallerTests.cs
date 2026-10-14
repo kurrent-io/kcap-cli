@@ -111,15 +111,16 @@ public class MuseHooksInstallerTests {
         await Assert.That(stop[0]).IsNull();
     }
 
+    /// <summary>Hooks on the other events would read as installed while the install reports failure.</summary>
     [Test]
-    public async Task An_event_whose_value_is_not_an_array_is_left_alone() {
-        var path = Tmp.CreateFile("settings.json", """{"schema_version":1,"hooks":{"Stop":"nope"}}""");
+    public async Task An_event_whose_value_is_not_an_array_refuses_the_whole_install() {
+        const string content = """{"schema_version":1,"hooks":{"Stop":"nope"}}""";
+        var path = Tmp.CreateFile("settings.json", content);
 
-        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Changed);
-        await Assert.That(MuseHooksInstaller.Remove(path)).IsEqualTo(SettingsEdit.Changed);
-
-        var root = (JsonObject)JsonNode.Parse(File.ReadAllText(path))!;
-        await Assert.That(root["hooks"]!["Stop"]!.GetValue<string>()).IsEqualTo("nope");
+        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Unchanged);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(content);
+        await Assert.That(MuseHooksInstaller.IsInstalled(path)).IsFalse();
+        await Assert.That(MuseHooksInstaller.ReadMarker(path)).IsNull();
     }
 
     [Test]
