@@ -169,7 +169,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
         _disposables.Add(Disposable.Create(() => Artefacts.OpenRequested -= ShowArtefacts));
-        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || loading)
+        // Keep the tab while a visible session's read is in flight; do not force it on for a
+        // session that has never shown documents (that would flash the strip then hide it).
+        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
             .Subscribe(show => {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;

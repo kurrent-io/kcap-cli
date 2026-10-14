@@ -140,8 +140,7 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    // Gated (OnTick): re-reads only when the stat key changed since the previous check — the key
-    // still advances even if the read that follows throws.
+    // Gated (OnTick): re-reads only when the stat key changed since the previous check.
     // PrimeAndRead (OnTabVisibleChanged true) always reads and always primes the baseline.
     // ReadOnly (RequestRefresh) never touches the stat key at all.
     (string? key, ConsentLogReadResult? result) ComputeOffUiThread(RefreshMode mode, string? previousKey) {
@@ -159,8 +158,16 @@ public sealed class ActivityViewModel : ReactiveObject, IDisposable {
 
     void ApplyOutcome(string? key, ConsentLogReadResult? result) {
         if (_disposed) return;
-        if (key is not null) _lastStatKey = key;
-        if (result is not null) Apply(result);
+        if (result is not null) {
+            // Prime the baseline only for a successful read — a throw leaves the key alone so the
+            // next gated tick can retry instead of treating the failed attempt as settled content.
+            if (key is not null) _lastStatKey = key;
+            Apply(result);
+            return;
+        }
+        // First open threw: leave Loading forever would be worse than the empty copy. Settle the
+        // gate without inventing rows; the next gated tick still retries (key was not primed).
+        if (!HasLoaded) HasLoaded = true;
     }
 
     /// Display rule keyed off Complete: a Complete read replaces the rows, including

@@ -224,7 +224,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
-        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || loading)
+        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
             .Subscribe(show => {
                 ShowsArtefactsTab = show;
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
