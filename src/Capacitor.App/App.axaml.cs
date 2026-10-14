@@ -239,7 +239,16 @@ public partial class App : Application {
             desktop.Exit += (_, _) => windowLifecycle.Dispose();
             if (OperatingSystem.IsWindows())
                 Program.Instance?.OnShowRequested(() => Dispatcher.UIThread.Post(() => {
-                    if (!_shutdownStarted) MainWindowAction(_coordinator)?.Invoke();
+                    if (_shutdownStarted) return;
+                    if (MainWindowAction(_coordinator) is { } showMain) {
+                        showMain();
+                        return;
+                    }
+                    // Onboarding and the startup screens come before the main window exists.
+                    var startup = _wizardWindow is { IsVisible: true } wizard ? wizard : desktop.Windows.FirstOrDefault(w => w.IsVisible);
+                    if (startup is null) return;
+                    if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
+                    startup.Activate();
                 }));
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
