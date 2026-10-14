@@ -1683,7 +1683,7 @@ kcap plugin install --muse          # merge kcap hooks into ~/.config/muse/setti
 kcap plugin remove --muse           # remove kcap hooks + MCP from settings.json (your own entries stay)
 ```
 
-Muse's hook payloads carry no transcript path, so kcap finds the session's log at `~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl` and the watcher (`vendor=muse`) tails it. Worker subagents and the `skill-reminder`, `goal-reminder` and `verify-reminder` child sessions keep their own logs under `subagent/`; the watcher records each as a labelled subagent of its parent. A Muse that crashes without firing `SessionEnd` is finalized when its `muse` process exits. `kcap status` lists any lifecycle event whose hook is missing. Historical `kcap import --muse` reads every session log under `~/.local/share/muse/sessions/` along with its subagent logs.
+Muse's hook payloads carry no transcript path, so kcap finds the session's log at `~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl` and the watcher (`vendor=muse`) tails it. Worker subagents and the `skill-reminder`, `goal-reminder` and `verify-reminder` child sessions keep their own logs under `subagent/`; the watcher records each as a labelled subagent of its parent. A Muse that crashes without firing `SessionEnd` is finalized when its `muse-bin-<version>` process exits. `kcap status` lists any lifecycle event whose hook is missing. Historical `kcap import --muse` reads every session log under `~/.local/share/muse/sessions/` along with its subagent logs.
 
 Cursor uses a single user-scope `hooks.json`; there is no project-scope variant.
 
