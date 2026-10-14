@@ -97,9 +97,9 @@ running notes file that every PR edits.
   passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
   key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip
   in warning orange reads as attention. `KcapPurple*` is in-flight execution (a running session or
-  an in-progress task and its count); selection and open items (the selected rail session, selected
-  master-list row, or open document in `PLAN`) use `KcapInfo*` / `KcapSelectionBrush`; labels and
-  keys use text/muted/surface tokens.
+  an in-progress task and its count); selection and open items (the selected rail session or selected
+  master-list row) use `KcapInfo*` / `KcapSelectionBrush`; labels and keys use text/muted/surface
+  tokens.
 - **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
   in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
   `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
@@ -247,8 +247,8 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
   glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
 - In-flight vs. selection: `KcapPurple*` is active execution (running session indicator, `InProgress`
   plan task dot and count); `KcapInfo*` / `KcapSelectionBrush` is selection and open state (selected
-  rail session, selected list row, open document row in `PLAN`). Everything else uses `KcapTextBrush`,
-  `KcapMutedBrush`, `KcapFaintBrush`, and surface brushes.
+  rail session, selected list row). Everything else uses `KcapTextBrush`, `KcapMutedBrush`,
+  `KcapFaintBrush`, and surface brushes.
 - Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
   `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
   Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
