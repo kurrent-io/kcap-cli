@@ -86,8 +86,12 @@ internal sealed class FakeMuseMspProcess : IMuseMspProcess {
     /// <summary>Lines the child writes to stdout as it exits on input close.</summary>
     public IReadOnlyList<string> LinesOnInputClose { get; set; } = [];
 
+    /// <summary>Invoked at the start of every <see cref="CloseInputAsync"/>, before it acts.</summary>
+    public Action? OnInputClose { get; set; }
+
     public Task CloseInputAsync(TimeSpan timeout) {
         InputCloseCalls++;
+        OnInputClose?.Invoke();
         if (!ExitsOnInputClose) return Task.CompletedTask;
 
         foreach (var line in LinesOnInputClose) Push(line);

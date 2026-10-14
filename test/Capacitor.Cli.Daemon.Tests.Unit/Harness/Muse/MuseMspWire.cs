@@ -21,4 +21,34 @@ internal static class MuseMspWire {
     /// <summary>An <c>approval/requested</c> notification for a shell command, offering only allow-once and abort.</summary>
     public const string ShellApprovalRequested =
         """{"jsonrpc":"2.0","method":"approval/requested","params":{"sessionId":"01a13696-9235-7b32-a9e5-3d3e067625e2","approvalId":"01a13696-a953-7bd0-bedc-c5bf1ef3b309","turnId":"01a13696-9344-7ed2-9040-df8ae372fbfc","taskId":"01a13696-a953-7bd0-bedc-c5bf1ef3b309","itemId":"01a13696-a953-7bd0-bedc-c5bf1ef3b309","toolCallId":"call_01a13696a650769391afaeda65128ee3","toolName":"bash","rawArgs":"{\"command\":\"echo hi > /workspace/out.txt\",\"description\":\"Write hi to probe file\"}","viewCursor":"v:01a13696-9235-7b32-a9e5-3d3e067625e2:12","sourceRange":{"stream":{"kind":"session","id":"01a13696-9235-7b32-a9e5-3d3e067625e2"},"first":{"id":"0b39c4e5-4be8-41f7-9037-fae59dbf0267","sequence":89},"last":{"id":"0b39c4e5-4be8-41f7-9037-fae59dbf0267","sequence":89}},"subject":{"kind":"shell","command":"echo hi > /workspace/out.txt","workspaceRoot":"/workspace/project","stages":[{"requirementId":{"approvalId":"01a13696-a953-7bd0-bedc-c5bf1ef3b309","sourceIndex":0},"position":1,"totalStages":1,"argv":["echo","hi"],"argvComplete":false,"resolution":{"kind":"unresolved"}}]},"currentRequirementId":{"approvalId":"01a13696-a953-7bd0-bedc-c5bf1ef3b309","sourceIndex":0},"availableChoices":[{"choiceId":"allow_once","label":"Allow once","decision":"approved","scope":"once"},{"choiceId":"abort","label":"Reject","decision":"abort","scope":"once","acceptsFeedback":true}],"protectedWrite":false,"judgeEscalated":false},"emittedAtMs":1791917205894}""";
+
+    /// <summary>The session id every captured session-one line carries.</summary>
+    public const string WireSessionId = "01a13695-0736-75d0-8f4e-f121585b8453";
+
+    /// <summary>The turn id the captured <c>turn/started</c> and <c>turn/completed</c> carry.</summary>
+    public const string WireTurnId = "01a13695-08e6-743d-8b85-cffc838ef5fc";
+
+    /// <summary>The <c>result</c> of the <c>session/start</c> response (wire line 5), session id <see cref="WireSessionId"/>.</summary>
+    public const string SessionStartResult =
+        """{"session":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","path":"/muse-home/sessions/2026/10/13/01a13695-0736-75d0-8f4e-f121585b8453/session.jsonl","status":"idle","activeTurnId":null,"createdAt":"2026-10-13T18:44:58.835129Z","updatedAt":"2026-10-13T18:44:58.835133Z","workspaceRoot":"/workspace/project","providerId":"meta","modelId":"muse-spark-1.3","turnCount":0,"forkedFrom":null,"sideFrom":null,"approvalMode":{"mode":"onRequest","source":"startup","lastCommandId":null},"createdByClient":{"name":"kcap_probe","version":"0.0.1"},"kind":"root","permissionState":{"profileId":":read-only","reviewerAuthority":"human","reviewerAttached":true}},"viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:1"}""";
+
+    /// <summary>A <c>turn/started</c> notification for <see cref="WireTurnId"/>.</summary>
+    public const string TurnStarted =
+        """{"jsonrpc":"2.0","method":"turn/started","params":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:3","sourceRange":{"stream":{"kind":"session","id":"01a13695-0736-75d0-8f4e-f121585b8453"},"first":{"id":"ae11effd-0271-4a3c-89f4-efc5caa94f26","sequence":25},"last":{"id":"ae11effd-0271-4a3c-89f4-efc5caa94f26","sequence":25}},"turnId":"01a13695-08e6-743d-8b85-cffc838ef5fc","commandId":"01a13695-08e6-743d-8b85-cffc838ef5fc"},"emittedAtMs":1791917099344}""";
+
+    /// <summary>A <c>session/tokenUsage</c> notification: 35873 input, 259 output, 166 reasoning tokens.</summary>
+    public const string SessionTokenUsage =
+        """{"jsonrpc":"2.0","method":"session/tokenUsage","params":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:6","sourceRange":{"stream":{"kind":"session","id":"01a13695-0736-75d0-8f4e-f121585b8453"},"first":{"id":"27919f6a-8f90-4fe3-9e4f-76d2c7378b9e","sequence":65},"last":{"id":"27919f6a-8f90-4fe3-9e4f-76d2c7378b9e","sequence":65}},"turnId":"01a13695-08e6-743d-8b85-cffc838ef5fc","modelId":"muse-spark-1.3","usage":{"inputTokens":35873,"outputTokens":259,"cachedTokens":0,"cacheWriteTokens":0,"cacheReadTokens":0,"reasoningTokens":166},"promptTokens":35873,"totalTokens":36132,"finishReason":"tool_calls","durationMs":3232,"cumulative":{"promptTokens":35873,"outputTokens":259,"totalTokens":36132}},"emittedAtMs":1791917102839}""";
+
+    /// <summary>A <c>session/statusChanged</c> notification to <c>idle</c>.</summary>
+    public const string StatusIdle =
+        """{"jsonrpc":"2.0","method":"session/statusChanged","params":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","status":"idle","permissionState":{"profileId":":read-only","reviewerAuthority":"human","reviewerAttached":true},"viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:50"},"emittedAtMs":1791917137754}""";
+
+    /// <summary>A <c>turn/completed</c> notification for <see cref="WireTurnId"/> with terminal <c>completed</c>.</summary>
+    public const string TurnCompleted =
+        """{"jsonrpc":"2.0","method":"turn/completed","params":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:50","sourceRange":{"stream":{"kind":"session","id":"01a13695-0736-75d0-8f4e-f121585b8453"},"first":{"id":"14304690-3679-47db-9e3e-95c84db08368","sequence":387},"last":{"id":"14304690-3679-47db-9e3e-95c84db08368","sequence":387}},"turnId":"01a13695-08e6-743d-8b85-cffc838ef5fc","terminal":"completed","durationMs":38428,"timeToFirstTokenMs":27150},"emittedAtMs":1791917137756}""";
+
+    /// <summary>A <c>session/closed</c> notification, reason <c>hostShutdown</c>.</summary>
+    public const string SessionClosed =
+        """{"jsonrpc":"2.0","method":"session/closed","params":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","reason":"hostShutdown","viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:51"},"emittedAtMs":1791917198979}""";
 }

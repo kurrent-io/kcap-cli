@@ -110,6 +110,16 @@ public class MuseMspTests {
     }
 
     [Test]
+    public async Task RequestReceipt_is_an_empty_result_for_the_server_request_id() {
+        using var frame = MuseMspFrame.TryParse(MuseMsp.RequestReceipt(7));
+
+        await Assert.That(frame!.IsResponse).IsTrue();
+        await Assert.That(frame.Id).IsEqualTo(7L);
+        await Assert.That(frame.Result!.Value.GetRawText()).IsEqualTo("{}");
+        await Assert.That(frame.Error).IsNull();
+    }
+
+    [Test]
     public async Task SessionStart_without_mcp_servers_has_no_config_member() {
         using var doc = Parse(MuseMsp.SessionStart(2, Cmd, Sid, "/work", "muse-spark-1.3", "meta", ":ask-me", "onRequest", null));
         var p = doc.RootElement.Obj("params")!.Value;

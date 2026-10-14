@@ -118,6 +118,11 @@ internal static class MuseMsp {
         return Request(id, "userInput/cancel", p);
     }
 
+    /// <summary>The empty presentation receipt a server-initiated <c>approval/request</c> or
+    /// <c>userInput/request</c> must be answered with; the decision itself travels as a command.</summary>
+    public static string RequestReceipt(long id) =>
+        new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = new JsonObject() }.ToJsonString();
+
     static JsonObject Command(string commandId, string sessionId) =>
         new() { ["commandId"] = commandId, ["sessionId"] = sessionId };
 
