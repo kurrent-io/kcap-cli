@@ -33,21 +33,6 @@
         <Setter Property="Padding" Value="12,9" />
         <Setter Property="Margin" Value="0,4,0,6" />
     </Style>
-    <Style Selector="Border.toolCardBadge">
-        <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="999" />
-        <Setter Property="Padding" Value="7,1" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
-    <Style Selector="Border.toolCardBadge > TextBlock">
-        <Setter Property="FontSize" Value="10" />
-        <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="LetterSpacing" Value="0.4" />
-        <Setter Property="LineHeight" Value="14" />
-        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
-    </Style>
     <Style Selector="Path.toolCardOpenArrow">
         <Setter Property="Width" Value="11" />
         <Setter Property="Height" Value="11" />
