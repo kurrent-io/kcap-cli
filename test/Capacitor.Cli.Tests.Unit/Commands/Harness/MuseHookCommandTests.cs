@@ -189,13 +189,14 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
     }
 
-    /// <summary>A daemon that resolved through a profile other than the active one: the hook selects that
-    /// profile, credential and server both, rather than the active profile's.</summary>
+    /// <summary>A daemon that resolved through a profile other than the active one: the hook takes that
+    /// profile's credential, and posts to the server the daemon recorded even after the profile's own URL
+    /// has been edited to another.</summary>
     [Test]
-    public async Task A_marker_profile_selects_that_profile_over_the_active_one() {
+    public async Task A_marker_profile_supplies_the_credential_while_the_marker_server_stays_the_destination() {
         StubHooks();
         StageParentLog();
-        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: _server.Url), "http://127.0.0.1:9", profile: "team-b");
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: "http://127.0.0.1:9"), _server.Url, profile: "team-b");
 
         var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
         var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
@@ -206,6 +207,18 @@ public class MuseHookCommandTests : IDisposable {
         await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
 
         await Assert.That(HookPosts("/hooks/session-start/muse").Count).IsEqualTo(1);
+    }
+
+    /// <summary>A marker that names a profile but no usable server leaves the destination to the profile.</summary>
+    [Test]
+    public async Task A_marker_profile_without_a_server_resolves_through_the_profile() {
+        WriteMarker(DaemonRoot("http://127.0.0.1:9", teamBUrl: _server.Url), "file:///etc/passwd", profile: "team-b");
+
+        var connection = MuseHookConnection.Resolve(SessionStartPayload("startup"), Home, _ => null);
+        var (_, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
+
+        await Assert.That(profiles.Name).IsEqualTo("team-b");
+        await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(AppConfig.NormalizeUrl(_server.Url!));
     }
 
     /// <summary>An environment that chooses a server by either means keeps it; the marker's root still applies.</summary>
@@ -629,7 +642,7 @@ public class MuseHookCommandTests : IDisposable {
     /// <summary>The process-level resolution a cleared-environment hook gets, as the composition root builds it.</summary>
     static async Task<(ConfigRoot Root, ProfileContext Profiles)> Resolve(MuseHookConnection connection, Func<ConfigRoot> fallback) {
         var root = connection.ConfigRootOr(fallback);
-        return (root, await AppConfig.ResolveActiveProfile([], root, connection.Apply(ProfileOverrides.None)));
+        return (root, connection.Bind(await AppConfig.ResolveActiveProfile([], root, connection.Apply(ProfileOverrides.None))));
     }
 
     string StageParentLog(params string[] lines) {

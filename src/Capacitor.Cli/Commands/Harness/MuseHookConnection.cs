@@ -30,23 +30,26 @@ sealed record MuseHookConnection(string? ConfigDir, string? ServerUrl, string? P
         if (!string.IsNullOrEmpty(env(ProfileOverrides.UrlVar)) || !string.IsNullOrEmpty(env(ProfileOverrides.ProfileVar)))
             return new(dir, null, null);
 
-        // The profile carries the credential; its server is the one the daemon resolved through it.
-        if (marker.Profile is { Length: > 0 } profile) return new(dir, null, profile);
-
         var url = Uri.TryCreate(marker.ServerUrl, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
             ? marker.ServerUrl
             : null;
 
-        return new(dir, url, null);
+        return new(dir, url, marker.Profile is { Length: > 0 } profile ? profile : null);
     }
 
     public ConfigRoot ConfigRootOr(Func<ConfigRoot> fromEnvironment) =>
         ConfigDir is { } dir ? new ConfigRoot(dir) : fromEnvironment();
 
     public ProfileOverrides Apply(ProfileOverrides fromEnvironment) =>
-        Profile is not null ? fromEnvironment with { Profile = Profile }
-      : ServerUrl is not null ? fromEnvironment with { Url = ServerUrl }
-      : fromEnvironment;
+        fromEnvironment with { Url = ServerUrl ?? fromEnvironment.Url, Profile = Profile ?? fromEnvironment.Profile };
+
+    /// <summary>A URL outranks a profile, which drops the profile's name and with it the credential. When
+    /// the marker pins both, the URL stays the destination and the profile still supplies the credential,
+    /// so editing the profile's URL mid-session cannot move the recording.</summary>
+    public ProfileContext Bind(ProfileContext resolved) =>
+        Profile is { } name && ServerUrl is not null && resolved.Snapshot.Profiles.TryGetValue(name, out var profile)
+            ? new(resolved.Resolution with { ProfileName = name, Profile = profile }, resolved.Snapshot)
+            : resolved;
 
     static string? PayloadSessionId(string payload) {
         try {
