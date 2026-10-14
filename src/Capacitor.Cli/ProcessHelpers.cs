@@ -896,9 +896,9 @@ static partial class ProcessHelpers {
     /// <summary>Agents whose process can sit between a kcap process and the harness it serves.</summary>
     static readonly string[] NestableAgents = ["grok", "claude", "codex", "gemini", "copilot", "cursor-agent", "kiro", "opencode", "pi", "mistral-vibe", "agy"];
 
-    /// <summary>The vendor of the nearest coding agent on the ppid chain from <paramref name="startPid"/>,
-    /// or null when none is found within <paramref name="maxHops"/>.</summary>
-    internal static string? NearestCodingAgent(
+    /// <summary>The nearest coding agent on the ppid chain from <paramref name="startPid"/>, or null when
+    /// none is found within <paramref name="maxHops"/> or the chain cannot be read.</summary>
+    internal static CodingAgentAncestor? NearestCodingAgent(
             int                                                 startPid,
             Func<int, (int ppid, IReadOnlyList<string> names)?> lookup,
             int                                                 maxHops = 16
@@ -906,14 +906,14 @@ static partial class ProcessHelpers {
         var pid = startPid;
         for (var hop = 0; hop < maxHops && pid > 1; hop++) {
             if (lookup(pid) is not { } info) return null;
-            if (NestableAgents.FirstOrDefault(vendor => info.names.Any(name => MatchesAgentName(name, vendor))) is { } found) return found;
+            if (NestableAgents.FirstOrDefault(vendor => info.names.Any(name => MatchesAgentName(name, vendor))) is { } found) return new(found, pid);
             pid = info.ppid;
         }
         return null;
     }
 
     /// <summary>The nearest coding agent above this process, or null.</summary>
-    internal static string? NearestCodingAgent() =>
+    internal static CodingAgentAncestor? NearestCodingAgent() =>
         GetParentPid() is { } parent ? NearestCodingAgent(parent, GetProcessInfo) : null;
 
     /// <summary>

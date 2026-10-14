@@ -148,52 +148,60 @@ public class HarnessRequesterContextTests {
 
     const string GrokSession = "01a1378d-a97a-7420-88e0-65e6248fe6d2";
 
+    static Func<CodingAgentAncestor?> Nearest(string? vendor) => () => vendor is null ? null : new CodingAgentAncestor(vendor, 4242);
+
+    static HarnessRequesterContext.Resolved ResolveUnder(string? nearest, Dictionary<string, string?> env, string? grokCwd = null) =>
+        HarnessRequesterContext.Resolve(Env(env), directoryExists: _ => true, Nearest(nearest), processCwd: pid => pid == 4242 ? grokCwd : null);
+
     /// <summary>Grok exports its own session to every MCP server it starts, but also passes through the
-    /// Claude and kcap ids of the shell that launched it; under Grok, Grok's id is the requester.</summary>
+    /// Claude and kcap ids of the shell that launched it; under Grok, Grok's id is the requester, working
+    /// in Grok's own directory.</summary>
     [Test]
-    public async Task Under_grok_the_grok_session_wins_over_inherited_claude_and_kcap_ids() {
-        var resolved = HarnessRequesterContext.Resolve(
-            Env(new() {
-                ["GROK_SESSION_ID"]        = GrokSession,
-                ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
-                ["CLAUDE_PROJECT_DIR"]     = "/repos/claude-checkout",
-                ["KCAP_SESSION_ID"]        = InheritedParentSession,
-            }),
-            directoryExists: _ => true,
-            nearestHarness: () => "grok");
+    public async Task Under_grok_the_grok_session_and_directory_win_over_inherited_claude_and_kcap_ones() {
+        var resolved = ResolveUnder("grok", new() {
+            ["GROK_SESSION_ID"]        = GrokSession,
+            ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+            ["CLAUDE_PROJECT_DIR"]     = "/repos/claude-checkout",
+            ["KCAP_SESSION_ID"]        = InheritedParentSession,
+        }, grokCwd: "/repos/grok-checkout");
 
         await Assert.That(resolved.SessionId).IsEqualTo("01a1378da97a742088e065e6248fe6d2");
-        await Assert.That(resolved.ProjectDir).IsNull();
+        await Assert.That(resolved.ProjectDir).IsEqualTo("/repos/grok-checkout");
     }
 
     /// <summary>A Claude Code session started from Grok's shell inherits Grok's id; its own wins.</summary>
     [Test]
     public async Task Under_claude_an_inherited_grok_session_is_ignored() {
-        var resolved = HarnessRequesterContext.Resolve(
-            Env(new() {
-                ["GROK_SESSION_ID"]        = GrokSession,
-                ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
-            }),
-            directoryExists: _ => true,
-            nearestHarness: () => "claude");
+        var resolved = ResolveUnder("claude", new() {
+            ["GROK_SESSION_ID"]        = GrokSession,
+            ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+        });
 
         await Assert.That(resolved.SessionId).IsEqualTo("11111111111111111111111111111111");
     }
 
-    /// <summary>Any other harness between this process and Grok inherited Grok's id, so it is not ours.</summary>
     [Test]
-    [Arguments("codex")]
-    [Arguments(null)]
-    public async Task Grok_session_is_trusted_only_when_grok_is_the_nearest_harness(string? nearest) {
-        var resolved = HarnessRequesterContext.Resolve(
-            Env(new() {
-                ["GROK_SESSION_ID"] = GrokSession,
-                ["KCAP_SESSION_ID"] = InheritedParentSession,
-            }),
-            directoryExists: _ => true,
-            nearestHarness: () => nearest);
+    public async Task Under_another_harness_an_inherited_grok_session_is_ignored() {
+        var resolved = ResolveUnder("codex", new() {
+            ["GROK_SESSION_ID"] = GrokSession,
+            ["KCAP_SESSION_ID"] = InheritedParentSession,
+        });
 
         await Assert.That(resolved.SessionId).IsEqualTo(InheritedParentSession);
+    }
+
+    /// <summary>With a Grok id present and no readable agent above, whose the inherited ids are cannot be
+    /// told, so none is claimed rather than one being attributed to the wrong session.</summary>
+    [Test]
+    public async Task An_unreadable_ancestry_claims_no_session() {
+        var resolved = ResolveUnder(null, new() {
+            ["GROK_SESSION_ID"]        = GrokSession,
+            ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession,
+            ["KCAP_SESSION_ID"]        = InheritedParentSession,
+        });
+
+        await Assert.That(resolved.SessionId).IsNull();
+        await Assert.That(resolved.ProjectDir).IsNull();
     }
 
     [Test]
@@ -202,7 +210,8 @@ public class HarnessRequesterContextTests {
         HarnessRequesterContext.Resolve(
             Env(new() { ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession }),
             directoryExists: _ => true,
-            nearestHarness: () => { walks++; return "grok"; });
+            nearestAgent: () => { walks++; return new CodingAgentAncestor("grok", 1); },
+            processCwd: _ => null);
 
         await Assert.That(walks).IsEqualTo(0);
     }

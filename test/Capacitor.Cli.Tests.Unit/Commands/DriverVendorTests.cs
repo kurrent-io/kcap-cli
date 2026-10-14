@@ -52,4 +52,19 @@ public class DriverVendorTests {
     [Arguments(null)]
     public async Task A_blank_stamp_falls_back_to_env(string? stamp)
         => await Assert.That(DriverVendor.Infer(stamp, Env(("CLAUDE_CODE_SESSION_ID", "s1")))).IsEqualTo("claude");
+
+    [Test]
+    public async Task Under_grok_the_driver_is_grok_even_with_inherited_claude_ids()
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => new CodingAgentAncestor("grok", 7)))
+            .IsEqualTo("grok");
+
+    [Test]
+    public async Task Under_claude_an_inherited_grok_id_does_not_name_the_driver()
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => new CodingAgentAncestor("claude", 7)))
+            .IsEqualTo("claude");
+
+    [Test]
+    public async Task An_unreadable_ancestry_names_no_driver()
+        => await Assert.That(DriverVendor.Infer(null, Env(("GROK_SESSION_ID", "g1"), ("CLAUDE_CODE_SESSION_ID", "s1")), () => null))
+            .IsNull();
 }

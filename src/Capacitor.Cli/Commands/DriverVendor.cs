@@ -23,9 +23,21 @@ public static class DriverVendor {
     /// <summary>Env-only seam kept for the existing precedence tests.</summary>
     internal static string? Infer(Func<string, string?> getEnv) => Infer(null, getEnv);
 
-    internal static string? Infer(string? driverArg, Func<string, string?> getEnv) {
+    internal static string? Infer(string? driverArg, Func<string, string?> getEnv) =>
+        Infer(driverArg, getEnv, ProcessHelpers.NearestCodingAgent);
+
+    /// <param name="nearestAgent">Asked only when a Grok session is in the environment: Grok's id is
+    /// passed on to everything its processes start, so it names the driver only when Grok is nearest.</param>
+    internal static string? Infer(string? driverArg, Func<string, string?> getEnv, Func<CodingAgentAncestor?> nearestAgent) {
         // Stamp wins when present and recognised — it is deterministic, unlike inherited env.
         if (Normalize(driverArg) is { } stamped) return stamped;
+
+        if (HarnessRequesterContext.GrokSessionIn(getEnv) is not null) {
+            switch (nearestAgent()) {
+                case null:              return null;
+                case { Vendor: "grok" }: return "grok";
+            }
+        }
 
         var claude = !string.IsNullOrWhiteSpace(getEnv(HarnessRequesterContext.ClaudeSessionIdVar));
         var codex  = !string.IsNullOrWhiteSpace(getEnv(HarnessRequesterContext.CodexThreadIdVar));
@@ -42,7 +54,7 @@ public static class DriverVendor {
     // kcap nonetheless stamps, since it exports no distinctive env var. Validating here keeps a
     // malformed or stale registration from echoing arbitrary text as driver_vendor to the model.
     static readonly HashSet<string> NameableVendors =
-        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex").Append("mistral-vibe"),
+        new(HarnessMcpProjections.DriverStampVendors.Append("claude").Append("codex").Append("mistral-vibe").Append("grok"),
             StringComparer.Ordinal);
 
     static string? Normalize(string? v) =>

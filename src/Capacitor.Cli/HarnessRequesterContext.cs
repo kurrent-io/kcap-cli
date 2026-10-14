@@ -57,6 +57,9 @@ static class HarnessRequesterContext {
     /// the nearest harness above this process.</summary>
     internal const string GrokSessionIdVar = "GROK_SESSION_ID";
 
+    internal static string? GrokSessionIn(Func<string, string?> getEnv) =>
+        getEnv(GrokSessionIdVar) is { } id && !string.IsNullOrWhiteSpace(id) ? id : null;
+
     /// <param name="SessionId">
     /// The requesting session in the canonical form the server files it under (a GUID as its
     /// 32-hex form, an opaque vendor id unchanged). Null when no harness signal is available.
@@ -70,17 +73,28 @@ static class HarnessRequesterContext {
     internal static Resolved Resolve() => Resolve(Environment.GetEnvironmentVariable, Directory.Exists);
 
     internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists) =>
-        Resolve(getEnv, directoryExists, ProcessHelpers.NearestCodingAgent);
+        Resolve(getEnv, directoryExists, ProcessHelpers.NearestCodingAgent, ProcessHelpers.GetProcessCwd);
 
     /// <summary>
     /// Env-injected overload so the precedence is unit-testable without mutating the process
     /// environment: pass a lookup that returns the values a real harness would export.
     /// </summary>
-    /// <param name="nearestHarness">The vendor of the nearest coding agent above this process, asked only
-    /// when a Grok session is in the environment.</param>
-    internal static Resolved Resolve(Func<string, string?> getEnv, Func<string, bool> directoryExists, Func<string?> nearestHarness) {
-        if (getEnv(GrokSessionIdVar) is { } grokSessionId && !string.IsNullOrWhiteSpace(grokSessionId) && nearestHarness() == "grok")
-            return new(SessionIds.Canonical(grokSessionId), ProjectDir: null);
+    /// <param name="nearestAgent">The nearest coding agent above this process, asked only when a Grok
+    /// session is in the environment.</param>
+    /// <param name="processCwd">A process's working directory, which for Grok is its project.</param>
+    internal static Resolved Resolve(
+            Func<string, string?> getEnv, Func<string, bool> directoryExists,
+            Func<CodingAgentAncestor?> nearestAgent, Func<int, string?> processCwd) {
+        if (GrokSessionIn(getEnv) is { } grokSessionId) {
+            switch (nearestAgent()) {
+                // Whose the inherited ids are cannot be told, so none of them is claimed.
+                case null:
+                    return new(SessionId: null, ProjectDir: null);
+                case { Vendor: "grok" } grok:
+                    var cwd = processCwd(grok.Pid);
+                    return new(SessionIds.Canonical(grokSessionId), cwd is { Length: > 0 } && directoryExists(cwd) ? cwd : null);
+            }
+        }
 
         var harnessSessionId = getEnv(ClaudeSessionIdVar);
         var nestedHarness    = getEnv(CodexThreadIdVar);

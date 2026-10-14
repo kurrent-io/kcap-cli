@@ -8,7 +8,7 @@ public class NearestCodingAgentTests {
         // mcp(100) -> grok(50) -> zsh(40) -> claude(30)
         var lookup = ProcTable.Of((50, 40, "grok"), (40, 30, "-zsh"), (30, 1, "claude"));
 
-        await Assert.That(ProcessHelpers.NearestCodingAgent(50, lookup)).IsEqualTo("grok");
+        await Assert.That(ProcessHelpers.NearestCodingAgent(50, lookup)).IsEqualTo(new CodingAgentAncestor("grok", 50));
     }
 
     [Test]
@@ -16,7 +16,7 @@ public class NearestCodingAgentTests {
         // mcp(100) -> claude(60) -> bash(55) -> grok(50)
         var lookup = ProcTable.Of((60, 55, "claude"), (55, 50, "bash"), (50, 1, "grok"));
 
-        await Assert.That(ProcessHelpers.NearestCodingAgent(60, lookup)).IsEqualTo("claude");
+        await Assert.That(ProcessHelpers.NearestCodingAgent(60, lookup)).IsEqualTo(new CodingAgentAncestor("claude", 60));
     }
 
     [Test]
