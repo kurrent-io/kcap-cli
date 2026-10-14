@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Capacitor.Cli.Core.NextWork;
 
@@ -14,17 +15,17 @@ public static class NextWorkPromptBuilder {
         switch (row.ResolvedGroup) {
             case "waiting":
                 if (string.Equals(row.Arm, "ReviewRequested", StringComparison.OrdinalIgnoreCase))
-                    sb.Append($"Review {label}.");
+                    sb.Append(CultureInfo.InvariantCulture, $"Review {label}.");
                 else if (string.Equals(row.Arm, "ApprovedUnmerged", StringComparison.OrdinalIgnoreCase))
-                    sb.Append($"Check {label} and get it ready to merge.");
+                    sb.Append(CultureInfo.InvariantCulture, $"Check {label} and get it ready to merge.");
                 else
-                    sb.Append($"Follow up on {label}.");
+                    sb.Append(CultureInfo.InvariantCulture, $"Follow up on {label}.");
                 break;
             case "finish":
-                sb.Append($"Continue work on {label}.");
+                sb.Append(CultureInfo.InvariantCulture, $"Continue work on {label}.");
                 break;
             default:
-                sb.Append($"Work on {label}.");
+                sb.Append(CultureInfo.InvariantCulture, $"Work on {label}.");
                 break;
         }
 
@@ -67,7 +68,9 @@ public static class NextWorkPromptBuilder {
                     : $"Fix failing CI: {trimmed}\n\nRead the failing job log first before making changes.",
             StartFromBlueprintKind.ExploreIdea => trimmed.Length == 0
                 ? "Explore this repository and help shape an idea. Do not create a branch unless asked."
-                : trimmed,
+                : trimmed.Contains("Do not create a branch", StringComparison.OrdinalIgnoreCase)
+                    ? trimmed
+                    : $"{trimmed}\n\nDo not create a branch unless asked.",
             _ => trimmed,
         };
     }

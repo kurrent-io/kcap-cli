@@ -137,36 +137,14 @@ public partial class LauncherPaneView : UserControl {
         flyout.ShowAt(anchor);
     }
 
-    void OnWhatsNextCardClick(object? sender, RoutedEventArgs e) {
-        if (DataContext is not HomeViewModel vm) return;
-        if ((sender as Control)?.DataContext is not WhatsNextCardViewModel card) return;
-        _ = SelectCardObservedAsync(vm, card);
-    }
-
-    static async Task SelectCardObservedAsync(HomeViewModel vm, WhatsNextCardViewModel card) {
-        try {
-            await vm.SelectWhatsNextCardAsync(card);
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: select whats-next card failed: {ex}");
-        }
-    }
-
-    void OnStartFromBlueprintClick(object? sender, RoutedEventArgs e) {
-        if (DataContext is not HomeViewModel vm) return;
-        if ((sender as Control)?.DataContext is not StartFromBlueprintViewModel blueprint) return;
-        vm.SelectBlueprint(blueprint);
-    }
-
     void OnLanePointerEntered(object? sender, PointerEventArgs e) {
         if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
             lane.Pin();
     }
 
     void OnLanePointerExited(object? sender, PointerEventArgs e) {
-        if ((sender as Control)?.DataContext is not WhatsNextLaneViewModel lane) return;
-        lane.Release();
-        if (!lane.IsPinned && DataContext is HomeViewModel vm)
-            vm.TryApplyQueuedFeedOnUnpin();
+        if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
+            lane.Release();
     }
 
     void OnLaneGotFocus(object? sender, RoutedEventArgs e) {
@@ -175,10 +153,8 @@ public partial class LauncherPaneView : UserControl {
     }
 
     void OnLaneLostFocus(object? sender, RoutedEventArgs e) {
-        if ((sender as Control)?.DataContext is not WhatsNextLaneViewModel lane) return;
-        lane.Release();
-        if (!lane.IsPinned && DataContext is HomeViewModel vm)
-            vm.TryApplyQueuedFeedOnUnpin();
+        if ((sender as Control)?.DataContext is WhatsNextLaneViewModel lane)
+            lane.Release();
     }
 
     Button RepositoryRow(HomeViewModel vm, RepositoryOption option, IBrush muted, Flyout flyout) {

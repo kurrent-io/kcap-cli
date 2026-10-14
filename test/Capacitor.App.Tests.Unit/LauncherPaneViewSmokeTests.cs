@@ -692,9 +692,9 @@ public class LauncherPaneViewSmokeTests {
         });
     }
 
-    sealed class FakeNextWorkSource(NextWorkFeedDto feed) : INextWorkSource {
-        public Task<NextWorkRead> FetchAsync(int limit = 20, CancellationToken ct = default) =>
-            Task.FromResult(NextWorkRead.Success(feed));
+    sealed class FakeNextWorkSource(IReadOnlyList<Capacitor.Cli.Core.NextWork.NextWorkFeedRowDto> items) : INextWorkSource {
+        public Task<Capacitor.Cli.Core.NextWork.NextWorkRead> ReadAsync(CancellationToken ct) =>
+            Task.FromResult(new Capacitor.Cli.Core.NextWork.NextWorkRead(Capacitor.Cli.Core.NextWork.NextWorkReadKind.Ready, items));
     }
 
     [Test]
@@ -707,28 +707,31 @@ public class LauncherPaneViewSmokeTests {
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
 
-            var feed = new NextWorkFeedDto("2026-10-14T00:00:00Z", [
-                new NextWorkFeedRowDto(
-                    "pr:0123456789abcdef#42", "ReviewRequested", "PR #42 · Auth refresh",
-                    "0123456789abcdef", 100, "Requested from you.", [],
-                    Group: "waiting", LaunchPrompt: "Review PR #42"),
-                new NextWorkFeedRowDto(
-                    "wi:AI-700", "FinishYours", "AI-700 · Launcher UX",
-                    "0123456789abcdef", 90, "CI green.", [],
-                    Group: "finish", WorkItemId: "wi-700", LaunchPrompt: "Finish AI-700"),
-                new NextWorkFeedRowDto(
-                    "le:le-1", "LooseEnd", "Unlinked branch",
-                    "0123456789abcdef", 70, "Recent commit.", [],
-                    Group: "pick_up", LaunchPrompt: "Pick up loose end")
-            ]);
+            Capacitor.Cli.Core.NextWork.NextWorkFeedRowDto[] rows = [
+                new() {
+                    TargetKey = "pr:0123456789abcdef#42", Arm = "ReviewRequested", TargetLabel = "PR #42 · Auth refresh",
+                    RepoHash = "0123456789abcdef", Rank = 1, Because = "Requested from you.",
+                    Group = "waiting", LaunchPrompt = "Review PR #42"
+                },
+                new() {
+                    TargetKey = "wi:AI-700", Arm = "FinishYours", TargetLabel = "AI-700 · Launcher UX",
+                    RepoHash = "0123456789abcdef", Rank = 2, Because = "CI green.",
+                    Group = "finish", WorkItemId = "wi-700", LaunchPrompt = "Finish AI-700"
+                },
+                new() {
+                    TargetKey = "le:le-1", Arm = "LooseEnd", TargetLabel = "Unlinked branch",
+                    RepoHash = "0123456789abcdef", Rank = 3, Because = "Recent commit.",
+                    Group = "pick_up", LaunchPrompt = "Pick up loose end"
+                }
+            ];
 
             using var vm = new HomeViewModel(
                 service, new AppStateStore(path), new RecordingLaunchClient(),
                 () => Task.FromResult(Array.Empty<string>()), TimeProvider.System,
-                nextWork: new FakeNextWorkSource(feed));
+                nextWork: new FakeNextWorkSource(rows));
             await vm.RefreshWhatsNextAsync();
 
-            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 700 };
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 1000 };
             window.Show();
             Settle(window);
 

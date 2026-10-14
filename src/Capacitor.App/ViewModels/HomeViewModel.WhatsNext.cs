@@ -5,7 +5,6 @@ using System.Text.RegularExpressions;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.NextWork;
-using DynamicData;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
@@ -152,7 +151,7 @@ public sealed partial class HomeViewModel {
                 .DistinctUntilChanged()
                 .Where(connected => connected)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => _ = RefreshWhatsNextAsync())
+                .Subscribe(connected => { _ = RefreshWhatsNextAsync(); })
                 .DisposeWith(_disposables);
         }
 
@@ -248,23 +247,19 @@ public sealed partial class HomeViewModel {
             _suppressGoalPastedLinkDetection = false;
         }
 
-        if (card.ContinuesInSameWorktree && !string.IsNullOrWhiteSpace(card.WorktreePath)) {
-            var mainRoot = GitRepository.ResolveMainRepoRoot(card.WorktreePath);
-            if (!string.IsNullOrWhiteSpace(mainRoot))
-                await SelectRepositoryCoreAsync(mainRoot, fromPastedLink: false, preserveWorktree: true);
-            SelectedExistingWorktreePath = card.WorktreePath;
-            SelectedWorktreeMode         = WorktreeLaunchMode.Automatic;
-            return;
-        }
-
-        SelectedExistingWorktreePath = null;
-        SelectedWorktreeMode         = WorktreeLaunchMode.Automatic;
-
+        string? resolvedRepo = null;
         if (!string.IsNullOrWhiteSpace(card.RepoHash) && !RemoteMachineSelected) {
             var (_, localPaths) = await GatherLocalRepoDataAsync();
-            if (_repoHashIndex.TryResolveByRepoHash(card.RepoHash, localPaths) is { Length: > 0 } matchedRepo)
-                await SelectRepositoryCoreAsync(matchedRepo, fromPastedLink: false, preserveWorktree: false);
+            resolvedRepo = _repoHashIndex.TryResolveByRepoHash(card.RepoHash, localPaths);
         }
+        if (string.IsNullOrWhiteSpace(resolvedRepo) && card.ContinuesInSameWorktree && !string.IsNullOrWhiteSpace(card.WorktreePath))
+            resolvedRepo = GitRepository.ResolveMainRepoRoot(card.WorktreePath);
+
+        if (!string.IsNullOrWhiteSpace(resolvedRepo))
+            await SelectRepositoryCoreAsync(resolvedRepo, fromPastedLink: false, preserveWorktree: card.ContinuesInSameWorktree);
+
+        SelectedExistingWorktreePath = card.ContinuesInSameWorktree ? card.WorktreePath : null;
+        SelectedWorktreeMode         = WorktreeLaunchMode.Automatic;
     }
 
     void ClearSelectedWhatsNextCard(bool clearGoal) {
@@ -398,18 +393,17 @@ public sealed partial class HomeViewModel {
             if (!string.IsNullOrWhiteSpace(sessionId) && !seenSessionIds.Add(sessionId)) continue;
 
             var localAgent   = _daemon.Agents.Items.FirstOrDefault(a => string.Equals(a.Id, row.Id, StringComparison.Ordinal));
-            var worktreePath = localAgent?.WorktreePath ?? (row.Origin == AgentOrigin.Local ? row.RepoPath : null);
+            var worktreePath = row.WorktreePath ?? localAgent?.WorktreePath ?? (row.Origin == AgentOrigin.Local ? row.RepoPath : null);
             var continues    = !string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath);
             var title        = string.IsNullOrWhiteSpace(row.Title) ? $"{row.Vendor} session" : row.Title.Trim();
-            var statusDetail = string.IsNullOrWhiteSpace(row.Branch) ? $"Status: {row.Status}." : $"Branch {row.Branch} · {row.Status}.";
+            var statusDetail = $"Status: {row.Status}.";
             var subtitle     = continues && !statusDetail.Contains("same worktree", StringComparison.OrdinalIgnoreCase)
                 ? $"{statusDetail} Continues in the same worktree."
                 : statusDetail;
-            var repoHash = !string.IsNullOrWhiteSpace(row.RepoOwner) && !string.IsNullOrWhiteSpace(row.RepoName)
-                ? RepoHashHelper.ComputeRepoHash(row.RepoOwner, row.RepoName)
-                : !string.IsNullOrWhiteSpace(row.RepoPath)
+            var repoHash = TryComputeRepoHashFromGroupKey(row.RepoGroupKey)
+                ?? (!string.IsNullOrWhiteSpace(row.RepoPath)
                     ? _repoHashIndex.TryGetRepoHash(GitRepository.ResolveMainRepoRoot(row.RepoPath))
-                    : null;
+                    : null);
             var prompt = $"Continue work on {title}.";
 
             yield return new WhatsNextCardViewModel(
@@ -430,6 +424,16 @@ public sealed partial class HomeViewModel {
                 IsLaunching = IsTargetLaunchInFlight(targetKey),
             };
         }
+    }
+
+    static string? TryComputeRepoHashFromGroupKey(string? repoGroupKey) {
+        if (string.IsNullOrWhiteSpace(repoGroupKey)) return null;
+        var slash = repoGroupKey.IndexOf('/');
+        if (slash <= 0 || slash == repoGroupKey.Length - 1 || repoGroupKey.Contains('@')) return null;
+        var owner = repoGroupKey[..slash];
+        var repo  = repoGroupKey[(slash + 1)..];
+        if (repo.Contains('/')) return null;
+        return RepoHashHelper.ComputeRepoHash(owner, repo);
     }
 
     string? ResolveLocalWorktreePath(string? rowWorktreePath, string? sessionId) {

@@ -22,11 +22,17 @@ public sealed class WhatsNextLaneViewModel : ReactiveObject {
     public string Title    { get; }
 
     public IReadOnlyList<WhatsNextCardViewModel> AllCards => _allCards;
+    public int TotalCount => _allCards.Count;
 
     public IReadOnlyList<WhatsNextCardViewModel> VisibleCards {
         get => _visibleCards;
-        private set => this.RaiseAndSetIfChanged(ref _visibleCards, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _visibleCards, value);
+            this.RaisePropertyChanged(nameof(VisibleItems));
+        }
     }
+
+    public IReadOnlyList<WhatsNextCardViewModel> VisibleItems => _visibleCards;
 
     public bool IsExpanded {
         get => _isExpanded;
@@ -40,8 +46,10 @@ public sealed class WhatsNextLaneViewModel : ReactiveObject {
     public bool IsPinned => _pinCount > 0;
     public bool IsVisible => _visibleCards.Count > 0;
     public bool ShowMoreVisible => _allCards.Count > DefaultVisibleCap;
+    public bool CanExpand => ShowMoreVisible;
     public int HiddenCount => Math.Max(0, _allCards.Count - DefaultVisibleCap);
     public string ExpandButtonText => _isExpanded ? "Show less" : $"Show more ({HiddenCount})";
+    public string ExpandButtonLabel => ExpandButtonText;
 
     public ReactiveCommand<Unit, Unit> ToggleExpandCommand { get; }
 
@@ -71,6 +79,7 @@ public sealed class WhatsNextLaneViewModel : ReactiveObject {
         if (_allCards.Count <= DefaultVisibleCap && _isExpanded)
             _isExpanded = false;
         this.RaisePropertyChanged(nameof(AllCards));
+        this.RaisePropertyChanged(nameof(TotalCount));
         this.RaisePropertyChanged(nameof(IsExpanded));
         RecomputeVisible();
     }
@@ -83,7 +92,9 @@ public sealed class WhatsNextLaneViewModel : ReactiveObject {
             : _allCards.Take(DefaultVisibleCap).ToList();
         this.RaisePropertyChanged(nameof(IsVisible));
         this.RaisePropertyChanged(nameof(ShowMoreVisible));
+        this.RaisePropertyChanged(nameof(CanExpand));
         this.RaisePropertyChanged(nameof(HiddenCount));
         this.RaisePropertyChanged(nameof(ExpandButtonText));
+        this.RaisePropertyChanged(nameof(ExpandButtonLabel));
     }
 }

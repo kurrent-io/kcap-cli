@@ -35,7 +35,7 @@
                         <DataTemplate x:DataType="vm:WhatsNextCardViewModel">
                             <Button Classes="kcapWhatsNextCard"
                                     Classes.selected="{Binding IsSelected}"
-                                    Click="OnWhatsNextCardClick"
+                                    Command="{Binding SelectCommand}"
                                     ToolTip.Tip="{Binding TooltipText}">
                                 <StackPanel Spacing="4">
                                     <TextBlock Text="{Binding Title}"
@@ -242,7 +242,7 @@
                             <DataTemplate x:DataType="vm:StartFromBlueprintViewModel">
                                 <Button Classes="kcapStartFromCard"
                                         Classes.selected="{Binding IsSelected}"
-                                        Click="OnStartFromBlueprintClick">
+                                        Command="{Binding SelectCommand}">
                                     <Panel>
                                         <Rectangle Classes="startFromDash"
                                                    RadiusX="8" RadiusY="8"

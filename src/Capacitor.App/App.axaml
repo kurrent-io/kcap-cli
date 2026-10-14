@@ -621,8 +621,12 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
-        <Style Selector="Button.kcapWhatsNextCard.selected,
-                         Button.kcapWhatsNextCard.selected /template/ ContentPresenter#PART_ContentPresenter,
+        <Style Selector="Button.kcapWhatsNextCard.selected">
+            <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.kcapWhatsNextCard.selected /template/ ContentPresenter#PART_ContentPresenter,
                          Button.kcapWhatsNextCard.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.kcapWhatsNextCard.selected:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />

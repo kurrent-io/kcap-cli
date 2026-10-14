@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.NextWork;
 
 namespace Capacitor.App.Tests.Unit;
@@ -12,10 +13,10 @@ public class HomeViewModelWhatsNextTests {
     const string ValidAgentId = "0123456789abcdef0123456789abcdef";
 
     sealed class ConfigurableNextWorkSource : INextWorkSource {
-        public NextWorkRead Next { get; set; } = NextWorkRead.Success(new NextWorkFeedDto("2026-10-14T00:00:00Z", []));
+        public NextWorkRead Next { get; set; } = new(NextWorkReadKind.Ready, []);
         public int Calls { get; private set; }
 
-        public Task<NextWorkRead> FetchAsync(int limit = 20, CancellationToken ct = default) {
+        public Task<NextWorkRead> ReadAsync(CancellationToken ct) {
             Calls++;
             return Task.FromResult(Next);
         }
@@ -34,14 +35,14 @@ public class HomeViewModelWhatsNextTests {
     [Test]
     public async Task Partitions_feed_into_Waiting_Finish_and_PickUp_lanes_and_excludes_housekeeping() {
         var source = new ConfigurableNextWorkSource {
-            Next = NextWorkRead.Success(new NextWorkFeedDto("2026-10-14T00:00:00Z", [
-                new NextWorkFeedRowDto("pr:hash1#1", "ReviewRequested", "PR #1", "hash1", 100, "Waiting on review", []),
-                new NextWorkFeedRowDto("pr:hash1#2", "ApprovedUnmerged", "PR #2", "hash1", 95, "Approved and green", []),
-                new NextWorkFeedRowDto("wi:AI-1", "FinishYours", "AI-1 · Feature", "hash1", 85, "Needs push", [], WorkItemId: "wi-1"),
-                new NextWorkFeedRowDto("session:s-1", "ResumeInterrupted", "Interrupted session", "hash1", 80, "Stopped mid-turn", [], SessionId: "s-1"),
-                new NextWorkFeedRowDto("le:le-1", "LooseEnd", "Orphan branch", "hash1", 60, "Unlinked commits", []),
-                new NextWorkFeedRowDto("evals:hash1", "EvalRegression", "Eval regression", "hash1", 40, "Eval score dropped", [], Group: "housekeeping")
-            ]))
+            Next = new NextWorkRead(NextWorkReadKind.Ready, [
+                new NextWorkFeedRowDto { TargetKey = "pr:hash1#1", Arm = "ReviewRequested", TargetLabel = "PR #1", RepoHash = "hash1", Rank = 1, Because = "Waiting on review" },
+                new NextWorkFeedRowDto { TargetKey = "pr:hash1#2", Arm = "ApprovedUnmerged", TargetLabel = "PR #2", RepoHash = "hash1", Rank = 2, Because = "Approved and green" },
+                new NextWorkFeedRowDto { TargetKey = "wi:AI-1", Arm = "FinishYours", TargetLabel = "AI-1 · Feature", RepoHash = "hash1", Rank = 3, Because = "Needs push", WorkItemId = "wi-1" },
+                new NextWorkFeedRowDto { TargetKey = "session:s-1", Arm = "ResumeInterrupted", TargetLabel = "Interrupted session", RepoHash = "hash1", Rank = 4, Because = "Stopped mid-turn", SessionId = "s-1" },
+                new NextWorkFeedRowDto { TargetKey = "le:le-1", Arm = "LooseEnd", TargetLabel = "Orphan branch", RepoHash = "hash1", Rank = 5, Because = "Unlinked commits" },
+                new NextWorkFeedRowDto { TargetKey = "evals:hash1", Arm = "EvalRegression", TargetLabel = "Eval regression", RepoHash = "hash1", Rank = 6, Because = "Eval score dropped", Group = "housekeeping" }
+            ])
         };
 
         var daemon = new FakeDaemonClientService();
@@ -66,11 +67,13 @@ public class HomeViewModelWhatsNextTests {
     [Test]
     public async Task Caps_lane_at_three_cards_and_expands_on_Show_more() {
         var rows = Enumerable.Range(1, 5)
-            .Select(i => new NextWorkFeedRowDto($"pr:hash#{i}", "ReviewRequested", $"PR #{i}", "hash", 100 - i, "Review requested", []))
+            .Select(i => new NextWorkFeedRowDto {
+                TargetKey = $"pr:hash#{i}", Arm = "ReviewRequested", TargetLabel = $"PR #{i}", RepoHash = "hash", Rank = i, Because = "Review requested"
+            })
             .ToArray();
 
         var source = new ConfigurableNextWorkSource {
-            Next = NextWorkRead.Success(new NextWorkFeedDto("2026-10-14T00:00:00Z", rows))
+            Next = new NextWorkRead(NextWorkReadKind.Ready, rows)
         };
 
         var daemon = new FakeDaemonClientService();
@@ -96,9 +99,9 @@ public class HomeViewModelWhatsNextTests {
     [Test]
     public async Task Hover_pinning_defers_feed_replacement_until_lane_is_unpinned() {
         var source = new ConfigurableNextWorkSource {
-            Next = NextWorkRead.Success(new NextWorkFeedDto("2026-10-14T00:00:00Z", [
-                new NextWorkFeedRowDto("pr:hash#1", "ReviewRequested", "First PR", "hash", 100, "Because 1", [])
-            ]))
+            Next = new NextWorkRead(NextWorkReadKind.Ready, [
+                new NextWorkFeedRowDto { TargetKey = "pr:hash#1", Arm = "ReviewRequested", TargetLabel = "First PR", RepoHash = "hash", Rank = 1, Because = "Because 1" }
+            ])
         };
 
         var daemon = new FakeDaemonClientService();
@@ -114,39 +117,38 @@ public class HomeViewModelWhatsNextTests {
         await Assert.That(vm.WaitingOnYouLane.VisibleItems[0].Title).IsEqualTo("First PR");
 
         vm.WaitingOnYouLane.Pin();
-        source.Next = NextWorkRead.Success(new NextWorkFeedDto("2026-10-14T00:01:00Z", [
-            new NextWorkFeedRowDto("pr:hash#2", "ReviewRequested", "Second PR", "hash", 100, "Because 2", [])
-        ]));
+        source.Next = new NextWorkRead(NextWorkReadKind.Ready, [
+            new NextWorkFeedRowDto { TargetKey = "pr:hash#2", Arm = "ReviewRequested", TargetLabel = "Second PR", RepoHash = "hash", Rank = 1, Because = "Because 2" }
+        ]);
 
         await vm.RefreshWhatsNextAsync();
         await Assert.That(vm.WaitingOnYouLane.VisibleItems[0].Title).IsEqualTo("First PR");
 
         vm.WaitingOnYouLane.Release();
-        vm.TryApplyQueuedFeedOnUnpin();
         await Assert.That(vm.WaitingOnYouLane.VisibleItems[0].Title).IsEqualTo("Second PR");
     }
 
     [Test]
     public async Task Selecting_a_card_populates_composer_selects_matching_repo_and_detects_local_worktree() {
         var existingWorktree = Tmp.CreateDir("existing-wt");
-        var cliRepoHash = LocalRepoHashIndex.ComputeRepoHash("kurrent-io", "kcap-cli");
+        var cliRepoHash = RepoHashHelper.ComputeRepoHash("kurrent-io", "kcap-cli");
 
         var source = new ConfigurableNextWorkSource {
-            Next = NextWorkRead.Success(new NextWorkFeedDto("2026-10-14T00:00:00Z", [
-                new NextWorkFeedRowDto(
-                    "wi:AI-777",
-                    "FinishYours",
-                    "AI-777 · Ship launcher",
-                    cliRepoHash,
-                    95,
-                    "1 open PR, checks passing.",
-                    [],
-                    Group: "finish",
-                    WorkItemId: "wi-777",
-                    SessionId: "sess-777",
-                    WorktreePath: existingWorktree,
-                    LaunchPrompt: "Continue AI-777 and merge the PR.")
-            ]))
+            Next = new NextWorkRead(NextWorkReadKind.Ready, [
+                new NextWorkFeedRowDto {
+                    TargetKey = "wi:AI-777",
+                    Arm = "FinishYours",
+                    TargetLabel = "AI-777 · Ship launcher",
+                    RepoHash = cliRepoHash,
+                    Rank = 1,
+                    Because = "1 open PR, checks passing.",
+                    Group = "finish",
+                    WorkItemId = "wi-777",
+                    SessionId = "sess-777",
+                    WorktreePath = existingWorktree,
+                    LaunchPrompt = "Continue AI-777 and merge the PR."
+                }
+            ])
         };
 
         var repoIndex = new LocalRepoHashIndex(path =>
@@ -248,7 +250,7 @@ public class HomeViewModelWhatsNextTests {
         var req = launch.Requests[0];
         await Assert.That(req.Borrowed).IsTrue();
         await Assert.That(req.BorrowCwd).IsEqualTo(PlatformPaths.Normalize("/repos/kcap-cli"));
-        await Assert.That(req.Goal).Contains("How should we structure the new cache layer?");
-        await Assert.That(req.Goal).Contains("Do not create a branch");
+        await Assert.That(req.Prompt).Contains("How should we structure the new cache layer?");
+        await Assert.That(req.Prompt).Contains("Do not create a branch");
     }
 }
