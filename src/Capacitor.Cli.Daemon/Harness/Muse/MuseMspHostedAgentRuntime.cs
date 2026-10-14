@@ -313,9 +313,13 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
         if (session?.Str("sessionId") is not { Length: > 0 } sessionId || session.Value.Str("path") is not { Length: > 0 } path)
             throw new InvalidOperationException("Muse: the session answer carried no session id or log path.");
 
-        if (_plan.ResumeSessionId is null && sessionId != _plan.MintedSessionId)
-            _logger.LogWarning("Muse: the host started session {SessionId}, not the minted {Minted} (agentId={AgentId}).",
-                sessionId, _plan.MintedSessionId, _agentId);
+        // The hosted-session marker and the hook's agent link are keyed by the minted id.
+        if (_plan.ResumeSessionId is null && !SameSessionId(sessionId, _plan.MintedSessionId)) {
+            FaultSessionReadyIfUnresolved(
+                $"muse_session_id_mismatch: the host started session {sessionId}, not the minted {_plan.MintedSessionId}",
+                inner: null);
+            return;
+        }
 
         var modelId = session.Value.Str("modelId");
         _session       = new MuseSessionDescriptor(sessionId, path, modelId, session.Value.Str("workspaceRoot") ?? _cwd);
@@ -327,6 +331,9 @@ internal sealed class MuseMspHostedAgentRuntime : IHostedAgentRuntime, ITerminat
 
         _sessionReady.TrySetResult();
     }
+
+    static bool SameSessionId(string a, string b) =>
+        Guid.TryParse(a, out var ga) && Guid.TryParse(b, out var gb) ? ga == gb : string.Equals(a, b, StringComparison.Ordinal);
 
     void FaultSessionReadyIfUnresolved(string message, Exception? inner) {
         if (!_sessionReady.TrySetException(inner is null ? new InvalidOperationException(message) : new InvalidOperationException(message, inner)))

@@ -179,6 +179,33 @@ public class MuseMspHostedAgentRuntimeTests {
         }
     }
 
+    static Action<MuseScriptedHost> StartAnswersWith(string sessionId) => h => h.Override = r =>
+        (string?)r["method"] == "session/start"
+            ? """{"jsonrpc":"2.0","id":@0@,"result":@1@}"""
+                .Replace("@0@", ((long)r["id"]!).ToString(CultureInfo.InvariantCulture))
+                .Replace("@1@", MuseMspWire.SessionStartResult.Replace(MuseMspWire.WireSessionId, sessionId))
+            : null;
+
+    [Test]
+    public async Task Session_start_answering_another_id_faults_the_barrier() {
+        await using var rig = NewRig(configure: StartAnswersWith("01a136a0-0000-7000-8000-0000000000ff"));
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await rig.Runtime.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard));
+
+        await Assert.That(ex!.Message).StartsWith("muse_session_id_mismatch: ");
+        await Assert.That(rig.Runtime.Session).IsNull();
+    }
+
+    [Test]
+    public async Task Session_start_answering_the_minted_id_without_dashes_is_the_same_session() {
+        await using var rig = NewRig(configure: StartAnswersWith(MintedId.Replace("-", "", StringComparison.Ordinal)));
+
+        await rig.Runtime.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(Guid.Parse(rig.Runtime.Session!.SessionId)).IsEqualTo(Guid.Parse(MintedId));
+    }
+
     [Test]
     public async Task Resume_sends_session_resume_not_start() {
         const string resumeId = "01a13695-0736-75d0-8f4e-f121585b8453";
