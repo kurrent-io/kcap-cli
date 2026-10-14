@@ -237,10 +237,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.Reconnected(); }).DisposeWith(_disposables);
 
         WorkContext.PullRequests = PullRequests;
-        WorkContext.Plan.OpenDocument = path => {
-            if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();
-        };
-        Artefacts.WhenAnyValue(a => a.Selected).Subscribe(selected => WorkContext.Plan.MarkOpen(selected?.Path)).DisposeWith(_disposables);
         _accessStates.Where(s => s == SessionAccessState.Established)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => Artefacts.Refresh()).DisposeWith(_disposables);
