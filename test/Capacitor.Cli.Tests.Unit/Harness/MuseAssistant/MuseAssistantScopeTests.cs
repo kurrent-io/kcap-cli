@@ -1,0 +1,400 @@
+using Capacitor.Cli.Harness.MuseAssistant;
+using Microsoft.Extensions.Time.Testing;
+using static Capacitor.Cli.Tests.Unit.Harness.MuseAssistant.WalkBuilder;
+
+namespace Capacitor.Cli.Tests.Unit.Harness.MuseAssistant;
+
+/// <summary>Consent is a kcap-side grant: written in the user's turn, bounded in the chat's own order, kept
+/// beside the watermark, revoked in the same write as the closure it implies, and reconciled by every
+/// command so a crash between the two files cannot leave a chat half-granted.</summary>
+public class MuseAssistantScopeTests {
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+    [TempHome]       public required TempHome       Home   { get; init; }
+    [TempDir]        public required TempDir        Walks  { get; init; }
+
+    const long Minute = 60_000, Hour = 3_600_000, T0 = 1_760_000_000_000;
+    static readonly MuseAssistantPrincipal Acme = new("https://acme.kcap.ai", "user_01HXYZ");
+    static readonly MuseAssistantBoundary History = new(MuseAssistantGrantBoundaries.History, null);
+    static MuseAssistantBoundary After(long seq) => new(MuseAssistantGrantBoundaries.AfterSeq, seq);
+
+    readonly FakeTimeProvider _time = new(DateTimeOffset.FromUnixTimeMilliseconds(T0 + 4 * Hour));
+
+    MuseAssistantStateStore Store(MuseAssistantPrincipal? p = null) => new(MuseAssistantPaths.ScopeDir(Config.Root, p ?? Acme), p ?? Acme);
+    MuseAssistantChatState State(string chat = "chat-main") => Store().LoadState(chat).State!;
+
+    // The fake clock freezes grant timestamps; a test whose commands contend for a lock passes the system
+    // clock instead, because the lock wait polls through Task.Delay on the clock it is given.
+    async Task<MuseAssistantScope> ScopeAsync(RecordingPoster poster, string userId = "user_01HXYZ", TimeProvider? time = null, string serverUrl = "https://acme.kcap.ai") =>
+        new(Config.Root, await MuseAssistantTestIdentity.SignedInAsync(Config.Root, serverUrl, userId), new(), new MuseAssistantActionRunner(poster, time ?? _time), time ?? _time);
+
+    async Task<MuseAssistantIngest> IngestAsync(RecordingPoster poster, string userId = "user_01HXYZ", TimeProvider? time = null, string serverUrl = "https://acme.kcap.ai") =>
+        new(Config.Root, Home.Home, await MuseAssistantTestIdentity.SignedInAsync(Config.Root, serverUrl, userId), new(), new MuseAssistantActionRunner(poster, time ?? _time), time ?? _time);
+
+    // Drives a lock wait on the fake clock to its timeout, in bounded steps.
+    async Task<int> TimedOut(Task<int> waiting) {
+        for (var i = 0; !waiting.IsCompleted && i++ < 1000;) { _time.Advance(TimeSpan.FromSeconds(1)); await Task.Delay(1); }
+
+        return await waiting.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    string Walk(string name, long fetchedAt, params WalkBuilder.Item[] items) => new WalkBuilder(Walks) { FetchedAtMs = fetchedAt }.AddPage(null, null, false, items).Write(name);
+
+    [Test]
+    public async Task Add_writes_a_grant_with_a_random_id_then_lists_the_chat_and_a_repeat_is_a_no_op() {
+        var scope = await ScopeAsync(new RecordingPoster());
+
+        await Assert.That(await scope.AddAsync("chat-main", After(41), default)).IsEqualTo(0);
+
+        var state = State();
+        await Assert.That(state.Grant.Id).Matches("^[0-9a-f]{32}$");
+        await Assert.That(state.Grant.Boundary).IsEqualTo(MuseAssistantGrantBoundaries.AfterSeq);
+        await Assert.That(state.Grant.AfterSeq).IsEqualTo(41);
+        await Assert.That(state.Grant.GrantedAtMs).IsEqualTo(T0 + 4 * Hour);
+        await Assert.That(state.Watermark).IsNull();
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+
+        await Assert.That(await scope.AddAsync("chat-main", History, default)).IsEqualTo(0);
+        await Assert.That(State().Grant).IsEqualTo(state.Grant);                         // no new grant, so no new session id
+    }
+
+    [Test]
+    public async Task Two_grants_in_the_same_millisecond_and_after_a_clock_rollback_get_distinct_ids() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-main", History, default);
+        var first = State().Grant.Id;
+        await scope.RemoveAsync("chat-main", default);
+        await scope.AddAsync("chat-main", History, default);
+        var second = State().Grant.Id;
+        // A later process on a clock set back: FakeTimeProvider cannot move backwards, so it gets its own.
+        var rolledBack = await ScopeAsync(new RecordingPoster(), time: new FakeTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(T0)));
+        await rolledBack.RemoveAsync("chat-main", default);
+        await rolledBack.AddAsync("chat-main", History, default);
+
+        await Assert.That(State().Grant.GrantedAtMs).IsEqualTo(T0);
+        await Assert.That(new[] { first, second, State().Grant.Id }.Distinct().Count()).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Remove_ends_the_open_session_then_re_add_inside_the_gap_sends_only_items_above_the_new_boundary_to_a_new_session() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0), Assistant(2, T0 + 1)), default);
+        var firstSession = State().Open!.SessionId;
+
+        var scope = await ScopeAsync(poster);
+        await Assert.That(await scope.RemoveAsync("chat-main", default)).IsEqualTo(0);
+        await Assert.That(poster.Ends).IsEquivalentTo([firstSession]);
+        await Assert.That(State().Grant.Revoked).IsTrue();
+        await Assert.That(State().Open).IsNull();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+
+        // Items 3 and 4 arrive while revoked; the user re-grants having just read seq 4.
+        await Assert.That(await scope.AddAsync("chat-main", After(4), default)).IsEqualTo(0);
+        await Assert.That(State().Watermark).IsEqualTo(2);
+        await (await IngestAsync(poster)).RunAsync(Walk("w2", T0 + 10 * Minute, User(1, T0), Assistant(2, T0 + 1), User(3, T0 + 2 * Minute), User(4, T0 + 3 * Minute), User(5, T0 + 4 * Minute)), default);
+
+        await Assert.That(poster.Seqs).IsEquivalentTo([1, 2, 5]);
+        await Assert.That(poster.Starts.Distinct().Count()).IsEqualTo(2);
+        await Assert.That(poster.Starts.Last()).IsNotEqualTo(firstSession);
+        await Assert.That(State().Watermark).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task Re_add_with_history_sends_nothing_below_the_watermark() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0), Assistant(2, T0 + 1)), default);
+        var scope = await ScopeAsync(poster);
+        await scope.RemoveAsync("chat-main", default);
+
+        await scope.AddAsync("chat-main", History, default);
+        await (await IngestAsync(poster)).RunAsync(Walk("w2", T0 + 5 * Minute, User(1, T0), Assistant(2, T0 + 1), User(3, T0 + 2 * Minute)), default);
+
+        await Assert.That(poster.Seqs).IsEquivalentTo([1, 2, 3]);
+    }
+
+    [Test]
+    public async Task Remove_waits_for_a_running_ingest_and_the_run_posts_nothing_after_the_revocation_is_written() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        var dir    = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+
+        Task<int> remove;
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-main"))) {
+            remove = (await ScopeAsync(poster, time: TimeProvider.System)).RemoveAsync("chat-main", default);
+            await Task.Delay(600);
+            await Assert.That(remove.IsCompleted).IsFalse();
+        }
+
+        await Assert.That(await remove.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(0);
+        await Assert.That(State().Grant.Revoked).IsTrue();
+
+        var late = new RecordingPoster();
+        await Assert.That(await (await IngestAsync(late)).RunAsync(Walk("late", T0 + Minute, User(1, T0)), default)).IsEqualTo(3);
+        await Assert.That(late.Accepted).IsEmpty();
+    }
+
+    [Test]
+    public async Task Remove_during_pending_start_replays_the_start_then_ends() {
+        await (await ScopeAsync(new RecordingPoster())).AddAsync("chat-main", History, default);
+        var state = State();
+        var open  = new MuseAssistantOpenSession(MuseAssistantSessionId.For(Acme.UserId, "chat-main", state.Grant.Id, 1), 1, T0, true, Home.Path, MuseAssistantSessionPhases.PendingStart, null);
+        Store().SaveState(state with { Open = open });
+        var poster = new RecordingPoster();
+
+        await Assert.That(await (await ScopeAsync(poster)).RemoveAsync("chat-main", default)).IsEqualTo(0);
+
+        await Assert.That(poster.Accepted.Select(a => a.GetType().Name)).IsEquivalentTo([nameof(MuseAssistantStartSession), nameof(MuseAssistantEndSession)]);
+        await Assert.That(((MuseAssistantEndSession)poster.Accepted[1]).EndedAtMs).IsEqualTo(T0);
+    }
+
+    [Test]
+    public async Task Remove_with_a_failing_closure_keeps_revoked_and_pending_end_listed_as_closing_and_sweep_completes_it() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        var failing = new RecordingPoster { Refuse = (_, _) => "hooks/session-end/muse-assistant answered 503" };
+
+        await Assert.That(await (await ScopeAsync(failing)).RemoveAsync("chat-main", default)).IsEqualTo(1);
+        await Assert.That(State().Grant.Revoked).IsTrue();
+        await Assert.That(State().Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.PendingEnd);
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+
+        var sweeping = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(sweeping)).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(sweeping.Ends.Count()).IsEqualTo(1);
+        await Assert.That(State().Open).IsNull();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+    }
+
+    [Test]
+    public async Task Concurrent_adds_for_different_chats_and_a_reset_racing_an_add_leave_every_active_chat_listed() {
+        var scope = await ScopeAsync(new RecordingPoster(), time: TimeProvider.System);
+
+        await Task.WhenAll(scope.AddAsync("chat-a", History, default), scope.AddAsync("chat-b", History, default), scope.AddAsync("chat-c", History, default));
+        await Assert.That(Store().LoadScope().Chats.Order()).IsEquivalentTo(["chat-a", "chat-b", "chat-c"]);
+
+        await Task.WhenAll(scope.ResetAsync(default), scope.AddAsync("chat-d", History, default));
+        var listed = Store().LoadScope().Chats;
+        var active = Store().EnumerateStates().Where(s => !s.Grant.Revoked).Select(s => s.ChatId).ToList();
+        await Assert.That(listed.Order()).IsEquivalentTo(active.Order());
+    }
+
+    [Test]
+    public async Task A_crash_between_the_two_files_is_reconciled_by_the_next_add_or_sweep() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        var store = Store();
+
+        // State written, list not: the next add lists it without a new grant.
+        store.SaveState(new("chat-a", Acme.ServerUrl, Acme.UserId, new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MuseAssistantGrantBoundaries.History, null, T0, null), null, null, null));
+        await scope.AddAsync("chat-a", History, default);
+        await Assert.That(State("chat-a").Grant.Id).IsEqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        await Assert.That(Store().LoadScope().Chats).Contains("chat-a");
+
+        // Listed, no state: sweep reports it and replays nothing; add grants it.
+        store.SaveScope(store.LoadScope() with { Chats = [.. store.LoadScope().Chats, "chat-b"] });
+        var poster = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(poster)).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(poster.Accepted).IsEmpty();
+        await Assert.That(Store().LoadState("chat-b").State).IsNull();
+        await scope.AddAsync("chat-b", After(7), default);
+        await Assert.That(State("chat-b").Grant.AfterSeq).IsEqualTo(7);
+
+        // State says active, list dropped it: sweep relists.
+        store.SaveScope(store.LoadScope() with { Chats = [] });
+        await (await ScopeAsync(new RecordingPoster())).SweepAsync(default);
+        await Assert.That(Store().LoadScope().Chats.Order()).IsEquivalentTo(["chat-a", "chat-b"]);
+    }
+
+    [Test]
+    public async Task Another_accounts_pending_closure_is_completed_only_when_that_account_signs_back_in() {
+        var a = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(a)).RunAsync(Walk("a1", T0 + Minute, User(1, T0)), default);
+        var failing = new RecordingPoster { Refuse = (_, _) => "cannot reach https://acme.kcap.ai" };
+        await Assert.That(await (await ScopeAsync(failing)).RemoveAsync("chat-main", default)).IsEqualTo(1);
+        var aSession = State().Open!.SessionId;
+
+        // Account B grants the same chat and records: its own directory, its own session.
+        var b = new RecordingPoster();
+        await (await ScopeAsync(b, "user_01OTHER")).AddAsync("chat-main", History, default);
+        await Assert.That(await (await IngestAsync(b, "user_01OTHER")).RunAsync(Walk("b1", T0 + Minute, User(1, T0)), default)).IsEqualTo(0);
+        await Assert.That(b.Starts.Single()).IsNotEqualTo(aSession);
+        await Assert.That(b.Ends).IsEmpty();
+        await Assert.That(await (await ScopeAsync(b, "user_01OTHER")).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(b.Ends).IsEmpty();                                                       // B's sweep never touches A's intent
+
+        // A signs back in: sweep completes A's closure.
+        var back = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(back)).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(back.Ends).IsEquivalentTo([aSession]);
+        await Assert.That(Store(Acme with { UserId = "user_01OTHER" }).LoadState("chat-main").State!.Open).IsNotNull();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Sweep_prints_active_chats_with_key_watermark_and_boundary_and_never_idle_closes() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", After(0), default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        _time.SetUtcNow(DateTimeOffset.FromUnixTimeMilliseconds(T0 + 10 * Hour));
+        using var stdout = ConsoleOutput.StartCapture();
+
+        var sweeping = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(sweeping)).SweepAsync(default)).IsEqualTo(0);
+
+        await Assert.That(sweeping.Accepted).IsEmpty();
+        await Assert.That(stdout.GetCapturedOutput().Trim())
+            .IsEqualTo($"key={MuseAssistantPaths.ChatKey("chat-main")} watermark=1 boundary=after_seq after_seq=0 chat=chat-main");
+    }
+
+    [Test]
+    public async Task Reset_revokes_every_chat_posts_the_closures_it_can_and_clears_the_list() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); });
+        await (await IngestAsync(poster)).RunAsync(new WalkBuilder(Walks) { ChatId = "chat-a", FetchedAtMs = T0 + Minute }.AddPage(null, null, false, User(1, T0)).Write("a"), default);
+        var flaky = new RecordingPoster { Refuse = (a, _) => a is MuseAssistantEndSession e && e.Session.SessionId == poster.Starts.Single() ? "hooks/session-end/muse-assistant answered 503" : null };
+
+        await Assert.That(await (await ScopeAsync(flaky)).ResetAsync(default)).IsEqualTo(1);
+
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+        await Assert.That(Store().EnumerateStates().All(s => s.Grant.Revoked)).IsTrue();
+        await Assert.That(State("chat-a").Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.PendingEnd);
+
+        var sweeping = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(sweeping)).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(State("chat-a").Open).IsNull();
+    }
+
+    [Test]
+    public async Task State_loss_after_two_grants_then_a_re_grant_records_only_above_the_new_boundary_under_a_third_id() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        var scope = await ScopeAsync(poster);
+        await scope.RemoveAsync("chat-main", default);
+        await scope.AddAsync("chat-main", After(1), default);
+        await (await IngestAsync(poster)).RunAsync(Walk("w2", T0 + 3 * Minute, User(1, T0), User(2, T0 + 2 * Minute)), default);
+        var seen = poster.Starts.Distinct().ToList();
+
+        Directory.Delete(Path.Join(Config.Directory, MuseAssistantPaths.Root), recursive: true);   // "Reset Muse" wiped the home
+        await scope.AddAsync("chat-main", After(3), default);
+        var fresh = new RecordingPoster();
+        await (await IngestAsync(fresh)).RunAsync(Walk("w3", T0 + 6 * Minute, User(1, T0), User(2, T0 + 2 * Minute), User(3, T0 + 4 * Minute), User(4, T0 + 5 * Minute)), default);
+
+        await Assert.That(fresh.Seqs).IsEquivalentTo([4]);
+        await Assert.That(seen).DoesNotContain(fresh.Starts.Single());
+    }
+
+    [Test]
+    [NotInParallel]
+    [Arguments((object)new[] { "--chat", "chat-main" })]
+    [Arguments((object)new[] { "--chat", "chat-main", "--after-seq" })]
+    [Arguments((object)new[] { "--chat", "chat-main", "--after-seq", "-5" })]
+    [Arguments((object)new[] { "--chat", "chat-main", "--after-seq", "twelve" })]
+    [Arguments((object)new[] { "--chat", "chat-main", "--after-seq", "3", "--include-history" })]
+    [Arguments((object)new[] { "--chat", "chat-main", "--empty-chat", "--include-history" })]
+    public async Task Add_refuses_a_malformed_or_ambiguous_boundary_without_writing(string[] args) {
+        var poster = new RecordingPoster();
+        var scope  = await ScopeAsync(poster);
+        var root   = Path.Join(Config.Directory, MuseAssistantPaths.Root);
+
+        using (var stderr = ConsoleOutput.StartErrorCapture()) {
+            await Assert.That(await scope.AddAsync("chat-main", args, default)).IsEqualTo(2);
+            await Assert.That(stderr.GetCapturedError()).Contains(MuseAssistantBoundary.Usage);
+        }
+
+        await Assert.That(Directory.Exists(root)).IsFalse();
+        await Assert.That(poster.Accepted).IsEmpty();
+
+        // The same entry writes once the boundary is well formed, so the absence above is the refusal's doing.
+        await Assert.That(await scope.AddAsync("chat-main", ["--chat", "chat-main", "--empty-chat"], default)).IsEqualTo(0);
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+    }
+
+    [Test]
+    public async Task Remove_that_cannot_take_the_chat_lock_revokes_nothing_and_exits_4() {
+        var poster = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(poster)).RunAsync(Walk("w1", T0 + Minute, User(1, T0)), default);
+        var dir = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-main")))
+            await Assert.That(await TimedOut((await ScopeAsync(poster)).RemoveAsync("chat-main", default))).IsEqualTo(4);
+
+        await Assert.That(State().Grant.Revoked).IsFalse();
+        await Assert.That(State().Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.Started);
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+        await Assert.That(poster.Ends).IsEmpty();
+    }
+
+    [Test]
+    public async Task Reset_that_cannot_take_a_chat_lock_keeps_that_chat_granted_and_listed_and_exits_4() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); });
+        var dir    = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-a")))
+            await Assert.That(await TimedOut((await ScopeAsync(poster)).ResetAsync(default))).IsEqualTo(4);
+
+        await Assert.That(State("chat-a").Grant.Revoked).IsFalse();
+        await Assert.That(State("chat-b").Grant.Revoked).IsTrue();
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-a"]);
+    }
+
+    [Test]
+    public async Task Remove_and_reset_without_a_sign_in_revoke_nothing_and_exit_4() {
+        var store = Store();
+        store.SaveState(new("chat-main", Acme.ServerUrl, Acme.UserId, new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MuseAssistantGrantBoundaries.History, null, T0, null), null, null, null));
+        store.SaveScope(store.LoadScope() with { Chats = ["chat-main"] });
+        var poster    = new RecordingPoster();
+        var signedOut = new MuseAssistantScope(
+            Config.Root, new MuseAssistantIdentity(Resolutions.At(Acme.ServerUrl, Config.Root), AuthFixtures.NewTokenStore(Config.Root)),
+            new(), new MuseAssistantActionRunner(poster, _time), _time);
+
+        await Assert.That(await signedOut.RemoveAsync("chat-main", default)).IsEqualTo(4);
+        await Assert.That(await signedOut.ResetAsync(default)).IsEqualTo(4);
+
+        await Assert.That(State().Grant.Revoked).IsFalse();
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-main"]);
+        await Assert.That(poster.Accepted).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_sweep_signed_into_another_tenant_never_posts_this_tenants_intents() {
+        const string Other = "https://other.kcap.ai";
+        var acme = await Record(async scope => await scope.AddAsync("chat-main", History, default));
+        await (await IngestAsync(acme)).RunAsync(Walk("a1", T0 + Minute, User(1, T0)), default);
+        var failing = new RecordingPoster { Refuse = (_, _) => "cannot reach https://acme.kcap.ai" };
+        await Assert.That(await (await ScopeAsync(failing)).RemoveAsync("chat-main", default)).IsEqualTo(1);
+        var acmeSession = State().Open!.SessionId;
+
+        // The same user on another tenant grants the same chat and sweeps there.
+        var other = new RecordingPoster();
+        await (await ScopeAsync(other, serverUrl: Other)).AddAsync("chat-main", History, default);
+        await Assert.That(await (await IngestAsync(other, serverUrl: Other)).RunAsync(Walk("o1", T0 + Minute, User(1, T0)), default)).IsEqualTo(0);
+        await Assert.That(await (await ScopeAsync(other, serverUrl: Other)).SweepAsync(default)).IsEqualTo(0);
+
+        await Assert.That(other.Ends).IsEmpty();
+        await Assert.That(other.Starts.Single()).IsNotEqualTo(acmeSession);
+        await Assert.That(State().Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.PendingEnd);
+
+        var back = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(back)).SweepAsync(default)).IsEqualTo(0);
+        await Assert.That(back.Ends).IsEquivalentTo([acmeSession]);
+        await Assert.That(Store(Acme with { ServerUrl = Other }).LoadState("chat-main").State!.Open).IsNotNull();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Show_lists_every_chat_with_its_status_and_posts_nothing() {
+        var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", After(3), default); });
+        await (await IngestAsync(poster)).RunAsync(new WalkBuilder(Walks) { ChatId = "chat-b", FetchedAtMs = T0 + Minute }.AddPage(null, null, false, User(4, T0)).Write("b"), default);
+        await (await ScopeAsync(new RecordingPoster { Refuse = (_, _) => "hooks/session-end/muse-assistant answered 503" })).RemoveAsync("chat-b", default);
+        using var stdout = ConsoleOutput.StartCapture();
+
+        var showing = new RecordingPoster();
+        await Assert.That(await (await ScopeAsync(showing)).ShowAsync(default)).IsEqualTo(0);
+
+        await Assert.That(showing.Accepted).IsEmpty();
+        var lines = stdout.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines.Single(l => l.EndsWith("chat=chat-a", StringComparison.Ordinal))).Contains("status=active");
+        await Assert.That(lines.Single(l => l.EndsWith("chat=chat-b", StringComparison.Ordinal))).Contains("status=closing");
+    }
+
+    async Task<RecordingPoster> Record(Func<MuseAssistantScope, Task> act) {
+        var poster = new RecordingPoster();
+        await act(await ScopeAsync(poster));
+        return poster;
+    }
+}
