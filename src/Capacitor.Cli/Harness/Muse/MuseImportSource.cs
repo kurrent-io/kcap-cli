@@ -15,14 +15,14 @@ namespace Capacitor.Cli.Harness.Muse;
 /// live watcher sends it, and each nested <c>subagent/&lt;childId&gt;/session.jsonl</c> follows as a subagent of
 /// the top-level session.
 /// </summary>
-internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IImportSource {
+internal sealed class MuseImportSource(MusePaths paths, WatcherPaths watchers, TimeProvider time) : IImportSource {
     const string LogPathKey  = "LogPath";
     const string LastLineKey = "LastLine";
     const string EndedAtKey  = "EndedAt";
     const string LastAtKey   = "LastRecordedAt";
 
-    // The server's stale-session sweep closes a watcher-backed session idle this long. An unfinished
-    // log idle as long has no live watcher left to stop its children, so the import stops them.
+    // The server's stale-session sweep closes a watcher-backed session idle this long once its watcher
+    // is gone. Idle time alone proves nothing: a live session can wait on its user far longer.
     internal static readonly TimeSpan AbandonedAfter = TimeSpan.FromMinutes(30);
 
     // runtime.session.metadata is the log's second record; this bounds the head scan on a log that has none.
@@ -294,7 +294,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         // Children land before session-end so their lifecycle sits inside the parent's. An unfinished
         // log posts no end; the server's stale-session closers own an abandoned one.
         var parentEndedAt = classification.SourceMeta![EndedAtKey] as DateTimeOffset?;
-        var stopChildren  = parentEndedAt is not null || IsAbandoned(log, classification.SourceMeta[LastAtKey] as DateTimeOffset?);
+        var stopChildren  = parentEndedAt is not null
+         || IsAbandoned(classification.SessionId, log, classification.SourceMeta[LastAtKey] as DateTimeOffset?);
 
         var (sentChildContent, childrenRecorded) = await ImportChildrenAsync(ctx, classification.SessionId, log, stopChildren, ct);
         if (!childrenRecorded) return new ImportSessionResult(ImportOutcome.Failed, sentChildContent);
@@ -314,8 +315,8 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
     /// content or stop the server did not record fails the import before the parent's session-end, so
     /// a re-import retries it; a refused start skips that child's content. Under a parent still running
     /// no child is stopped: a worker can be re-engaged after its result, and a stop's id is deterministic,
-    /// so one posted early would stop the live child watcher for good. The live watcher owns those stops,
-    /// and a re-import after the parent ends or is abandoned posts them all.</summary>
+    /// so one posted early would complete that child for good. The live watcher owns those stops, and a
+    /// re-import after the parent ends or is abandoned posts them all.</summary>
     async Task<(bool AnySent, bool AllRecorded)> ImportChildrenAsync(
             ImportContext ctx, string parentSessionId, string parentLog, bool stopChildren, CancellationToken ct) {
         var labels      = MuseSubagentDiscovery.ResolveChildLabels(parentLog);
@@ -357,16 +358,17 @@ internal sealed class MuseImportSource(MusePaths paths, TimeProvider time) : IIm
         return (anySent, allRecorded);
     }
 
-    /// <summary>An unfinished parent whose log and every child log have gone unwritten past
-    /// <see cref="AbandonedAfter"/>. With no activity time to read, it is not.</summary>
-    bool IsAbandoned(string parentLog, DateTimeOffset? lastRecordedAt) {
+    /// <summary>An unfinished parent no longer recorded live: its log and every child log have gone
+    /// unwritten past <see cref="AbandonedAfter"/>, and no watcher for it runs on this machine, the one
+    /// whose hooks would have started it. With no activity time to read, it is not.</summary>
+    bool IsAbandoned(string sessionId, string parentLog, DateTimeOffset? lastRecordedAt) {
         var lastActivity = lastRecordedAt;
 
         foreach (var log in MuseSubagentDiscovery.EnumerateChildLogs(parentLog).Prepend(parentLog))
             if (TryGetLastWriteUtc(log) is { } written && (lastActivity is null || written > lastActivity))
                 lastActivity = written;
 
-        return lastActivity is { } last && time.GetUtcNow() - last > AbandonedAfter;
+        return lastActivity is { } last && time.GetUtcNow() - last > AbandonedAfter && !WatcherManager.PidAlive(watchers, sessionId);
     }
 
     // Without strict the server answers 200 when it fails to record a child's start or stop.

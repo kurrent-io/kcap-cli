@@ -117,7 +117,7 @@ public class ReplayChildContentCapabilityTests {
             "antigravity" => new AntigravityImportSource(new(new(scratch), ""), TimeProvider.System),
             "mistralvibe" => new MistralVibeImportSource(new MistralVibePaths(new UserHome(scratch), null), TimeProvider.System),
             "grok"        => new GrokImportSource(new GrokPaths(new UserHome(scratch), null), TimeProvider.System),
-            "muse"        => new MuseImportSource(new MusePaths(new UserHome(scratch), null, null), TimeProvider.System),
+            "muse"        => new MuseImportSource(new MusePaths(new UserHome(scratch), null, null), new WatcherPaths(scratch), TimeProvider.System),
             _             => throw new ArgumentOutOfRangeException(nameof(vendor), vendor, "unclassified import source"),
         };
     }

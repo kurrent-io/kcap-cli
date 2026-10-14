@@ -228,10 +228,12 @@ public sealed partial class WatcherManager(
         }
     }
 
+    bool PidAlive(string key) => PidAlive(paths, key);
+
     /// <summary>The pid file names a process that is still this watcher's incarnation, irrespective of
     /// whether it's wedged. A pid file that exists but cannot be read counts as alive: reading it as
     /// gone would let a spawn overwrite it and orphan the watcher it names.</summary>
-    bool PidAlive(string key) {
+    internal static bool PidAlive(WatcherPaths paths, string key) {
         string[] lines;
 
         try {
@@ -252,7 +254,7 @@ public sealed partial class WatcherManager(
     /// <summary>
     /// True when the watcher's PID exists AND its heartbeat isn't stale (after the startup
     /// grace) — i.e. the process is alive AND its main loop is provably still turning, not
-    /// wedged. <see cref="PidAlive"/> alone can't tell a hung watcher from a healthy one.
+    /// wedged. <see cref="PidAlive(WatcherPaths, string)"/> alone can't tell a hung watcher from a healthy one.
     /// </summary>
     internal bool IsWatcherAlive(string key) {
         if (!PidAlive(key)) {

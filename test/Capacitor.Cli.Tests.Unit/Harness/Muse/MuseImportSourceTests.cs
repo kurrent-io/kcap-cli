@@ -40,7 +40,9 @@ public class MuseImportSourceTests : IDisposable {
 
     MusePaths Paths => new(new UserHome(Tmp.PathTo("home")), null, Tmp.PathTo("data"));
 
-    MuseImportSource Source(TimeProvider? time = null) => new(Paths, time ?? TimeProvider.System);
+    WatcherPaths Watchers => new(Tmp.PathTo("watchers"));
+
+    MuseImportSource Source(TimeProvider? time = null) => new(Paths, Watchers, time ?? TimeProvider.System);
 
     static string Fixture(string name) => File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Harness", "Muse", "fixtures", name));
 
@@ -354,11 +356,11 @@ public class MuseImportSourceTests : IDisposable {
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
     }
 
-    /// <summary>An unfinished log idle past the server's stale window has no live watcher to stop its
-    /// children, and the server's stale close completes none, so the import stops every one. The
-    /// session's own end stays with that stale close.</summary>
+    /// <summary>An unfinished log idle past the server's stale window with no watcher left on this machine
+    /// has nothing to stop its children, and the server's stale close completes none, so the import stops
+    /// every one. The session's own end stays with that stale close.</summary>
     [Test]
-    public async Task Under_an_abandoned_unfinished_parent_every_child_is_stopped_but_the_session_is_not_ended() {
+    public async Task Under_an_idle_unfinished_parent_with_no_live_watcher_every_child_is_stopped_but_the_session_is_not_ended() {
         var log = LayOutUnfinishedProbeWithWorkers();
         LastWrittenAt(log, UnfinishedLastRecord);
         StubServer();
@@ -372,6 +374,28 @@ public class MuseImportSourceTests : IDisposable {
         await Assert.That(childRoutes).IsEquivalentTo(
             Enumerable.Repeat(new[] { "/hooks/subagent-start", "/hooks/subagent-stop" }, 4).SelectMany(r => r), CollectionOrdering.Matching);
         await Assert.That(PostedRoutes()).DoesNotContain("/hooks/session-end/muse");
+    }
+
+    /// <summary>A live session can wait on its user past the stale window. While its watcher still runs,
+    /// that watcher owns the children's stops, and one posted now would complete a worker the user may
+    /// re-engage.</summary>
+    [Test]
+    public async Task Under_an_idle_unfinished_parent_whose_watcher_still_runs_no_child_is_stopped() {
+        var log = LayOutUnfinishedProbeWithWorkers();
+        LastWrittenAt(log, UnfinishedLastRecord);
+        StubServer();
+
+        using var watcher = DummyProcess.StartSleep(30);
+        Directory.CreateDirectory(Watchers.Directory);
+        await File.WriteAllTextAsync(Watchers.PidFile(Guid.Parse(ParentId).ToString("N")),
+            $"{watcher.Pid}\n{PidIdentity.Capture(watcher.Pid)}");
+
+        var now = UnfinishedLastRecord + MuseImportSource.AbandonedAfter + TimeSpan.FromHours(2);
+        var (_, result) = await ImportProbeAsync(new FakeTimeProvider(now));
+
+        await Assert.That(result.Outcome).IsEqualTo(ImportOutcome.Loaded);
+        await Assert.That(PostedRoutes().Count(r => r == "/hooks/subagent-start")).IsEqualTo(4);
+        await Assert.That(PostedRoutes()).DoesNotContain("/hooks/subagent-stop");
     }
 
     /// <summary>A worker still writing its own log keeps an otherwise idle parent from reading as abandoned.</summary>
