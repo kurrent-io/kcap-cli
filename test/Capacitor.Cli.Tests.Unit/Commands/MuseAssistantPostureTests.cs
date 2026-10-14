@@ -1,6 +1,7 @@
 using System.Reflection;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -41,21 +42,44 @@ public class MuseAssistantPostureTests {
     }
 
     [Test]
-    public async Task ApprovalHosts_lists_the_server_first_then_the_fixed_hosts_once() {
-        var hosts = MuseAssistantPosture.ApprovalHosts("https://capacitor.example.internal", AuthEndpoints.Defaults);
+    public async Task ApprovalHosts_lists_a_self_hosted_server_first_then_the_telemetry_host() {
+        var hosts = MuseAssistantPosture.ApprovalHosts("https://capacitor.example.internal");
 
-        await Assert.That(hosts[0]).IsEqualTo("capacitor.example.internal");
-        await Assert.That(hosts).Contains("phog.kurrent.io");
-        await Assert.That(hosts).Contains("auth.kcap.ai");
-        await Assert.That(hosts).Contains("signin.kcap.ai");
-        await Assert.That(hosts.Distinct().Count()).IsEqualTo(hosts.Count);
+        await Assert.That(hosts).IsEquivalentTo(["capacitor.example.internal", "phog.kurrent.io"], CollectionOrdering.Matching);
     }
 
     [Test]
-    public async Task ApprovalHosts_does_not_repeat_a_server_that_is_also_a_fixed_host() {
-        var hosts = MuseAssistantPosture.ApprovalHosts("https://signin.kcap.ai", AuthEndpoints.Defaults);
+    public async Task ApprovalHosts_does_not_repeat_a_server_that_is_also_the_telemetry_host() {
+        var hosts = MuseAssistantPosture.ApprovalHosts("https://phog.kurrent.io");
 
-        await Assert.That(hosts.Count(h => h == "signin.kcap.ai")).IsEqualTo(1);
+        await Assert.That(hosts.Count(h => h == "phog.kurrent.io")).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SignInHosts_names_the_hosts_each_providers_device_sign_in_contacts() {
+        await Assert.That(MuseAssistantPosture.SignInHosts(AuthProvider.WorkOS)).IsEquivalentTo(["api.workos.com", "signin.kcap.ai"]);
+        await Assert.That(MuseAssistantPosture.SignInHosts(AuthProvider.GitHubApp)).IsEquivalentTo(["github.com"]);
+        await Assert.That(MuseAssistantPosture.SignInHosts(AuthProvider.None)).IsEmpty();
+    }
+
+    [Test]
+    public async Task The_sign_in_notice_is_silent_when_sign_in_contacts_nothing() {
+        await Assert.That(MuseAssistantPosture.SignInNoticeLines([]).ToList()).IsEmpty();
+
+        var text = string.Join("\n", MuseAssistantPosture.SignInNoticeLines(["api.workos.com"]));
+        await Assert.That(text).Contains("api.workos.com");
+    }
+
+    /// <summary>A declined or expired code fails the same way as an unapproved host, so the hint must
+    /// not assert the host is the cause.</summary>
+    [Test]
+    public async Task The_login_failure_hint_covers_a_declined_code_without_blaming_approval() {
+        var text = string.Join("\n", MuseAssistantPosture.LoginFailedHintLines(["api.workos.com"]));
+
+        await Assert.That(text).Contains("api.workos.com");
+        await Assert.That(text).Contains("expired or was declined");
+        await Assert.That(text).Contains("run the same command again");
+        await Assert.That(text).DoesNotContain("not yet approved");
     }
 
     [Test]

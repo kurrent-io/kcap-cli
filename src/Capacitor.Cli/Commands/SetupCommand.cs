@@ -629,6 +629,17 @@ sealed class SetupCommand(
             return 1;
         }
 
+        // Plain Console.Out: an agent reads this from redirected output. Ahead of the funnel event,
+        // which flushes to the telemetry host at once, so no card appears before its explanation.
+        var museHosts = museAssistant ? MuseAssistantPosture.ApprovalHosts(serverUrlArg!) : null;
+
+        if (museHosts is not null) {
+            foreach (var line in MuseAssistantPosture.HostNoticeLines(museHosts)) await Console.Out.WriteLineAsync(line);
+            await Console.Out.WriteLineAsync();
+        } else if (MuseAssistantEnvironment.IsMuseAssistant(home)) {
+            AnsiConsole.MarkupLine(MuseAssistantPosture.AdviceLine);
+        }
+
         var profile = await AppConfig.LoadProfileConfig(config);
 
         telemetry.Funnel.Started(
@@ -652,16 +663,6 @@ sealed class SetupCommand(
         }
         AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
 
-        // Plain Console.Out: an agent reads this from redirected output, and the hosts must precede
-        // the first network call so the user knows what the approval cards are for.
-        var museHosts = museAssistant ? MuseAssistantPosture.ApprovalHosts(serverUrlArg!, endpoints) : null;
-
-        if (museHosts is not null) {
-            foreach (var line in MuseAssistantPosture.HostNoticeLines(museHosts)) await Console.Out.WriteLineAsync(line);
-            await Console.Out.WriteLineAsync();
-        } else if (MuseAssistantEnvironment.IsMuseAssistant(home)) {
-            AnsiConsole.MarkupLine(MuseAssistantPosture.AdviceLine);
-        }
 
         // Check if already configured
         var activeProfile  = profile.ActiveName;
@@ -698,6 +699,10 @@ sealed class SetupCommand(
 
             (serverUrl, provider) = resolved.Value;
 
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.SignInNoticeLines(MuseAssistantPosture.SignInHosts(provider)))
+                    await Console.Out.WriteLineAsync(line);
+
             // A named server can be one still being created, which the provisioner says to re-run setup against.
             if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         } else if (noPrompt && requestedWorkspace is null) {
@@ -730,8 +735,9 @@ sealed class SetupCommand(
         var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile);
 
         if (loginStepResult != 0) {
-            if (museHosts is not null)
-                foreach (var line in MuseAssistantPosture.UnreachableHintLines(museHosts)) await Console.Out.WriteLineAsync(line);
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.LoginFailedHintLines(MuseAssistantPosture.SignInHosts(provider)))
+                    await Console.Out.WriteLineAsync(line);
 
             return loginStepResult;
         }

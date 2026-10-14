@@ -141,8 +141,8 @@ Options:
                               harness (the image's Codex is not Muse's), defaults
                               visibility to private (--default-visibility still
                               wins), prints the hosts the user will be asked to
-                              approve in the chat before the first network call,
-                              and reads "cannot reach server" as "not yet
+                              approve in the chat before each stage contacts
+                              them, and reads "cannot reach server" as "not yet
                               approved" with a retry hint. Run from the
                               connect-capacitor skill; see README → Unattended
                               setup → Muse Assistant.

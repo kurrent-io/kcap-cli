@@ -63,24 +63,30 @@ internal static class MuseAssistantPosture {
         return Uri.TryCreate(text, UriKind.Absolute, out var uri) ? uri.Host : serverArg;
     }
 
-    public static IReadOnlyList<string> ApprovalHosts(string serverArg, AuthEndpoints endpoints) {
-        var hosts = new List<string>();
+    /// <summary>The hosts contacted before the server names its sign-in provider.</summary>
+    public static IReadOnlyList<string> ApprovalHosts(string serverArg) => Distinct(HostOf(serverArg), CliTelemetry.EndpointHost);
 
-        void Add(string host) {
-            if (host.Length > 0 && !hosts.Contains(host)) hosts.Add(host);
-        }
+    /// <summary>The hosts the device sign-in for <paramref name="provider"/> contacts. WorkOS also
+    /// serves its verification page from the kcap sign-in domain.</summary>
+    public static IReadOnlyList<string> SignInHosts(string provider) => provider switch {
+        AuthProvider.WorkOS    => Distinct(HostOf(WorkOSClient.ApiBase), HostOf(MachineAuth.DefaultTokenUrl)),
+        AuthProvider.GitHubApp => Distinct(HostOf(GitHubOAuthClient.ApiBase)),
+        _                      => []
+    };
 
-        Add(HostOf(serverArg));
-        Add(CliTelemetry.EndpointHost);
-        Add(HostOf(endpoints.ProxyUrl));
-        Add(HostOf(MachineAuth.DefaultTokenUrl));
-
-        return hosts;
-    }
+    static List<string> Distinct(params string[] hosts) => hosts.Where(h => h.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     public static IEnumerable<string> HostNoticeLines(IReadOnlyList<string> hosts) {
         yield return "  Muse Assistant: the first contact with each host below raises an approval card in the user's chat.";
-        yield return "  Ask the user to choose \"Always allow this site\" on each card; this run finishes once they have:";
+        yield return "  Ask the user to choose \"Always allow this site\" on each card:";
+
+        foreach (var host in hosts) yield return $"    {host}";
+    }
+
+    public static IEnumerable<string> SignInNoticeLines(IReadOnlyList<string> hosts) {
+        if (hosts.Count == 0) yield break;
+
+        yield return "  Muse Assistant: signing in contacts these hosts next; ask the user to approve their cards too:";
 
         foreach (var host in hosts) yield return $"    {host}";
     }
@@ -89,5 +95,14 @@ internal static class MuseAssistantPosture {
         yield return "  On Muse Assistant an unapproved host answers with a placeholder address, so \"cannot reach\" here";
         yield return $"  usually means not yet approved. Ask the user to approve the cards for {string.Join(", ", hosts)},";
         yield return "  then run the same command again.";
+    }
+
+    /// <summary>Worded for both causes: a sign-in host still awaiting approval and a declined or
+    /// expired code end the same way here, and a re-run is the remedy for each.</summary>
+    public static IEnumerable<string> LoginFailedHintLines(IReadOnlyList<string> hosts) {
+        if (hosts.Count > 0)
+            yield return $"  On Muse Assistant, if a card for {string.Join(", ", hosts)} is still waiting, ask the user to approve it.";
+
+        yield return "  If the code expired or was declined, a re-run shows a fresh one: run the same command again.";
     }
 }

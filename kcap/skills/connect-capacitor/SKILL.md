@@ -48,21 +48,23 @@ Never start `kcap daemon` unless the user asks for hosted agents.
 
 ### What the user will see, and must do
 
-Say this to the user before running anything:
+First ask for the workspace address (for example `https://acme.kcap.ai`) if the
+user has not given one. Never guess a tenant.
 
-> Connecting Capacitor needs three or four approvals from you in this chat. Each
-> time I first contact a new host, a card appears here with **Allow once /
-> Always allow this site / Deny**. Please choose **Always allow this site** on
-> each of: `<tenant>.kcap.ai` (your Capacitor workspace), `phog.kurrent.io`
-> (kcap's anonymous usage proxy), `auth.kcap.ai` and `signin.kcap.ai` (the
-> sign-in). Then I will show you a short code to approve on your own device.
+Then say this to the user, naming the workspace's own host:
 
-I do not see those cards. If a command below fails with "cannot reach" or
-"not yet approved", the user has not approved that host yet: ask them to look
+> Connecting Capacitor needs a few approvals from you in this chat. Each time I
+> first contact a new host, a card appears here with **Allow once / Always allow
+> this site / Deny**. Please choose **Always allow this site** on each. The first
+> two are your workspace (`<its host>`) and `phog.kurrent.io` (kcap's anonymous
+> usage proxy); the sign-in then adds `api.workos.com` and `signin.kcap.ai`, or
+> `github.com` for a GitHub workspace. After that I will show you a short code to
+> approve on your own device.
+
+Setup prints the exact hosts as it reaches each stage; relay them to the user.
+I do not see the cards. If a command below fails with "cannot reach" or asks for
+a card to be approved, the user has not approved that host yet: ask them to look
 for the card, then run the **same command again** unchanged.
-
-Ask for the workspace address (`https://<tenant>.kcap.ai`) if the user has not
-given one. Never guess a tenant.
 
 ### B1. Check what is already there
 
@@ -78,6 +80,8 @@ is missing.
 
 Only `~` survives a VM replacement; the global npm prefix is `/usr` and is
 wiped, so never `npm install -g` here.
+If `npm install` cannot reach `registry.npmjs.org`, that host needs its card
+approved too.
 
 ```bash
 mkdir -p ~/workspace/kcap ~/workspace/capacitor
@@ -101,9 +105,10 @@ sleep 8; cat ~/workspace/capacitor/setup.log
 default, lists the hosts above before its first request, and treats an
 unreachable server as "not yet approved".
 
-- The log first lists the hosts. If it then says **Cannot reach server** and
-  **not yet approved**: the user has not approved the card yet. Ask them, then
-  run the same command again.
+- The log first lists the hosts, and once the server answers, the sign-in
+  hosts. If it then says **Cannot reach server** and **not yet approved**, or
+  sign-in fails while a card is waiting: ask the user to approve it, then run
+  the same command again.
 - Once the server answers, the log shows a **verification URL and a code**.
   **Show both to the user** and ask them to open the URL on their own device and
   enter the code. Keep reading the log (`sleep 15; tail -20 …`) until it reaches
