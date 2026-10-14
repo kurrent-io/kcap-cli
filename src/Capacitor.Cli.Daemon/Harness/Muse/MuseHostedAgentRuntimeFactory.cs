@@ -249,7 +249,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     async Task AwaitFirstTurnAsync(MuseMspHostedAgentRuntime runtime, string prompt, CancellationToken ct) {
         var deadline = _readyDeadline ?? MuseMspHostedAgentRuntime.DefaultReadyDeadline;
 
-        var send = runtime.SendUserInputAndWaitForWriteAsync(prompt);
+        var send = runtime.SendFirstPromptAsync(prompt);
 
         // Abandoned on timeout or cancellation, then faulted by the runtime's disposal.
         _ = send.ContinueWith(static t => _ = t.Exception, CancellationToken.None,

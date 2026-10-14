@@ -322,22 +322,59 @@ public class MuseMspHostedAgentRuntimeTests {
         await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
     }
 
-    /// <summary>A host that never answers an input fails it at the deadline and frees the lane for the next.</summary>
+    /// <summary>A written input the host leaves unanswered may still run, so it is reported delivered at
+    /// the deadline rather than dropped (a drop invites a retry that runs it twice), and the lane is freed
+    /// for the next. The late refusal that follows is still logged.</summary>
     [Test]
-    public async Task Unanswered_input_fails_at_the_deadline_and_releases_the_lane() {
-        await using var rig = await ReadyRig();
+    public async Task Unanswered_input_is_reported_delivered_at_the_deadline_and_releases_the_lane() {
+        var logger = new CaptureLogger();
+        await using var rig = await ReadyRig(logger: logger);
         rig.Host.Silent.Add("turn/start");
 
         var first = rig.Runtime.SendUserInputAsync("first");
+        var unanswered = await rig.Host.WaitForWriteAsync("turn/start");
+        rig.Time.Advance(MuseMspHostedAgentRuntime.DefaultReadyDeadline + TimeSpan.FromSeconds(1));
+
+        await first.WaitAsync(HangGuard);
+
+        rig.Host.Silent.Remove("turn/start");
+        await rig.Runtime.SendUserInputAsync("second").WaitAsync(HangGuard);
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
+
+        rig.Process.Push(MuseScriptedHost.ErrorResponse((long)unanswered["id"]!, "session is closing"));
+        await logger.WaitForAsync(e => e.Message.Contains("refused after its deadline", StringComparison.Ordinal)).WaitAsync(HangGuard);
+    }
+
+    /// <summary>Only an explicit refusal falls a steer back to a new turn: an unanswered steer may have
+    /// landed, and a fallback would run the input a second time.</summary>
+    [Test]
+    public async Task An_unanswered_steer_is_reported_delivered_without_a_fallback_turn() {
+        await using var rig = await ReadyRig();
+
+        await rig.Runtime.SendUserInputAsync("first").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        await rig.Host.SyncAsync();
+        rig.Host.Silent.Add("turn/steer");
+
+        var second = rig.Runtime.SendUserInputAsync("again");
+        await rig.Host.WaitForWriteAsync("turn/steer");
+        rig.Time.Advance(MuseMspHostedAgentRuntime.DefaultReadyDeadline + TimeSpan.FromSeconds(1));
+
+        await second.WaitAsync(HangGuard);
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(1);
+    }
+
+    /// <summary>The launch's first prompt is the exception: a host that never acknowledges it fails it.</summary>
+    [Test]
+    public async Task An_unanswered_first_prompt_faults_at_the_deadline() {
+        await using var rig = await ReadyRig();
+        rig.Host.Silent.Add("turn/start");
+
+        var first = rig.Runtime.SendFirstPromptAsync("first");
         await rig.Host.WaitForWriteAsync("turn/start");
         rig.Time.Advance(MuseMspHostedAgentRuntime.DefaultReadyDeadline + TimeSpan.FromSeconds(1));
 
         await Assert.ThrowsAsync<TimeoutException>(async () => await first.WaitAsync(HangGuard));
-
-        rig.Host.Silent.Remove("turn/start");
-        await rig.Runtime.SendUserInputAsync("second").WaitAsync(HangGuard);
-
-        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
     }
 
     [Test]
