@@ -23,13 +23,7 @@ public sealed class MuseAssistantHttpPoster(ProfileContext profiles, ICapacitorH
 
         var (route, body) = action switch {
             MuseAssistantStartSession start => ("hooks/session-start/muse-assistant", StartBody(start.Session, chatId)),
-            MuseAssistantSendLines lines    => ("hooks/transcript", JsonSerializer.Serialize(new TranscriptBatch {
-                SessionId   = lines.SessionId,
-                Lines       = lines.Lines,
-                LineNumbers = lines.Seqs,
-                Vendor      = "muse-assistant",
-                Strict      = true
-            }, CapacitorJsonContext.Default.TranscriptBatch)),
+            MuseAssistantSendLines lines    => ("hooks/transcript", TranscriptBody(lines)),
             MuseAssistantEndSession end     => ("hooks/session-end/muse-assistant", new JsonObject {
                 ["session_id"] = end.Session.SessionId,
                 ["ended_at"]   = Iso(end.EndedAtMs),
@@ -62,6 +56,14 @@ public sealed class MuseAssistantHttpPoster(ProfileContext profiles, ICapacitorH
 
         return text.Length <= 200 ? text : string.Concat(text.AsSpan(0, 200), "…");
     }
+
+    internal static string TranscriptBody(MuseAssistantSendLines lines) => JsonSerializer.Serialize(new TranscriptBatch {
+        SessionId   = lines.SessionId,
+        Lines       = lines.Lines,
+        LineNumbers = lines.Seqs,
+        Vendor      = "muse-assistant",
+        Strict      = true
+    }, CapacitorJsonContext.Default.TranscriptBatch);
 
     static string StartBody(MuseAssistantOpenSession session, string chatId) => new JsonObject {
         ["session_id"]         = session.SessionId,

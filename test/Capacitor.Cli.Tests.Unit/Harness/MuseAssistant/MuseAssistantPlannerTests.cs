@@ -1,3 +1,4 @@
+using System.Text;
 using Capacitor.Cli.Harness.MuseAssistant;
 using TUnit.Assertions.Enums;
 
@@ -246,13 +247,32 @@ public class MuseAssistantPlannerTests {
     }
 
     [Test]
+    public async Task Every_batch_request_body_stays_within_the_cap_with_its_envelope() {
+        // Two lines whose escaped sizes add up to exactly the cap: the rest of the request must push the second out.
+        static MuseAssistantItem Half(long seq) => Item(seq, T0 + seq) with { Line = new string('a', MuseAssistantPlanner.MaxBatchBytes / 2 - 3) };
+
+        var sends = Plan(Fresh(), Walk(T0 + Minute, Half(1), Half(2))).OfType<MuseAssistantSendLines>().ToList();
+
+        await Assert.That(sends.Count).IsEqualTo(2);
+        foreach (var send in sends)
+            await Assert.That(Encoding.UTF8.GetByteCount(MuseAssistantHttpPoster.TranscriptBody(send))).IsLessThanOrEqualTo(MuseAssistantPlanner.MaxBatchBytes);
+    }
+
+    [Test]
+    public async Task A_line_that_fits_the_cap_only_without_the_envelope_is_a_problem() {
+        var full = Item(1, T0) with { Line = new string('a', MuseAssistantPlanner.MaxBatchBytes - 3) };
+
+        await Assert.That(MuseAssistantPlanner.OversizeProblem(Walk(T0 + Minute, full), Fresh())).IsNotNull();
+    }
+
+    [Test]
     public async Task A_line_whose_escaped_size_exceeds_the_cap_is_a_problem_only_while_it_would_be_sent() {
         var huge = Item(5, T0 + 5, turn: "t9") with { Line = new string('é', 700_000) };
         var walk = Walk(T0 + Minute, Item(4, T0), huge);
 
         var problem = MuseAssistantPlanner.OversizeProblem(walk, Fresh());
 
-        await Assert.That(problem).IsEqualTo("item seq 5 in turn t9 is too large to send (4200003 bytes > 4 MiB)");
+        await Assert.That(problem).IsEqualTo("item seq 5 in turn t9 is too large to send (4200003 bytes; a request carries at most 4 MiB)");
         await Assert.That(MuseAssistantPlanner.OversizeProblem(walk, Fresh() with { Watermark = 5 })).IsNull();
         await Assert.That(MuseAssistantPlanner.OversizeProblem(walk, Fresh(MuseAssistantGrantBoundaries.AfterSeq, 5))).IsNull();
         await Assert.That(MuseAssistantPlanner.OversizeProblem(Walk(T0, huge with { Role = "developer" }), Fresh())).IsNull();

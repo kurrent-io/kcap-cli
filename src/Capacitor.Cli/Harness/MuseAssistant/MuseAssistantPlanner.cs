@@ -13,6 +13,9 @@ public static class MuseAssistantPlanner {
     public static readonly TimeSpan IdleClose = TimeSpan.FromMinutes(150);
     public const int MaxBatchLines = 100;
     public const int MaxBatchBytes = 4 * 1024 * 1024;
+    /// <summary>What a batch's lines may add up to: the cap less room for the rest of the request — the
+    /// session id, up to <see cref="MaxBatchLines"/> line numbers below 1e9 and the fixed fields, about 1.2 KB.</summary>
+    public const int MaxLinesBytes = MaxBatchBytes - 4 * 1024;
 
     /// <summary>When <paramref name="open"/> last had a selected item. The state's last-selected time can
     /// still be the previous session's — a run that stopped after this session's start, or its first batch,
@@ -37,8 +40,8 @@ public static class MuseAssistantPlanner {
             if (state.Watermark is { } w && item.Seq <= w) continue;
             if (!MuseAssistantRoles.IsSelected(item.Role) || state.Grant.Floor is { } f && item.Seq <= f) continue;
 
-            if (WireSize(item.Line) is var size && size > MaxBatchBytes)
-                return $"item seq {item.Seq} in turn {item.TurnId} is too large to send ({size} bytes > 4 MiB)";
+            if (WireSize(item.Line) is var size && size > MaxLinesBytes)
+                return $"item seq {item.Seq} in turn {item.TurnId} is too large to send ({size} bytes; a request carries at most 4 MiB)";
         }
 
         return null;
@@ -99,7 +102,7 @@ public static class MuseAssistantPlanner {
             }
 
             var size = WireSize(item.Line);
-            if (lines.Count > 0 && (lines.Count >= MaxBatchLines || bytes + size > MaxBatchBytes)) Flush();
+            if (lines.Count > 0 && (lines.Count >= MaxBatchLines || bytes + size > MaxLinesBytes)) Flush();
 
             lines.Add(item.Line);
             seqs.Add(checked((int)item.Seq));
