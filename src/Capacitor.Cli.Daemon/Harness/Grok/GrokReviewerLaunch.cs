@@ -23,9 +23,8 @@ internal static class GrokReviewerLaunch {
     }
 
     /// <summary>Grok loads Claude Code's and Cursor's MCP servers, hooks, skills and rules by default; a
-    /// reviewer gets none of them, so a server outside the injected set cannot be reached and a hook
-    /// cannot act for it. Subagents start in the parent's permission mode with their own tools, so they
-    /// are off too.</summary>
+    /// reviewer gets none of them. Subagents start in the parent's permission mode with their own tools,
+    /// so they are off too. Grok's own configuration has no such switch and still applies.</summary>
     internal static readonly IReadOnlyDictionary<string, string> ReviewerEnvironment = new Dictionary<string, string>(StringComparer.Ordinal) {
         ["GROK_CLAUDE_MCPS_ENABLED"]   = "false",
         ["GROK_CLAUDE_HOOKS_ENABLED"]  = "false",

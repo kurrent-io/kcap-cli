@@ -1922,11 +1922,11 @@ The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok
 
 #### Grok as an unattended review-flow reviewer
 
-Enabled by default; `KCAP_GROK_UNATTENDED_REVIEWER=0` in the daemon's environment disables it. Grok reviews in an owned worktree only, never a borrowed checkout, because nothing in it contains what the reviewer reads.
+Enabled by default; `KCAP_GROK_UNATTENDED_REVIEWER=0` in the daemon's environment disables it. Like Claude, Grok declares no containment, so it reviews in an owned worktree only, never a borrowed checkout.
 
-- **Grok asks before every edit and every command it does not class as read-only.** The daemon approves only calls on the MCP servers it injected for the review, its result channel among them. Any other request ends the round rather than being answered, so a reviewer that tries to write is stopped, not trusted.
-- **The reviewer gets reads, search and the shell, and no edit tools.** It is launched with an agent profile that removes `search_replace` and `write`, subagents and web search, so a well-behaved review raises nothing to refuse.
-- **Your Claude Code and Cursor setup stays out of it.** The reviewer loads none of their MCP servers, hooks, skills or rules. Your own `~/.grok` MCP servers and hooks still load: Grok has no switch for them. A call to one of those servers is refused like any other.
+- **Whatever Grok asks about, the daemon refuses unless it is a call on a server it injected for the review.** That includes its result channel. Any other request ends the round rather than being answered. Grok asks before an edit or a command it does not class as read-only.
+- **The reviewer gets reads, search and the shell, and no edit tools.** It is launched with an agent profile that removes `search_replace` and `write`, subagents and web search.
+- **Your Grok configuration still applies.** Permission rules you set in `~/.grok` approve matching calls without asking, and your Grok hooks and MCP servers run as they do in your own sessions. Grok has no per-process switch for them. Your Claude Code and Cursor MCP servers, hooks, skills and rules are not loaded.
 - **Version floor:** the daemon records the installed `grok` at startup and refuses an older build. `kcap daemon reviewer affirm --vendor grok` moves it.
 
 ### Hosted Pi agents

@@ -508,10 +508,12 @@ internal static class AcpVendorDescriptors {
     /// it, and then never sends <c>session/request_permission</c>, so neither the permission broker nor
     /// a launch preset would decide anything.</para>
     ///
-    /// <para>As a reviewer, that same ask mode is the boundary: every edit and every command Grok does
-    /// not class as read-only raises a frame, and only a call on a server this launch injected is
-    /// approved. The <see cref="GrokReviewerLaunch.AgentProfile"/> clamp removes the edit tools so a
-    /// well-behaved review raises none. No borrowed review: nothing here contains reads.</para>
+    /// <para>As a reviewer it declares no containment, like Claude, so it reviews owned worktrees only. Of
+    /// the frames Grok raises, only a call on a server this launch injected is approved, and the
+    /// <see cref="GrokReviewerLaunch.AgentProfile"/> clamp removes the edit tools. That is a guard, not a
+    /// boundary: the user's own Grok permission rules, hooks and MCP servers still act without asking,
+    /// and no per-process switch turns them off short of moving <c>GROK_HOME</c>, which would mean
+    /// handling the user's credential.</para>
     ///
     /// <para>Reconnect stays off: <c>session/load</c> worked from a fresh process after a SIGKILL, with
     /// stable tool-call ids, but the reconnect probe has not passed against Grok.</para></summary>
