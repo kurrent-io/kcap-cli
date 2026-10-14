@@ -34,7 +34,7 @@ Never start `kcap daemon` unless the user asks for hosted agents.
 1. Check what is there: `command -v kcap && kcap whoami`. A `Server:` line
    naming the workspace the user wants (or any, if they named none) plus
    `Server:   accepts this token` means nothing to do; say so and stop.
-   Anything else means step 3 runs.
+   No `kcap` on PATH means step 2, then step 3; anything else, step 3.
 2. Install: requires Node.js 18+ (`node -v`). `npm install -g @kurrent/kcap`,
    then `command -v kcap` must print a path (otherwise add `$(npm prefix -g)/bin`
    to PATH in the shell profile — the hooks run `kcap` by name).
@@ -97,11 +97,16 @@ npm install --prefix ~/workspace/kcap @kurrent/kcap
 
 ### B3. Sign in by device code
 
+The workspace address goes into a shell command, so check it first: it must be
+`https://` (or `http://`) followed only by letters, digits, `.` and `-`, with
+an optional `:port` and nothing after it. Refuse anything else — quotes,
+spaces, `$`, `;` or a path — and ask the user for the plain address.
+
 Run setup in the background and read its output while it waits for the user:
 
 ```bash
 KCAP=~/workspace/kcap/node_modules/.bin/kcap
-SERVER='<the workspace address the user gave, exactly>'
+SERVER='<the checked workspace address>'
 nohup "$KCAP" setup --server-url "$SERVER" --device --no-prompt --muse-assistant \
   > ~/workspace/capacitor/setup.log 2>&1 &
 sleep 8; cat ~/workspace/capacitor/setup.log
