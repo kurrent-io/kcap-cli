@@ -448,8 +448,13 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         // The timer callback fires off-thread in production and synchronously on the CALLING
         // thread under FakeTimeProvider.Advance -- Schedule (not a raw write) is what keeps this
         // on the UI scheduler either way, and synchronous under WithImmediateRxScheduler's
-        // ImmediateScheduler so a test can assert right after Advance() returns.
-        RxSchedulers.MainThreadScheduler.Schedule(() => Publish(TerminalSessionState.NotFound, null));
+        // ImmediateScheduler so a test can assert right after Advance() returns. Re-check
+        // timeout-won inside the scheduled action: a late DTO can claim dto-won and publish
+        // Connecting before this hop runs, and must not be overwritten with NotFound.
+        RxSchedulers.MainThreadScheduler.Schedule(() => {
+            if (Volatile.Read(ref _resolveState) != ResolveTimeoutWon) return;
+            Publish(TerminalSessionState.NotFound, null);
+        });
     }
 
     /// CAS (not read-then-write): only a timed-out gate is eligible for retry, and only if
