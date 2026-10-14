@@ -30,4 +30,12 @@ public class MuseSandboxProbeTests {
         await Assert.That(probe.Available).IsTrue();
         await Assert.That(Volatile.Read(ref calls)).IsEqualTo(1);
     }
+
+    /// <summary>Without a root bind bwrap starts on an empty root where <c>true</c> does not resolve,
+    /// so the probe would report no sandbox on every host, including ones where user namespaces work.</summary>
+    [Test]
+    public async Task The_bubblewrap_probe_binds_the_root_so_true_resolves() {
+        await Assert.That(MuseSandboxProbe.BubblewrapArguments)
+            .IsEquivalentTo(["--unshare-all", "--ro-bind", "/", "/", "true"]);
+    }
 }
