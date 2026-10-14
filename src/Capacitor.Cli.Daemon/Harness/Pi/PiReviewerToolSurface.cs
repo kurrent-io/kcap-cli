@@ -27,7 +27,7 @@ internal static class PiReviewerToolSurface {
     /// <paramref name="servers"/>: a launcher assembling the server list has no reason to order it
     /// this way, so the surface enforces it rather than trusting caller order.</summary>
     internal static IReadOnlyList<PiReviewerTool> For(IReadOnlyList<AcpMcpServerSpec> servers) {
-        var resultChannel = servers.FirstOrDefault(s => IsResultChannel(s.Name));
+        var resultChannel = servers.FirstOrDefault(s => KcapMcpRegistry.IsReservedResultChannel(s.Name));
 
         if (resultChannel is null)
             throw new InvalidOperationException(
@@ -40,7 +40,7 @@ internal static class PiReviewerToolSurface {
             .Select(t => new PiReviewerTool(t.Name, resultChannel.Name, t.Name)));
 
         foreach (var server in servers) {
-            if (IsResultChannel(server.Name)) continue;
+            if (KcapMcpRegistry.IsReservedResultChannel(server.Name)) continue;
 
             if (string.Equals(server.Name, ReviewContextServer, StringComparison.Ordinal)) {
                 tools.Add(new PiReviewerTool($"{server.Name.Replace('-', '_')}_{ReviewContextTool}", server.Name, ReviewContextTool));
@@ -61,7 +61,4 @@ internal static class PiReviewerToolSurface {
 
     internal static string AllowlistArg(IReadOnlyList<PiReviewerTool> tools) =>
         string.Join(",", tools.Select(t => t.PiName));
-
-    static bool IsResultChannel(string name) =>
-        string.Equals(name, KcapMcpRegistry.ReservedResultChannelId, StringComparison.OrdinalIgnoreCase);
 }

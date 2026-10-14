@@ -74,6 +74,10 @@ public static class KcapMcpRegistry {
     /// it, and every reviewer runtime must agree on that.</summary>
     public const string ReservedResultChannelId = "kcap-flow-result";
 
+    /// <summary>Whether <paramref name="name"/> names the reserved result channel (case-insensitive).</summary>
+    public static bool IsReservedResultChannel(string name) =>
+        string.Equals(name, ReservedResultChannelId, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>How long a harness with a per-server tool timeout lets one result-channel call run.
     /// It must exceed the channel's own delivery deadline, or the harness abandons a submit that is
     /// still riding out a server restart.</summary>
