@@ -74,16 +74,30 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The bang command waiting for the output record that follows it.
     ShellCommandItem? _openShell;
 
-    /// The feed and the generation it belongs to, taken as one reference: reading them separately
-    /// lets a switch land between them and tag a read of the old source with the new generation,
-    /// which Apply's guard would then wave through onto the freshly cleared list.
-    sealed class FeedLease(IChatTranscriptFeed feed, int generation) {
-        public IChatTranscriptFeed Feed { get; } = feed;
-        public int Generation { get; } = generation;
+    /// The feed and its generation travel together so a switched-out read cannot be tagged as current.
+    sealed class FeedLease : IDisposable {
+        public IChatTranscriptFeed Feed { get; }
+        public int Generation { get; }
+        public int Pending = 1;
+        public int WakePosted;
+        readonly Action _changed;
+
+        public FeedLease(IChatTranscriptFeed feed, int generation, Action<FeedLease> changed) {
+            Feed = feed;
+            Generation = generation;
+            _changed = () => changed(this);
+            if (feed is RemoteTranscriptFeed remote) remote.Changed += _changed;
+        }
+
+        public void Dispose() {
+            if (Feed is RemoteTranscriptFeed remote) remote.Changed -= _changed;
+            Feed.Dispose();
+        }
     }
 
     int _generation;
     int _inputGeneration;
+    int _baselineVersion;
     int _readInFlight;
     string? _feedKey;
     /// The session the listed foreign rows belong to.
@@ -622,6 +636,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (HasUsageLimitQuestion) return;
             var chipIds = files.Select(f => f.Id).ToList();
             var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
+            if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
             _lastSent = queued;
             _sending = queued;
             ChatSendOutcome outcome;
@@ -781,8 +796,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _planActivity?.Clear();
         _feedKey = key;
         var previous = _lease;
-        _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation));
-        previous?.Feed.Dispose();
+        _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation), SignalFeedRead);
+        previous?.Dispose();
         RebaseQueuedMessages(CurrentOffset);
         _failureNote = null;
         var wasWaiting = _phase == ChatTabPhase.Waiting;
@@ -822,6 +837,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Notice(RefusalNotice.Render(refused));
     }
 
+    void SignalFeedRead(FeedLease lease) {
+        Interlocked.Exchange(ref lease.Pending, 1);
+        if (Interlocked.Exchange(ref lease.WakePosted, 1) != 0) return;
+        Dispatcher.UIThread.Post(() => {
+            Volatile.Write(ref lease.WakePosted, 0);
+            if (ReferenceEquals(lease, _lease)) OnTick();
+        });
+    }
+
     void OnTick() {
         if (!Dispatcher.UIThread.CheckAccess()) {
             Dispatcher.UIThread.Post(OnTick);
@@ -831,18 +855,30 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         RefreshActivityNote();
         _runs.Tick();
         if (_lease is not { } lease) return;
+        if (lease.Feed is RemoteTranscriptFeed && Volatile.Read(ref lease.Pending) == 0) return;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return;
+        Interlocked.Exchange(ref lease.Pending, 0);
         _pendingRead = ReadAndApplyAsync(lease);
     }
 
     async Task ReadAndApplyAsync(FeedLease lease) {
+        var baselineVersion = Volatile.Read(ref _baselineVersion);
+        var inputGeneration = _inputGeneration;
+        var canSkipEmpty = Phase == ChatTabPhase.Reading && _failureNote is null
+            && Tracked.All(queued => queued.IsForeign || queued.HasBaseline);
         try {
-            var read = await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
+            var read = lease.Feed is RemoteTranscriptFeed
+                ? lease.Feed.ReadAppended()
+                : await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
+            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0
+                && baselineVersion == Volatile.Read(ref _baselineVersion) && inputGeneration == Volatile.Read(ref _inputGeneration)) return;
             await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read));
         } catch (Exception ex) {
             LogOnce($"read: {ex.Message}");
         } finally {
             Volatile.Write(ref _readInFlight, 0);
+            if (_lease is { Feed: RemoteTranscriptFeed remote } current
+                && (Volatile.Read(ref current.Pending) != 0 || remote.HasPendingChanges)) SignalFeedRead(current);
         }
     }
 
@@ -1161,7 +1197,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Interlocked.Increment(ref _generation);
         var lease = _lease;
         _lease = null;
-        lease?.Feed.Dispose();
+        lease?.Dispose();
         _timer?.Dispose();
         _timer = null;
         _runs.Changed -= RefreshRuns;

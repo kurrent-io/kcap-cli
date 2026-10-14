@@ -52,7 +52,7 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlyDictionary<string, int>> agentsRunningCommands,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>> pullRequests,
             IObservable<bool> localOnAppServer, Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest,
-            bool isExpanded, Action<bool> setExpanded) {
+            bool isExpanded, Action<bool> setExpanded, IObservable<Unit>? ageTicks = null) {
         RootPath = group.Key;
         // Rows in one group share RepoGroupLabel by construction — any member names it.
         Label = group.Cache.Items[0].RepoGroupLabel;
@@ -63,12 +63,20 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
         _expanded = new BehaviorSubject<bool>(isExpanded).DisposeWith(_disposables);
         ToggleCommand = ReactiveCommand.Create(() => SetExpanded(!IsExpanded)).DisposeWith(_disposables);
 
-        // Preserve main's collapsed-group verdict, including pending permissions, questions,
-        // usage limits, and background work. Expanded, the individual session marks take over.
-        var header = group.Cache.Connect().QueryWhenChanged()
-            .CombineLatest(agentsWithPending, agentsAwaitingAnswer, agentsRunningCommands, _expanded,
-                (query, pending, answering, commands, visible) => visible ? null
-                    : SessionStatusDots.Rollup(query.Items, pending, answering, commands))
+        var query = group.Cache.Connect().QueryWhenChanged().Replay(1).RefCount();
+        var pendingHere = query.CombineLatest(agentsWithPending, (rows, pending) =>
+                rows.Items.Where(row => pending.Contains(row.Id)).Select(row => row.Id).ToHashSet(StringComparer.Ordinal))
+            .DistinctUntilChanged(EqualityComparer<HashSet<string>>.Create((a, b) => a!.SetEquals(b!)));
+        var answeringHere = query.CombineLatest(agentsAwaitingAnswer, (rows, answering) =>
+                rows.Items.Where(row => answering.Contains(row.Id)).Select(row => row.Id).ToHashSet(StringComparer.Ordinal))
+            .DistinctUntilChanged(EqualityComparer<HashSet<string>>.Create((a, b) => a!.SetEquals(b!)));
+        var commandsHere = query.CombineLatest(agentsRunningCommands, (rows, commands) =>
+                rows.Items.Where(row => commands.GetValueOrDefault(row.Key) > 0)
+                    .ToDictionary(row => row.Key, row => commands[row.Key], StringComparer.Ordinal))
+            .DistinctUntilChanged(EqualityComparer<Dictionary<string, int>>.Create((a, b) => a!.Count == b!.Count && a.All(item => b.GetValueOrDefault(item.Key) == item.Value)));
+        var header = query.CombineLatest(pendingHere, answeringHere, commandsHere, _expanded,
+                (rows, pending, answering, commands, visible) => visible ? null
+                    : SessionStatusDots.Rollup(rows.Items, pending, answering, commands))
             .Replay(1).RefCount();
         _headerStatus = header.ToProperty(this, x => x.HeaderStatus, initialValue: null).DisposeWith(_disposables);
         _showsHeaderBadge = header.Select(status => status is not null)
@@ -84,9 +92,9 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
 
         Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         group.Cache.Connect()
-            .Transform(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale,
+            .TransformWithInlineUpdate(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale,
                 openLocal, openRemote, time, agentsAwaitingAnswer, agentsRunningCommands,
-                pullRequests, localOnAppServer, openPullRequest))
+                pullRequests, localOnAppServer, openPullRequest, ageTicks), (vm, row) => vm.Update(row))
             .DisposeMany()
             .SortAndBind(_sessionsSource, SessionComparer)
             .Subscribe()

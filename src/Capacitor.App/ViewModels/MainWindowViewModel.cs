@@ -36,15 +36,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         message == ReconnectingMessage
         || message == DaemonLifecycleController.AlreadyRunningReconnectStatus;
 
-    // StatusColors (shared with TrayIconRenderer's tray-icon overlay) is hex-only
-    // constants (plain strings, not Brush instances). A Brush is an AvaloniaObject with UI-thread
-    // affinity enforced the moment the renderer references it; caching one as a shared
-    // `static readonly` field would tie its affinity to whichever thread happens to trigger this
-    // type's static initializer FIRST (e.g. a plain unit test calling a static helper off the UI
-    // thread) and then poison every later render that reuses the same cached instance. Paint
-    // below constructs a fresh instance per call instead — cheap, and always on whatever thread
-    // the caller is on.
-    static IBrush Paint(string hex) => new SolidColorBrush(Color.Parse(hex));
+    static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
+    static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
+    static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
+    static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
+
+    static IBrush Paint(string hex) => hex switch {
+        StatusColors.Connected => ConnectedBrush,
+        StatusColors.InProgress => InProgressBrush,
+        StatusColors.Disrupted => DisruptedBrush,
+        _ => UnavailableBrush,
+    };
 
     readonly IDaemonClientService _service;
 

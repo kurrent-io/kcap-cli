@@ -1,4 +1,3 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.PullRequests;
 using ReactiveUI.Reactive;
 
@@ -20,18 +19,26 @@ public sealed partial class PullRequestContextViewModel {
             if (manual) Notify();
             return;
         }
+        // A fresh manual discovery supersedes overview/page reads using the old provider state.
+        if (manual) CancelReads();
         var refresh = _refreshDiscovery;
         _refreshDiscovery = false;
         _queuedRefresh = false;
         _refreshing = true;
         _lastRefresh = _time.GetTimestamp();
         Notify();
-        var repository = _primaryRepo?.Invoke();
-        // The daemon reports the branch the worktree was cut on; a session that switched since
-        // opens its PR on the new one, which only the checkout's HEAD knows.
-        var branch = _branch = GitRepository.CurrentBranch(_worktree) ?? _branch;
+        var worktree = _worktree;
+        var reportedBranch = _branch;
+        var generation = _generation;
         Start(async ct => {
-            _readers?.DescribeSession(session, repository, branch);
+            var branch = await Task.Run(() => _readBranch(worktree), ct).WaitAsync(ct).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => {
+                ct.ThrowIfCancellationRequested();
+                if (_disposed || generation != _generation) throw new OperationCanceledException(ct);
+                // A reported branch can advance while the filesystem lookup is in flight.
+                branch = _worktree == worktree && _branch == reportedBranch ? branch ?? reportedBranch : _branch;
+                _readers?.DescribeSession(session, _primaryRepo?.Invoke(), branch);
+            });
             var capability = await _source.DiscoverAsync(refresh, ct).ConfigureAwait(false);
             var links = capability.Kind switch {
                 PullRequestCapabilityKind.Supported => await _source.ListAsync(session, ct).ConfigureAwait(false),
@@ -39,6 +46,7 @@ public sealed partial class PullRequestContextViewModel {
                 _ => null
             };
             return () => {
+                if (_worktree == worktree && _branch == reportedBranch) _branch = branch;
                 _refreshing = false;
                 _legacy = capability.Kind is PullRequestCapabilityKind.Legacy or PullRequestCapabilityKind.Unsupported;
                 if (links is null) {
@@ -69,7 +77,7 @@ public sealed partial class PullRequestContextViewModel {
     }
 
     void RequestOverview() {
-        if (_disposed || !_foreground || _legacy || _stopped || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
+        if (_disposed || !_foreground || _legacy || _stopped || _refreshing || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
             || _retryAt > _time.GetUtcNow().UtcDateTime || _lastOverview is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) return;
         _overviewPending = true;
         _lastOverview = _time.GetTimestamp();

@@ -946,9 +946,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             Add(key);
         // An agent's RepoPath can be a worktree checkout (review flows launch into the
         // requester's worktree) — the menu offers the repository, never the checkout.
-        foreach (var agent in _daemon.Agents.Items)
-            if (agent.RepoPath is { Length: > 0 } repoPath)
-                Add(GitRepository.ResolveMainRepoRoot(repoPath));
+        var agentPaths = _daemon.Agents.Items.Select(agent => agent.RepoPath)
+            .OfType<string>().Where(path => path.Length > 0).Distinct(PathComparer).ToArray();
+        var roots = await Task.Run(() => agentPaths.Select(GitRepository.ResolveMainRepoRoot).ToArray());
+        foreach (var root in roots) Add(root);
         foreach (var repo in known)
             Add(repo);
         Add(SelectedRepoPath);
@@ -1104,13 +1105,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             if (normalized.Length > 0) return normalized;
         }
 
-        foreach (var agent in _daemon.Agents.Items) {
-            if (agent.RepoPath is not { Length: > 0 } repoPath) continue;
-            var normalized = PlatformPaths.Normalize(GitRepository.ResolveMainRepoRoot(repoPath));
-            if (normalized.Length > 0) return normalized;
-        }
-
-        return null;
+        var agentPaths = _daemon.Agents.Items.Select(agent => agent.RepoPath)
+            .OfType<string>().Where(path => path.Length > 0).Distinct(PathComparer).ToArray();
+        return await Task.Run(() => agentPaths.Select(path => PlatformPaths.Normalize(GitRepository.ResolveMainRepoRoot(path)))
+            .FirstOrDefault(path => path.Length > 0));
     }
 
     /// Sets the repository and restores that repository's remembered harness, or DefaultVendor

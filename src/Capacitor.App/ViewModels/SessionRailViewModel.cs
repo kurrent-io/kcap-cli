@@ -1,5 +1,7 @@
 using System.Collections.Frozen;
 using System.Collections.ObjectModel;
+using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -63,22 +65,25 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequests = null,
             Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest = null) {
         _directory = directory;
+        var ageTicks = new Subject<Unit>().DisposeWith(_disposables);
+        time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => { if (!ageTicks.IsDisposed) ageTicks.OnNext(Unit.Default); }),
+            null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1)).DisposeWith(_disposables);
         IObservable<string?> selected = _selectedAgentIdChanges;
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
         // here so every nested OAPH downstream sees
         // it on the UI thread without adding its own ObserveOn.
         var pending = (agentsWithPending ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
-            .ObserveOn(RxSchedulers.MainThreadScheduler);
+            .ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
         var answering = (agentsAwaitingAnswer ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty))
-            .ObserveOn(RxSchedulers.MainThreadScheduler);
+            .ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
         // Marshaled once here, like `pending` above, so every nested OAPH downstream sees it on
         // the UI thread without its own ObserveOn.
-        var stale = directory.RemoteStale.ObserveOn(RxSchedulers.MainThreadScheduler);
+        var stale = directory.RemoteStale.ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
         var prs = (pullRequests ?? Observable.Return<IReadOnlyDictionary<string, RailPullRequestSummary>>(
-                FrozenDictionary<string, RailPullRequestSummary>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler);
-        var localOnAppServer = directory.LocalDaemonOnAppServer.ObserveOn(RxSchedulers.MainThreadScheduler);
+                FrozenDictionary<string, RailPullRequestSummary>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
+        var localOnAppServer = directory.LocalDaemonOnAppServer.ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
         var commands = (agentsRunningCommands ?? Observable.Return<IReadOnlyDictionary<string, int>>(
-                FrozenDictionary<string, int>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler);
+                FrozenDictionary<string, int>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
 
         _isEmpty = directory.Rows.CountChanged
             .Select(c => c == 0)
@@ -95,7 +100,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
                 prs, localOnAppServer, openPullRequest, !_collapsedRepos.Contains(g.Key), expanded => {
                     if (expanded) _collapsedRepos.Remove(g.Key);
                     else _collapsedRepos.Add(g.Key);
-                }))
+                }, ageTicks))
             .DisposeMany()
             .SortAndBind(_reposSource, RepoComparer)
             .Subscribe()

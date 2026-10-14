@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
@@ -40,6 +41,74 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Row_revisions_preserve_commands_and_bindings_and_refresh_all_session_facts() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<string>();
+            using var prs = new System.Reactive.Subjects.BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                new Dictionary<string, RailPullRequestSummary> {
+                    ["published"] = new([new(Capacitor.Cli.Core.PullRequests.PullRequestWire.Subject(FakePullRequestSource.Link(42)), null, "Open")])
+                });
+            using var rail = new SessionRailViewModel(directory, opened.Add, _ => { }, TimeProvider.System, pullRequests: prs);
+            var row = AgentRow.FromLocal(Dto("a", "/repo") with { SessionId = null }, new RepoIdentity("path:/repo", "repo"));
+            directory.Rows.AddOrUpdate(row);
+            var session = rail.Repos.Single().Sessions.Single();
+            var command = session.OpenCommand;
+            rail.SelectedAgentId = "a";
+            directory.Rows.AddOrUpdate(row with { Title = "Updated", Model = "new model", SessionId = "published", LiveSubagents = 2, AwaitingInput = false });
+            await Assert.That(ReferenceEquals(session, rail.Repos.Single().Sessions.Single())).IsTrue();
+            await Assert.That(ReferenceEquals(command, session.OpenCommand)).IsTrue();
+            await Assert.That(session.Primary).IsEqualTo("Updated");
+            await Assert.That(session.Model).IsEqualTo("new model");
+            await Assert.That(session.Meta).EndsWith("2 subagents");
+            await Assert.That(session.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(session.IsSelected).IsTrue();
+            await Assert.That(session.PullRequestLabel).IsEqualTo("PR #42");
+            await session.OpenCommand.Execute();
+            await Assert.That(opened).IsEquivalentTo(["a"]);
+            directory.Rows.RemoveKey(row.Key);
+            prs.OnNext(new Dictionary<string, RailPullRequestSummary>());
+            await Assert.That(session.PullRequestLabel).IsEqualTo("PR #42");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unrelated_pending_changes_leave_other_repository_and_session_presentations_untouched() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            using var pending = new System.Reactive.Subjects.BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, pending);
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("a", "/a"), new RepoIdentity("path:/a", "a")));
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("b", "/b"), new RepoIdentity("path:/b", "b")));
+            foreach (var repo in rail.Repos) await repo.ToggleCommand.Execute();
+            var unaffected = rail.Repos.Single(repo => repo.Label == "b");
+            var header = unaffected.HeaderStatus;
+            var status = unaffected.Sessions.Single().Status;
+            pending.OnNext(new HashSet<string> { "a" });
+            await Assert.That(ReferenceEquals(header, unaffected.HeaderStatus)).IsTrue();
+            await Assert.That(ReferenceEquals(status, unaffected.Sessions.Single().Status)).IsTrue();
+            await Assert.That(rail.Repos.Single(repo => repo.Label == "a").HeaderStatus!.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Session_age_advances_without_directory_revisions() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+            using var directory = new FakeAgentDirectory();
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, time);
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(Dto("a", "/repo", created: time.GetUtcNow().UtcDateTime), new RepoIdentity("path:/repo", "repo")));
+            var session = rail.Repos.Single().Sessions.Single();
+            await Assert.That(session.Meta).IsEqualTo("0s");
+            time.Advance(TimeSpan.FromMinutes(2));
+            await Assert.That(session.Meta).IsEqualTo("2m");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Revealing_a_session_honors_origin_and_covers_pending_sessions() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var directory = new FakeAgentDirectory();
@@ -78,6 +147,11 @@ public class SessionRailViewModelTests {
                 service.Agents.AddOrUpdate(rows[1] with { Title = "Updated title", AwaitingInput = true });
                 await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))
                     .IsEquivalentTo(["a", "b", "c"], CollectionOrdering.Matching);
+                var session = rail.Repos.Single().Sessions.Single(row => row.Id == "b");
+                service.Agents.AddOrUpdate(rows[1] with { CreatedAt = created.AddHours(2) });
+                await Assert.That(rail.Repos.Single().Sessions.Select(row => row.Id))
+                    .IsEquivalentTo(["a", "c", "b"], CollectionOrdering.Matching);
+                await Assert.That(ReferenceEquals(session, rail.Repos.Single().Sessions.Last())).IsTrue();
                 service.Agents.Clear();
                 service.Agents.AddOrUpdate(rows.Reverse());
                 await Assert.That(rail.Repos.Single().Sessions.Select(s => s.Id))

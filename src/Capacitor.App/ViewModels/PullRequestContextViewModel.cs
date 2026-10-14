@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.PullRequests.Readers;
@@ -16,6 +17,7 @@ namespace Capacitor.App.ViewModels;
 public sealed partial class PullRequestContextViewModel : ReactiveObject {
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
+    readonly Func<string?, string?> _readBranch;
     readonly TimeProvider _time;
     readonly IUrlOpener _opener;
     readonly Action _openReader;
@@ -121,8 +123,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
-        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null) {
+        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null) {
         _source = source;
+        _readBranch = readBranch ?? GitRepository.CurrentBranch;
         _time = time;
         _opener = opener;
         _openReader = openReader;
@@ -151,6 +154,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _subscriptions.Add(LoadMoreCommand); _subscriptions.Add(ReloadEarlierCommand); _subscriptions.Add(ExpandThreadCommand);
         _subscriptions.Add(OpenRowCommand); _subscriptions.Add(OpenGitHubCommand); _subscriptions.Add(OpenBodyLinkCommand);
         _subscriptions.Add(SignInCommand); _subscriptions.Add(LinkGitHubCommand);
+        _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
@@ -179,7 +183,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             if (_session is null || _disposed) return;
             CancelReads(); ClearProtected(); _source.ResetSession(_session); _stopped = false; _lastRefresh = null; RequestRefresh(manual: true);
         }).DisposeWith(_subscriptions);
-        _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
     internal void ClearSession() {
@@ -315,7 +318,35 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         else if (state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
     }
     internal static readonly TimeSpan RowsFreshFor = TimeSpan.FromSeconds(30);
+    void ScheduleTick() {
+        if (_disposed) return;
+        var next = double.PositiveInfinity;
+        if (_foreground && _session is not null) {
+            if (!_stopped && !_refreshing) {
+                var pollGap = _queuedRefresh ? 3 : Math.Max(30, _pollAfter);
+                next = _lastRefresh is { } last ? pollGap - _time.GetElapsedTime(last).TotalSeconds : 1;
+                if (_retryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
+                    next = Math.Max(next, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+            }
+            if (!_masked && !_grace && _accessSeconds > 0) next = Math.Min(next, Remaining);
+            if (_grace) next = Math.Min(next, (TimeSpan.FromMinutes(5) - _time.GetElapsedTime(_graceStarted)).TotalSeconds);
+            if (!_legacy && !_stopped && !_refreshing && !_overviewPending && _selected is { IsAvailable: true }) {
+                var overviewGap = _lastOverview is { } last ? 15 - _time.GetElapsedTime(last).TotalSeconds : 0;
+                var overviewDue = Math.Max(Remaining - 5, overviewGap);
+                if (_retryAt is { } retry) overviewDue = Math.Max(overviewDue, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+                next = Math.Min(next, overviewDue);
+            }
+        }
+        _timer.Change(double.IsPositiveInfinity(next) ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Math.Max(1, next)), Timeout.InfiniteTimeSpan);
+    }
+
     void Tick() {
+        if (_disposed) return;
+        TickCore();
+        ScheduleTick();
+    }
+
+    void TickCore() {
         if (_disposed || !_foreground) return;
         if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
         if (_grace && _time.GetElapsedTime(_graceStarted) >= TimeSpan.FromMinutes(5)) { _masked = true; _grace = false; Notify(); }
@@ -392,5 +423,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _cancel.Dispose(); foreach (var retired in _retired) retired.Dispose();
         _tasks.Clear(); _retired.Clear(); _positions.Clear(); _choices.Clear(); ClearProtected();
         _hasPullRequest.Dispose();
+        _notified.Clear();
     }
 }
