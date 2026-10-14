@@ -1977,6 +1977,20 @@ Enabled by default; `KCAP_GROK_UNATTENDED_REVIEWER=0` in the daemon's environmen
 - **Your Grok configuration still applies.** Permission rules you set in `~/.grok` approve matching calls without asking, and your Grok hooks and MCP servers run as they do in your own sessions. Grok has no per-process switch for them. Your Claude Code and Cursor MCP servers, hooks, skills and rules are not loaded.
 - **Version floor:** the daemon records the installed `grok` at startup and refuses an older build. `kcap daemon reviewer affirm --vendor grok` moves it.
 
+### Hosted Muse Code agents
+
+The daemon hosts Muse Code over `muse serve` (chat, no terminal) when `muse` is on `PATH` (or `KCAP_MUSE_PATH` names it). `KCAP_MUSE_MODEL` overrides the model, mirroring `KCAP_PI_MODEL`; a per-launch model from the dashboard takes precedence, and with neither set Muse runs its own default.
+
+```bash
+KCAP_MUSE_MODEL=<model> kcap daemon
+```
+
+- **Credentials stay on the daemon host.** The daemon never looks for them, and one installed as a service inherits no `META_API_KEY` exported in your shell: run `muse auth set` as the user the daemon runs as, or set `META_API_KEY` in the service unit's own environment. On Linux this is required; a macOS `auth.json` does not transfer.
+- **Linux needs bubblewrap with user namespaces.** Without them a reviewer launch is refused, and an interactive agent runs without Muse's sandbox.
+- **Always in a daemon-owned worktree,** never your own checkout, because Muse's sandbox does not confine reads. The worktree is trusted, so its Muse hooks and MCP servers load; new network hosts ask for approval.
+- **Reminder child sessions run and bill on every launch.** Muse does not let `serve` disable them; each is recorded as a subagent of its parent.
+- **It is recorded once,** from Muse's own session log. Reviews: [Unattended Muse reviews](#unattended-muse-reviews).
+
 ### Hosted Pi agents
 
 `KCAP_PI_MODEL` overrides the model a `pi` hosted agent runs, mirroring `KCAP_OPENCODE_MODEL` —
@@ -2008,20 +2022,6 @@ Two things are worth knowing before you pick Pi:
   only PTY-backed vendors are given. There is also no borrowed-workspace containment for Pi, so a
   hosted Pi launch — interactive or reviewer — always runs in a daemon-owned worktree, never your
   own checkout.
-
-### Hosted Muse Code agents
-
-The daemon hosts Muse Code over `muse serve` (chat, no terminal) when `muse` is on `PATH` (or `KCAP_MUSE_PATH` names it). `KCAP_MUSE_MODEL` overrides the model, mirroring `KCAP_PI_MODEL`; a per-launch model from the dashboard takes precedence, and with neither set Muse runs its own default.
-
-```bash
-KCAP_MUSE_MODEL=<model> kcap daemon
-```
-
-- **Credentials stay on the daemon host.** The daemon never looks for them, and one installed as a service inherits no `META_API_KEY` exported in your shell: run `muse auth set` as the user the daemon runs as, or set `META_API_KEY` in the service unit's own environment. On Linux this is required; a macOS `auth.json` does not transfer.
-- **Linux needs bubblewrap with user namespaces.** Without them a reviewer launch is refused, and an interactive agent runs without Muse's sandbox.
-- **Always in a daemon-owned worktree,** never your own checkout, because Muse's sandbox does not confine reads. The worktree is trusted, so its Muse hooks and MCP servers load; new network hosts ask for approval.
-- **Reminder child sessions run and bill on every launch.** Muse does not let `serve` disable them; each is recorded as a subagent of its parent.
-- **It is recorded once,** from Muse's own session log. Reviews: [Unattended Muse reviews](#unattended-muse-reviews).
 
 #### Review-flow reviewer backstops & crash-survivor reaping
 
