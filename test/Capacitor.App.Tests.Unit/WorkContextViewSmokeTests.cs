@@ -71,43 +71,6 @@ public class WorkContextViewSmokeTests {
         }
     }
 
-    /// Clickable document rows under PLAN open the Artefacts tab without a separate summary row.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Document_rows_are_buttons_that_open_the_tab_and_reflect_the_selected_document() {
-        await RunOnUiAsync(async () => {
-            await using var host = new Host();
-            host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "design", Path = "docs/x-design.md" }]));
-            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
-                Artifacts = [new PlanArtifactDto {
-                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
-                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
-                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
-                }],
-            }));
-            await host.ShowAsync(KeyOnlyRead());
-
-            var info = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapInfoBrush")!;
-            await Assert.That(host.Window.GetVisualDescendants().OfType<Button>().Any(b => b.Name == "ArtefactsSummaryRow")).IsFalse();
-
-            await host.Vm.Plan.ToggleCommand.Execute();
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            var docList = host.Find<ItemsControl>("PlanDocumentList");
-            await Assert.That(docList.ClipToBounds).IsFalse();
-            var rowButton = host.Window.GetVisualDescendants().OfType<Button>().Single(b => b.DataContext is PlanDocumentRow);
-            await Assert.That(rowButton.Classes.Contains("copyValue")).IsTrue();
-            await Assert.That(rowButton.Classes.Contains("planDocRow")).IsTrue();
-            await Assert.That(rowButton.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
-
-            host.Vm.Plan.MarkOpen("docs/x-design.md");
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
-            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(info.Color);
-        });
-    }
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_tick_re_reads_a_failed_first_read_with_the_tab_hidden() {
@@ -982,7 +945,7 @@ public class WorkContextViewSmokeTests {
     /// while the session runs.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_plan_section_lists_documents_and_tasks_by_status_between_the_pull_request_and_the_subagents() {
+    public async Task The_plan_section_lists_tasks_by_status_between_the_pull_request_and_the_subagents() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             host.Plans.Enqueue(PlanRead(
@@ -1003,7 +966,7 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsTrue();
             await Assert.That(host.Find<ItemsControl>("PlanCounts").IsEffectivelyVisible).IsFalse();
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
-            await Assert.That(texts).Contains("plan-widget-design.md");
+            await Assert.That(texts).DoesNotContain("plan-widget-design.md");
             await Assert.That(texts).Contains("Read the route");
             await Assert.That(texts).Contains("Draw the rows");
             await Assert.That(texts).Contains("glyphs first");
@@ -1037,7 +1000,7 @@ public class WorkContextViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_plan_section_is_hidden_without_a_plan_and_counts_nothing_for_documents_alone() {
+    public async Task The_plan_section_is_hidden_without_tasks_even_when_documents_are_declared() {
         await RunOnUiAsync(async () => {
             await using (var none = new Host()) {
                 await none.ShowAsync(KeyOnlyRead());
@@ -1048,17 +1011,7 @@ public class WorkContextViewSmokeTests {
             host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "plan", Path = "PLAN.md" }]));
             await host.ShowAsync(KeyOnlyRead());
 
-            await Assert.That(host.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<ItemsControl>("PlanCounts").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<Border>("PlanInProgressBody").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<ItemsControl>("PlanDocumentList").IsEffectivelyVisible).IsFalse();
-
-            await host.Vm.Plan.ToggleCommand.Execute();
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<ItemsControl>("PlanDocumentList").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<ItemsControl>("PlanTaskList").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsFalse();
         });
     }
 }

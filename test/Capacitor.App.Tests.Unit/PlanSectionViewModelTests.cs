@@ -212,7 +212,7 @@ public class PlanSectionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Documents_list_plan_then_spec_then_design_by_file_name_and_a_plan_of_documents_alone_still_shows() {
+    public async Task A_plan_of_documents_alone_without_tasks_keeps_the_section_hidden() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Source.Enqueue(Ready(Plan("p1", documents: [
@@ -221,13 +221,9 @@ public class PlanSectionViewModelTests {
 
             await h.SwitchAsync(SessionA);
 
-            await Assert.That(h.Vm.HasPlan).IsTrue();
             await Assert.That(h.Vm.HasTasks).IsFalse();
-            await Assert.That(h.Vm.HasDocuments).IsTrue();
-            await Assert.That(h.Vm.Documents.Select(d => d.Kind)).IsEquivalentTo(new[] { "plan", "spec", "design" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.Documents.Select(d => d.FileName)).IsEquivalentTo(
-                new[] { "widget.md", "SPEC.md", "2026-09-21-widget-design.md" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.Documents[2].Path).IsEqualTo("docs/superpowers/specs/2026-09-21-widget-design.md");
+            await Assert.That(h.Vm.HasPlan).IsFalse();
+            await Assert.That(h.Vm.ShowsPlan).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
@@ -483,35 +479,6 @@ public class PlanSectionViewModelTests {
 
             await Assert.That(h.Source.Requested.Count).IsEqualTo(1);
             await Assert.That(h.Vm.HasPlan).IsFalse();
-        });
-    }
-
-    /// A document row is a way into the tab: the command hands the declared path to whoever
-    /// opens documents, and the open one stays marked through a refresh.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_document_row_opens_by_path_and_the_open_mark_survives_a_refresh() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            var opened = new List<string>();
-            h.Vm.OpenDocument = opened.Add;
-            h.Source.Enqueue(Ready(Plan("p1", documents: [Doc("design", "docs/x-design.md"), Doc("plan", "docs/x.md")])));
-            await h.SwitchAsync(SessionA);
-
-            await h.Vm.OpenDocumentCommand.Execute(h.Vm.Documents[1]);
-            await Assert.That(opened).IsEquivalentTo(new[] { "docs/x-design.md" });
-
-            h.Vm.MarkOpen("/Users/me/repo/docs/x-design.md");
-            await Assert.That(h.Vm.Documents[1].IsOpen).IsTrue();
-            await Assert.That(h.Vm.Documents[0].IsOpen).IsFalse();
-
-            h.Source.Enqueue(Ready(Plan("p1", documents: [Doc("design", "docs/x-design.md"), Doc("plan", "docs/x.md"), Doc("spec", "docs/s.md")])));
-            await h.RefreshAsync();
-            await Assert.That(h.Vm.Documents.Single(d => d.Kind == "design").IsOpen).IsTrue();
-
-            h.Vm.MarkOpen(null);
-            await Assert.That(h.Vm.Documents.Any(d => d.IsOpen)).IsFalse();
-            await h.Vm.TeardownAsync();
         });
     }
 }

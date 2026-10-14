@@ -177,10 +177,6 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
             }).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
-        WorkContext.Plan.OpenDocument = path => {
-            if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();
-        };
-        Artefacts.WhenAnyValue(a => a.Selected).Subscribe(selected => WorkContext.Plan.MarkOpen(selected?.Path)).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
