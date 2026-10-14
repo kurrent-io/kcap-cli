@@ -367,6 +367,10 @@ public class DaemonConfig {
     /// </summary>
     public bool OpenCodeUnattendedReviewerEnabled { get; set; } = true;
 
+    /// <summary>Whether this daemon may run Grok Build as an unattended review-flow reviewer. Default
+    /// true; <c>KCAP_GROK_UNATTENDED_REVIEWER=0</c> disables. See <c>GrokReviewerCapability</c>.</summary>
+    public bool GrokUnattendedReviewerEnabled { get; set; } = true;
+
     /// <summary>
     /// One absolute budget, in seconds, for an OpenCode reviewer launch: spawn through the first prompt
     /// completing. On expiry the child is terminated, its isolated config dir removed, and the launch

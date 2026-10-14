@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Daemon.Harness.Grok;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Capacitor.Cli.Daemon.Harness.OpenCode;
 
@@ -154,9 +155,13 @@ internal sealed record AcpVendorDescriptor {
     /// </summary>
     public bool                        SupportsReconnectResume { get; }
 
-    /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c>, fresh per launch so no launch can
-    /// alter another's. Null sends none.</summary>
-    public Func<JsonObject>?            SessionNewMeta { get; }
+    /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c> for an interactive (false) or review
+    /// (true) launch, fresh per launch so no launch can alter another's. Null sends none.</summary>
+    public Func<bool, JsonObject>?      SessionNewMeta { get; }
+
+    /// <summary>The vendor's admission rule under <see cref="AcpUnattendedInteractionPolicy.AllowlistedAutoApprove"/>;
+    /// required by that policy and unused by every other.</summary>
+    public UnattendedToolAdmitter?      ToolAdmitter { get; }
 
     public AcpVendorDescriptor(
             HarnessId                   Harness,
@@ -172,7 +177,8 @@ internal sealed record AcpVendorDescriptor {
             bool                        SupportsReconnectResume = false,
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
                                         UnattendedTrustArgvBuilder = null,
-            Func<JsonObject>?           SessionNewMeta = null
+            Func<bool, JsonObject>?     SessionNewMeta = null,
+            UnattendedToolAdmitter?     ToolAdmitter = null
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -229,6 +235,12 @@ internal sealed record AcpVendorDescriptor {
         this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.SupportsReconnectResume = SupportsReconnectResume;
         this.SessionNewMeta = SessionNewMeta;
+        this.ToolAdmitter   = ToolAdmitter;
+
+        if (UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove && ToolAdmitter is null)
+            throw new ArgumentException(
+                $"{nameof(AcpUnattendedInteractionPolicy.AllowlistedAutoApprove)} requires a {nameof(ToolAdmitter)} (vendor: {Vendor}).",
+                nameof(ToolAdmitter));
         this.ReviewFlowMcpTransport = ReviewFlowMcpTransport switch {
             AcpReviewFlowMcpTransport.Default when SupportsMcpServers => AcpReviewFlowMcpTransport.SessionNew,
             AcpReviewFlowMcpTransport.Default                         => AcpReviewFlowMcpTransport.Unsupported,
@@ -373,6 +385,7 @@ internal static class AcpVendorDescriptors {
         // the tools THIS launch injected and reaps anything else, which keeps the scoped posture --
         // still no fs_write, still no execute_bash -- while surviving the vendor's prompt leak.
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
+        ToolAdmitter:        UnattendedToolAdmitter.Kiro,
         ModelSelector:       SetModelSelector.Instance,
         SupportsMcpServers:  true,
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
@@ -495,6 +508,13 @@ internal static class AcpVendorDescriptors {
     /// it, and then never sends <c>session/request_permission</c>, so neither the permission broker nor
     /// a launch preset would decide anything.</para>
     ///
+    /// <para>As a reviewer it declares no containment, like Claude, so it reviews owned worktrees only. Of
+    /// the frames Grok raises, only a call on a server this launch injected is approved, and the
+    /// <see cref="GrokReviewerLaunch.AgentProfile"/> clamp removes the edit tools. That is a guard, not a
+    /// boundary: the user's own Grok permission rules, hooks and MCP servers still act without asking,
+    /// and no per-process switch turns them off short of moving <c>GROK_HOME</c>, which would mean
+    /// handling the user's credential.</para>
+    ///
     /// <para>Reconnect stays off: <c>session/load</c> worked from a fresh process after a SIGKILL, with
     /// stable tool-call ids, but the reconnect probe has not passed against Grok.</para></summary>
     public static readonly AcpVendorDescriptor Grok = new(
@@ -502,11 +522,14 @@ internal static class AcpVendorDescriptors {
         // A configured leader would hand the session to a shared process the daemon does not own.
         Argv:                ["agent", "--no-leader", "stdio"],
         UnattendedTrustArgv: [],
-        SupportsUnattended:  false,
+        SupportsUnattended:  true,
+        UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.AllowlistedAutoApprove,
+        ToolAdmitter:        GrokToolAdmission.Admitter,
         ModelSelector:       ConfigOptionModelSelector.Instance,
         SupportsMcpServers:  true,
+        ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
         SupportsReconnectResume: false,
-        SessionNewMeta:      () => new JsonObject { ["yoloMode"] = false }
+        SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).

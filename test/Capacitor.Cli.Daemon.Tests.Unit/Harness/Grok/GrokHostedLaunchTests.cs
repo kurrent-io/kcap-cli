@@ -30,7 +30,10 @@ public class GrokHostedLaunchTests {
         await Assert.That(descriptor.Argv.SequenceEqual(["agent", "--no-leader", "stdio"])).IsTrue();
         await Assert.That(descriptor.SupportsMcpServers).IsTrue();
         await Assert.That(descriptor.ModelSelector).IsEqualTo(ConfigOptionModelSelector.Instance);
-        await Assert.That(descriptor.SupportsUnattended).IsFalse();
+        await Assert.That(descriptor.SupportsUnattended).IsTrue();
+        await Assert.That(descriptor.UnattendedInteractionPolicy).IsEqualTo(AcpUnattendedInteractionPolicy.AllowlistedAutoApprove);
+        await Assert.That(descriptor.ReviewFlowMcpTransport).IsEqualTo(AcpReviewFlowMcpTransport.SessionNew);
+        await Assert.That(descriptor.SupportsBorrowedReviewFlow).IsFalse();
         await Assert.That(descriptor.SupportsReconnectResume).IsFalse();
     }
 

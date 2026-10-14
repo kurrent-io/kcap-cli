@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Cursor;
 using Capacitor.Cli.Daemon.Harness.Gemini;
+using Capacitor.Cli.Daemon.Harness.Grok;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Capacitor.Cli.Daemon.Harness.OpenCode;
 using Microsoft.Extensions.Logging;
@@ -264,8 +265,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 admittedToolIds: descriptor.UnattendedInteractionPolicy
                                      == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove
                               && ctx.IsReviewFlow && reviewMcp is { Count: > 0 } && ctx.LaunchIdentity is { } id
-                    ? UnattendedToolAdmission.AdmittedFor(reviewMcp, id)
+                    ? descriptor.ToolAdmitter!.AdmittedFor(reviewMcp, id)
                     : null,
+                admissionMatcher: descriptor.ToolAdmitter?.IsAdmitted,
                 // Launch-time permission preset — resolved for NON-review-flow launches only (a review
                 // flow runs under its own containment posture, never a preset). A malformed token
                 // resolves to null (inert). The audit sink is fire-and-forget; ServerConnection swallows
@@ -955,8 +957,12 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
 
         // kcap's own Grok hook loads inside this child; the daemon already records the session from
         // its ACP stream, so the hook stands down rather than recording it a second time.
-        if (descriptor.Harness is HarnessId.Grok)
+        if (descriptor.Harness is HarnessId.Grok) {
             psi.Environment[GrokHookEnvironment.HostedVar] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+
+            if (ctx.IsReviewFlow)
+                foreach (var (key, value) in GrokReviewerLaunch.ReviewerEnvironment) psi.Environment[key] = value;
+        }
 
         // OpenCode's launch controls are env-shaped rather than argv-shaped (`opencode acp` accepts
         // none of the global flags), so its whole posture lives here. Unlike Kiro's branch above this
@@ -1158,6 +1164,15 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             return oc == OpenCodeReviewerDecision.Allowed
                 ? null
                 : OpenCodeReviewerCapability.DenialReason(oc, g.Installed, g.Affirmed);
+        }
+
+        if (descriptor.Harness is HarnessId.Grok) {
+            var g    = GateInputsFor(descriptor, config, config.GrokUnattendedReviewerEnabled, resolveVersion);
+            var grok = GrokReviewerCapability.Decide(g.Enabled, g.Installed, g.Affirmed);
+
+            return grok == GrokReviewerDecision.Allowed
+                ? null
+                : GrokReviewerCapability.DenialReason(grok, g.Installed, g.Affirmed);
         }
 
         if (!UsesMcpNameAllowlistArgv(descriptor)) return null;
