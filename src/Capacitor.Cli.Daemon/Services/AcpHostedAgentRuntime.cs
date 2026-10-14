@@ -299,6 +299,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// for every launch/test that carries no journal.</summary>
     readonly TranscriptJournal? _journal;
     readonly Func<bool, JsonObject>? _sessionNewMeta;
+    readonly Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>? _turnUsageReader;
 
     readonly ReapVerdictGate _gate;
 
@@ -512,9 +513,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             TranscriptJournal?                                                              journal = null,
             PolicyJudgeGateway?                                                             policyJudge = null,
             Func<bool, JsonObject>?                                                         sessionNewMeta = null,
-            Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null
+            Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null,
+            Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>?                         turnUsageReader = null
         ) {
         _sessionNewMeta = sessionNewMeta;
+        _turnUsageReader = turnUsageReader;
         _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
@@ -1492,8 +1495,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 HandleMcpSurfaceViolation(violation);
         }
 
-        if (notification.Method != "session/update")
+        if (notification.Method != "session/update") {
+            if (_turnUsageReader is { } readUsage && !_suppressNotifications && IsThisSession(notification))
+                EmitTurnUsage(readUsage(notification));
             return;
+        }
 
         // Notification suppression (reconnect spec §5.4): while an incident is in flight, every
         // session/update — the dying connection's last gasps and the candidate's entire replay —
@@ -1538,6 +1544,22 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // every update this runtime ever sees is aggregated in strict arrival order without needing
         // its own queue/consumer loop.
         AggregateUpdate(reduced);
+    }
+
+    bool IsThisSession(AcpNotification notification) =>
+        _sessionId is { Length: > 0 } sessionId
+     && notification.Params is { ValueKind: JsonValueKind.Object } p
+     && p.TryGetProperty("sessionId", out var id) && id.ValueKind == JsonValueKind.String
+     && id.GetString() == sessionId;
+
+    // Standalone, like a usage_update: metadata, so it must not close an open chunk run.
+    void EmitTurnUsage(IReadOnlyList<AcpEventEnvelope> usage) {
+        if (usage.Count == 0) return;
+
+        lock (_aggregationLock) {
+            foreach (var envelope in usage)
+                EmitEnvelope(envelope with { Seq = 0, TimestampIso = NowIso() });
+        }
     }
 
     static AcpSessionUpdate Reduce(JsonElement update) {
