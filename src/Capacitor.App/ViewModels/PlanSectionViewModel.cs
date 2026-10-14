@@ -85,8 +85,9 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         var old = _current;
         _current = new ReadLease(sessionId);
         old?.Cts.Cancel();
-        Clear();
+        // Raise IsLoading before Clear so HasPlan || IsLoading does not briefly go false.
         RaiseLoading();
+        Clear();
         StartRead(_current);
     }
 
@@ -146,10 +147,11 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
                 if (_current is { } ready) ready.Settled = true;
-                RaiseLoading();
                 // The server lists most recently touched first, which stands in for a continued
                 // session that has not written to its predecessor's plan yet.
+                // Show before RaiseLoading so HasPlan || IsLoading does not briefly go false.
                 Show(read.Plans.FirstOrDefault(plan => plan.IsCurrent) ?? (read.Plans.Count > 0 ? read.Plans[0] : null));
+                RaiseLoading();
                 return;
             case SessionPlansReadKind.Unreachable:
                 // Keep last good rows (a mid-session refresh); after a switch Clear already ran.
@@ -158,8 +160,8 @@ public sealed class PlanSectionViewModel : ReactiveObject {
                 return;
             default:
                 if (_current is { } done) done.Settled = true;
-                RaiseLoading();
                 Clear();
+                RaiseLoading();
                 return;
         }
     }

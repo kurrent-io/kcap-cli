@@ -87,8 +87,10 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         old?.Cts.Cancel();
         _pendingPath = null;
         LastReadFailed = false;
-        Clear();
+        // Raise IsLoading before Clear so observers that combine HasAny || IsLoading see loading
+        // true while HasAny falls — otherwise a stale IsLoading=false hides a sticky tab.
         RaiseLoading();
+        Clear();
         if (_current is not null) StartRead(_current);
     }
 
@@ -189,17 +191,19 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     void Apply(PlanArtifactsRead read) {
         LastReadFailed = read.Kind == SessionPlansReadKind.Unreachable;
         if (_current is { } lease) lease.Settled = true;
-        RaiseLoading();
+        // Populate (or clear) before RaiseLoading so HasAny || IsLoading never dips to false
+        // between settlement and content — that flicker hides the tab and forces Chat.
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
                 Show(read.Body?.Artifacts ?? []);
-                return;
+                break;
             case SessionPlansReadKind.Unreachable:
-                return;
+                break;
             default:
                 Clear();
-                return;
+                break;
         }
+        RaiseLoading();
     }
 
     static int KindRank(string kind) => kind switch { "plan" => 0, "spec" => 1, "design" => 2, _ => 3 };
