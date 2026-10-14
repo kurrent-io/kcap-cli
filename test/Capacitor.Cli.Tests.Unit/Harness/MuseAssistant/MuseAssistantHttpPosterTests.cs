@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.MuseAssistant;
+using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -39,6 +41,15 @@ public class MuseAssistantHttpPosterTests : IDisposable {
         await Assert.That(body.GetProperty("started_at").GetDateTimeOffset()).IsEqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1_760_000_005_000));
         await Assert.That(body.GetProperty("default_visibility").GetString()).IsEqualTo("private");
         await Assert.That(body.GetProperty("home_dir").GetString()).IsEqualTo("/home/hatch");
+    }
+
+    [Test]
+    public async Task A_start_for_a_side_chat_posts_is_main_false() {
+        Accept("/hooks/session-start/muse-assistant");
+
+        await Poster().SendAsync(new MuseAssistantStartSession(Session with { IsMain = false }, null, State), "chat-main", default);
+
+        await Assert.That(LastBody("/hooks/session-start/muse-assistant").GetProperty("is_main").GetBoolean()).IsFalse();
     }
 
     [Test]
@@ -90,5 +101,38 @@ public class MuseAssistantHttpPosterTests : IDisposable {
         var refused = await poster.SendAsync(new MuseAssistantEndSession(Session, 1, null, State), "chat-main", default);
 
         await Assert.That(refused).Contains("127.0.0.1:9");
+    }
+
+    [Test]
+    public async Task A_spent_retry_budget_reports_the_last_transport_fault_on_one_line() {
+        var time   = new FakeTimeProvider();
+        var poster = new MuseAssistantHttpPoster(Resolutions.Of(new() { ServerUrl = "https://acme.kcap.ai" }), new FaultingHttpClient(), time);
+
+        var sending = poster.SendAsync(new MuseAssistantEndSession(Session, 1, null, State), "chat-main", default);
+        for (var i = 0; !sending.IsCompleted && i++ < 1000;) { time.Advance(TimeSpan.FromSeconds(1)); await Task.Delay(1); }
+        var refused = await sending.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(refused).Contains("retry budget");
+        await Assert.That(refused).Contains("socket reset by peer");
+        await Assert.That(refused).DoesNotContain("\n");
+    }
+
+    sealed class FaultingHttpClient : ICapacitorHttpClient {
+        public Task<HttpClient> ForBackgroundAsync(CancellationToken ct = default) => Task.FromResult(new HttpClient(new FaultingHandler()));
+
+        public Task<HttpClient>  ForCommandAsync(CancellationToken ct = default)       => throw new NotSupportedException();
+        public Task<HttpClient>  ForSessionAsync(CancellationToken ct = default)       => throw new NotSupportedException();
+        public Task<AuthAttempt> ForHookAsync(CancellationToken ct = default)          => throw new NotSupportedException();
+        public Task<AuthAttempt> ForWaitAsync(CancellationToken ct = default)          => throw new NotSupportedException();
+        public Task<AuthAttempt> ForProtectedReadAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<HttpClient>  ForMemoryAsync(CancellationToken ct = default)        => throw new NotSupportedException();
+        public HttpClient Anonymous() => throw new NotSupportedException();
+        public HttpClient Loopback()  => throw new NotSupportedException();
+        public HttpClient Bearer()    => throw new NotSupportedException();
+    }
+
+    sealed class FaultingHandler : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new HttpRequestException("socket reset by peer\nsecond line");
     }
 }

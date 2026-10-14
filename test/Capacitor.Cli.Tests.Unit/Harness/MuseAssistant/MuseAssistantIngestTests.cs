@@ -160,6 +160,70 @@ public class MuseAssistantIngestTests {
     }
 
     [Test]
+    [NotInParallel]
+    public async Task Without_a_sign_in_the_ingest_exits_1_naming_kcap_login_and_posts_nothing() {
+        Grant();
+        var poster    = new RecordingPoster();
+        var signedOut = new MuseAssistantIdentity(Resolutions.At(Acme.ServerUrl, Config.Root), AuthFixtures.NewTokenStore(Config.Root));
+        var ingest    = new MuseAssistantIngest(Config.Root, Home.Home, signedOut, new(), new MuseAssistantActionRunner(poster, TimeProvider.System), TimeProvider.System);
+        using var stderr = ConsoleOutput.StartErrorCapture();
+
+        await Assert.That(await ingest.RunAsync(TwoSessionWalk(), default)).IsEqualTo(1);
+
+        await Assert.That(stderr.GetCapturedError()).Contains("kcap login");
+        await Assert.That(poster.Accepted).IsEmpty();
+        await Assert.That(Store().LoadState("chat-main").State!.Watermark).IsNull();
+    }
+
+    [Test]
+    public async Task A_revoked_chat_whose_closure_cannot_be_posted_exits_1_and_keeps_the_closure_pending() {
+        Grant();
+        await (await IngestAsync(new RecordingPoster { Refuse = (_, i) => i == 1 ? "hooks/transcript answered 503" : null })).RunAsync(TwoSessionWalk(), default);
+        var store   = Store();
+        var started = store.LoadState("chat-main").State!;
+        var open    = started.Open!;
+        store.SaveState(started with { Grant = started.Grant with { RevokedAtMs = T0 + Hour }, Open = open with { Phase = MuseAssistantSessionPhases.PendingEnd, EndedAtMs = open.StartedAtMs } });
+        var poster = new RecordingPoster { Refuse = (_, _) => "hooks/session-end/muse-assistant answered 503" };
+
+        await Assert.That(await (await IngestAsync(poster)).RunAsync(TwoSessionWalk("after-revoke"), default)).IsEqualTo(1);
+
+        await Assert.That(poster.Accepted).IsEmpty();
+        await Assert.That(store.LoadState("chat-main").State!.Open!.Phase).IsEqualTo(MuseAssistantSessionPhases.PendingEnd);
+
+        var retry = new RecordingPoster();
+        await Assert.That(await (await IngestAsync(retry)).RunAsync(TwoSessionWalk("retry"), default)).IsEqualTo(3);
+        await Assert.That(retry.Ends).IsEquivalentTo([Id(1)]);
+    }
+
+    [Test]
+    public async Task A_walk_that_is_out_of_scope_and_has_a_coverage_gap_reports_out_of_scope() {
+        var poster  = new RecordingPoster();
+        var partial = new WalkBuilder(Walks).AddPage(null, "c1", true, User(50, T0)).Write("partial");
+
+        await Assert.That(await (await IngestAsync(poster)).RunAsync(partial, default)).IsEqualTo(3);
+
+        // Once granted, the same walk is refused for its gap, so the 3 above was the scope check, not a missing gap.
+        Grant();
+        await Assert.That(await (await IngestAsync(poster)).RunAsync(partial, default)).IsEqualTo(2);
+        await Assert.That(poster.Accepted).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_main_flag_of_false_is_posted_on_the_start_and_on_its_replay() {
+        Grant();
+        var dir    = new WalkBuilder(Walks) { IsMain = false, FetchedAtMs = T0 + Minute }.AddPage(null, null, false, User(1, T0)).Write("side-chat");
+        var failed = new RecordingPoster { Refuse = (_, i) => i == 0 ? "hooks/session-start/muse-assistant answered 503" : null };
+
+        await Assert.That(await (await IngestAsync(failed)).RunAsync(dir, default)).IsEqualTo(1);
+        await Assert.That(Store().LoadState("chat-main").State!.Open!.IsMain).IsFalse();
+
+        var replayed = new RecordingPoster();
+        await Assert.That(await (await IngestAsync(replayed)).RunAsync(dir, default)).IsEqualTo(0);
+
+        await Assert.That(replayed.Accepted.OfType<MuseAssistantStartSession>().Single().Session.IsMain).IsFalse();
+    }
+
+    [Test]
     public async Task A_profile_switch_hides_the_other_profiles_state_and_posts_nothing() {
         Grant();
         var dir = TwoSessionWalk();
@@ -288,7 +352,12 @@ public class MuseAssistantIngestTests {
             var all = crashing.Accepted.Concat(rerun.Accepted).ToList();
             await Assert.That(all.OfType<MuseAssistantStartSession>().Select(a => a.Session.SessionId).Distinct()).IsEquivalentTo([Id(1), Id(5)]).Because($"crash on write {n}");
             await Assert.That(all.OfType<MuseAssistantSendLines>().SelectMany(a => a.Seqs).Distinct().Order()).IsEquivalentTo(expectedSeqs).Because($"crash on write {n}");
-            await Assert.That(all.GroupBy(Key).Count(g => g.Count() > 1)).IsLessThanOrEqualTo(1).Because($"crash on write {n}");
+            await Assert.That(all.OfType<MuseAssistantEndSession>().Select(a => a.Session.SessionId).Distinct()).IsEquivalentTo([Id(1), Id(5)]).Because($"crash on write {n}");
+
+            // The only repeat allowed is the last call the crash accepted: its result never reached the state file.
+            var repeated = all.GroupBy(Key).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+            await Assert.That(repeated.Count).IsLessThanOrEqualTo(1).Because($"crash on write {n}: {string.Join(", ", repeated)}");
+            if (repeated.Count == 1) await Assert.That(repeated[0]).IsEqualTo(Key(crashing.Accepted.Last())).Because($"crash on write {n}");
         }
     }
 

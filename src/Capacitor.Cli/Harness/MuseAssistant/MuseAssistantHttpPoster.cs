@@ -48,8 +48,18 @@ public sealed class MuseAssistantHttpPoster(ProfileContext profiles, ICapacitorH
 
             return response.IsSuccessStatusCode ? null : $"{route} answered {(int)response.StatusCode}";
         } catch (HttpRequestException ex) {
-            return $"cannot reach {UnusableUrlDiagnostic.Sanitize(baseUrl)}: {ex.Message}";
+            // A spent retry budget wraps the last transport fault; that inner message is the real cause.
+            var cause = ex.InnerException is { } inner ? $" ({Clean(inner.Message)})" : "";
+
+            return $"cannot reach {UnusableUrlDiagnostic.Sanitize(baseUrl)}: {Clean(ex.Message)}{cause}";
         }
+    }
+
+    // A message is printed on a line the cron log is parsed by: no control characters, bounded length.
+    static string Clean(string message) {
+        var text = new string(message.Where(c => !char.IsControl(c)).ToArray());
+
+        return text.Length <= 200 ? text : string.Concat(text.AsSpan(0, 200), "…");
     }
 
     static string StartBody(MuseAssistantOpenSession session, string chatId) => new JsonObject {
