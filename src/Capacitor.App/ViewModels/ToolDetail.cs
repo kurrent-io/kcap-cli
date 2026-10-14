@@ -43,11 +43,16 @@ public static class ToolDetail {
 
     /// The one argument a catalogued kcap row shows, first line only, elided like any detail.
     public static string ForKey(string? inputJson, string? key) {
+        var raw = RawForKey(inputJson, key);
+        return raw.Length > 0 ? TextElision.End(FirstLine(raw), MaxLength) : "";
+    }
+
+    public static string RawForKey(string? inputJson, string? key) {
         if (string.IsNullOrEmpty(inputJson) || string.IsNullOrEmpty(key)) return "";
         try {
             using var doc = JsonDocument.Parse(inputJson);
             if (!doc.RootElement.IsObject) return "";
-            return doc.RootElement.Str(key) is { } s && s.Trim().Length > 0 ? TextElision.End(FirstLine(s), MaxLength) : "";
+            return doc.RootElement.Str(key) is { } s && s.Trim().Length > 0 ? FirstLine(s) : "";
         } catch (JsonException) {
             return "";
         }

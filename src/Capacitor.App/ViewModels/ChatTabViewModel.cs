@@ -960,9 +960,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         _openShell = null;
                         var name = e.ToolName ?? "tool";
                         var entry = KcapToolCatalogue.Match(name);
+                        var isToolSearch = entry is null && KcapToolCatalogue.IsToolSearch(name);
                         var category = entry?.Category ?? ToolSummary.Categorize(name, e.ToolInputJson);
-                        var label = entry?.Label ?? KcapToolCatalogue.ForeignLabel(name);
+                        var label = entry?.Label ?? (isToolSearch ? "Looked up tools" : KcapToolCatalogue.ForeignLabel(name));
                         var detail = entry is not null ? ToolDetail.ForKey(e.ToolInputJson, entry.DetailKey)
+                            : isToolSearch ? TextElision.End(KcapToolCatalogue.FormatToolSearchQuery(ToolDetail.RawForKey(e.ToolInputJson, "query")), 80)
                             : label is not null ? FirstOrAny(e.ToolInputJson, category)
                             : ToolDetail.From(e.ToolInputJson, _root, category);
                         var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson);

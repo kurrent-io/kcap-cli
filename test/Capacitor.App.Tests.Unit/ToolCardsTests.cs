@@ -68,6 +68,10 @@ public class ToolCardsTests {
         await Assert.That(ToolCards.Build(ToolCardKind.Document, """{"kind":"plan"}""", "{}")).IsNull();
         await Assert.That(ToolCards.FileName(@"docs\plans\a.md")).IsEqualTo("a.md");
         await Assert.That(ToolCards.FileName("a.md")).IsEqualTo("a.md");
+        var rootDoc = ToolCards.Build(ToolCardKind.Document, """{"kind":"plan","path":"a.md"}""", "{}")!;
+        await Assert.That(rootDoc.HasDistinctMeta).IsFalse();
+        var subDoc = ToolCards.Build(ToolCardKind.Document, """{"kind":"plan","path":"docs/a.md"}""", "{}")!;
+        await Assert.That(subDoc.HasDistinctMeta).IsTrue();
     }
 
     [Test]

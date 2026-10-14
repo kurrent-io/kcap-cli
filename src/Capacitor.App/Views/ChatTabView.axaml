@@ -190,15 +190,27 @@
                             </Panel>
                         </Grid>
                         <Border x:Name="ToolCard" Classes="toolCard" IsVisible="{Binding HasCard}">
-                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="2">
-                                <TextBlock x:Name="ToolCardTitle" Classes="toolLine" Text="{Binding Card.Title}" Foreground="{StaticResource KcapMutedBrush}" />
-                                <TextBlock x:Name="ToolCardName" Grid.Row="1" Text="{Binding Card.Name}" FontWeight="SemiBold" FontSize="13.5"
-                                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="ToolCardMeta" Grid.Row="1" Grid.Column="0" Margin="0,20,0,0" Classes="toolLine"
-                                           Text="{Binding Card.Meta}" Foreground="{StaticResource KcapFaintBrush}" />
-                                <StackPanel Grid.Column="1" Grid.RowSpan="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                    <Button x:Name="ToolCardOpen" Content="Open" Classes="kcapGhost kcapQuiet"
-                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel Spacing="3" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Border Classes="toolCardBadge">
+                                            <TextBlock x:Name="ToolCardTitle" Text="{Binding Card.Title}" />
+                                        </Border>
+                                        <TextBlock x:Name="ToolCardName" Text="{Binding Card.Name}" FontWeight="SemiBold" FontSize="13.5"
+                                                   VerticalAlignment="Center" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="ToolCardMeta" Classes="toolLine"
+                                               Text="{Binding Card.Meta}" Foreground="{StaticResource KcapFaintBrush}"
+                                               IsVisible="{Binding Card.HasDistinctMeta}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                    <Button x:Name="ToolCardOpen" Classes="kcapGhost kcapQuiet"
+                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <TextBlock Text="Open" VerticalAlignment="Center" />
+                                            <Path Classes="toolCardOpenArrow" />
+                                        </StackPanel>
+                                    </Button>
                                     <Button x:Name="ToolCardCopyLink" Content="Copy link" Classes="kcapGhost kcapQuiet"
                                             Tag="{Binding Card.Url}" Click="OnCopyLinkClick"
                                             IsVisible="{Binding Card.Url, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -238,7 +250,7 @@
                                         </views:ChatKindHeader.Status>
                                     </views:ChatKindHeader>
                                 </Button>
-                                <ItemsControl ItemsSource="{Binding VisibleCalls}" IsVisible="{Binding HasVisibleCalls}" />
+                                <ItemsControl ItemsSource="{Binding VisibleCalls}" IsVisible="{Binding HasVisibleCalls}" ClipToBounds="False" />
                             </StackPanel>
                         </Border>
                     </views:ChatCardRow>

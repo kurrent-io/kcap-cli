@@ -9,6 +9,7 @@ public static class KcapToolCatalogue {
     const string McpPrefix = "mcp__";
     const string Separator = "__";
     const string PiPrefix = "kcap_";
+    const string SelectPrefix = "select:";
 
     internal static readonly KcapToolEntry[] Entries = [
         // pages
@@ -119,6 +120,32 @@ public static class KcapToolCatalogue {
         if (server is null || server.Length == 0 || tool.Length == 0) return null;
         return $"{Humanise(server)} · {tool.Replace('_', ' ')}";
     }
+
+    public static bool IsToolSearch(string? toolName) =>
+        string.Equals(toolName, "ToolSearch", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(toolName, "tool_search", StringComparison.OrdinalIgnoreCase);
+
+    /// Shortens MCP tool-search queries (`select:mcp__plugin_kcap_...` or space-separated tool
+    /// names) to comma-separated bare tool names so the row fits on one scannable line.
+    public static string FormatToolSearchQuery(string? query) {
+        if (string.IsNullOrWhiteSpace(query)) return "";
+        var trimmed = query.Trim();
+        var isSelect = trimmed.StartsWith(SelectPrefix, StringComparison.OrdinalIgnoreCase);
+        var body = isSelect ? trimmed[SelectPrefix.Length..] : trimmed;
+        var parts = body.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "";
+        if (!isSelect && !parts.All(IsToolIdentifierToken)) return trimmed;
+        var names = new List<string>(parts.Length);
+        foreach (var part in parts) {
+            var (_, tool) = Split(part);
+            var clean = tool.Length > 0 ? tool : part;
+            if (!names.Contains(clean, StringComparer.Ordinal)) names.Add(clean);
+        }
+        return string.Join(", ", names);
+    }
+
+    static bool IsToolIdentifierToken(string token) =>
+        token.Contains('_', StringComparison.Ordinal) || token.StartsWith(McpPrefix, StringComparison.Ordinal);
 
     // (server, tool) for `mcp__<server>__<tool>` or Pi's `kcap_<server>_<tool>`; (null, name) for a
     // bare name. A plugin server segment (`plugin_kcap_kcap-plans`, `plugin_linear_linear`) keeps

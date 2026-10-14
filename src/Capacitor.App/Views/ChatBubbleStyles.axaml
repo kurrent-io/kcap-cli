@@ -30,7 +30,37 @@
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="8" />
-        <Setter Property="Padding" Value="12,8" />
-        <Setter Property="Margin" Value="0,2,0,6" />
+        <Setter Property="Padding" Value="12,9" />
+        <Setter Property="Margin" Value="-22,4,-22,6" />
+    </Style>
+    <Style Selector="Border.toolCardBadge">
+        <Setter Property="Background" Value="{StaticResource KcapPurpleDimBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="CornerRadius" Value="999" />
+        <Setter Property="Padding" Value="8,2" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.toolCardBadge > TextBlock">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="0.3" />
+        <Setter Property="LineHeight" Value="15" />
+        <Setter Property="Foreground" Value="{StaticResource KcapPurpleBrush}" />
+    </Style>
+    <Style Selector="Path.toolCardOpenArrow">
+        <Setter Property="Width" Value="11" />
+        <Setter Property="Height" Value="11" />
+        <Setter Property="Stretch" Value="None" />
+        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="StrokeThickness" Value="1.5" />
+        <Setter Property="StrokeLineCap" Value="Round" />
+        <Setter Property="StrokeJoin" Value="Round" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Data" Value="M3,8 L8,3 M4.5,3 H8 V6.5" />
+    </Style>
+    <Style Selector="Button.kcapGhost:pointerover Path.toolCardOpenArrow,
+                     Button.kcapGhost:pressed Path.toolCardOpenArrow">
+        <Setter Property="Stroke" Value="{StaticResource KcapTextBrush}" />
     </Style>
 </Styles>
