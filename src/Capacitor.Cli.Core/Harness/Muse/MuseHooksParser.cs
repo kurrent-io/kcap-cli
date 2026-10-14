@@ -26,10 +26,13 @@ public static class MuseHooksParser {
 
     public static bool EntryReferencesCapacitorMuseHook(JsonNode? group) {
         if (group is not JsonObject g) return false;
-        if (g["hooks"] is JsonArray hooks)
-            return hooks.Any(h => h is JsonObject ho && IsCapacitorMuseHookCommand(CommandOf(ho["command"])));
+        if (g["hooks"] is JsonArray hooks) return hooks.Any(IsCapacitorMuseHook);
         return IsCapacitorMuseHookCommand(CommandOf(g["command"]));
     }
+
+    /// <summary>Whether one entry of a group's <c>hooks</c> array is kcap's command.</summary>
+    public static bool IsCapacitorMuseHook(JsonNode? hook) =>
+        hook is JsonObject h && IsCapacitorMuseHookCommand(CommandOf(h["command"]));
 
     // A user's own hook may carry a non-string command; that is simply not ours.
     static string? CommandOf(JsonNode? node) =>

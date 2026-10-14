@@ -64,8 +64,8 @@ public static class MuseHooksInstaller {
                 if (hooks[eventName] is not JsonArray groups) continue;
                 var removed = false;
                 for (var i = groups.Count - 1; i >= 0; i--) {
-                    if (!MuseHooksParser.EntryReferencesCapacitorMuseHook(groups[i])) continue;
-                    groups.RemoveAt(i);
+                    if (!RemoveKcapCommands(groups[i], out var groupEmptied)) continue;
+                    if (groupEmptied) groups.RemoveAt(i);
                     removed = true;
                 }
                 if (!removed) continue;
@@ -78,6 +78,26 @@ public static class MuseHooksInstaller {
 
         if (outcome is SettingsEdit.Changed or SettingsEdit.Unchanged) DeleteMarker(settingsPath);
         return outcome;
+    }
+
+    // A user may keep their own command in the same group as kcap's; only kcap's entries go,
+    // and the group goes only once nothing is left in it.
+    static bool RemoveKcapCommands(JsonNode? group, out bool groupEmptied) {
+        groupEmptied = false;
+        if (group is not JsonObject g) return false;
+        if (g["hooks"] is not JsonArray hooks) {
+            if (!MuseHooksParser.EntryReferencesCapacitorMuseHook(g)) return false;
+            groupEmptied = true;
+            return true;
+        }
+        var removed = false;
+        for (var i = hooks.Count - 1; i >= 0; i--) {
+            if (!MuseHooksParser.IsCapacitorMuseHook(hooks[i])) continue;
+            hooks.RemoveAt(i);
+            removed = true;
+        }
+        groupEmptied = removed && hooks.Count == 0;
+        return removed;
     }
 
     public static string? ReadMarker(string settingsPath) {

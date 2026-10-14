@@ -33,6 +33,21 @@ public class MuseHooksInstallerTests {
     }
 
     [Test]
+    public async Task Remove_keeps_a_user_command_that_shares_a_group_with_kcaps() {
+        var path = Tmp.CreateFile("settings.json", """{"schema_version":1,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"kcap hook --muse --no-update-check","timeout":5},{"type":"command","command":"say done","timeout":5}]}]}}""");
+
+        await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(MuseHooksInstaller.Remove(path)).IsEqualTo(SettingsEdit.Changed);
+
+        var stop = (JsonArray)JsonNode.Parse(File.ReadAllText(path))!["hooks"]!["Stop"]!;
+        await Assert.That(stop.Count).IsEqualTo(1);
+        var hooks = stop[0]!["hooks"]!.AsArray();
+        await Assert.That(hooks.Count).IsEqualTo(1);
+        await Assert.That(hooks[0]!["command"]!.GetValue<string>()).IsEqualTo("say done");
+        await Assert.That(MuseHooksInstaller.IsInstalled(path)).IsFalse();
+    }
+
+    [Test]
     public async Task Malformed_file_is_refused_untouched() {
         var path = Tmp.CreateFile("settings.json", "{\"schema_version\":1,");
         await Assert.That(MuseHooksInstaller.Install(path)).IsEqualTo(SettingsEdit.Malformed);
