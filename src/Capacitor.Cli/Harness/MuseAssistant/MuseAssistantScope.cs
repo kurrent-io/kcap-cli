@@ -103,12 +103,14 @@ public sealed class MuseAssistantScope(
         return MuseAssistantExitCodes.Ok;
     }
 
-    /// <summary>Revokes every chat it can lock. One it cannot stays granted and listed — dropping it from
-    /// the list alone would be undone by the next sweep — and the exit says recording has not stopped.</summary>
+    /// <summary>Revokes every chat it can lock and sets aside every state file it cannot read. One it cannot
+    /// lock stays granted and listed — dropping it from the list alone would be undone by the next sweep —
+    /// and the exit says recording has not stopped.</summary>
     public Task<int> ResetAsync(CancellationToken ct) =>
         UnderLocksAsync("scope reset", null, MuseAssistantExitCodes.NotRevoked, async (_, store) => {
             var unrevoked = new HashSet<string>(StringComparer.Ordinal);
             var failed    = false;
+            var setAside  = false;
 
             foreach (var found in store.EnumerateStates().ToList()) {
                 using var chatLock = await LockAsync(MuseAssistantPaths.ChatLock(store.ScopeDir, found.ChatId), ct);
@@ -134,13 +136,37 @@ public sealed class MuseAssistantScope(
                 }
             }
 
+            var listedByKey = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var chatId in store.LoadScope().Chats) listedByKey.TryAdd(MuseAssistantPaths.ChatKey(chatId), chatId);
+
+            foreach (var file in store.EnumerateUnusableStateFiles().ToList()) {
+                var listedAs = listedByKey.GetValueOrDefault(Path.GetFileNameWithoutExtension(file));
+
+                using var fileLock = await LockAsync(Path.ChangeExtension(file, ".lock"), ct);
+                if (fileLock is null) {
+                    if (listedAs is null) {
+                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy}; the unusable state file {Path.GetFileName(file)} was not set aside");
+                    } else {
+                        Console.Error.WriteLine($"kcap muse-assistant scope reset: {Busy}; its state file is unusable and was not set aside chat={listedAs}");
+                        unrevoked.Add(listedAs);
+                    }
+
+                    continue;
+                }
+
+                var aside = store.SetAside(file, time.GetUtcNow().ToUnixTimeMilliseconds());
+                setAside = true;
+                var subject = listedAs is null ? Path.GetFileName(file) : $"the state file of \"{listedAs}\"";
+                Console.Error.WriteLine($"kcap muse-assistant scope reset: {subject} is unreadable or belongs to another account; set aside as {aside}, so nothing more is recorded from it, but a session it had open may stay open");
+            }
+
             var scope = store.LoadScope();
             store.SaveScope(scope with { Chats = scope.Chats.Where(unrevoked.Contains).ToArray() });
 
             if (unrevoked.Count > 0) return MuseAssistantExitCodes.NotRevoked;
 
-            Console.Out.WriteLine("reset: every grant revoked");
-            return failed ? MuseAssistantExitCodes.Server : MuseAssistantExitCodes.Ok;
+            Console.Out.WriteLine(setAside ? "reset: every grant revoked or set aside" : "reset: every grant revoked");
+            return failed ? MuseAssistantExitCodes.Server : setAside ? MuseAssistantExitCodes.OutOfScope : MuseAssistantExitCodes.Ok;
         }, ct);
 
     public async Task<int> ShowAsync(CancellationToken ct) {

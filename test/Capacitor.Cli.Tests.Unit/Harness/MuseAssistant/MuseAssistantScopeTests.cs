@@ -504,6 +504,49 @@ public class MuseAssistantScopeTests {
     }
 
     [Test]
+    [NotInParallel]
+    public async Task Reset_sets_aside_every_unusable_state_file_and_exits_3_rather_than_claiming_every_grant_revoked() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-a", History, default);
+        await scope.AddAsync("chat-b", History, default);
+        var dir      = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        var listed   = MuseAssistantPaths.ChatState(dir, "chat-b");
+        var unlisted = MuseAssistantPaths.ChatState(dir, "chat-c");
+        File.WriteAllText(listed, "{ not json");
+        File.WriteAllText(unlisted, File.ReadAllText(MuseAssistantPaths.ChatState(dir, "chat-a")).Replace("user_01HXYZ", "user_01OTHER"));
+        using var output = ConsoleOutput.StartFullCapture("\n");
+
+        await Assert.That(await scope.ResetAsync(default)).IsEqualTo(3);
+
+        await Assert.That(File.Exists(listed)).IsFalse();
+        await Assert.That(File.Exists(unlisted)).IsFalse();
+        var aside = Directory.GetFiles(dir, Path.GetFileName(listed) + ".unusable-*").Single();
+        await Assert.That(File.ReadAllText(aside)).IsEqualTo("{ not json");
+        await Assert.That(Directory.GetFiles(dir, Path.GetFileName(unlisted) + ".unusable-*")).Count().IsEqualTo(1);
+        await Assert.That(State("chat-a").Grant.Revoked).IsTrue();
+        await Assert.That(Store().LoadScope().Chats).IsEmpty();
+        await Assert.That(output.GetCapturedOutput()).Contains("reset: every grant revoked or set aside");
+        await Assert.That(output.GetCapturedError()).Contains(Path.GetFileName(aside)).And.Contains("\"chat-b\"").And.DoesNotContain("chat=");
+
+        await Assert.That(await (await ScopeAsync(new RecordingPoster())).SweepAsync(default)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Reset_that_cannot_lock_a_listed_chat_with_unusable_state_keeps_it_listed_and_exits_4() {
+        var scope = await ScopeAsync(new RecordingPoster());
+        await scope.AddAsync("chat-b", History, default);
+        var dir  = MuseAssistantPaths.ScopeDir(Config.Root, Acme);
+        var path = MuseAssistantPaths.ChatState(dir, "chat-b");
+        File.WriteAllText(path, "{ not json");
+
+        using (MuseAssistantChatLock.TryAcquire(MuseAssistantPaths.ChatLock(dir, "chat-b")))
+            await Assert.That(await TimedOut(scope.ResetAsync(default))).IsEqualTo(4);
+
+        await Assert.That(File.ReadAllText(path)).IsEqualTo("{ not json");
+        await Assert.That(Store().LoadScope().Chats).IsEquivalentTo(["chat-b"]);
+    }
+
+    [Test]
     public async Task Reset_that_cannot_take_a_chat_lock_keeps_that_chat_granted_and_listed_and_exits_4() {
         var poster = await Record(async scope => { await scope.AddAsync("chat-a", History, default); await scope.AddAsync("chat-b", History, default); });
         var dir    = MuseAssistantPaths.ScopeDir(Config.Root, Acme);

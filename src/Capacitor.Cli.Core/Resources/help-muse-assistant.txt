@@ -31,7 +31,8 @@ scope remove   Withdraw a chat: closes its open session and sends nothing furthe
                state file is unreadable or belongs to another account is unlisted and the
                file is renamed to <chat_key>.json.unusable-<epoch ms> (kept, never read
                again); that run exits 3, and `scope add` then grants the chat afresh.
-scope reset    Withdraw every chat.
+scope reset    Withdraw every chat. A state file it cannot read, or that belongs to another
+               account, is set aside as `scope remove` does, and that run exits 3.
 scope show     Every chat with its status, boundary, watermark and open session.
 sweep          Replay interrupted lifecycle posts, reconcile the files, and print one
                line per active chat for the cron:
@@ -48,7 +49,8 @@ Exit codes: 0 done or nothing to do (also: another ingest holds the chat);
             2 malformed or incomplete input, or a wrong argument shape;
             3 chat not in scope, revoked, no grant recorded, or state from another
               tenant or account (sweep: a listed chat is in that condition, unless a
-              failed lifecycle post makes it 1);
+              failed lifecycle post makes it 1; scope reset: a state file was set
+              aside, unless a failed lifecycle post makes it 1);
             4 scope remove or scope reset only: recording could not be confirmed
               stopped (nothing revoked, or an unexpected error) — retry; retrying
               is safe.

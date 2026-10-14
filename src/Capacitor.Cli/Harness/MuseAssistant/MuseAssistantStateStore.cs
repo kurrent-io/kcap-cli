@@ -52,8 +52,10 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
 
     /// <summary>Renames an unusable state file out of the <c>*.json</c> set so the chat can be granted
     /// afresh while the file stays as evidence. Returns the new file name; the caller holds the chat lock.</summary>
-    public string SetAsideState(string chatId, long nowMs) {
-        var path = MuseAssistantPaths.ChatState(scopeDir, chatId);
+    public string SetAsideState(string chatId, long nowMs) => SetAside(MuseAssistantPaths.ChatState(scopeDir, chatId), nowMs);
+
+    /// <inheritdoc cref="SetAsideState"/>
+    public string SetAside(string path, long nowMs) {
         for (var stamp = nowMs;; stamp++) {
             var aside = $"{path}.unusable-{stamp}";
             if (File.Exists(aside)) continue;
@@ -71,7 +73,14 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
     }
 
     /// <summary>Every readable state file that belongs here, by the name its own chat id would give it.</summary>
-    public IEnumerable<MuseAssistantChatState> EnumerateStates() {
+    public IEnumerable<MuseAssistantChatState> EnumerateStates() =>
+        ScanStateFiles().Where(f => f.State is not null).Select(f => f.State!);
+
+    /// <summary>Every other <c>*.json</c> beside <c>scope.json</c>: unreadable, another account's, or misnamed.</summary>
+    public IEnumerable<string> EnumerateUnusableStateFiles() =>
+        ScanStateFiles().Where(f => f.State is null).Select(f => f.File);
+
+    IEnumerable<(string File, MuseAssistantChatState? State)> ScanStateFiles() {
         if (!Directory.Exists(scopeDir)) yield break;
 
         foreach (var file in Directory.EnumerateFiles(scopeDir, "*.json").Order(StringComparer.Ordinal)) {
@@ -82,13 +91,13 @@ public class MuseAssistantStateStore(string scopeDir, MuseAssistantPrincipal pri
             try {
                 state = JsonSerializer.Deserialize(File.ReadAllText(file), MuseAssistantJsonContext.Default.MuseAssistantChatState);
             } catch (JsonException) {
-                continue;
+                state = null;
             }
 
-            if (state is null || state.ServerUrl != principal.ServerUrl || state.UserId != principal.UserId) continue;
-            if (name != MuseAssistantPaths.ChatKey(state.ChatId) + ".json") continue;
+            var usable = state is not null && state.ServerUrl == principal.ServerUrl && state.UserId == principal.UserId
+                      && name == MuseAssistantPaths.ChatKey(state.ChatId) + ".json";
 
-            yield return state;
+            yield return (file, usable ? state : null);
         }
     }
 
