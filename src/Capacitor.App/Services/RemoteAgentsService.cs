@@ -121,7 +121,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             } catch (Exception) {
                 // Data-plane refresh: a throw here is a missed refresh, never an app fault.
             }
-            if (result?.Rows is not null) {
+            if (result?.Rows is { Length: > 0 }) {
                 Task? daemonsInFlight;
                 lock (_lock) daemonsInFlight = _daemonsInFlight?.Task;
                 if (daemonsInFlight is not null)
@@ -168,22 +168,16 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             } catch (Exception) {
             }
             TaskCompletionSource? completed;
-            bool rerun;
             lock (_lock) {
                 if (result is not null && generation == _generation)
                     _daemons.OnNext(result);
+                if (_daemonsRerun) { _daemonsRerun = false; continue; }
+                _daemonsBusy = false;
                 completed = _daemonsInFlight;
-                rerun = _daemonsRerun;
-                if (rerun) {
-                    _daemonsRerun = false;
-                    _daemonsInFlight = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                } else {
-                    _daemonsBusy = false;
-                    _daemonsInFlight = null;
-                }
+                _daemonsInFlight = null;
             }
             completed?.TrySetResult();
-            if (!rerun) return;
+            return;
         }
     }
 
