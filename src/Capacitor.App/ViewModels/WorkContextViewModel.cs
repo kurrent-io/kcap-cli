@@ -308,6 +308,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             Phase = WorkContextPhase.WaitingForSession;
             Plan.SwitchSession(null);
             Artefacts?.SwitchSession(null, null);
+            _runs.Clear();
         }
         this.RaisePropertyChanged(nameof(PhaseNote));
     }
@@ -352,6 +353,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         Plan.Refresh();
         if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
         _reader.StartIfIdle();
+    }
+
+    internal void Reconnected() {
+        if (_tornDown) return;
+        Plan.Refresh();
+        Artefacts?.Refresh();
+        _reader.Refresh();
     }
 
     void OnSignInCompleted() {

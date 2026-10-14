@@ -107,6 +107,7 @@
             <ContentControl x:Name="ArtefactsPane" IsVisible="{Binding ShowsArtefactsPane}" />
         </Grid>
     </Grid>
-    <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}" />
+    <views:WorkContextView x:Name="WorkContextHost" Grid.Column="1" DataContext="{Binding WorkContext}"
+                           IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsPanes}" />
     </Grid>
 </UserControl>

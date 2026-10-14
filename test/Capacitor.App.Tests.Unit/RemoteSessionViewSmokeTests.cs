@@ -185,6 +185,7 @@ public class RemoteSessionViewSmokeTests {
             host.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
             host.Lane.SessionAccessChangedSubject.OnNext("s1");
             await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Denied, "denied");
+            await Assert.That(host.View.GetVisualDescendants().OfType<WorkContextView>().Single().IsVisible).IsFalse();
 
             await Assert.That(chat.IsVisible).IsFalse();
             await Assert.That(banner.IsVisible).IsTrue();

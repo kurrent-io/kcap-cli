@@ -8,6 +8,8 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public PullRequestLinkDto[] Links = [Link(1), Link(2)];
     public int AccessSeconds = 30;
     public int Lists;
+    public int Resets;
+    public string? ListFailure;
     public int Overviews;
     public int Pages;
     public int TotalPages = 3;
@@ -29,9 +31,11 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public readonly List<CancellationToken> OverviewTokens = [];
     public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(Capability, 1));
-    public void ResetSession(string sessionId) { }
+    public void ResetSession(string sessionId) { Resets++; }
     public Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
         Lists++;
+        if (ListFailure is { } reason) return Task.FromResult(new PullRequestRead<PullRequestLinkListDto>(
+            PullRequestReadKind.SubjectUnavailable, Reason: reason));
         return Task.FromResult(new PullRequestRead<PullRequestLinkListDto>(PullRequestReadKind.Ready, new() { Items = Links }));
     }
     public Task<PullRequestRead<PullRequestLinkListDto>> LegacyLinksAsync(string sessionId, CancellationToken ct) => ListAsync(sessionId, ct);

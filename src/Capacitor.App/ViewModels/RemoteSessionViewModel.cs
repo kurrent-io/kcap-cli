@@ -35,6 +35,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly BehaviorSubject<AgentStatusDto?> _presence = new(null);
     /// The current lease's verdict, re-pointed whenever the lease moves; Unavailable in between.
     readonly BehaviorSubject<SessionAccessState> _accessStates = new(SessionAccessState.Unavailable);
+    bool _workAccessDenied;
     string? _leasedSession;
     AgentRow _row;
 
@@ -222,8 +223,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
             artefacts: Artefacts, isRemote: true);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
-            _sessionIds.Select(sid => (AgentStatusDto?)new AgentStatusDto(row.Id, "agent", row.Vendor, null,
-                row.Status, null, null, null, row.CreatedAt, null, null, SessionId: sid)),
+            _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
             requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         if (PullRequests is { } context)
@@ -234,7 +234,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 }).DisposeWith(_disposables);
         lane.Status.Select(s => s.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == ServerLaneState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.RefreshCommand.Execute().Subscribe(); }).DisposeWith(_disposables);
+            .Subscribe(_ => { PullRequests?.Reconnected(); WorkContext.Reconnected(); }).DisposeWith(_disposables);
 
         WorkContext.PullRequests = PullRequests;
         WorkContext.Plan.OpenDocument = path => {
@@ -317,9 +317,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     void Apply(AgentRow row) {
         _row = row;
-        _presence.OnNext(new AgentStatusDto(row.Id, row.Kind, row.Vendor, row.RepoPath, row.Status,
-            null, null, null, row.CreatedAt, row.Model, row.RequesterDisplay,
-            Title: row.Title, SessionId: row.SessionId));
+        PublishWorkPresence();
         if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
@@ -347,6 +345,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         PublishSession(ended: false);
     }
 
+    void PublishWorkPresence() {
+        var sessionId = _workAccessDenied ? null : _row.SessionId;
+        _presence.OnNext(new AgentStatusDto(_row.Id, _row.Kind, _row.Vendor, _row.RepoPath, _row.Status,
+            null, null, null, _row.CreatedAt, _row.Model, _row.RequesterDisplay,
+            Title: _row.Title, SessionId: sessionId));
+        if (string.IsNullOrEmpty(sessionId)) PullRequests?.ClearSession();
+    }
+
     void AcquireLease(string sessionId) {
         _leasedSession = sessionId;
         // The lease's first state arrives asynchronously; without this the pane keeps the previous
@@ -355,6 +361,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var lease = _access.Acquire(sessionId);
         var states = lease.State.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(s => {
             _accessStates.OnNext(s);
+            if (s == SessionAccessState.Denied) {
+                _workAccessDenied = true;
+                PublishWorkPresence();
+            } else if (s == SessionAccessState.Established && _workAccessDenied) {
+                _workAccessDenied = false;
+                PublishWorkPresence();
+            }
             Access = s switch {
                 SessionAccessState.Established => RemoteSessionAccess.Ready,
                 SessionAccessState.Denied => RemoteSessionAccess.Denied,
