@@ -3,7 +3,6 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Daemon.Acp;
-using Capacitor.Cli.Daemon.Harness.Pi;
 
 namespace Capacitor.Cli.Daemon.Harness.Muse;
 
@@ -36,8 +35,8 @@ internal static class MuseUnattendedApprovals {
         if (string.Equals(wireName, identity.ResultChannelWireName, StringComparison.Ordinal))
             return KcapMcpRegistry.ReservedResultChannelUnattendedSafeTools;
 
-        if (string.Equals(wireName, identity.AllowlistWireName(PiReviewerToolSurface.ReviewContextServer), StringComparison.Ordinal))
-            return [PiReviewerToolSurface.ReviewContextTool];
+        if (string.Equals(wireName, identity.AllowlistWireName(KcapMcpRegistry.ReviewContextServerId), StringComparison.Ordinal))
+            return [KcapMcpRegistry.ReviewContextTool];
 
         var canonical = KcapMcpRegistry.ReviewFlowUnattendedSafeTools.Keys
             .FirstOrDefault(id => string.Equals(identity.AllowlistWireName(id), wireName, StringComparison.Ordinal));

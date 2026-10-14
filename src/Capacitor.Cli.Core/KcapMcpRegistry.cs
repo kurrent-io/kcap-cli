@@ -74,6 +74,11 @@ public static class KcapMcpRegistry {
     /// it, and every reviewer runtime must agree on that.</summary>
     public const string ReservedResultChannelId = "kcap-flow-result";
 
+    /// <summary>The server a borrowed-snapshot review is injected with, independent of the allowlist, and
+    /// the one tool it serves. Read-only, so every unattended reviewer may auto-approve it.</summary>
+    public const string ReviewContextServerId = "kcap-review-context";
+    public const string ReviewContextTool     = "get_branch_authored_mcp_configs";
+
     /// <summary>Whether <paramref name="name"/> names the reserved result channel (case-insensitive).</summary>
     public static bool IsReservedResultChannel(string name) =>
         string.Equals(name, ReservedResultChannelId, StringComparison.OrdinalIgnoreCase);
