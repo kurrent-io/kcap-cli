@@ -448,26 +448,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// host when the id belongs to another machine. A caller that knows which row was clicked says
     /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
     /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
-    /// running.
-    public void OpenSession(string agentId, AgentOrigin? origin = null) {
-        if (_navigation.ShutdownLatched) return;
+    /// running. True when the session is the open workspace afterwards.
+    public bool OpenSession(string agentId, AgentOrigin? origin = null) {
+        if (_navigation.ShutdownLatched) return false;
 
         // Neither lane holds the id: opening the local workspace for it would attach a terminal to
         // an agent this machine never ran.
-        if ((origin ?? _originOf(agentId)) is not { } lane) return;
+        if ((origin ?? _originOf(agentId)) is not { } lane) return false;
 
         // Re-clicking the open session must not tear down and rebuild a live attach. The other
         // lane's same-id agent is a different agent, and a remote host the local daemon has taken
         // over no longer owns the id at all: both are a real swap.
-        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return;
+        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return true;
 
         ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
             ? remote(agentId)
             : _workspaceFactory is { } local ? local(agentId) : null;
-        if (next is null) return;
+        if (next is null) return false;
 
         SwapTo(next);
         Rail?.NotifySessionOpened(agentId);
+        return true;
     }
 
     static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>

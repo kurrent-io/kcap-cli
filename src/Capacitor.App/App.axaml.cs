@@ -595,8 +595,11 @@ public partial class App : Application {
             : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
         _menuBar?.SetFeedbackAction(openFeedback);
 
+        // Workspace links only: the explicit "Open in web" actions keep the browser.
+        var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
+            agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
-            agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, opener, permissions,
+            agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: () => {
@@ -608,7 +611,7 @@ public partial class App : Application {
         // host, and the click opens nothing.
         RemoteSessionViewModel? BuildRemote(string agentId) =>
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
-                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, opener, _time,
+                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath))
                 : null;
 
