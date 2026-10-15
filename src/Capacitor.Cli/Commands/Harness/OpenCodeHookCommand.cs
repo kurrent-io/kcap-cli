@@ -34,6 +34,8 @@ sealed class OpenCodeHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -157,7 +159,7 @@ sealed class OpenCodeHookCommand(
         var canConsumeFragment = MemoryContractOf(args) >= 1;
         var memoryTask = canConsumeFragment
             ? StartMemoryIndexTask(sessionId, scopeRoot,
-                activeProfile?.DisableMemoryIndex is true,
+                activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
                 activeProfile?.DisableSessionGuidelines is true,
                 SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.OpenCode, harnesses),
                 budget.Remaining)
@@ -177,16 +179,16 @@ sealed class OpenCodeHookCommand(
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = canConsumeFragment
             ? HarnessNudgeEmitter.Combine(
-                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
+                SessionNudges.Resolve(HarnessId.OpenCode, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
                 // Inside the gate, unlike the harness nudge below: resolving takes the one-shot
                 // marker, and an older plugin discards this stdout, so outside it the notice would be
                 // spent on a session that never shows it.
-                FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.OpenCode, harnesses))
+                FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.OpenCode, harnesses))
             : null;
         // The harness nudge is independent of the once-per-session memory lease — it has its own
         // 6h evaluation throttle, so it can surface even on a re-fired session that can't reconsume.
         var combinedNudge = HarnessNudgeEmitter.Combine(
-            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time));
+            workItemsNudge, HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time));
         await WriteMemoryFragment(stdout, fragment, combinedNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return 0;

@@ -117,6 +117,52 @@ public class PtyHostedAgentRuntimeFactoryTests {
         }
     }
 
+    /// <summary>The hook runs as a child of the agent, so the PTY's environment is where it reads the
+    /// session kind. The flow agent id stays exclusive to the flow-result server's own config.</summary>
+    [Test]
+    public async Task A_flow_participant_is_marked_with_its_kind_and_role_and_never_the_flow_agent_id() {
+        var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
+        var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        var pty      = new SpyPtyProcessFactory();
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+
+        var start = await factory.StartAsync(
+            BuildClaudeLaunchContext(null) with { IsReviewFlow = true, FlowRole = "reviewer" }, CancellationToken.None);
+
+        try {
+            await Assert.That(pty.LastEnv!["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+            await Assert.That(pty.LastEnv["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+            await Assert.That(pty.LastEnv.ContainsKey("KCAP_FLOW_AGENT_ID")).IsFalse();
+        } finally {
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task An_interactive_launch_is_a_hosted_agent_with_no_role() {
+        var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
+        var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        var pty      = new SpyPtyProcessFactory();
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+
+        var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
+
+        try {
+            await Assert.That(pty.LastEnv!["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+            await Assert.That(pty.LastEnv.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
+        } finally {
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    /// <summary>The PTY spawn applies the overlay over the daemon's environment with these removed,
+    /// so a daemon started inside a participant cannot pass its role on.</summary>
+    [Test]
+    public async Task The_pty_scrub_covers_the_session_markers() {
+        await Assert.That(PtyEnvScrub.HostedAgentVars).Contains("KCAP_SESSION_KIND");
+        await Assert.That(PtyEnvScrub.HostedAgentVars).Contains("KCAP_FLOW_ROLE");
+    }
+
     static readonly string LongPrompt = new('d', PromptFile.ArgumentBudget + 1);
 
     (PtyHostedAgentRuntimeFactory Factory, SpyPtyProcessFactory Pty, GatedPty Process, string PromptRoot) NewPromptFactory(bool windows) {

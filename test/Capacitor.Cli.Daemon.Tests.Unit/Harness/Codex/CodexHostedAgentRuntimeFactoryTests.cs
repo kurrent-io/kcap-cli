@@ -262,6 +262,29 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
+    public async Task BuildEnv_marks_a_participant_and_an_interactive_launch_by_kind() {
+        using var wt = new TempDir();
+
+        var participant = CodexHostedAgentRuntimeFactory.BuildEnv(Ctx(isReviewFlow: true, wt.Path) with { FlowRole = "reviewer" }, emitEnvelopeTranscript: true);
+        var interactive = CodexHostedAgentRuntimeFactory.BuildEnv(Ctx(isReviewFlow: false, wt.Path), emitEnvelopeTranscript: false);
+
+        await Assert.That(participant["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+        await Assert.That(participant["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+        await Assert.That(participant.ContainsKey("KCAP_FLOW_AGENT_ID")).IsFalse();
+        await Assert.That(interactive["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+        await Assert.That(interactive.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
+    }
+
+    [Test]
+    public async Task ApplyChildEnv_drops_an_inherited_flow_role() {
+        var childEnv = new Dictionary<string, string?> { ["KCAP_FLOW_ROLE"] = "reviewer" };
+
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, new Dictionary<string, string> { ["KCAP_SESSION_KIND"] = "hosted_agent" });
+
+        await Assert.That(childEnv.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
+    }
+
+    [Test]
     public async Task ApplyChildEnv_clears_an_inherited_marker_when_the_overlay_does_not_emit() {
         // A daemon whose OWN environment carries the marker must not leak it to a non-emitting child —
         // that child's hook would suppress the only watcher and lose the transcript.

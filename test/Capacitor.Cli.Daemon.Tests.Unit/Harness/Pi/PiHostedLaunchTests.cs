@@ -26,6 +26,19 @@ public class PiHostedLaunchTests {
         ServerUrl: serverUrl, DaemonBridgeUrl: null, CapacitorPath: "/usr/local/bin/kcap",
         Work: work, DaemonId: daemonId, DaemonEpoch: daemonEpoch);
 
+    // ── BuildPsi: session markers ──
+
+    [Test]
+    public async Task BuildPsi_marks_a_participant_and_an_interactive_launch_by_kind() {
+        var participant = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(isReviewFlow: true) with { FlowRole = "reviewer" });
+        var interactive = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx());
+
+        await Assert.That(participant.Environment["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+        await Assert.That(participant.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+        await Assert.That(interactive.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+        await Assert.That(interactive.Environment.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
+    }
+
     // ── BuildPsi: argv ──
 
     [Test]

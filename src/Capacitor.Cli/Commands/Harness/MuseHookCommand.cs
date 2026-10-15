@@ -147,8 +147,14 @@ sealed class MuseHookCommand(
 
         if (log is not null) forwarded["transcript_path"] = log;
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
-        if ((hosted.AgentId ?? MuseHostedSessionMarker.TryRead(home, sessionId)?.AgentId) is { } agentHostId)
-            forwarded["agent_host_id"] = agentHostId;
+        var marker      = MuseHostedSessionMarker.TryRead(home, sessionId);
+        var agentHostId = hosted.AgentId ?? marker?.AgentId;
+        var markerKind  = HostedSessionKinds.Parse(marker?.SessionKind);
+        var audience    = SessionStartAudience.From(hosted with {
+            AgentId = agentHostId,
+            Kind    = markerKind == HostedSessionKind.None ? hosted.Kind : markerKind
+        });
+        if (agentHostId is not null) forwarded["agent_host_id"] = agentHostId;
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
@@ -156,7 +162,7 @@ sealed class MuseHookCommand(
             router, config, forwarded.ToJsonString(), clock.Time, budget.Remaining, detectPullRequest: false);
 
         var memoryTask = StartMemoryIndexTask(sessionId, ScopeRootFrom(enriched, cwd),
-            disabled: activeProfile?.DisableMemoryIndex is true,
+            disabled: activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
             flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses),
             source, budget.Remaining);
@@ -166,9 +172,9 @@ sealed class MuseHookCommand(
 
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var nudge = HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Muse, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Muse, harnesses));
+            SessionNudges.Resolve(HarnessId.Muse, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Muse, harnesses));
         await WriteFragment(stdout, fragment, nudge);
     }
 

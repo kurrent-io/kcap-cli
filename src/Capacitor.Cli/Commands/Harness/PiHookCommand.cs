@@ -39,6 +39,8 @@ sealed class PiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -159,7 +161,7 @@ sealed class PiHookCommand(
         // it captures stdout (--memory-contract >= 1), since an older kcap.ts discards the output.
         var memoryTask = MemoryContractOf(args) >= 1
             ? StartMemoryIndexTask(file, scopeRoot,
-                activeProfile?.DisableMemoryIndex is true,
+                activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
                 activeProfile?.DisableSessionGuidelines is true,
                 SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Pi, harnesses),
                 budget.Remaining,
@@ -177,9 +179,9 @@ sealed class PiHookCommand(
         // gate is needed (unlike Copilot).
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Pi, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Pi, harnesses));
+            SessionNudges.Resolve(HarnessId.Pi, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Pi, harnesses));
         await WriteMemoryFragment(stdout, fragment, workItemsNudge);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;

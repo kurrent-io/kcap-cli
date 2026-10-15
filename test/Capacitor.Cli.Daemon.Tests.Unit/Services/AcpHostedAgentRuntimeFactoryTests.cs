@@ -780,6 +780,26 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     }
 
     [Test]
+    public async Task BuildProcessStartInfo_marks_a_participant_with_its_kind_and_role() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), ReviewContext() with { FlowRole = "reviewer" });
+
+        await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+        await Assert.That(psi.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+    }
+
+    /// <summary>The environment is seeded from this process, so the role's absence is the launch
+    /// removing it, whatever the test host inherited.</summary>
+    [Test]
+    public async Task BuildProcessStartInfo_marks_an_interactive_launch_as_a_hosted_agent_with_no_role() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), MakeContext("agent-1") with { FlowRole = "reviewer" });
+
+        await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+        await Assert.That(psi.Environment.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
+    }
+
+    [Test]
     public async Task BuildProcessStartInfo_CursorReviewFlow_UsesCursorZeroPromptFlags() {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Cursor,

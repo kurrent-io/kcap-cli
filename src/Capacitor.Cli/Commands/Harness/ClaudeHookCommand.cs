@@ -810,9 +810,10 @@ public sealed class ClaudeHookCommand(
             // mark notices delivered, or run the feed, for output no agent ever sees. Each opt-out is
             // read from the effective profile, which also covers KCAP_URL users. The feed's guidance
             // names kcap-workitems tools, so without them it is neither requested nor rendered.
+            var audience                    = SessionStartAudience.From(hosted);
             var coordinationNoticesDisabled = activeProfile?.DisableCoordinationNotices is true;
             var nextWorkDisabled            = activeProfile?.DisableNextWorkNudge is true
-                                           || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses);
+                                           || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses, audience: audience);
             JsonNode? capabilityNode = null;
             if (!coordinationNoticesDisabled || !nextWorkDisabled) {
                 try {
@@ -830,7 +831,7 @@ public sealed class ClaudeHookCommand(
             // a 401, or a budget overrun yields a null fragment and nothing is injected. Started
             // after the ordering-guard / backlog returns above so a spooled session-start doesn't
             // pay for a fetch it won't use.
-            var memoryDisabled = profiles.Resolution.Profile?.DisableMemoryIndex is true;
+            var memoryDisabled = profiles.Resolution.Profile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance;
             var lifecycleReason = source?.ToLowerInvariant() switch {
                 "resume" => SessionLifecycleReason.Resume,
                 "reopen" => SessionLifecycleReason.Reopen,
@@ -924,17 +925,19 @@ public sealed class ClaudeHookCommand(
                     // whenever --server-url or KCAP_URL wins, which would ignore the opt-out.
                     var disabled        = activeProfile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
-                    var nextWorkFragment = NextWorkEmitter.BuildFragment(responseNode, nextWorkDisabled);
+                    audience = audience.WithAck(responseNode);
+                    var nextWorkFragment = NextWorkEmitter.BuildFragment(responseNode, nextWorkDisabled || !audience.GetsDriverGuidance);
                     // update_check=false opts out of ALL kcap update nudging, including the
                     // in-agent one — skip emission entirely rather than let a server that still
                     // sends `version` sneak the fragment past a locally-disabled preference.
                     var updateCheckOff  = profiles.Resolution.Profile?.UpdateCheck is false;
-                    var nudgeFragment   = updateCheckOff
+                    var nudgeFragment   = updateCheckOff || !audience.GetsOnboarding
                         ? null
                         : VersionNudgeEmitter.BuildFragment(responseNode, CapacitorVersion.CurrentDisplay());
                     // join the parallel memory-index fetch, bounded by the remaining
                     // hook budget so a slow fetch can't delay the hook (fail-open → null).
                     var memoryFragment = await AwaitMemoryFragmentAsync(memoryIndexTask, budget);
+                    if (!audience.GetsDriverGuidance) memoryFragment = null;
 
                     // Coordination notices ride the hook POST response (no extra fetch), same as the
                     // guidelines fragment. Gated on the same opt-out that suppressed the capability
@@ -943,10 +946,11 @@ public sealed class ClaudeHookCommand(
                     var coordinationFragment = CoordinationNoticesEmitter.BuildFragment(
                         responseNode, coordinationNoticesDisabled);
 
-                    // The static nudges, each gated on its server being in the plugin's loaded .mcp.json.
-                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
-                    var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
-                    var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Claude, harnesses);
+                    // The static nudges, each gated on its server being loaded by this session.
+                    var sessionNudges = SessionNudges.Resolve(HarnessId.Claude, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience);
+                    // Opted out for a hosted session, which leaves the first-run notice armed for a person's next one.
+                    var harnessNudge = HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
+                    var firstRunNotice = FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Claude, harnesses);
 
                     // Short instructions are funded first so the server-sized lists absorb the cap.
                     envelope = SessionStartAdditionalContext.BuildRankedEnvelope([
@@ -1130,12 +1134,13 @@ public sealed class ClaudeHookCommand(
             try { ack = await response.Content.ReadAsStringAsync(); } catch { }
 
             // The block's reason names kcap-workitems tools, so without them it is never sent.
+            var audience         = SessionStartAudience.From(hosted);
             var nextWorkDisabled = activeProfile?.DisableNextWorkNudge is true
-                                || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses);
+                                || !WorkItemsNudgeEmitter.ToolsRegisteredFor(HarnessId.Claude, harnesses, audience: audience);
             JsonNode? payload = null;
             try { payload = JsonNode.Parse(body); } catch { }
 
-            if (ClaudeCompletionNudge.ShouldBlock(ack, nextWorkDisabled, payload))
+            if (ClaudeCompletionNudge.ShouldBlock(ack, nextWorkDisabled, payload, audience))
                 writer.WriteLine(ClaudeCompletionNudge.BlockDecision);
         }
 

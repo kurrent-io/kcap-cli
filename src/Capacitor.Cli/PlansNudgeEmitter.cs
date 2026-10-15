@@ -20,9 +20,10 @@ static class PlansNudgeEmitter {
     /// <paramref name="codexConfigPath"/> is the availability gate's test seam and is null in production.
     /// </summary>
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
-                                  HarnessRegistry harnesses, string? codexConfigPath = null) {
+                                  HarnessRegistry harnesses, string? codexConfigPath = null,
+                                  SessionStartAudience? audience = null) {
         if (optedOut) return null;
-        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-plans", codexConfigPath)) return null;
+        if (!McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-plans", codexConfigPath, audience)) return null;
         return Build(sessionId);
     }
 
