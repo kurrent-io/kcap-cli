@@ -114,7 +114,7 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
 
     internal static readonly TimeSpan RequestBudget = TimeSpan.FromSeconds(100);
 
-    const string ServerInstructions =
+    internal const string ServerInstructions =
         "Use these tools to read the team's retained facts and curated skills, and to fine-tune a skill. " +
         "Every fact and skill member carries its curation_key and curation: the address and the current state a " +
         "curate_fact_cluster call is built from. Skill writes take the doc_revision get_skill returned as " +

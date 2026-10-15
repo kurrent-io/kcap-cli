@@ -136,7 +136,7 @@ sealed class McpAnalyticsServer(ConfigRoot config, ProfileContext profiles, Toke
         return 0;
     }
 
-    const string ServerInstructions =
+    internal const string ServerInstructions =
         "Query Kurrent Capacitor's AI coding-agent analytics (sessions, tool/skill/token usage, cost, " +
         "commits, PRs, evals) with governed read-only SQL. Call get_analytics_schema once to learn the " +
         "views, then write Postgres SELECTs for query_analytics. Rejections include the reason — fix the " +
