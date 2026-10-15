@@ -76,6 +76,16 @@ static partial class NextWorkEmitter {
         "done with or parking that work. So: a lookup answered or a PR merged as asked, present; draft PRs " +
         "you were asked to fix up, wait until they merge or the user parks them, however many requests that takes.";
 
+    /// <summary>What a start gets when the ack carries no list: the guidance otherwise rides only on the
+    /// list, so a feed that missed its budget would cost the session the instruction as well.</summary>
+    internal const string InstructionOnly =
+        "Next work (Capacitor): no list was ready at session start; call get_next_work when you need one. " + Guidance;
+
+    /// <summary><see cref="BuildFragment"/>, falling back to <see cref="InstructionOnly"/> when the ack has
+    /// no rows to show. Null only when disabled.</summary>
+    public static string? BuildFragmentOrInstruction(JsonNode? responseNode, bool disabled) =>
+        disabled ? null : BuildFragment(responseNode, disabled: false) ?? InstructionOnly;
+
     public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
         if (responseNode is not JsonObject obj) return null;

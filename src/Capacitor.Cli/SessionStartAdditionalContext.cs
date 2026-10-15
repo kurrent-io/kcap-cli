@@ -21,19 +21,22 @@ static class SessionStartAdditionalContext {
     /// Renders <paramref name="fragments"/> in the order given, but hands out room under
     /// <see cref="MaxContextChars"/> by rank, lowest first, so a long fragment cannot crowd out a shorter
     /// better-ranked one placed after it. A fragment that does not fit is cut at a line break when it is
-    /// trimmable and dropped otherwise: cutting anything else could leave a data fence open.
+    /// trimmable and dropped otherwise: cutting anything else could leave a data fence open. Each cut or
+    /// drop is reported to <paramref name="diagnostic"/>, since the agent cannot tell what it never saw.
     /// </summary>
-    public static string? BuildRankedEnvelope(IReadOnlyList<ContextFragment> fragments) {
+    public static string? BuildRankedEnvelope(IReadOnlyList<ContextFragment> fragments, Action<string>? diagnostic = null) {
         var granted = new string?[fragments.Count];
         // Every kept fragment is charged a separator, so the budget carries one extra for the first.
         var room = MaxContextChars + Separator.Length;
 
         foreach (var i in Enumerable.Range(0, fragments.Count).OrderBy(i => fragments[i].Rank)) {
-            var (text, _, trimmable) = fragments[i];
+            var (text, _, trimmable, name) = fragments[i];
             if (string.IsNullOrWhiteSpace(text)) continue;
             var fit = text.Length + Separator.Length <= room ? text
                     : trimmable ? CutAtLineBreak(text, room - Separator.Length)
                     : null;
+            if (!ReferenceEquals(fit, text))
+                diagnostic?.Invoke($"session-start {name ?? "context"} {(fit is null ? "dropped" : "cut")}: over Claude Code's {MaxContextChars}-character context cap");
             if (fit is null) continue;
             granted[i] = fit;
             room -= fit.Length + Separator.Length;
