@@ -41,6 +41,26 @@ sealed class DeclaredDocumentLedger(ConfigRoot config, TimeProvider time) {
         }
     }
 
+    /// <summary>Holds one document's refresh across processes, or null when <paramref name="wait"/>
+    /// runs out. Parallel tool calls run their hooks concurrently, so each refresh reads the file
+    /// only once it holds this: whichever posts last sent the newest text.</summary>
+    public async Task<IDisposable?> LockAsync(string sessionId, string path, TimeSpan wait) {
+        var lockPath = Entry(sessionId, path) + ".lock";
+        Directory.CreateDirectory(SessionDir(sessionId));
+        var deadline = time.GetUtcNow() + wait;
+        while (true) {
+            try {
+                return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            } catch (IOException) when (time.GetUtcNow() < deadline) {
+                await Task.Delay(LockPoll, time);
+            } catch (IOException) {
+                return null;
+            }
+        }
+    }
+
+    static readonly TimeSpan LockPoll = TimeSpan.FromMilliseconds(25);
+
     void Touch(string sessionId) => Directory.SetLastWriteTimeUtc(SessionDir(sessionId), time.GetUtcNow().UtcDateTime);
 
     void Reap() {

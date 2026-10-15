@@ -77,6 +77,21 @@ public class DeclaredDocumentLedgerTests {
         await Assert.That(ledger.Find("long", Spec.Path, Server)).IsEqualTo(Spec);
     }
 
+    [Test]
+    public async Task A_document_is_held_by_one_refresh_at_a_time() {
+        var ledger = Ledger();
+
+        using (var held = await ledger.LockAsync("s1", Spec.Path, TimeSpan.Zero)) {
+            await Assert.That(held).IsNotNull();
+            await Assert.That(await ledger.LockAsync("s1", Spec.Path, TimeSpan.FromMilliseconds(100))).IsNull();
+            using var other = await ledger.LockAsync("s1", "/repo/docs/other.md", TimeSpan.Zero);
+            await Assert.That(other).IsNotNull();
+        }
+
+        using var again = await ledger.LockAsync("s1", Spec.Path, TimeSpan.Zero);
+        await Assert.That(again).IsNotNull();
+    }
+
     void Age(string sessionId) =>
         Directory.SetLastWriteTimeUtc(Config.Root.Path("declared-documents", sessionId), DateTime.UtcNow - DeclaredDocumentLedger.Retention - TimeSpan.FromDays(1));
 }

@@ -949,6 +949,22 @@ public class ClaudeHookCommandTests {
     }
 
     [Test]
+    public async Task plan_edit_reads_the_document_only_once_it_holds_it() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+        var held = await new DeclaredDocumentLedger(Config.Root, TimeProvider.System).LockAsync(sid.Replace("-", ""), spec, TimeSpan.Zero);
+        File.WriteAllText(spec, "# Spec, first\n");
+
+        var refresh = fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+        await Task.Delay(200);
+        File.WriteAllText(spec, "# Spec, second\n");
+        held!.Dispose();
+        await refresh;
+
+        await Assert.That(DocumentPosts(fx).Single()["content"]!.GetValue<string>()).IsEqualTo("# Spec, second\n");
+    }
+
+    [Test]
     public async Task plan_edit_never_sends_a_document_to_a_server_that_did_not_accept_it() {
         using var fx = new Fixture(Config.Root);
         var (sid, spec) = DeclaredSpec("https://other.example");

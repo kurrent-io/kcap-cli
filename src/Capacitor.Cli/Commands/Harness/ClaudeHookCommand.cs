@@ -125,8 +125,8 @@ public sealed class ClaudeHookCommand(
     /// <summary>
     /// <c>kcap hook --claude --plan-edit</c>: a synchronous PostToolUse on Claude's file writes. When the
     /// file is a document this session declared, declares it again, so the server's snapshot follows
-    /// the file instead of keeping the text it had when it was first declared. Synchronous so two
-    /// quick edits reach the server in order and the last one is not killed by a headless teardown.
+    /// the file instead of keeping the text it had when it was first declared. Synchronous so a
+    /// headless teardown cannot kill the last refresh.
     /// </summary>
     public async Task<int> HandlePlanEdit(TextReader stdin) {
         HttpClient? client = null;
@@ -146,11 +146,15 @@ public sealed class ClaudeHookCommand(
         try {
             var body = await stdin.ReadToEndAsync();
             if (ClaudePlanEdit.Parse(body) is not { } edit) return 0;
-            if (new DeclaredDocumentLedger(config, clock.Time).Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
+            var ledger = new DeclaredDocumentLedger(config, clock.Time);
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
 
             var budget = clock.Budget(ToolHookCeiling);
             if (await ShouldSuppressCaptureAsync(edit.SessionId, body, "post-tool-use", profiles.Effective, budget)) return 0;
             if (await clientWithin(budget.Remaining) is not { } client) return 0;
+
+            using var gate = await ledger.LockAsync(edit.SessionId, edit.Path, budget.Remaining);
+            if (gate is null) return 0;
 
             var declaration = McpPlansServer.BuildDeclaration(document.ToArguments(edit.SessionId), document.Cwd, document.RepoRoot);
 
