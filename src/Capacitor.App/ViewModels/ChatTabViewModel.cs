@@ -256,11 +256,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     readonly ComposerHistory _history = new();
+    // Own sends, until the transcript echoes them into the history. The queue's acknowledgement
+    // decides the echo, so a replay or a reworded receipt neither settles nor doubles one.
+    readonly List<QueuedChatMessage> _unechoed = new();
     int _recallEdits = -1;
-    /// Replaces the composer text with the next older sent prompt; false when nothing changed.
-    public bool RecallOlder() => Recall(_history.Older(Recallable()));
-    /// Replaces the composer text with the next newer sent prompt, or the draft past the newest.
-    public bool RecallNewer() => Recall(_history.Newer(Recallable()));
+    /// Replaces the composer text with the next older prompt; false when nothing changed.
+    public bool RecallOlder() => Recall(_history.Older(Recallable(), Unechoed()));
+    /// Replaces the composer text with the next newer prompt, or the draft past the newest.
+    public bool RecallNewer() => Recall(_history.Newer(Recallable(), Unechoed()));
+
+    List<string> Unechoed() {
+        _unechoed.RemoveAll(q => q.Acknowledged);
+        return _unechoed.Select(q => q.Text).ToList();
+    }
 
     /// Text equality cannot prove a recall was left alone — an edit undone by hand lands on the
     /// same string — so the edit count decides, as it does for the sent draft.
@@ -658,6 +666,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
             _lastSent = queued;
             _sending = queued;
+            _unechoed.Add(queued);
+            if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
             ChatSendOutcome outcome;
             try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
@@ -671,7 +681,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
                 return;
             }
-            if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
+            if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
             var waits = !queued.Acknowledged && outcome switch {
                 ChatSendOutcome.Accepted    => _openFeed is not null,
                 ChatSendOutcome.Unconfirmed => true,
@@ -809,6 +819,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
         _items.Clear();
+        _history.Clear();
+        _unechoed.Clear();
         _pendingTools.Clear();
         _settledTools.Clear();
         _questionAsks.Clear();
@@ -930,6 +942,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 // names where that history ends — anything past it arrived after and can acknowledge.
                 RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
                 _items.Clear();
+                _history.ClearForReplay();
                 _pendingTools.Clear();
                 _settledTools.Clear();
                 _questionAsks.Clear();
@@ -969,6 +982,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         foreach (var (projected, offset) in read.Lines) {
             _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
+                _history.Observe(AttachmentTrailer.Strip(text));
                 var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
                 acknowledged.Acknowledged = true;
