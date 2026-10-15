@@ -7,6 +7,9 @@ namespace Capacitor.App.Views;
 /// the window list, and only a registered Help menu gets the search field.
 public static partial class AppKitMenus {
     const string ObjC = "/usr/lib/libobjc.A.dylib";
+    const nint AssociationRetainNonatomic = 1;
+
+    static nint AdoptedKey => Selector("kcapAdoptedWindowsMenu");
 
     /// Registers the current main menu's submenus with these titles; one that is missing is skipped.
     public static void Adopt(string windowTitle, string helpTitle) {
@@ -16,8 +19,13 @@ public static partial class AppKitMenus {
         var mainMenu = Send(app, Selector("mainMenu"));
         if (mainMenu == 0) return;
 
+        // AppKit adds another block of tiling items to a menu each time it is registered, even
+        // with the same menu, so each menu is registered once and keeps its items for life.
         var windowMenu = Submenu(mainMenu, windowTitle);
-        if (windowMenu != 0) SendVoid(app, Selector("setWindowsMenu:"), windowMenu);
+        if (windowMenu != 0 && GetAssociatedObject(windowMenu, AdoptedKey) == 0) {
+            SendVoid(app, Selector("setWindowsMenu:"), windowMenu);
+            SetAssociatedObject(windowMenu, AdoptedKey, Send(GetClass("NSNull"), Selector("null")), AssociationRetainNonatomic);
+        }
 
         var helpMenu = Submenu(mainMenu, helpTitle);
         if (helpMenu != 0) SendVoid(app, Selector("setHelpMenu:"), helpMenu);
@@ -42,6 +50,12 @@ public static partial class AppKitMenus {
 
     [LibraryImport(ObjC, EntryPoint = "sel_registerName", StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint Selector(string name);
+
+    [LibraryImport(ObjC, EntryPoint = "objc_getAssociatedObject")]
+    private static partial nint GetAssociatedObject(nint obj, nint key);
+
+    [LibraryImport(ObjC, EntryPoint = "objc_setAssociatedObject")]
+    private static partial void SetAssociatedObject(nint obj, nint key, nint value, nint policy);
 
     [LibraryImport(ObjC, EntryPoint = "objc_msgSend")]
     private static partial nint Send(nint receiver, nint selector);
