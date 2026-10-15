@@ -20,7 +20,8 @@ public static partial class AppKitMenus {
         if (mainMenu == 0) return;
 
         // AppKit adds another block of tiling items to a menu each time it is registered, even
-        // with the same menu, so each menu is registered once and keeps its items for life.
+        // with the same menu, so each menu is registered once. AppKit keeps the window list current
+        // in every menu it has registered, not only the latest.
         var windowMenu = Submenu(mainMenu, windowTitle);
         if (windowMenu != 0 && GetAssociatedObject(windowMenu, AdoptedKey) == 0) {
             SendVoid(app, Selector("setWindowsMenu:"), windowMenu);

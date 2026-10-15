@@ -34,8 +34,8 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         if (NativeMenu.GetMenu(window) is not null) return;
 
         NativeMenu.SetMenu(window, Build(window));
-        // Avalonia swaps the main menu to the key window's own, so each window's copies are handed
-        // to AppKit when it becomes key; a rebuilt native menu is a new one to hand over.
+        // Avalonia swaps the main menu to the key window's own, so a window's copies go to AppKit the
+        // first time it becomes key, and again only if Avalonia rebuilds the native menu.
         window.Activated += (_, _) => AppKitMenus.Adopt(WindowMenuTitle, HelpMenuTitle);
     }
 
