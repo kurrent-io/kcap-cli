@@ -114,12 +114,25 @@ public class ComposerHistoryTests {
     }
 
     [Test]
-    public async Task Clear_forgets_every_entry_and_ends_navigation() {
+    public async Task Clear_forgets_every_entry() {
         var history = With("first");
-        await Assert.That(history.Older("")).IsEqualTo("first");
         history.Clear();
-        await Assert.That(history.Newer("first")).IsNull();
         await Assert.That(history.Older("")).IsNull();
+    }
+
+    /// A replay under a recall leaves it navigable: ↑ reaches the replayed turns and ↓ the draft.
+    [Test]
+    public async Task Clear_during_a_recall_keeps_it_navigable() {
+        var history = With("first", "second");
+        await Assert.That(history.Older("")).IsEqualTo("second");
+        history.Clear();
+        history.Observe("first");
+        history.Observe("replayed");
+        await Assert.That(history.Older("second")).IsEqualTo("replayed");
+        await Assert.That(history.Newer("replayed")).IsEqualTo("");
+        await Assert.That(history.Older("")).IsEqualTo("replayed");
+        history.Clear();
+        await Assert.That(history.Newer("replayed")).IsEqualTo("");
     }
 
     [Test]

@@ -7,7 +7,8 @@ public sealed class ComposerHistory {
     public const int Capacity = 100;
 
     readonly List<string> _entries = new();
-    // -1 while the shown entry has been evicted from the front: the next newer one is index 0.
+    // While recalling: -1 once the shown entry is evicted from the front, Count once a clear has
+    // detached it from the entries, so the replayed turns all sit above it.
     int _cursor;
     string? _shown;
     string _draft = "";
@@ -22,13 +23,18 @@ public sealed class ComposerHistory {
     /// collapses into it, and an arrival never interrupts a recall in progress.
     public void Observe(string text) {
         if (string.IsNullOrWhiteSpace(text)) return;
-        if (Append(text) && _shown is not null) _cursor = Math.Max(_cursor - 1, -1);
+        var pastNewest = _cursor == _entries.Count;
+        var evicted = Append(text);
+        if (_shown is null) return;
+        if (pastNewest) _cursor = _entries.Count;
+        else if (evicted) _cursor = Math.Max(_cursor - 1, -1);
     }
 
     /// The transcript is being replayed from the start, so what it showed is about to arrive again.
+    /// A recall on screen stays one: ↓ still restores the draft, and ↑ reaches the replayed turns.
     public void Clear() {
         _entries.Clear();
-        EndNavigation();
+        _cursor = 0;
     }
 
     /// The next older prompt, or null when there is none or `current` is a draft of the user's own.
