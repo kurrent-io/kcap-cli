@@ -248,6 +248,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly AgentOrigin _origin;
     readonly string _agentId;
 
+    // A send in flight can land after this tab is gone, with nothing left to clear its text.
+    bool DraftIsInFlight => _sending is { } sending && sending.ComposerEdits == _composerEdits && sending.Text == ComposerText;
+
+    /// The unsent draft, for the same session's workspace on the other lane; this tab's stored copy is dropped.
+    public string HandOffDraft() {
+        var text = DraftIsInFlight ? "" : ComposerText;
+        _drafts?.Set(_origin, _agentId, "");
+        return text;
+    }
+
     readonly ComposerHistory _history = new();
     int _recallEdits = -1;
     /// Replaces the composer text with the next older sent prompt; false when nothing changed.
@@ -1214,6 +1224,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
         foreach (var choice in _usageLimitChoices) choice.Choose.Dispose();
+        if (DraftIsInFlight) _drafts?.Set(_origin, _agentId, "");
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();

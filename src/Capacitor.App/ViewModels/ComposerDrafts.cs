@@ -8,7 +8,7 @@ public sealed class ComposerDrafts {
     readonly Dictionary<string, string> _drafts = new(StringComparer.Ordinal);
 
     // The origin is part of the key: a local and a remote agent can share an id and are different agents.
-    static string Key(AgentOrigin origin, string agentId) => $"{origin}:{agentId}";
+    static string Key(AgentOrigin origin, string agentId) => $"{origin}:{AgentIds.Normalize(agentId) ?? agentId}";
 
     public string Get(AgentOrigin origin, string agentId) =>
         _drafts.TryGetValue(Key(origin, agentId), out var text) ? text : "";

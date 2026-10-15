@@ -184,12 +184,12 @@ public class ChatTabViewModelTests {
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
-                       Action<ToolCard>? openCard = null) {
+                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -1428,6 +1428,54 @@ public class ChatTabViewModelTests {
             await send;
             await Assert.That(h.Chat.ComposerText).IsEqualTo("");
             await h.TeardownAsync();
+        });
+    }
+
+    /// Pins that a draft outlives its tab, which navigation tears down, and that a sent one does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unsent_draft_survives_the_tab_being_rebuilt() {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput();
+            var first = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            first.Chat.ComposerText = "half a thought";
+            await first.TeardownAsync();
+
+            var second = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            await Assert.That(second.Chat.ComposerText).IsEqualTo("half a thought");
+            var send = second.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await second.TeardownAsync();
+
+            var third = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            await Assert.That(third.Chat.ComposerText).IsEqualTo("");
+            await third.TeardownAsync();
+        });
+    }
+
+    /// Pins that a send still in flight when the tab goes is not offered back as a draft — it can
+    /// land with no tab left to clear it — while an edit made after sending still is.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_draft_sent_but_not_yet_settled_is_not_restored(bool editedAfterSending) {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput();
+            var first = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            first.Chat.ComposerText = "hello";
+            var send = first.Chat.SendCommand.Execute().ToTask();
+            if (editedAfterSending) first.Chat.ComposerText = "hello again";
+            await first.TeardownAsync();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+
+            var second = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            await Assert.That(second.Chat.ComposerText).IsEqualTo(editedAfterSending ? "hello again" : "");
+            await second.TeardownAsync();
         });
     }
 

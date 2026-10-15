@@ -13,14 +13,14 @@ namespace Capacitor.App.Tests.Unit;
 
 public class ChatComposerTests {
     static async Task<(FakeDaemonClientService Daemon, FakeTimeProvider Time, TerminalTabViewModel Terminal, ChatTabViewModel Chat, FakeTerminalAttachClient Client, RecordingOpener Opener)>
-            BuildAttachedAsync(ComposerDrafts? drafts = null) {
+            BuildAttachedAsync() {
         var daemon = new FakeDaemonClientService();
         var factory = new FakeTerminalAttachClientFactory();
         var time = new FakeTimeProvider();
         var opener = new RecordingOpener();
         var terminal = new TerminalTabViewModel("a1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
         var chat = new ChatTabViewModel(
-            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), opener, time, new FakePermissionService(), new SessionRuns(time), drafts: drafts);
+            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), opener, time, new FakePermissionService(), new SessionRuns(time));
         daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude", "codex"]));
         daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo", model: "claude-opus-5") with { Status = "Running" });
         // The Avalonia scheduler always posts, even when the caller is already on the UI thread,
@@ -53,29 +53,6 @@ public class ChatComposerTests {
             await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
             await Assert.That(client.SentInput).Count().IsEqualTo(2);
             await chat.TeardownAsync();
-        });
-    }
-
-    /// Pins that a draft outlives its chat tab, which navigation tears down, and that a sent
-    /// draft is not brought back.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task An_unsent_draft_survives_the_tab_being_rebuilt() {
-        await RunOnUiAsync(async () => {
-            var drafts = new ComposerDrafts();
-            var (_, _, _, first, _, _) = await BuildAttachedAsync(drafts);
-            first.ComposerText = "half a thought";
-            await first.TeardownAsync();
-
-            var (_, _, _, second, _, _) = await BuildAttachedAsync(drafts);
-            await Assert.That(second.ComposerText).IsEqualTo("half a thought");
-            await second.SendCommand.Execute();
-            await Assert.That(second.ComposerText).IsEqualTo("");
-            await second.TeardownAsync();
-
-            var (_, _, _, third, _, _) = await BuildAttachedAsync(drafts);
-            await Assert.That(third.ComposerText).IsEqualTo("");
-            await third.TeardownAsync();
         });
     }
 

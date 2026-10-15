@@ -9,4 +9,7 @@ public interface ISessionWorkspace {
     PullRequestContextViewModel? PullRequests { get; }
     void OpenPullRequest(PullRequestSubjectDto? subject = null);
     Task TeardownAsync();
+    /// Takes the composer's unsent draft out of this workspace, which another lane's is replacing.
+    string HandOffDraft();
+    void AdoptDraft(string text);
 }

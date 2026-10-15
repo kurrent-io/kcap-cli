@@ -153,6 +153,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
             ComposerDrafts? drafts = null) {
         AgentId = agentId;
+        _drafts = drafts;
         _opener = opener;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
@@ -317,6 +318,21 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     }
 
     static string TitleFor(AgentStatusDto? dto) => dto?.Title ?? RepoLabel.Leaf(dto?.RepoPath);
+
+    readonly ComposerDrafts? _drafts;
+
+    // Chat is built on the first dto, so a draft can arrive or leave before there is a tab to hold it.
+    public string HandOffDraft() {
+        if (Chat is { } chat) return chat.HandOffDraft();
+        var text = _drafts?.Get(AgentOrigin.Local, AgentId) ?? "";
+        _drafts?.Set(AgentOrigin.Local, AgentId, "");
+        return text;
+    }
+
+    public void AdoptDraft(string text) {
+        if (Chat is { } chat) chat.ComposerText = text;
+        else _drafts?.Set(AgentOrigin.Local, AgentId, text);
+    }
 
     /// Disposes this workspace's own daemon-cache projections, then tears down Chat (if built), the
     /// work-context pane, and Terminal last -- the caller that closes a workspace tab calls this once.

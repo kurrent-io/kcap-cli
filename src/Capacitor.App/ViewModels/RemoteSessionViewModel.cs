@@ -385,6 +385,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     static void Log(string note) => Console.Error.WriteLine($"kcap: remote chat: {note}");
 
+    public string HandOffDraft() => Chat.HandOffDraft();
+
+    public void AdoptDraft(string text) => Chat.ComposerText = text;
+
     public async Task TeardownAsync() {
         _disposables.Dispose();
         Artefacts.OpenRequested -= ShowArtefacts;

@@ -67,7 +67,7 @@ public class MainWindowViewModelTests {
 
         /// A session id only where a test needs one: it is what a local row is compared against
         /// before the removal counts as an origin change rather than an ended session.
-        public RemoteSessionViewModel New(string agentId, string? sessionId, IPullRequestSource? pullRequests = null) {
+        public RemoteSessionViewModel New(string agentId, string? sessionId, IPullRequestSource? pullRequests = null, ComposerDrafts? drafts = null) {
             var row = AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = agentId, SessionId = sessionId, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
                 Vendor = "claude", RegisteredAt = DateTime.UtcNow,
@@ -75,7 +75,7 @@ public class MainWindowViewModelTests {
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
                 (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(), WorkSource,
-                () => new FakeTerminalSurface(), pullRequests: pullRequests);
+                () => new FakeTerminalSurface(), pullRequests: pullRequests, drafts: drafts);
         }
 
         public void Dispose() {
@@ -98,12 +98,12 @@ public class MainWindowViewModelTests {
         return (vm, home, tmp);
     }
 
-    static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, string agentId, IPullRequestSource? pullRequests = null) {
+    static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, string agentId, IPullRequestSource? pullRequests = null, ComposerDrafts? drafts = null) {
         var (actions, _) = NewActions(service);
         var attach = new FakeTerminalAttachClientFactory();
         return new WorkspaceViewModel(
             agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests);
+            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests, drafts: drafts);
     }
 
     [Test]
@@ -152,6 +152,61 @@ public class MainWindowViewModelTests {
                 after.SetForeground(true);
                 await WorkspaceFixtures.WaitUntilAsync(() => after.CanReveal && !after.IsReading, what: "PR after handoff");
                 await Assert.That(after.Selected!.Subject.Number).IsEqualTo(1);
+            } finally {
+                var current = vm.CurrentWorkspace;
+                vm.CloseWorkspace();
+                if (current is not null) await current.TeardownAsync();
+            }
+        });
+    }
+
+    /// Pins that an unsent draft follows its session across lanes, and that the lane it left keeps
+    /// no copy to resurrect on a later move back.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_origin_handoff_carries_the_unsent_draft(bool startRemote) {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var drafts = new ComposerDrafts();
+            var service = new FakeDaemonClientService();
+            var dto = WorkspaceFixtures.Agent("a1", "claude", hasTerminal: false, "/repos/kcap-cli", sessionId: "s1");
+            service.Agents.AddOrUpdate(dto);
+            var localRow = AgentRow.FromLocal(dto, new RepoIdentity("path:/repos/kcap-cli", "kcap-cli"));
+            if (!startRemote) host.Directory.Rows.AddOrUpdate(localRow);
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id, drafts: drafts),
+                originOf: _ => startRemote ? AgentOrigin.Remote : AgentOrigin.Local,
+                remoteWorkspaceFactory: id => host.New(id, "s1", drafts: drafts),
+                trackWorkspaceTeardown: teardown => _ = teardown(), directory: host.Directory);
+            try {
+                vm.OpenSession("a1", startRemote ? AgentOrigin.Remote : AgentOrigin.Local);
+                var before = vm.CurrentWorkspace!;
+                static ChatTabViewModel? ChatOf(ISessionWorkspace? workspace) => workspace switch {
+                    WorkspaceViewModel local => local.Chat,
+                    RemoteSessionViewModel remote => remote.Chat,
+                    _ => null,
+                };
+                await WorkspaceFixtures.WaitUntilAsync(() => ChatOf(before) is not null, what: "chat tab");
+                ChatOf(before)!.ComposerText = "half a thought";
+
+                if (startRemote) {
+                    host.Directory.ProvenTwins.Add("a1");
+                    host.Directory.Rows.AddOrUpdate(localRow);
+                    host.Directory.Rows.Remove("remote:a1");
+                } else {
+                    host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                        AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1", Vendor = "claude",
+                    }));
+                    host.Directory.Rows.Remove("local:a1");
+                }
+
+                await WorkspaceFixtures.WaitUntilAsync(() => !ReferenceEquals(vm.CurrentWorkspace, before) && ChatOf(vm.CurrentWorkspace) is not null,
+                    what: "rebound chat tab");
+                await Assert.That(ChatOf(vm.CurrentWorkspace)!.ComposerText).IsEqualTo("half a thought");
+                var left = startRemote ? AgentOrigin.Remote : AgentOrigin.Local;
+                await Assert.That(drafts.Get(left, "a1")).IsEqualTo("");
             } finally {
                 var current = vm.CurrentWorkspace;
                 vm.CloseWorkspace();
