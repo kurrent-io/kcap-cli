@@ -5,10 +5,20 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 /// server's predicate check for check: a message the two disagree on is a turn one side shows and
 /// the other hides.
 /// </summary>
+/// <remarks>The interrupt marker is the one check the server's predicate must carry too: while it
+/// does not, a marker that is the session's newest user line fails the server's anchor check and
+/// the consultation runs windowless.</remarks>
 public static class ClaudeHarnessPayload {
     const string NotificationTag = "<task-notification";
     const string NotificationEnd = "</task-notification>";
     const string SkillHeader     = "Base directory for this skill:";
+
+    // Written on Esc or a declined prompt. The words are Claude Code's; the human's no is declared
+    // as a refusal, so as a turn it would only push a real message out of the window.
+    static readonly string[] InterruptMarkers = [
+        "[Request interrupted by user]",
+        "[Request interrupted by user for tool use]",
+    ];
 
     /// <summary>
     /// True when <paramref name="text"/> is wholly a harness payload. A message that merely quotes
@@ -18,6 +28,8 @@ public static class ClaudeHarnessPayload {
         if (string.IsNullOrWhiteSpace(text)) return false;
 
         if (IsWhollyTaskNotification(text) || ClaudeAgentMessageFrame.IsMatch(text)) return true;
+
+        if (InterruptMarkers.Contains(text.Trim(), StringComparer.Ordinal)) return true;
 
         if (text.AsSpan().TrimStart().StartsWith(SkillHeader, StringComparison.Ordinal)) return true;
 

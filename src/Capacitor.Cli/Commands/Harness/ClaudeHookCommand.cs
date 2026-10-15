@@ -1295,7 +1295,7 @@ public sealed class ClaudeHookCommand(
         var key = PolicySnapshotStore.Sanitize(sessionId);
         TryDelete(config.Path("policy", "sessions", $"{key}.json"));
         TryDelete(config.Path("policy", "journal", $"{key}.json"));
-        TryDelete(config.Path("policy", "judge", $"{key}.json"));
+        TryDelete(ClaudeJudgeDeclarationReader.StatePath(config, sessionId));
 
         try {
             var uploaded = config.Path("policy", "uploaded");

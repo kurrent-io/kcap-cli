@@ -33,7 +33,7 @@ internal static class ClaudeHostedPolicySeam {
             case PolicyOutcome.Ask:   return Result(PolicyOutcome.Ask,   "ask",   "parked", null);
         }
 
-        if (judge is null || !snapshot.JudgeEnabled) return null;
+        if (judge is null || !snapshot.JudgeEnabled || ClaudeJudgeLane.IsHumanInteraction(call.ToolName)) return null;
 
         var judged = await ConsultAsync(call, snapshot, action, time, judge, judgeState, judgeBudget ?? JudgeBudget, logger, refusals, ct);
         return judged.Outcome switch {
@@ -62,7 +62,7 @@ internal static class ClaudeHostedPolicySeam {
         try {
             var started      = time.GetTimestamp();
             var declarations = ClaudeJudgeDeclarationReader.Read(call.TranscriptPath, call.ToolUseId, call.Cwd,
-                judgeState?.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(call.SessionId)}.json"));
+                judgeState is null ? null : ClaudeJudgeDeclarationReader.StatePath(judgeState, call.SessionId));
             var wire         = PolicyWire.ToWire(action);
             var inline       = PolicyWire.ToUpload(call.SessionId, snapshot);
             var refused      = refusals is null ? declarations.Refusals : Merge(declarations.Refusals, refusals.Declare(call.SessionId));

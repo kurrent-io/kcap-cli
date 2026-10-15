@@ -22,6 +22,7 @@ using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Antigravity;
+using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
@@ -355,6 +356,9 @@ partial class WatchCommand(
         }
 
         using var cts = new CancellationTokenSource();
+
+        if (vendor == "claude" && agentId is null)
+            _ = Task.Run(() => ClaudeJudgeWarmup.RunAsync(config, sessionId, transcriptPath, cwd, time, cts.Token));
 
         var shutdownRequestedAt = 0L;
         using var shutdownStamp = cts.Token.Register(() => Interlocked.CompareExchange(ref shutdownRequestedAt, time.GetTimestamp(), 0));

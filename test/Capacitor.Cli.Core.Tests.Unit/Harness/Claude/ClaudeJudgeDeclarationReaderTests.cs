@@ -73,6 +73,31 @@ public class ClaudeJudgeDeclarationReaderTests {
         await Assert.That(d.Turns!.UserMessages.Select(m => m.Id).ToArray()).IsEquivalentTo(new[] { Id(1) });
     }
 
+    /// <summary>Claude Code writes the marker itself, as a text block reusing the interrupted turn's
+    /// prompt id; the human's no is declared as a refusal instead.</summary>
+    [Test]
+    [Arguments("[Request interrupted by user]")]
+    [Arguments("[Request interrupted by user for tool use]")]
+    public async Task An_interrupt_marker_is_not_a_human_message(string marker) {
+        var interrupt = new JsonObject {
+            ["type"] = "user", ["uuid"] = Id(2), ["promptId"] = "p1",
+            ["message"] = new JsonObject {
+                ["role"] = "user", ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = marker }),
+            },
+        }.ToJsonString();
+        var d = ClaudeJudgeDeclarationReader.Read(Write(Human(1, "deploy it"), interrupt), null, null);
+
+        await Assert.That(d.Turns!.UserMessages.Select(m => m.Id).ToArray()).IsEquivalentTo(new[] { Id(1) });
+    }
+
+    [Test]
+    public async Task A_message_that_quotes_an_interrupt_marker_is_a_human_message() {
+        var d = ClaudeJudgeDeclarationReader.Read(
+            Write(Human(1, "why did I get [Request interrupted by user] just now?")), null, null);
+
+        await Assert.That(d.Turns!.UserMessages.Single().Id).IsEqualTo(Id(1));
+    }
+
     [Test]
     public async Task A_prompt_queued_mid_turn_is_a_human_message() {
         var queued = new JsonObject {
@@ -302,5 +327,30 @@ public class ClaudeJudgeDeclarationReaderTests {
         var d = ClaudeJudgeDeclarationReader.Read(path, null, null, State, 1000);
 
         await Assert.That(d.Turns!.UserMessages.Single().Id).IsEqualTo(Id(2));
+    }
+
+    /// <summary>A backlog several allowances long is read to its end, so the next read takes only
+    /// what is appended after it and declares the newest turn at once.</summary>
+    [Test]
+    public async Task Warming_reads_a_backlog_over_the_allowance_to_its_end() {
+        var path = Write([.. Enumerable.Range(1, 40).Select(n => Human(n, $"message {n}"))]);
+        var allowance = new FileInfo(path).Length / 3;
+
+        var reads = ClaudeJudgeDeclarationReader.Warm(path, null, State, allowance, CancellationToken.None);
+        var rewarm = ClaudeJudgeDeclarationReader.Warm(path, null, State, allowance, CancellationToken.None);
+        Append(path, Human(41, "and now this"));
+        var d = ClaudeJudgeDeclarationReader.Read(path, null, null, State, allowance);
+
+        await Assert.That(reads).IsGreaterThan(1);
+        await Assert.That(rewarm).IsEqualTo(1).Because("a file read to its end stops after one read");
+        await Assert.That(d.Turns!.UserMessages[^1].Id).IsEqualTo(Id(41));
+        await Assert.That(d.Refusals.Complete).IsTrue();
+    }
+
+    [Test]
+    public async Task Warming_an_unreadable_transcript_gives_up_after_one_read() {
+        var reads = ClaudeJudgeDeclarationReader.Warm(Tmp.PathTo("missing.jsonl"), null, State, 1000, CancellationToken.None);
+
+        await Assert.That(reads).IsEqualTo(1);
     }
 }
