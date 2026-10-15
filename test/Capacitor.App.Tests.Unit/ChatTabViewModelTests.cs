@@ -1628,12 +1628,13 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
             var h = new Harness(TranscriptChat.For("claude"), input: input);
-            var path = Tmp.CreateFile("t.jsonl", [User("a"), User("b")]);
+            var path = Tmp.CreateFile("t.jsonl", [User("dropped"), User("a"), User("b")]);
             await h.PushAsync(Dto(path));
             await SendAsync(h, input, "a");
 
             File.WriteAllLines(path, [User("a"), User("b")]);
             await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
             await AssertRecallOrder(h.Chat, "a", "b", "a");
             await h.TeardownAsync();
         });
@@ -1659,6 +1660,7 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Another transcript recalls nothing from the last, and a recall on screen becomes a draft.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Another_transcript_recalls_nothing_sent_while_reading_the_last() {
@@ -1667,9 +1669,24 @@ public class ChatTabViewModelTests {
             var h = new Harness(TranscriptChat.For("claude"), input: input);
             await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [User("before")])));
             await SendAsync(h, input, "unechoed");
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
 
             await h.PushAsync(Dto(Tmp.CreateFile("o.jsonl", [User("other")])));
+            await Assert.That(h.Chat.RecallNewer()).IsFalse();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("unechoed");
             await AssertRecallOrder(h.Chat, "other");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Recall_leaves_out_the_attachment_trailer_the_daemon_appended() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var withFiles = """{"type":"user","message":{"role":"user","content":"look at this\n\n[Attached files: /x/a.png]"}}""";
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [withFiles])));
+            await AssertRecallOrder(h.Chat, "look at this");
             await h.TeardownAsync();
         });
     }

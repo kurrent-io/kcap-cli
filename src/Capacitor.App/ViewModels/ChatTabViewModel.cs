@@ -942,7 +942,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 // names where that history ends — anything past it arrived after and can acknowledge.
                 RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
                 _items.Clear();
-                _history.Clear();
+                _history.ClearForReplay();
                 _pendingTools.Clear();
                 _settledTools.Clear();
                 _questionAsks.Clear();
@@ -982,7 +982,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         foreach (var (projected, offset) in read.Lines) {
             _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
-                _history.Observe(text);
+                _history.Observe(AttachmentTrailer.Strip(text));
                 var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
                 acknowledged.Acknowledged = true;

@@ -121,7 +121,7 @@ public class ComposerHistoryTests {
     public async Task A_replay_during_a_recall_picks_the_recall_back_up() {
         var history = Seen("first", "second");
         await Assert.That(history.Older("", None)).IsEqualTo("second");
-        history.Clear();
+        history.ClearForReplay();
         foreach (var text in new[] { "first", "second", "third" }) history.Observe(text);
         await Assert.That(history.Older("second", None)).IsEqualTo("first");
         await Assert.That(history.Newer("first", None)).IsEqualTo("second");
@@ -132,8 +132,18 @@ public class ComposerHistoryTests {
     public async Task A_recall_whose_turn_is_gone_still_steps_back_to_the_draft() {
         var history = Seen("first", "second");
         await Assert.That(history.Older("", None)).IsEqualTo("second");
-        history.Clear();
+        history.ClearForReplay();
         await Assert.That(history.Newer("second", None)).IsEqualTo("");
         await Assert.That(history.Older("", None)).IsNull();
+    }
+
+    [Test]
+    public async Task Clear_ends_a_recall_on_screen() {
+        var history = Seen("first", "second");
+        await Assert.That(history.Older("", None)).IsEqualTo("second");
+        history.Clear();
+        history.Observe("second");
+        await Assert.That(history.Newer("second", None)).IsNull();
+        await Assert.That(history.Older("second", None)).IsNull();
     }
 }

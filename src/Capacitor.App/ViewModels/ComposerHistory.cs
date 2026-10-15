@@ -24,8 +24,15 @@ public sealed class ComposerHistory {
         _cursor--;
     }
 
-    /// The transcript is replaying from the start, or the chat now reads another one.
-    public void Clear() => _entries.Clear();
+    /// The chat now reads another transcript.
+    public void Clear() {
+        _entries.Clear();
+        EndNavigation();
+    }
+
+    /// The transcript is replaying from the start; a recall on screen picks up again once its
+    /// turn is replayed.
+    public void ClearForReplay() => _entries.Clear();
 
     /// The next older prompt, or null when there is none or `current` is a draft of the user's own.
     public string? Older(string current, IReadOnlyList<string> unechoed) {
