@@ -435,20 +435,25 @@ sealed class DaemonServiceCommands(
         var failed = false;
 
         foreach (var unit in manager.ListInstalled()) {
-            if (!Owned(unit)) continue;
+            try {
+                if (!Owned(unit)) continue;
 
-            using var txn = await ServiceTxnLock.TryAcquireAsync(store, unit, TimeSpan.FromSeconds(5), time);
-            if (txn is null) {
-                await Console.Error.WriteLineAsync($"Another service operation is in progress for '{unit}'. Try again shortly.");
+                using var txn = await ServiceTxnLock.TryAcquireAsync(store, unit, TimeSpan.FromSeconds(5), time);
+                if (txn is null) {
+                    await Console.Error.WriteLineAsync($"Another service operation is in progress for '{unit}'. Try again shortly.");
+                    failed = true;
+                } else if (!Owned(unit)) {
+                    // An install holding the lock may have repointed the unit at another copy of kcap.
+                    continue;
+                } else if (!manager.Uninstall(unit, out var error)) {
+                    await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
+                    failed = true;
+                } else {
+                    await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
+                }
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {ex.Message}");
                 failed = true;
-            } else if (!Owned(unit)) {
-                // An install holding the lock may have repointed the unit at another copy of kcap.
-                continue;
-            } else if (!manager.Uninstall(unit, out var error)) {
-                await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
-                failed = true;
-            } else {
-                await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
             }
         }
 
