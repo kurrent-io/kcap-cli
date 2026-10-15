@@ -769,10 +769,10 @@ public class MainWindowViewModelTests {
             var vm = NewVm(service,
                 workspaceFactory: id => { built++; return NewWorkspace(service, id); });
 
-            vm.OpenSession("a1");
+            await Assert.That(vm.OpenSession("a1")).IsTrue();
             await Assert.That(built).IsEqualTo(1);
 
-            vm.OpenSession("a1"); // same id: no teardown/rebuild of a live attach
+            await Assert.That(vm.OpenSession("a1")).IsTrue(); // same id: no teardown/rebuild of a live attach
             await Assert.That(built).IsEqualTo(1);
 
             vm.OpenSession("a2"); // different id still swaps
@@ -820,6 +820,18 @@ public class MainWindowViewModelTests {
             await Assert.That(rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id)).IsExpanded).IsTrue();
             vm.CloseWorkspace();
             await workspace!.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task OpenSession_reports_an_id_neither_lane_holds_as_not_opened() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), originOf: _ => null);
+
+            await Assert.That(vm.OpenSession("a1")).IsFalse();
+            await Assert.That(vm.CurrentWorkspace).IsNull();
         });
     }
 
