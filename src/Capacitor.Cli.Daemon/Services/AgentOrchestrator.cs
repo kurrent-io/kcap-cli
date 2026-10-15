@@ -2597,7 +2597,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // The same instance the AgentInstance below carries, so a factory that judges an
                 // action during its own startup uses the documents this launch was reported with.
                 PolicySnapshot: policySnapshot,
-                Journal: journal
+                Journal: journal,
+                FlowRole: isReviewFlow ? cmd.FlowRole : null
             );
 
             HostedRuntimeStart start;

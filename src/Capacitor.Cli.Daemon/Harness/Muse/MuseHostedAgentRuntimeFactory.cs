@@ -178,7 +178,9 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
             plan.MintedSessionId, ctx.AgentId, ctx.DaemonId, ctx.DaemonEpoch, _time.GetUtcNow(),
             NonDefaultConfigDir(_config),
             string.IsNullOrEmpty(ctx.ServerUrl) ? null : ctx.ServerUrl,
-            _config.Profiles.Resolution.ProfileName is { Length: > 0 } profile ? profile : null));
+            _config.Profiles.Resolution.ProfileName is { Length: > 0 } profile ? profile : null,
+            (ctx.IsReviewFlow ? HostedSessionKind.FlowParticipant : HostedSessionKind.HostedAgent).ToWire(),
+            ctx.IsReviewFlow ? ctx.FlowRole : null));
 
         var relay        = !_hooksInstalled(_paths.SettingsJson);
         var relayedStart = false;
@@ -364,6 +366,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
         // The daemon id and epoch are what let a restarted daemon's orphan reaper recognise a survivor.
         psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
+        HostedLaunchMarkers.Apply(psi.Environment, ctx);
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]        = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"]     = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))   psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;

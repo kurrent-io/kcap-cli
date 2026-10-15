@@ -10,15 +10,17 @@ static class SessionIdLineEmitter {
     const int MaxSessionIdLength = 256;
 
     public static string? Resolve(HarnessId harness, string? sessionId, HarnessRegistry harnesses,
-                                  string? workItemsNudge, string? plansNudge, string? codexConfigPath = null) {
+                                  string? workItemsNudge, string? plansNudge, string? codexConfigPath = null,
+                                  SessionStartAudience? audience = null) {
         if (!string.IsNullOrWhiteSpace(workItemsNudge) || !string.IsNullOrWhiteSpace(plansNudge)) return null;
-        if (!AnyServerRegisteredFor(harness, harnesses, codexConfigPath)) return null;
+        if (!AnyServerRegisteredFor(harness, harnesses, codexConfigPath, audience)) return null;
 
         return Build(sessionId);
     }
 
-    public static bool AnyServerRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) =>
-        KcapMcpServers.All.Any(s => McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, s.Name, codexConfigPath));
+    public static bool AnyServerRegisteredFor(HarnessId harness, HarnessRegistry harnesses,
+                                              string? codexConfigPath = null, SessionStartAudience? audience = null) =>
+        KcapMcpServers.All.Any(s => McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, s.Name, codexConfigPath, audience));
 
     public static string? Build(string? sessionId) {
         if (string.IsNullOrWhiteSpace(sessionId)) return null;

@@ -396,6 +396,109 @@ public class ClaudeHookCommandTests {
         await Assert.That(stdout).Contains("Team memory");
     }
 
+    // ── What a hosted session and a flow participant are given ─────────────────────────────
+
+    const string FullAck =
+        """{"top_clusters":[{"text":"seal secrets","category":"safety"}],"coordination_notices":[{"text":"Sam is also on AUTH-12"}],"version":"999.999.999"}""";
+
+    static HostedAgent Participant => new("agent-1", true, DaemonBridge.None) { Kind = HostedSessionKind.FlowParticipant };
+
+    static HostedAgent HostedNonParticipant => new("agent-1", true, DaemonBridge.None) { Kind = HostedSessionKind.HostedAgent };
+
+    async Task<(string Context, Fixture Fx)> StartSessionAsync(HostedAgent hosted, string ack = FullAck) {
+        var fx = new Fixture(Config.Root) {
+            RespondJson     = ack,
+            MemoryIndexBody     = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""",
+            FlowDefinitionsBody = ProactiveCatalog,
+            Hosted              = hosted
+        };
+        fx.RegisterClaudeMcpServer("kcap-workitems", "kcap-plans", "kcap-flows");
+        new FirstRunNoticeStore(Config.Root).Arm();
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        return (JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>(), fx);
+    }
+
+    /// <summary>The control the two tests below are measured against: the same fixture gives an
+    /// interactive session every fragment.</summary>
+    [Test, NotInParallel]
+    public async Task an_interactive_session_gets_every_fragment() {
+        var (ctx, fx) = await StartSessionAsync(HostedAgent.Terminal);
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("seal secrets");
+        await Assert.That(ctx).Contains("## Coordination notices");
+        await Assert.That(ctx).Contains("newer kcap version");
+        await Assert.That(ctx).Contains("Team memory");
+        await Assert.That(ctx).Contains("## Work items");
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("Flows you may offer");
+        await Assert.That(ctx).Contains("## Kurrent Capacitor is set up");
+    }
+
+    [Test, NotInParallel]
+    public async Task a_flow_participant_gets_only_the_guidelines_and_coordination_notices() {
+        var (ctx, fx) = await StartSessionAsync(Participant);
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("seal secrets");
+        await Assert.That(ctx).Contains("## Coordination notices");
+        await Assert.That(ctx).DoesNotContain("newer kcap version");
+        await Assert.That(ctx).DoesNotContain("Team memory");
+        await Assert.That(ctx).DoesNotContain("## Work items");
+        await Assert.That(ctx).DoesNotContain("## Plans");
+        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("Flows you may offer");
+        await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]).IsNull();
+    }
+
+    /// <summary>A hosted agent drives its own work, so it keeps the driver guidance its loaded
+    /// servers support, and loses only what is meant for a person's first session.</summary>
+    [Test, NotInParallel]
+    public async Task a_hosted_agent_keeps_the_driver_guidance_and_loses_the_onboarding() {
+        var (ctx, fx) = await StartSessionAsync(HostedNonParticipant);
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("Team memory");
+        await Assert.That(ctx).Contains("## Work items");
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).DoesNotContain("newer kcap version");
+        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+    }
+
+    /// <summary>Withholding the notice must not spend it: it belongs to the person's next session.</summary>
+    [Test, NotInParallel]
+    public async Task a_hosted_session_leaves_the_first_run_notice_armed() {
+        var (_, fx) = await StartSessionAsync(HostedNonParticipant);
+        using var __ = fx;
+
+        await Assert.That(new FirstRunNoticeStore(Config.Root).TryClaim()).IsTrue();
+    }
+
+    /// <summary>A launch the daemon did not mark still narrows on the kind the server resolved.</summary>
+    [Test, NotInParallel]
+    public async Task a_participant_named_only_by_the_ack_loses_the_same_fragments() {
+        var (ctx, fx) = await StartSessionAsync(HostedAgent.Terminal,
+            """{"top_clusters":[{"text":"seal secrets","category":"safety"}],"version":"999.999.999","session_kind":"flow_participant","flow_role":"reviewer"}""");
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("seal secrets");
+        await Assert.That(ctx).DoesNotContain("newer kcap version");
+        await Assert.That(ctx).DoesNotContain("Team memory");
+        await Assert.That(ctx).DoesNotContain("## Work items");
+        await Assert.That(ctx).DoesNotContain("## Plans");
+        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+    }
+
     const string ProactiveCatalog = """{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}""";
 
     [Test, NotInParallel]
@@ -1805,6 +1908,9 @@ public class ClaudeHookCommandTests {
         public TimeSpan       MemoryIndexDelay  { get; set; } = TimeSpan.Zero;
 
         public string FlowDefinitionsBody { get; set; } = """{"definitions":[]}""";
+
+        /// <summary>What the daemon exported into the session, as the hook reads it.</summary>
+        public HostedAgent Hosted { get; set; } = HostedAgent.Terminal;
         public int FlowDefinitionsRequestCount => _memoryServer.LogEntries.Count(e => e.RequestMessage.Path == "/api/flows/definitions");
 
         /// <summary>Every request the stub server saw, for a test asserting that none arrived.</summary>
@@ -1859,7 +1965,7 @@ public class ClaudeHookCommandTests {
             clock ??= elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
             _clock = clock;
 
-            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
+            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), Hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin), stdout);
         }
 
@@ -1896,13 +2002,14 @@ public class ClaudeHookCommandTests {
         }
 
         /// <summary>Installs the kcap plugin under the fixture's home with a bundled .mcp.json naming
-        /// <paramref name="serverName"/>, which is what makes that server registered for Claude.</summary>
-        public void RegisterClaudeMcpServer(string serverName) {
+        /// <paramref name="serverNames"/>, which is what makes those servers registered for Claude.</summary>
+        public void RegisterClaudeMcpServer(params string[] serverNames) {
             var claude      = Path.Combine(_tmpHome, ".claude");
             var installPath = Path.Combine(claude, "plugins", "cache", "kcap", "kcap", "1.0.0");
             Directory.CreateDirectory(installPath);
             File.WriteAllText(Path.Combine(installPath, ".mcp.json"),
-                """{"mcpServers":{""" + System.Text.Json.JsonSerializer.Serialize(serverName) + """:{"command":"kcap","args":["mcp"]}}}""");
+                """{"mcpServers":{""" + string.Join(",", serverNames.Select(n =>
+                    System.Text.Json.JsonSerializer.Serialize(n) + """:{"command":"kcap","args":["mcp"]}""")) + "}}");
             File.WriteAllText(Path.Combine(claude, "plugins", "installed_plugins.json"),
                 "{ \"plugins\": { \"kcap@kcap\": [ { \"scope\": \"user\", \"installPath\": " +
                 System.Text.Json.JsonSerializer.Serialize(installPath) + ", \"version\": \"1.0.0\" } ] } }");

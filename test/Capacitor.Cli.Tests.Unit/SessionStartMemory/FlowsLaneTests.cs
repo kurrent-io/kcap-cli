@@ -41,6 +41,17 @@ public class FlowsLaneTests {
             HarnessId.Codex, TestHarnesses.Under(new UserHome(home.Path)), config)).IsFalse();
     }
 
+    /// <summary>A participant's own MCP config omits the flows server, so it cannot start what it is offered.</summary>
+    [Test]
+    public async Task The_lane_is_off_for_a_flow_participant_whatever_the_harness_registers() {
+        using var home = new TempDir();
+        var config = home.CreateFile("config.toml", "[mcp_servers.kcap-flows]\ncommand = \"kcap\"\nargs = [\"mcp\", \"flows\"]\n");
+
+        await Assert.That(SessionStartMemoryHookSupport.FlowsLaneDisabled(
+            HarnessId.Codex, TestHarnesses.Under(new UserHome(home.Path)), config,
+            new SessionStartAudience(IsHosted: true, IsFlowParticipant: true))).IsTrue();
+    }
+
     [Test]
     public async Task Proactive_flows_render_with_their_when_to_use() {
         var fragment = SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog));

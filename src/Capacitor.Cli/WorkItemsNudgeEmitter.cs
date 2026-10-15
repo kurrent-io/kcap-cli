@@ -38,17 +38,18 @@ static class WorkItemsNudgeEmitter {
     /// </summary>
     public static string? Resolve(HarnessId harness, string? sessionId, bool optedOut,
                                   HarnessRegistry harnesses, PlanEntitlements plan,
-                                  string? codexConfigPath = null) {
+                                  string? codexConfigPath = null, SessionStartAudience? audience = null) {
         if (optedOut) return null;
         if (!plan.Allows(PlanFeature.WorkItems)) return null;
-        if (!ToolsRegisteredFor(harness, harnesses, codexConfigPath)) return null;
+        if (!ToolsRegisteredFor(harness, harnesses, codexConfigPath, audience)) return null;
         return Build(sessionId);
     }
 
     /// <summary>Whether the harness has the <c>kcap-workitems</c> tools to call — fail closed, so
     /// guidance naming them is never shown to an agent that cannot reach them.</summary>
-    public static bool ToolsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) =>
-        McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath);
+    public static bool ToolsRegisteredFor(HarnessId harness, HarnessRegistry harnesses,
+                                          string? codexConfigPath = null, SessionStartAudience? audience = null) =>
+        McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, "kcap-workitems", codexConfigPath, audience);
 
     public static string? Build(string? sessionId) {
         if (string.IsNullOrWhiteSpace(sessionId)) return null;
