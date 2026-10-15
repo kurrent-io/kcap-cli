@@ -150,7 +150,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
-            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null) {
+            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
+            ComposerDrafts? drafts = null) {
         AgentId = agentId;
         _opener = opener;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
@@ -261,7 +262,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts);
             })
             .DisposeWith(_disposables);
 

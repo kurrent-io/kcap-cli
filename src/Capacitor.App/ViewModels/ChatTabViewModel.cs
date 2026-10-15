@@ -240,8 +240,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _composerEdits++;
             Notice(null);
             this.RaiseAndSetIfChanged(ref _composerText, value);
+            _drafts?.Set(_origin, _agentId, value);
         }
     }
+
+    readonly ComposerDrafts? _drafts;
+    readonly AgentOrigin _origin;
+    readonly string _agentId;
 
     readonly ComposerHistory _history = new();
     int _recallEdits = -1;
@@ -476,10 +481,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null)
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
-               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard) { }
+               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
+               drafts: drafts) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
@@ -487,7 +493,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IPermissionService permissions, SessionRuns runs, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null) {
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
+        _drafts = drafts;
+        _origin = origin;
+        _agentId = agentId;
+        _composerText = drafts?.Get(origin, agentId) ?? "";
         _planActivity = planActivity;
         _openCard = openCard;
         _input = input;
