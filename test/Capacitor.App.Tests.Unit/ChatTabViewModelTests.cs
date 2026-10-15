@@ -1499,6 +1499,33 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A workspace opened on an existing session recalls the user turns its transcript already
+    /// shows, and a rewritten transcript replaces them rather than appending a second copy.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Recall_reaches_the_user_turns_the_transcript_shows() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [UserLine.Replace("hello", "first"), AssistantLine, UserLine]);
+            await h.PushAsync(Dto(path));
+
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("hello");
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("first");
+            await Assert.That(h.Chat.RecallNewer()).IsTrue();
+            await Assert.That(h.Chat.RecallNewer()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+
+            File.WriteAllLines(path, [UserLine.Replace("hello", "rewritten")]);
+            await h.TickAsync();
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("rewritten");
+            await Assert.That(h.Chat.RecallOlder()).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
     /// Text alone cannot decide this: an edit during the round trip that ends on the sent text is
     /// still the user's own draft, and clearing it would erase what they typed.
     [Test]

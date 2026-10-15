@@ -786,6 +786,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
         _items.Clear();
+        _history.Clear();
         _pendingTools.Clear();
         _settledTools.Clear();
         _questionAsks.Clear();
@@ -907,6 +908,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 // names where that history ends — anything past it arrived after and can acknowledge.
                 RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
                 _items.Clear();
+                _history.Clear();
                 _pendingTools.Clear();
                 _settledTools.Clear();
                 _questionAsks.Clear();
@@ -963,6 +965,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         _openGroup = null;
                         _openShell = null;
                         fresh.Add(new UserTurnItem(e.Text ?? ""));
+                        _history.Observe(e.Text ?? "");
                         break;
                     case AcpEventKind.AssistantText:
                         _openGroup = null;

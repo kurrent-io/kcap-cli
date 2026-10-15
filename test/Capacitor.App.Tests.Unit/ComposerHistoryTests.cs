@@ -79,6 +79,47 @@ public class ComposerHistoryTests {
         await Assert.That(history.Older("")).IsEqualTo("third");
     }
 
+    /// The transcript echoes a sent prompt beside its own record, so the pair is one entry.
+    [Test]
+    public async Task Observe_collapses_the_echo_of_a_sent_prompt() {
+        var history = With("first");
+        history.Observe("first");
+        history.Observe("  ");
+        await Assert.That(history.Older("")).IsEqualTo("first");
+        await Assert.That(history.Older("first")).IsNull();
+    }
+
+    [Test]
+    public async Task Observe_leaves_a_recall_in_progress_alone() {
+        var history = With("first", "second");
+        await Assert.That(history.Older("")).IsEqualTo("second");
+        history.Observe("third");
+        await Assert.That(history.Older("second")).IsEqualTo("first");
+        await Assert.That(history.Newer("first")).IsEqualTo("second");
+        await Assert.That(history.Newer("second")).IsEqualTo("third");
+    }
+
+    /// The recalled entry can be the one pushed out the front; ↓ then resumes at the new oldest.
+    [Test]
+    public async Task Observe_past_capacity_keeps_the_recall_cursor_in_step() {
+        var history = With(Enumerable.Range(0, ComposerHistory.Capacity).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray());
+        var current = "";
+        for (var i = 0; i < ComposerHistory.Capacity; i++) current = history.Older(current)!;
+        await Assert.That(current).IsEqualTo("0");
+        history.Observe("new");
+        await Assert.That(history.Older(current)).IsNull();
+        await Assert.That(history.Newer(current)).IsEqualTo("1");
+    }
+
+    [Test]
+    public async Task Clear_forgets_every_entry_and_ends_navigation() {
+        var history = With("first");
+        await Assert.That(history.Older("")).IsEqualTo("first");
+        history.Clear();
+        await Assert.That(history.Newer("first")).IsNull();
+        await Assert.That(history.Older("")).IsNull();
+    }
+
     [Test]
     public async Task Record_drops_the_oldest_past_capacity() {
         var history = With(Enumerable.Range(0, ComposerHistory.Capacity + 1).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray());

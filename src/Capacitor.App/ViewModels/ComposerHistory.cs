@@ -1,21 +1,33 @@
 namespace Capacitor.App.ViewModels;
 
-/// Prompts sent from one composer, recalled with ↑/↓ the way a shell recalls commands. Recall
-/// starts only from a blank composer and continues only while the box still shows the recalled
-/// text unchanged: an edit turns it back into the user's own draft.
+/// Prompts recalled with ↑/↓ the way a shell recalls commands: the transcript's user turns plus
+/// what this composer sent. Recall starts only from a blank composer and continues only while the
+/// box still shows the recalled text unchanged: an edit turns it back into the user's own draft.
 public sealed class ComposerHistory {
     public const int Capacity = 100;
 
     readonly List<string> _entries = new();
+    // -1 while the shown entry has been evicted from the front: the next newer one is index 0.
     int _cursor;
     string? _shown;
     string _draft = "";
 
+    /// A prompt this composer sent.
     public void Record(string text) {
-        if (_entries.Count == 0 || !string.Equals(_entries[^1], text, StringComparison.Ordinal)) {
-            _entries.Add(text);
-            if (_entries.Count > Capacity) _entries.RemoveAt(0);
-        }
+        Append(text);
+        EndNavigation();
+    }
+
+    /// A user turn the transcript shows. A sent prompt's own echo lands next to its record and
+    /// collapses into it, and an arrival never interrupts a recall in progress.
+    public void Observe(string text) {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        if (Append(text) && _shown is not null) _cursor--;
+    }
+
+    /// The transcript is being replayed from the start, so what it showed is about to arrive again.
+    public void Clear() {
+        _entries.Clear();
         EndNavigation();
     }
 
@@ -26,7 +38,7 @@ public sealed class ComposerHistory {
             _draft = current;
             _cursor = _entries.Count;
         }
-        if (_cursor == 0) return null;
+        if (_cursor <= 0) return null;
         _cursor--;
         return _shown = _entries[_cursor];
     }
@@ -46,5 +58,14 @@ public sealed class ComposerHistory {
     public void EndNavigation() {
         _shown = null;
         _cursor = _entries.Count;
+    }
+
+    /// True when the oldest entry was dropped to make room.
+    bool Append(string text) {
+        if (_entries.Count > 0 && string.Equals(_entries[^1], text, StringComparison.Ordinal)) return false;
+        _entries.Add(text);
+        if (_entries.Count <= Capacity) return false;
+        _entries.RemoveAt(0);
+        return true;
     }
 }
