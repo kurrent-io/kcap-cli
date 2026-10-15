@@ -675,6 +675,12 @@ public class AntigravityReviewerLaunchTests {
         await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_unsupported_platform");
     }
 
+    /// <summary>A launcher only offers what the daemon advertises, so a Windows host that refuses
+    /// every launch must not report the vendor available — the binary is present here.</summary>
+    [Test]
+    public async Task A_windows_host_does_not_report_the_vendor_available() =>
+        await Assert.That(Factory(EnabledConfig(), posixHost: false).IsAvailable()).IsFalse();
+
     /// <summary>Binary presence is shared too — there is nothing to launch either way.</summary>
     [Test]
     public async Task A_missing_binary_refuses_a_hosted_launch_too() {

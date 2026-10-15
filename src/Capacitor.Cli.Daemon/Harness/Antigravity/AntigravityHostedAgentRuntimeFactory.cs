@@ -122,7 +122,9 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
     public string CliPath => config.AntigravityPath;
 
-    public bool IsAvailable() => _binaryExists(config.AntigravityPath);
+    // A Windows host refuses every launch (LaunchRefusal's platform arm), so offering it there would
+    // put a vendor in the launcher that can only fail.
+    public bool IsAvailable() => _posixHost && _binaryExists(config.AntigravityPath);
 
     public bool SupportsUnattended => DescribeUnattendedSupport().Supported;
 
