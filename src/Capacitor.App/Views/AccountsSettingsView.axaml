@@ -10,8 +10,8 @@
             <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
         </Style>
     </UserControl.Styles>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
-        <StackPanel Spacing="16">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Classes="settingsPage">
             <StackPanel Spacing="10">
                 <TextBlock x:Name="AccountsTitleText" Classes="kcapTitle" Text="Accounts" LineHeight="22" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"

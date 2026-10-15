@@ -35,6 +35,7 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Harness;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.App.Platform.Linux;
 using Capacitor.App.Platform.Mac;
@@ -1077,6 +1078,38 @@ public partial class App : Application {
         "kcap will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."
         + (importRunning ? " Your history import will stop. Sessions already imported are kept; you can retry from setup." : ""));
 
+    HarnessesSettingsViewModel CreateHarnessesSettings(SettingsProfileStore settings, string daemonName) {
+        var runner = new ProcessRunner(_time);
+        var probe = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
+        var cli = new KcapCli(runner,
+            CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory),
+            daemonName, settings.ProfileName, probe.TerminalPathAsync,
+            canonicalServer: ServerIdentity.Canonicalize(settings.ServerUrl));
+        var harnesses = HarnessRegistry.FromEnvironment(_userHome);
+        return new HarnessesSettingsViewModel(settings, cli,
+            HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome), _shutdown.Token,
+            id => harnesses[id].Signals.IsWired);
+    }
+
+    async Task<VisibilityOptionsResponse?> ReadSettingsVisibilityOptionsAsync(SettingsProfileStore settings, CancellationToken ct) {
+        using var timeout = new CancellationTokenSource(WizardVisibilityOptionsTimeout, _time);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            await Task.Run(settings.LoadProfile, bounded.Token).ConfigureAwait(false);
+            if (_serverHttp?.GetRequiredService<ICapacitorHttpClient>() is not { } http) return null;
+            var (client, status, _, _) = await http.ForWaitAsync(bounded.Token).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return null;
+                var read = await ServerVisibilityOptions.ReadAsync(client, settings.ServerUrl, bounded.Token).ConfigureAwait(false);
+                if (read.Problem is { } problem) Console.Error.WriteLine($"kcap: settings visibility options read failed: {problem}");
+                return read.Offer;
+            }
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: settings visibility options read failed: {ex.Message}");
+            return null;
+        }
+    }
+
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled,
             bool showSearch = false) {
@@ -1110,7 +1143,10 @@ public partial class App : Application {
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
-                profiles: profilesVm) {
+                profiles: profilesVm, harnesses: CreateHarnessesSettings(settings, service.DaemonName),
+                capture: new CaptureSettingsViewModel(settings, _shutdown.Token,
+                    isLocal: IsLocalServer(settings.ServerUrl, _localRoot),
+                    visibilityOptions: ct => ReadSettingsVisibilityOptionsAsync(settings, ct))) {
                 Accounts = _accounts is { } accounts
                     ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
                         discover: () => AccountDiscovery.Find(
@@ -1129,13 +1165,15 @@ public partial class App : Application {
 
         var window = new SettingsWindow { DataContext = vm };
         _settingsWindow = window;
-        window.Closing += (_, e) => { if (vm.IsBusy && !_shutdownStarted) e.Cancel = true; };
+        window.Closing += (_, e) => { if (vm.HasActiveOperation && !_shutdownStarted) e.Cancel = true; };
         window.Closed += (_, _) => { _settingsWindow = null; vm.Dispose(); };
         // The list is re-read whenever the window regains focus, so a `kcap use` or `kcap profile
         // add` made in a terminal shows up on return without a file watcher.
         window.Activated += (_, _) => _ = profilesVm.RefreshAsync();
         _ = profilesVm.RefreshAsync();
         if (showSearch) window.ShowSearch();
+        _ = vm.Harnesses!.RescanAsync();
+        _ = vm.Capture.RefreshVisibilityOptionsAsync();
         window.Show();
         window.Activate();
     }

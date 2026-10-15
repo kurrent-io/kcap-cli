@@ -3,10 +3,10 @@
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              x:Class="Capacitor.App.Views.ProfilesSettingsView"
              x:DataType="vm:ProfilesSettingsViewModel">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="24">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Classes="settingsPage">
             <StackPanel Spacing="10">
-                <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" LineHeight="22" />
+                <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                            Text="Each profile is a server and a sign-in. This app runs against one profile until it is relaunched." />
             </StackPanel>

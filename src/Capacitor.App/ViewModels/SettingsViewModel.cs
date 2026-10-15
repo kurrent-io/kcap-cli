@@ -55,7 +55,10 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
             bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
             NotificationSettingsService? notificationSettings = null,
-            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null) {
+            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null,
+            HarnessesSettingsViewModel? harnesses = null, CaptureSettingsViewModel? capture = null) {
+        Capture = capture ?? new CaptureSettingsViewModel(settings, appLifetime);
+        Harnesses = harnesses;
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -98,6 +101,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             notificationSettings.Changes.Skip(1).ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(ApplyNotificationPreferences).DisposeWith(_subscriptions);
         }
+        Capture.WhenAnyValue(x => x.Busy).Subscribe(_ => Refresh()).DisposeWith(_subscriptions);
+        if (Harnesses is not null)
+            Harnesses.WhenAnyValue(x => x.Busy).Subscribe(_ => Refresh()).DisposeWith(_subscriptions);
         RefreshNotificationAccess();
     }
 
@@ -163,6 +169,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public bool CanManageNotifications => _notificationSettings is not null;
 
     public ProfilesSettingsViewModel? Profiles { get; }
+    public CaptureSettingsViewModel Capture { get; }
+    public HarnessesSettingsViewModel? Harnesses { get; }
+    public bool HasActiveOperation => IsBusy || Capture.Busy || Harnesses?.Busy == true;
 
     public AccountsSettingsViewModel? Accounts { get; init; }
     public AppearanceSettingsViewModel? Appearance { get; init; }
@@ -215,7 +224,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         }
     }
 
-    public bool CanEdit => !IsBusy && !_needsAppRestart;
+    public bool CanEdit => !IsBusy && !Capture.Busy && Harnesses?.Busy != true && !_needsAppRestart;
     public bool CanSave => CanEdit && CapacityError is null && Capacity != _savedCapacity;
     public bool CanRename => CanEdit && _canRenameOnPlatform && !_nameOverridden && _startupSettled.IsCompletedSuccessfully &&
         NameError is null && Name != DaemonStore.Sanitize(_runningName) && Idle;
@@ -403,6 +412,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     void Refresh() {
+        this.RaisePropertyChanged(nameof(HasActiveOperation));
         this.RaisePropertyChanged(nameof(CanEdit));
         this.RaisePropertyChanged(nameof(CanSave));
         this.RaisePropertyChanged(nameof(CanRename));
@@ -416,6 +426,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public void Dispose() {
         _lifetime.Cancel();
+        Capture.Dispose();
+        Harnesses?.Dispose();
         _subscriptions.Dispose();
         Accounts?.Dispose();
         Appearance?.Dispose();

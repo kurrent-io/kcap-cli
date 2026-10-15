@@ -10,10 +10,30 @@ public sealed class SettingsProfileStore(ConfigRoot config, string profileName, 
     public string ServerUrl => serverUrl;
 
     public DaemonSettings Load() {
+        return LoadProfile().Daemon ?? new DaemonSettings();
+    }
+
+    public Profile LoadProfile() {
         if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var current))
             throw new InvalidOperationException("Could not read the profile settings.");
-        return Profile(current).Daemon ?? new DaemonSettings();
+        return Profile(current);
     }
+
+    public Task SaveCaptureAsync(Profile values, CancellationToken ct) =>
+        ConfigMutator.MutateAsync(config, current => {
+            var profile = Profile(current);
+            return current with {
+                Profiles = new Dictionary<string, Profile>(current.Profiles) {
+                    [profileName] = profile with {
+                        DefaultVisibility = values.DefaultVisibility,
+                        AllowedRepos = values.AllowedRepos,
+                        ExcludedRepos = values.ExcludedRepos,
+                        AllowedPaths = values.AllowedPaths,
+                        ExcludedPaths = values.ExcludedPaths,
+                    }
+                }
+            };
+        }, ct);
 
     public Task SaveCapacityAsync(int capacity, CancellationToken ct) =>
         SaveAsync(settings => settings with { MaxAgents = capacity }, ct);
