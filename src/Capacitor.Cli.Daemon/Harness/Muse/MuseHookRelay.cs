@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon.Harness.Muse;
 
@@ -56,7 +57,7 @@ internal static class MuseHookRelay {
         Process? process = null;
 
         try {
-            process = Process.Start(psi);
+            process = Process.Start(WindowsLaunchCommand.Apply(psi, BinaryProbe.FromEnvironment()));
             if (process is null) {
                 logger.LogWarning("Muse hook relay: kcap did not start for {Event} (agentId={AgentId}).", hookEvent, agentId);
                 return;

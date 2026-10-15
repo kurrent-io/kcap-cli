@@ -4,6 +4,7 @@ using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -232,6 +233,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             WorkingDirectory       = cwd,
         };
         ApplyChildEnv(psi.Environment, env);
+        WindowsLaunchCommand.Apply(psi, BinaryProbe.FromEnvironment());
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start '{cliPath} {string.Join(' ', argv)}'.");

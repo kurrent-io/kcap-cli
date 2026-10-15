@@ -23,6 +23,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -1703,13 +1704,13 @@ public static partial class DaemonRunner {
     static string? ProbeCliVersionOnce(string cliPath, int timeoutMs) {
         Process? process = null;
         try {
-            process = Process.Start(new ProcessStartInfo {
+            process = Process.Start(WindowsLaunchCommand.Apply(new ProcessStartInfo {
                 FileName = cliPath,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 ArgumentList = { "--version" }
-            });
+            }, BinaryProbe.FromEnvironment()));
             if (process is null) return null;
 
             // Drain both pipes WHILE the child runs. A --version that writes more than the OS pipe

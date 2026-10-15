@@ -87,7 +87,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
         _logger                = loggerFactory.CreateLogger<MuseHostedAgentRuntimeFactory>();
 
         _processSource  = processSource ?? ((psi, _) => Task.FromResult<IMuseMspProcess>(
-            new MuseMspProcess(psi, loggerFactory.CreateLogger<MuseMspProcess>(), time)));
+            new MuseMspProcess(WindowsLaunchCommand.Apply(psi, config.Binaries), loggerFactory.CreateLogger<MuseMspProcess>(), time)));
         _binaryExists   = binaryExists   ?? (path => config.Binaries.Finds(path));
         _resolveVersion = resolveVersion ?? (path => new VendorVersionResolver(config.Binaries).Resolve(path));
         _hooksInstalled = hooksInstalled ?? MuseHooksInstaller.IsInstalled;

@@ -74,7 +74,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
 
     readonly Func<ProcessStartInfo, CancellationToken, Task<IPiRpcProcess>> _processSource =
         processSource ?? ((psi, _) => Task.FromResult<IPiRpcProcess>(
-            new PiRpcProcess(psi, loggerFactory.CreateLogger<PiRpcProcess>(), time)));
+            new PiRpcProcess(WindowsLaunchCommand.Apply(psi, config.Binaries), loggerFactory.CreateLogger<PiRpcProcess>(), time)));
 
     readonly Func<string, bool> _binaryExists =
         binaryExists ?? (path => config.Binaries.Finds(path));

@@ -105,7 +105,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
     readonly Func<ProcessStartInfo, CancellationToken, Task<IAgyTurnProcess>> _turnSource =
         turnSource ?? ((psi, _) => Task.FromResult<IAgyTurnProcess>(
-            new AgyTurnProcess(psi, loggerFactory.CreateLogger<AgyTurnProcess>(), time)));
+            new AgyTurnProcess(WindowsLaunchCommand.Apply(psi, config.Binaries), loggerFactory.CreateLogger<AgyTurnProcess>(), time)));
 
     readonly Func<string, bool> _binaryExists =
         binaryExists ?? (path => config.Binaries.Finds(path));

@@ -1258,7 +1258,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     static (Stream Input, Stream Output, IAcpProcess Process) StartRealProcess(
             AcpVendorDescriptor descriptor, DaemonConfig config, RuntimeStartContext ctx,
             ILoggerFactory loggerFactory, TimeProvider time) {
-        var psi = BuildProcessStartInfo(descriptor, config, ctx);
+        var psi = WindowsLaunchCommand.Apply(BuildProcessStartInfo(descriptor, config, ctx), config.Binaries);
 
         // Materialize what the pure builder declared. Only a sandboxed borrowed launch carries these,
         // and the vendor cannot create them itself: HOME must exist before the runtime starts, and the
