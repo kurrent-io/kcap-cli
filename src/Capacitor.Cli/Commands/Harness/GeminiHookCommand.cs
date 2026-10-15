@@ -340,7 +340,7 @@ sealed class GeminiHookCommand(
             scopeRoot: cwd is not null ? GitRepository.FindRoot(cwd) ?? cwd : null,
             disabled: activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
-            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Gemini, harnesses),
+            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Gemini, harnesses, audience: audience),
             source: source,
             budget: budget.Remaining);
 

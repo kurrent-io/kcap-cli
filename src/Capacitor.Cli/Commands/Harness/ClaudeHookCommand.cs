@@ -839,7 +839,7 @@ public sealed class ClaudeHookCommand(
                 "compact" => SessionLifecycleReason.Compact,
                 _ => SessionLifecycleReason.New
             };
-            var flowsDisabled = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Claude, harnesses);
+            var flowsDisabled = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Claude, harnesses, audience: audience);
             var memoryIndexTask = StartMemoryIndexTask(nativeSessionId, sessionCwd, memoryDisabled, flowsDisabled, lifecycleReason, budget.Remaining);
 
             // 2. Single bounded POST — keep resp alive to read the response body for the

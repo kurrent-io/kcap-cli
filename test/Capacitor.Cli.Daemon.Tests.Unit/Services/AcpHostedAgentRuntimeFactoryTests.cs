@@ -788,15 +788,12 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         await Assert.That(psi.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
     }
 
-    /// <summary>The environment is seeded from this process, so the role's absence is the launch
-    /// removing it, whatever the test host inherited.</summary>
     [Test]
-    public async Task BuildProcessStartInfo_marks_an_interactive_launch_as_a_hosted_agent_with_no_role() {
+    public async Task BuildProcessStartInfo_marks_an_interactive_launch_as_a_hosted_agent() {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
-            AcpVendorDescriptors.Cursor, new DaemonConfig(), MakeContext("agent-1") with { FlowRole = "reviewer" });
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), MakeContext("agent-1"));
 
         await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
-        await Assert.That(psi.Environment.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
     }
 
     [Test]

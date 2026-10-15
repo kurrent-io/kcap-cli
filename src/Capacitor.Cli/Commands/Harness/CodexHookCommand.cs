@@ -387,7 +387,7 @@ sealed class CodexHookCommand(
             // resolved one silently ignored `disable_memory_index: true` for every KCAP_URL user.
             activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
-            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Codex, harnesses),
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Codex, harnesses, audience: audience),
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining);
 

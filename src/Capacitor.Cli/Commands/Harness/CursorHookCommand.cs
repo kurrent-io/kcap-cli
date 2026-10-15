@@ -583,7 +583,7 @@ public sealed class CursorHookCommand(
         var activeProfile      = profiles.Effective;
         var disabled           = activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance;
         var guidelinesDisabled = activeProfile?.DisableSessionGuidelines is true;
-        var flowsDisabled      = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Cursor, harnesses);
+        var flowsDisabled      = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Cursor, harnesses, audience: audience);
         if (disabled && guidelinesDisabled && flowsDisabled) return null;
 
         try {

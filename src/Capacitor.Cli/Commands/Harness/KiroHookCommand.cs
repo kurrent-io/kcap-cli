@@ -333,7 +333,7 @@ sealed class KiroHookCommand(
             // user's opt-out on those deployments (the defect found reviewing the Copilot adapter).
             activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
-            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Kiro, harnesses),
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Kiro, harnesses, audience: audience),
             // Remaining already reserves Safety — do not subtract it again.
             budget.Remaining);
 

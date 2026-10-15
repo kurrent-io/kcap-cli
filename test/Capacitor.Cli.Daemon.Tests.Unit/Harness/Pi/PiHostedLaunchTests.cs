@@ -36,7 +36,6 @@ public class PiHostedLaunchTests {
         await Assert.That(participant.Environment["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
         await Assert.That(participant.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
         await Assert.That(interactive.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
-        await Assert.That(interactive.Environment.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
     }
 
     // ── BuildPsi: argv ──

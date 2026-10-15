@@ -408,10 +408,11 @@ public class ClaudeHookCommandTests {
     async Task<(string Context, Fixture Fx)> StartSessionAsync(HostedAgent hosted, string ack = FullAck) {
         var fx = new Fixture(Config.Root) {
             RespondJson     = ack,
-            MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""",
-            Hosted          = hosted
+            MemoryIndexBody     = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""",
+            FlowDefinitionsBody = ProactiveCatalog,
+            Hosted              = hosted
         };
-        fx.RegisterClaudeMcpServer("kcap-workitems", "kcap-plans");
+        fx.RegisterClaudeMcpServer("kcap-workitems", "kcap-plans", "kcap-flows");
         new FirstRunNoticeStore(Config.Root).Arm();
 
         var sid = Guid.NewGuid().ToString("N");
@@ -435,6 +436,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("Team memory");
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("Flows you may offer");
         await Assert.That(ctx).Contains("## Kurrent Capacitor is set up");
     }
 
@@ -451,7 +453,9 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("## Plans");
         await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
         await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("Flows you may offer");
         await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]).IsNull();

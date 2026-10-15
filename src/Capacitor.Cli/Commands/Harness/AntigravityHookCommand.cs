@@ -192,7 +192,7 @@ sealed class AntigravityHookCommand(
         var memoryTask = StartMemoryIndexTask(sessionId, scopeRoot,
             activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
-            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Antigravity, harnesses),
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Antigravity, harnesses, audience: audience),
             budget.Remaining);
 
         // Task 6: spawn-before-post. Route through the shared spool-aware poster (which

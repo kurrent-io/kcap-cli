@@ -164,7 +164,7 @@ sealed class MuseHookCommand(
         var memoryTask = StartMemoryIndexTask(sessionId, ScopeRootFrom(enriched, cwd),
             disabled: activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
-            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses),
+            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Muse, harnesses, audience: audience),
             source, budget.Remaining);
 
         // Posted with or without a log: Stop starts a missing watcher but never posts the start.

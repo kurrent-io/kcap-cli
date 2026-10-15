@@ -161,7 +161,7 @@ sealed class OpenCodeHookCommand(
             ? StartMemoryIndexTask(sessionId, scopeRoot,
                 activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
                 activeProfile?.DisableSessionGuidelines is true,
-                SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.OpenCode, harnesses),
+                SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.OpenCode, harnesses, audience: audience),
                 budget.Remaining)
             : Task.FromResult<string?>(null);
 

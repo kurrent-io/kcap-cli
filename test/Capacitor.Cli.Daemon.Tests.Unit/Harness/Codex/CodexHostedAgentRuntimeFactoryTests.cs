@@ -263,10 +263,8 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task BuildEnv_marks_a_participant_and_an_interactive_launch_by_kind() {
-        using var wt = new TempDir();
-
-        var participant = CodexHostedAgentRuntimeFactory.BuildEnv(Ctx(isReviewFlow: true, wt.Path) with { FlowRole = "reviewer" }, emitEnvelopeTranscript: true);
-        var interactive = CodexHostedAgentRuntimeFactory.BuildEnv(Ctx(isReviewFlow: false, wt.Path), emitEnvelopeTranscript: false);
+        var participant = CodexHostedAgentRuntimeFactory.BuildEnv(Ctx(isReviewFlow: true, "/wt") with { FlowRole = "reviewer" }, emitEnvelopeTranscript: true);
+        var interactive = CodexHostedAgentRuntimeFactory.BuildEnv(Ctx(isReviewFlow: false, "/wt"), emitEnvelopeTranscript: false);
 
         await Assert.That(participant["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
         await Assert.That(participant["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");

@@ -292,7 +292,7 @@ sealed class CopilotHookCommand(
             // for every KCAP_URL user.
             activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             activeProfile?.DisableSessionGuidelines is true,
-            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Copilot, harnesses),
+            SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Copilot, harnesses, audience: audience),
             // Remaining already reserves Safety — subtracting it again here halved the window.
             budget.Remaining,
             // Deliverability gate: the lease is committed only once the lifecycle POST has proved the

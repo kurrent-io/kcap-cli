@@ -40,8 +40,9 @@ internal static class SessionStartMemoryHookSupport {
     }
 
     /// <summary>Offering a flow the agent cannot start is worse than not offering it.</summary>
-    public static bool FlowsLaneDisabled(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) =>
-        !McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, KcapMcpServers.FlowsServerName, codexConfigPath);
+    public static bool FlowsLaneDisabled(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null,
+                                         SessionStartAudience? audience = null) =>
+        !McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, KcapMcpServers.FlowsServerName, codexConfigPath, audience);
 
     /// <summary>
     /// Awaits an in-flight fragment fetch under the budget remaining AT THIS INSTANT — never the

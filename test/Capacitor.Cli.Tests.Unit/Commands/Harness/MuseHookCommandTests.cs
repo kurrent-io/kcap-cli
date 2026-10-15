@@ -576,7 +576,10 @@ public class MuseHookCommandTests : IDisposable {
         StubMemoryIndex(3);
         StageParentLog();
         Home.CreateFile(Path.GetRelativePath(Home.Path, TestHarnesses.Under(Home).Of<MuseHarness>().Paths.SettingsJson),
-            """{"mcp_servers":{"kcap-workitems":{"command":"kcap"},"kcap-plans":{"command":"kcap"}}}""");
+            """{"mcp_servers":{"kcap-workitems":{"command":"kcap"},"kcap-plans":{"command":"kcap"},"kcap-flows":{"command":"kcap"}}}""");
+        _server.Given(Request.Create().WithPath("/api/flows/definitions").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}"""));
         new FirstRunNoticeStore(Config.Root).Arm();
         if (hosted)
             MuseHostedSessionMarker.Write(Home, new MuseHostedSessionMarker(
@@ -597,6 +600,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(written).Contains("## Team memory");
         await Assert.That(written).Contains("## Work items");
         await Assert.That(written).Contains("## Plans");
+        await Assert.That(written).Contains("Flows you may offer");
         await Assert.That(written).Contains("## Kurrent Capacitor is set up");
     }
 
@@ -611,6 +615,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(written).DoesNotContain("## Plans");
         await Assert.That(written).DoesNotContain("Kurrent Capacitor session id:");
         await Assert.That(written).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(written).DoesNotContain("Flows you may offer");
     }
 
     /// <summary>A marker an older daemon wrote carries no kind: the session is hosted, not a participant.</summary>

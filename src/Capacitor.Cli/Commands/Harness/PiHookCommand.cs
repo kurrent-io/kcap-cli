@@ -163,7 +163,7 @@ sealed class PiHookCommand(
             ? StartMemoryIndexTask(file, scopeRoot,
                 activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
                 activeProfile?.DisableSessionGuidelines is true,
-                SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Pi, harnesses),
+                SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Pi, harnesses, audience: audience),
                 budget.Remaining,
                 reason)
             : Task.FromResult<string?>(null);
