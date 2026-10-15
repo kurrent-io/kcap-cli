@@ -15,6 +15,7 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 public sealed partial class PullRequestContextViewModel : ReactiveObject {
+    static readonly TimeSpan SnapshotGrace = TimeSpan.FromMinutes(5);
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
     readonly Func<string?, string?> _readBranch;
@@ -68,6 +69,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     long? _lastRefresh;
     long? _lastOverview;
     DateTime? _retryAt;
+    DateTime? _listRetryAt;
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
@@ -96,10 +98,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public string Section => _section;
     public double ScrollOffset { get; set; }
     public bool CanReveal => _foreground && !_masked && Remaining > 0 && !_legacy;
-    public bool CanDisplay => _foreground && !_masked && (Remaining > 0 || _grace && _time.GetElapsedTime(_graceStarted) < TimeSpan.FromMinutes(5));
+    public bool CanDisplay => _foreground && !_masked && (Remaining > 0
+        || _grace && _time.GetElapsedTime(_graceStarted) < SnapshotGrace
+        || RenewingSnapshot && RenewalDisplayRemaining > 0);
     public bool CanNavigate => CanDisplay && !_legacy;
     bool CanDisplayReader => _readerVisible && CanDisplay && (Remaining > 0 || _section == "overview" || _sections.ContainsKey(SectionKey));
     double Remaining => Math.Max(0, _accessSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds);
+    bool RenewingSnapshot => _hasDisplayed && _accessSeconds > 0 && (_overviewPending || _refreshing);
+    double RenewalDisplayRemaining => _accessSeconds + SnapshotGrace.TotalSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds;
     string SectionKey => _section == "thread_comments" ? _section + ":" + _thread : _section == "threads" ? _section + ":" + _resolved : _section;
     string _resolved = "unresolved";
     public bool IncludeResolved {
@@ -176,6 +182,11 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _lifecycles.Clear();
             ClearProtected();
             _stopped = false;
+            _retryAt = null;
+            _listRetryAt = null;
+            _pollAfter = 30;
+            _queuedRefresh = false;
+            _refreshPage = false;
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
@@ -204,6 +215,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _userRefresh = false;
         _stopped = false;
         _retryAt = null;
+        _listRetryAt = null;
         _lastRefresh = null;
         ClearProtected();
         SetNotice(WorkContextViewModel.WaitingNote);
@@ -333,10 +345,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
                 next = _lastRefresh is { } last ? pollGap - _time.GetElapsedTime(last).TotalSeconds : 1;
                 if (_retryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
                     next = Math.Max(next, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+                if (_listRetryAt is { } listRetry && listRetry > _time.GetUtcNow().UtcDateTime)
+                    next = Math.Max(next, (listRetry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
             }
-            if (!_masked && !_grace && _accessSeconds > 0 && !_refreshing && !_overviewPending) next = Math.Min(next, Remaining);
-            if (_grace) next = Math.Min(next, (TimeSpan.FromMinutes(5) - _time.GetElapsedTime(_graceStarted)).TotalSeconds);
-            if (!_legacy && !_stopped && !_overviewPending && _selected is { IsAvailable: true }) {
+            if (!_masked && !_grace && _accessSeconds > 0)
+                next = Math.Min(next, Remaining > 0 ? Remaining : RenewingSnapshot ? RenewalDisplayRemaining : 0);
+            if (_grace) next = Math.Min(next, (SnapshotGrace - _time.GetElapsedTime(_graceStarted)).TotalSeconds);
+            if (!_masked && _accessSeconds > 0 && !_legacy && !_stopped && !_overviewPending && _selected is { IsAvailable: true }) {
                 var overviewGap = _lastOverview is { } last ? 15 - _time.GetElapsedTime(last).TotalSeconds : 0;
                 var overviewDue = Math.Max(Remaining - 5, overviewGap);
                 if (_retryAt is { } retry) overviewDue = Math.Max(overviewDue, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
@@ -354,12 +369,17 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
 
     void TickCore() {
         if (_disposed || !_foreground) return;
-        if (_grace && _time.GetElapsedTime(_graceStarted) >= TimeSpan.FromMinutes(5)) { _masked = true; _grace = false; _staleReason = null; Notify(); }
+        if (_grace && _time.GetElapsedTime(_graceStarted) >= SnapshotGrace || !_masked && RenewingSnapshot && RenewalDisplayRemaining <= 0) {
+            _masked = true; _grace = false; _staleReason = null; Notify();
+        }
         if (!_masked && _accessSeconds > 0 && Remaining <= 5 && !_legacy && !_stopped && !_overviewPending
             && !(_retryAt > _time.GetUtcNow().UtcDateTime)) RequestOverview();
-        if (!(_retryAt > _time.GetUtcNow().UtcDateTime) && !_stopped
+        if (!(_retryAt > _time.GetUtcNow().UtcDateTime) && !(_listRetryAt > _time.GetUtcNow().UtcDateTime) && !_stopped
             && (_queuedRefresh || _lastRefresh is null || _time.GetElapsedTime(_lastRefresh.Value).TotalSeconds >= Math.Max(30, _pollAfter))) RequestRefresh();
-        if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace && !_refreshing && !_overviewPending) EnterGrace();
+        if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) {
+            if (!RenewingSnapshot) EnterGrace();
+            else Notify();
+        }
     }
     void EnterGrace(string? reason = null) {
         _accessSeconds = 0;
@@ -376,9 +396,12 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _grace = false;
         _staleReason = read.Kind == PullRequestReadKind.Stale ? Reason(read) : null;
         _hasDisplayed = true;
-        _retryAt = read.RetryAt;
+        RememberRetry(read.RetryAt);
         _pollAfter = Math.Max(15, read.PollAfterSeconds);
         return true;
+    }
+    void RememberRetry(DateTime? retry) {
+        if (_retryAt is null || _retryAt <= _time.GetUtcNow().UtcDateTime || retry > _retryAt) _retryAt = retry;
     }
     void ClearProtected() {
         _overview = null; _overviewRead = null; _sections.Clear(); _accessSeconds = 0;

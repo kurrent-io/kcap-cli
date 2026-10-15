@@ -337,6 +337,106 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    [Arguments(6, true)]
+    [Arguments(306, false)]
+    public Task A_slow_renewal_retains_the_snapshot_only_within_the_display_grace(int seconds, bool visible) => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Source.Overviews == 2, what: "renewal started");
+        h.Time.Advance(TimeSpan.FromSeconds(seconds));
+        Dispatcher.UIThread.RunJobs();
+        await Assert.That(h.Vm.CanDisplay).IsEqualTo(visible);
+        await Assert.That(h.Vm.Description).IsEqualTo(visible ? "Private description" : null);
+        await Assert.That(h.Vm.HasStaleOverview).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        renewal.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "renewal settled");
+        await Assert.That(h.Vm.CanReveal).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_denial_cancels_a_pending_page_so_it_cannot_restore_protected_content() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var page = new TaskCompletionSource();
+        h.Source.PageGate = page;
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Source.Pages == 1, what: "page started");
+        h.Source.Failure = "denied";
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Vm.Notice.Contains("cannot read"), what: "renewal denied");
+        await Assert.That(h.Source.OverviewTokens[^1].IsCancellationRequested).IsTrue();
+        page.SetResult();
+        await Task.Yield(); Dispatcher.UIThread.RunJobs();
+        await Assert.That(h.Vm.CanDisplay).IsFalse();
+        await Assert.That(h.Vm.Rows).IsEmpty();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_list_completion_does_not_clear_the_overviews_retry_deadline() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var list = new TaskCompletionSource();
+        h.Source.ListGate = list;
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(h.Source.Overview(subject) with {
+            Kind = PullRequestReadKind.Stale, RetryAt = h.Time.GetUtcNow().UtcDateTime.AddMinutes(2), Reason = "rate_limited"
+        }));
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Vm.HasStaleOverview, what: "overview cooldown");
+        list.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list completion");
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await Assert.That(h.Source.Pages).IsEqualTo(0);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_transient_list_failure_respects_retry_after_and_keeps_a_fresh_overview() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, AccessFailure: "transient",
+            RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(2), Reason: "rate_limited"));
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "list failure and overview renewal");
+        await Assert.That(h.Vm.HasStaleOverview).IsFalse();
+        h.Time.Advance(TimeSpan.FromSeconds(31)); Dispatcher.UIThread.RunJobs();
+        await Assert.That(h.Source.Lists).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments("transient")]
+    [Arguments("denied")]
+    public Task An_unavailable_snapshot_does_not_wake_the_timer_every_second(string failure) => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Source.Failure = failure;
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "failed renewal settled");
+        var before = h.Clock.Callbacks;
+        for (var i = 0; i < 25; i++) {
+            h.Time.Advance(TimeSpan.FromSeconds(1)); Dispatcher.UIThread.RunJobs();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "poll settled");
+        }
+        await Assert.That(h.Clock.Callbacks - before).IsLessThanOrEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_new_session_does_not_inherit_the_previous_sessions_retry_deadline() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied",
+            RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(2))));
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Notice.Contains("cannot read"), what: "first session denied");
+        h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "other-session", branch: "feature"));
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new session loaded");
+        await Assert.That(h.Source.Lists).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Thirty_second_background_poll_renews_overview_without_flashing_grace_or_stale() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
         var sawStale = false;
@@ -461,6 +561,20 @@ public class PullRequestContextViewModelTests {
         await Assert.That(h.Vm.IsOverview).IsTrue();
         await Assert.That(h.Vm.SelectedTabIndex).IsEqualTo(0);
         await Assert.That(opened).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Cached_checks_keep_their_verdict_while_overview_renewal_is_paused() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Source.TotalPages = 1; h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "checks loaded");
+        await Assert.That(h.Vm.ChecksStatus.IsDanger).IsTrue();
+        h.Source.Failure = "transient";
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Source.Overviews == 2 && !h.Vm.IsReading, what: "renewal paused");
+        await Assert.That(h.Vm.HasStaleOverview).IsTrue();
+        await Assert.That(h.Vm.ChecksStatus.IsDanger).IsTrue();
         await h.Dispose();
     });
 
@@ -690,13 +804,25 @@ public class PullRequestContextViewModelTests {
         internal FakePullRequestSource Source { get; }
         internal RecordingOpener Opener { get; } = new();
         internal PullRequestContextViewModel Vm { get; }
+        internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
         internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null) {
             Source = new(Time);
-            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch);
+            Clock = new(Time);
+            Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
         internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); SignIn.Dispose(); }
+    }
+
+    sealed class TimerCountingTimeProvider(TimeProvider inner) : TimeProvider {
+        internal int Callbacks { get; private set; }
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            inner.CreateTimer(value => { Callbacks++; callback(value); }, state, dueTime, period);
     }
 }

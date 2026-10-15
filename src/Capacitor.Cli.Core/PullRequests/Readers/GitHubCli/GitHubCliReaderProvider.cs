@@ -84,7 +84,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
     public Task<IReadOnlyList<PullRequestLinkDto>> DiscoverAsync(PullRequestRepository repository, string branch, CancellationToken ct) {
         if (cli.IsStopped || !Serves(repository.Provider, repository.Host) || !GitHubCliRunner.ValidOwner(repository.Owner)
             || !GitHubCliRunner.ValidRepo(repository.RepoName) || !GitHubCliRunner.ValidBranch(branch)) return Task.FromResult<IReadOnlyList<PullRequestLinkDto>>([]);
-        var key = $"{repository.Host}|{repository.Owner}|{repository.RepoName}|{branch}|{Identity}".ToLowerInvariant();
+        var key = $"{repository.Host}|{repository.Owner}|{repository.RepoName}".ToLowerInvariant() + $"|{branch}|{Identity}";
         Task<IReadOnlyList<PullRequestLinkDto>> task;
         lock (_views) {
             if (_recentDiscovery.TryGetValue(key, out var recent) && _time.GetElapsedTime(recent.At) < TimeSpan.FromSeconds(10))

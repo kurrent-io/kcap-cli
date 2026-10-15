@@ -40,7 +40,7 @@ public sealed partial class PullRequestContextViewModel {
             if (!CanDisplay) return IsSelectionLoading ? "" : "Refresh access to open PR content.";
             if (CurrentSection is not { } state) {
                 if (IsSectionLoading) return "";
-                if (!CanReveal && _staleReason is { Length: > 0 } reason) return reason;
+                if ((!CanReveal || _retryAt > _time.GetUtcNow().UtcDateTime) && _staleReason is { Length: > 0 } reason) return reason;
                 if (CanReveal) return "This section has not loaded yet.";
                 return "";
             }
@@ -70,7 +70,7 @@ public sealed partial class PullRequestContextViewModel {
         ? "Updated " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
     /// The footer names one thing, the time; which commit the checks ran on rides its hover.
     public string FreshnessDetail => HasStaleOverview && _staleReason is { Length: > 0 } reason ? reason
-        : !IsOverview && CanDisplayReader && CurrentSection?.Head is { Length: >= 7 } head
+        : IsChecks && CanDisplayReader && CurrentSection?.Head is { Length: >= 7 } head
         ? "Checks ran on commit " + head[..7] : "When GitHub last sent what this tab shows";
 
     readonly Dictionary<string, object?> _notified = new(StringComparer.Ordinal);

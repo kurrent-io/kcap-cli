@@ -12,7 +12,7 @@ public sealed partial class PullRequestContextViewModel {
     void RequestRefresh(bool manual = false) {
         if (_disposed || !_foreground || _session is not { } session) return;
         if (manual) { _source.ResetSession(session); _stopped = false; _refreshDiscovery = true; _refreshPage = true; _lastOverview = null; }
-        if (_stopped || _retryAt > _time.GetUtcNow().UtcDateTime) return;
+        if (_stopped || _retryAt > _time.GetUtcNow().UtcDateTime || _listRetryAt > _time.GetUtcNow().UtcDateTime) return;
         // A click waits out a short gap only; the poll keeps the longer one.
         if (_refreshing || _lastRefresh is { } last && _time.GetElapsedTime(last).TotalSeconds < (manual || _queuedRefresh ? 3 : 15)) {
             _queuedRefresh |= manual;
@@ -55,26 +55,29 @@ public sealed partial class PullRequestContextViewModel {
                 _refreshing = false;
                 _legacy = capability.Kind is PullRequestCapabilityKind.Legacy or PullRequestCapabilityKind.Unsupported;
                 if (links is null) {
-                    _retryAt = capability.RetryAt;
-                    if (capability.Kind == PullRequestCapabilityKind.SignedOut) ForgetChoices();
-                    ClearProtected();
-                    _notice = capability.Kind == PullRequestCapabilityKind.SignedOut ? "Sign in to see pull requests."
-                        : "Couldn't discover pull request support. Retry when the server is reachable.";
+                    _listRetryAt = capability.RetryAt;
+                    if (capability.Kind == PullRequestCapabilityKind.SignedOut) {
+                        ForgetChoices(); ClearProtected(); _notice = "Sign in to see pull requests.";
+                    } else {
+                        if (!CanReveal && !_overviewPending) EnterGrace("Couldn't discover pull request support. Retry when the server is reachable.");
+                        if (!CanDisplay && !_overviewPending) _notice = "Couldn't discover pull request support. Retry when the server is reachable.";
+                    }
                     return;
                 }
                 if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
+                    _listRetryAt = links.RetryAt;
                     if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") {
                         ForgetChoices(); ClearProtected();
                         _stopped = links.Reason == "retries_stopped";
                         _notice = _stopped ? "This session's pull requests are unavailable. Use Retry to check again."
                             : links.Kind == PullRequestReadKind.SignedOut ? "Sign in to see pull requests." : "Couldn't refresh the linked pull requests.";
                     } else {
-                        EnterGrace("Couldn't refresh the linked pull requests.");
-                        if (!_grace) _notice = "Couldn't refresh the linked pull requests.";
+                        if (!CanReveal && !_overviewPending) EnterGrace("Couldn't refresh the linked pull requests.");
+                        if (!CanDisplay && !_overviewPending) _notice = "Couldn't refresh the linked pull requests.";
                     }
                     return;
                 }
-                _retryAt = null;
+                _listRetryAt = null;
                 _pollAfter = Math.Max(15, links.PollAfterSeconds);
                 _sessionItems.Clear();
                 _sessionItems.AddRange(links.Data.Items);
@@ -199,17 +202,16 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
     void Fail<T>(PullRequestRead<T> read) where T : class {
-        _retryAt = read.RetryAt;
+        RememberRetry(read.RetryAt);
         var reason = Reason(read);
-        // A superseded provider, a changed identity or a lost reader outlives its own request: cancel the
-        // in-flight reads it left behind and advance the generation, or a stale completion would still land.
+        // Access loss invalidates peer reads too; a late page must not reopen protected content.
         if (read.Kind == PullRequestReadKind.Restart && read.Reason is "identity_changed" or "integration_changed" || read.Reason == "no_reader") { CancelReads(); ClearProtected(); }
         else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
             || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") {
             EnterGrace(reason);
             if (_grace) return;
         }
-        else ClearProtected();
+        else { CancelReads(); ClearProtected(); }
         SetNotice(reason);
     }
     void ApplyChoices(bool listed) {
@@ -280,6 +282,7 @@ public sealed partial class PullRequestContextViewModel {
         CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null;
     }
     void FailProtocol(string? reader) {
+        CancelReads();
         ClearProtected();
         SetNotice(reader is null ? "The server returned an inconsistent PR response. Retry after updating the server and app."
             : $"{reader} returned an inconsistent PR response. Refresh to reload it.");

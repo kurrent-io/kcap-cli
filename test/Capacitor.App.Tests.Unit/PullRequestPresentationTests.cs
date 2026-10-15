@@ -17,6 +17,33 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestPresentationTests {
     [Test]
+    public Task Returning_to_a_PR_restores_its_tab_and_scroll_after_the_page_arrives() => RunOnUiAsync(async () => {
+        await using var h = new PullRequestViewTestHost();
+        h.Source.PageItem = _ => new PullRequestCommentDto {
+            Id = "long-comment", Availability = "available", Body = string.Join("\n\n", Enumerable.Repeat("A long discussion paragraph.", 100))
+        };
+        await h.ShowAsync();
+        await h.Model.ShowSectionCommand.Execute("conversation");
+        await h.SettleAsync();
+        var scroll = h.Reader.FindControl<ScrollViewer>("ReaderScroll")!;
+        scroll.Offset = new Vector(0, 400);
+        h.Window.UpdateLayout(); Dispatcher.UIThread.RunJobs();
+        await Assert.That(scroll.Offset.Y).IsEqualTo(400);
+        var original = h.Model.Selected!;
+        h.Model.Selected = h.Model.Choices.Single(choice => choice != original);
+        await h.SettleAsync();
+        var pending = new TaskCompletionSource();
+        h.Source.PageGate = pending;
+        h.Model.Selected = original;
+        await WorkspaceFixtures.WaitUntilAsync(() => h.Model.IsSectionLoading, what: "restored section loading");
+        h.Window.UpdateLayout(); Dispatcher.UIThread.RunJobs();
+        pending.SetResult();
+        await h.SettleAsync();
+        await Assert.That(h.Model.Section).IsEqualTo("conversation");
+        await Assert.That(scroll.Offset.Y).IsEqualTo(400);
+    });
+
+    [Test]
     public Task Sidebar_status_actions_open_the_matching_tabs_and_review_subsections_keep_native_content() => RunOnUiAsync(async () => {
         await using var h = new PullRequestViewTestHost();
         await h.ShowAsync();

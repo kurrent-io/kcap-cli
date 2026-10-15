@@ -16,6 +16,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public TaskCompletionSource? ListGate;
     public int Resets;
     public string? ListFailure;
+    public readonly Queue<PullRequestRead<PullRequestLinkListDto>> ListResponses = new();
     public int Overviews;
     public int Pages;
     public int TotalPages = 3;
@@ -41,6 +42,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public async Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
         Lists++;
         if (ListGate is { } gate) await gate.Task.WaitAsync(ct);
+        if (ListResponses.TryDequeue(out var response)) return response;
         if (ListFailure is { } reason) return new(PullRequestReadKind.SubjectUnavailable, Reason: reason);
         return new(PullRequestReadKind.Ready, new() { Items = Links });
     }

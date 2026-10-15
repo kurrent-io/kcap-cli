@@ -152,6 +152,32 @@ public class GitHubCliReaderProviderTests {
     }
 
     [Test]
+    public async Task Discovery_cache_keeps_case_sensitive_branches_separate() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        h.Process.When(["pr", "list"], GhHarness.Fixture("pr-list.json"));
+        await h.Provider.ProbeAsync(false, default);
+        await h.Provider.DiscoverAsync(Repository, "feature", default);
+        await h.Provider.DiscoverAsync(Repository, "Feature", default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Cancelling_one_discovery_does_not_cancel_a_shared_fetch() {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        var pending = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "list"], pending);
+        await h.Provider.ProbeAsync(false, default);
+        using var cancel = new CancellationTokenSource();
+        var first = h.Provider.DiscoverAsync(Repository, "feature", cancel.Token);
+        var second = h.Provider.DiscoverAsync(Repository, "feature", default);
+        cancel.Cancel();
+        await Assert.That(async () => await first).Throws<OperationCanceledException>();
+        pending.SetResult(new(0, GhHarness.Fixture("pr-list.json"), "", false));
+        await Assert.That((await second).Count).IsEqualTo(2);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Concurrent_discoveries_share_a_single_spawn_and_reuse_for_ten_seconds_unless_reset() {
         var h = new GhHarness(Tmp); h.SignedIn("github.com");
         var pending = new TaskCompletionSource<ProcessResult>();
