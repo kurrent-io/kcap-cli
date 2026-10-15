@@ -31,7 +31,10 @@ public static class WindowsUninstallCleanup {
             if (process is null) return;
             _ = process.StandardOutput.ReadToEndAsync();
             _ = process.StandardError.ReadToEndAsync();
-            process.WaitForExit(ServiceStepTimeout);
+            if (process.WaitForExit(ServiceStepTimeout)) return;
+            // Left running, it would hold files in the folder Velopack is about to delete.
+            try { process.Kill(entireProcessTree: true); }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
         } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
         }
     }
