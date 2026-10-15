@@ -120,4 +120,31 @@ public class RestartCoordinatorTests {
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
+
+    /// <summary>On Windows only a script install is watched: an update switches its <c>current</c>, so the
+    /// binary reached through it changes while the file the daemon runs from does not.</summary>
+    [Test]
+    public async Task On_Windows_a_script_install_is_watched_through_current() {
+        using var tmp = new TempDir();
+        tmp.CreateFile("kcap/install.json", "{}");
+        var running    = tmp.CreateFile("kcap/versions/1.0.0/bin/kcap-daemon", "old");
+        var viaCurrent = tmp.CreateFile("kcap/current/bin/kcap-daemon", "old");
+
+        var before = RestartCoordinator.StatBinaryAt(running, isWindows: true, File.Exists);
+        File.WriteAllText(viaCurrent, "the new version");
+        var after = RestartCoordinator.StatBinaryAt(running, isWindows: true, File.Exists);
+
+        await Assert.That(before).IsNotNull();
+        await Assert.That(RestartDecision.BinaryChanged(before, after)).IsTrue();
+        await Assert.That(File.ReadAllText(running)).IsEqualTo("old");
+    }
+
+    [Test]
+    public async Task On_Windows_a_binary_outside_a_script_install_is_not_watched() {
+        using var tmp = new TempDir();
+        var exe = tmp.CreateFile("npm/bin/kcap-daemon", "x");
+
+        await Assert.That(RestartCoordinator.StatBinaryAt(exe, isWindows: true, File.Exists)).IsNull();
+        await Assert.That(RestartCoordinator.StatBinaryAt(exe, isWindows: false, File.Exists)).IsNotNull();
+    }
 }

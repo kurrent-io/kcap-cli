@@ -14,8 +14,11 @@ npm, downloads this platform's archive from GitHub Releases and checks its
 sha256 against the manifest; any mismatch installs nothing. The release
 goes into its own versions/<version> directory and the `current` link is
 switched to it, so running processes keep the files they started from.
-The new binary then runs `kcap refresh`. A daemon service installed from a
-script install is moved onto the `current` path, so it follows updates.
+The new binary then runs `kcap refresh`. The version it replaced stays;
+older ones are deleted unless something still runs from them. A daemon
+started from a script install restarts on the new version once it is idle,
+Windows included. A daemon service installed from a script install is moved
+onto the `current` path, so it follows updates.
 A daemon service installed under npm keeps running the npm binary after a
 switch to the script install: run `kcap daemon service install` again.
 
