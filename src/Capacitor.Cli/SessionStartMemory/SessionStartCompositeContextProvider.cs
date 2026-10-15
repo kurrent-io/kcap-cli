@@ -24,7 +24,7 @@ internal sealed class SessionStartCompositeContextProvider(
 
         // Flows ignore scope, and a slow scope resolution must not spend the budget they share.
         if (request.Disabled && request.GuidelinesDisabled)
-            return Combine(null, null, flowsTask is null ? null : await flowsTask);
+            return Combine(null, null, ReportFlows(flowsTask is null ? null : await flowsTask));
 
         SessionStartMemoryScope scope;
         try {
@@ -44,7 +44,14 @@ internal sealed class SessionStartCompositeContextProvider(
         var guidelinesResult = guidelinesTask is null ? null : await guidelinesTask;
         var flowsResult      = flowsTask      is null ? null : await flowsTask;
 
-        return Combine(memoryResult, guidelinesResult, flowsResult);
+        return Combine(memoryResult, guidelinesResult, ReportFlows(flowsResult));
+    }
+
+    SessionStartMemoryContextResult? ReportFlows(SessionStartMemoryContextResult? flows) {
+        if (flows?.Disposition == SessionStartMemoryDisposition.RetryableFailure)
+            diagnostic?.Invoke("SessionStart flows lane skipped: the flow catalogue was unreachable and none is cached");
+
+        return flows;
     }
 
     async Task<SessionStartMemoryContextResult> RunLaneAsync(Func<Task<SessionStartMemoryContextResult>> lane) {

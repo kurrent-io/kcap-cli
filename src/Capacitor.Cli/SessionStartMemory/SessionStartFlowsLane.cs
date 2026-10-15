@@ -7,24 +7,41 @@ using Capacitor.Cli.Core.WorkItems;
 namespace Capacitor.Cli.SessionStartMemory;
 
 /// <summary>The flows lane of the composite SessionStart context: the catalogue flows an operator marked
-/// <c>offer: proactive</c>, each with when to offer it. Marker-less, like the guidelines lane.</summary>
-internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpClient>> client, TimeProvider time) {
+/// <c>offer: proactive</c>, each with when to offer it. Marker-less, like the guidelines lane. A listing that
+/// cannot be fetched in time falls back to the last one the server returned.</summary>
+internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpClient>> client, TimeProvider time, SessionStartFlowsCatalogCache cache) {
     public const int MaxDescribed     = 10;
     public const int MaxFragmentChars = 2048;
     const int WhenToUseCap = 300;
     const int IdCap        = 64;
 
-    public const string Header = "Flows you may offer (ask first; never start unprompted):";
+    /// <summary>Held back from the request budget so the cached catalogue is still delivered when the fetch runs out of time.</summary>
+    static readonly TimeSpan CacheReserve = TimeSpan.FromMilliseconds(250);
+
+    public const string Header = "Flows you may offer. When one fits what you just finished, offer it unprompted, and start it only after the user says yes:";
     public const string Footer = "Before starting one, call get_flow_definition(<id>) and follow its guide.";
 
     public async Task<SessionStartMemoryContextResult> FetchAsync(SessionStartMemoryContextRequest request, CancellationToken ct) {
-        var outcome = await SessionStartContextFetch.FetchAsync(
-            await client(ct), request.BaseUrl.TrimEnd('/') + "/api/flows/definitions", time, ct);
+        var window = request.Budget > CacheReserve * 2 ? request.Budget - CacheReserve : request.Budget / 2;
+        using var deadline = new CancellationTokenSource(window, time);
+        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        SessionStartFetchOutcome outcome;
+        try {
+            outcome = await SessionStartContextFetch.FetchAsync(
+                await client(linked.Token), request.BaseUrl.TrimEnd('/') + "/api/flows/definitions", time, linked.Token);
+        } catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException or InvalidDataException) {
+            return FromCache(request.BaseUrl) ?? SessionStartMemoryContextResult.Retry;
+        }
 
         // A server older than the listing has nothing to offer, now or on a retry.
-        if (outcome.Status == HttpStatusCode.NotFound) return SessionStartMemoryContextResult.Empty;
+        if (outcome.Status == HttpStatusCode.NotFound) {
+            cache.Delete(request.BaseUrl);
+            return SessionStartMemoryContextResult.Empty;
+        }
         if (outcome.Body is null)
-            return new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
+            return FromCache(request.BaseUrl)
+                ?? new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
 
         JsonNode? root;
         try {
@@ -33,10 +50,17 @@ internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpCli
             return SessionStartMemoryContextResult.Empty;
         }
 
-        return BuildFragment(root) is { } fragment
+        cache.Write(request.BaseUrl, root);
+
+        return Result(root);
+    }
+
+    SessionStartMemoryContextResult? FromCache(string baseUrl) => cache.Read(baseUrl) is { } cached ? Result(cached) : null;
+
+    static SessionStartMemoryContextResult Result(JsonNode? root) =>
+        BuildFragment(root) is { } fragment
             ? new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, fragment)
             : SessionStartMemoryContextResult.Empty;
-    }
 
     public static string? BuildFragment(JsonNode? root) {
         if (root is not JsonObject { } obj || obj["definitions"] is not JsonArray definitions) return null;

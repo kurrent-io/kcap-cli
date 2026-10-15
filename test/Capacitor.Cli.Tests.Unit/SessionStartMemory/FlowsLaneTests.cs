@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -8,14 +9,18 @@ using Microsoft.Extensions.Time.Testing;
 namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 
 public class FlowsLaneTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    SessionStartFlowsCatalogCache Cache => new(Tmp.PathTo("flows-cache"));
+
     static Func<CancellationToken, Task<HttpClient>> Lazy(HttpClient client) => _ => Task.FromResult(client);
 
     static SessionStartMemoryContextRequest Req(bool memory = false, bool guidelines = false, bool flows = true) =>
         new("https://example.test", "/repo", Disabled: !memory, TimeSpan.FromSeconds(1), CancellationToken.None,
             GuidelinesDisabled: !guidelines, FlowsDisabled: !flows);
 
-    static SessionStartFlowsLane Lane(HttpStatusCode status, string body) =>
-        new(Lazy(new HttpClient(new Handler(status, body, null))), TimeProvider.System);
+    SessionStartFlowsLane Lane(HttpStatusCode status, string body) =>
+        new(Lazy(new HttpClient(new Handler(status, body, null))), TimeProvider.System, Cache);
 
     const string Catalog = """
         {"definitions":[
@@ -164,7 +169,7 @@ public class FlowsLaneTests {
     [Test]
     public async Task The_lane_reads_the_definitions_listing() {
         var handler = new Handler(HttpStatusCode.OK, Catalog, null);
-        var lane    = new SessionStartFlowsLane(Lazy(new HttpClient(handler)), TimeProvider.System);
+        var lane    = new SessionStartFlowsLane(Lazy(new HttpClient(handler)), TimeProvider.System, Cache);
 
         var result = await lane.FetchAsync(Req(), CancellationToken.None);
 
@@ -219,13 +224,13 @@ public class FlowsLaneTests {
         }
     }
 
-    static SessionStartCompositeContextProvider WithScope(ISessionStartMemoryScopeResolver resolver, (HttpStatusCode, string) memory, (HttpStatusCode, string) guidelines) {
+    SessionStartCompositeContextProvider WithScope(ISessionStartMemoryScopeResolver resolver, (HttpStatusCode, string) memory, (HttpStatusCode, string) guidelines) {
         var time = new FakeTimeProvider();
 
         return new SessionStartCompositeContextProvider(resolver,
             new SessionStartMemoryContextProvider(new FixedScope("repo", "machine"), Lazy(new HttpClient(new Handler(memory.Item1, memory.Item2, null))), time),
             new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(guidelines.Item1, guidelines.Item2, null))), time),
-            new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.OK, Catalog, null))), time),
+            new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.OK, Catalog, null))), time, Cache),
             time);
     }
 
@@ -297,15 +302,86 @@ public class FlowsLaneTests {
         await Assert.That(result.Fragment!).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);
     }
 
-    static SessionStartCompositeContextProvider Composite(
-            (HttpStatusCode, string) memory, (HttpStatusCode, string) guidelines, (HttpStatusCode, string) flows) {
+    SessionStartCompositeContextProvider Composite(
+            (HttpStatusCode, string) memory, (HttpStatusCode, string) guidelines, (HttpStatusCode, string) flows,
+            Action<string>? diagnostic = null) {
         var scope = new FixedScope("repo", "machine");
         var time  = new FakeTimeProvider();
 
         return new SessionStartCompositeContextProvider(scope,
             new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new Handler(memory.Item1, memory.Item2, null))), time),
             new SessionStartGuidelinesLane(Lazy(new HttpClient(new Handler(guidelines.Item1, guidelines.Item2, null))), time),
-            new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(flows.Item1, flows.Item2, null))), time),
-            time);
+            new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(flows.Item1, flows.Item2, null))), time, Cache),
+            time, diagnostic);
+    }
+
+    [Test]
+    public async Task An_unreachable_catalogue_falls_back_to_the_last_one_the_server_returned() {
+        await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+
+        var result = await Lane(HttpStatusCode.ServiceUnavailable, "").FetchAsync(Req(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment).IsEqualTo(SessionStartFlowsLane.BuildFragment(JsonNode.Parse(Catalog)));
+    }
+
+    /// <summary>The fetch stops short of the request budget, so the cached block arrives while the caller still waits for it.</summary>
+    [Test]
+    public async Task A_listing_that_outlasts_the_budget_falls_back_to_the_cache_within_it() {
+        await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+        var hanging = new SessionStartFlowsLane(Lazy(new HttpClient(new HangingHandler())), TimeProvider.System, Cache);
+
+        var result = await hanging.FetchAsync(Req(), CancellationToken.None).WaitAsync(Req().Budget);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.Ready);
+        await Assert.That(result.Fragment!).Contains("- code-review: ");
+    }
+
+    [Test]
+    public async Task One_servers_catalogue_is_never_offered_for_another() {
+        await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+
+        var result = await Lane(HttpStatusCode.ServiceUnavailable, "")
+            .FetchAsync(Req() with { BaseUrl = "https://other.example.test" }, CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+    }
+
+    [Test]
+    public async Task A_server_that_stops_offering_flows_clears_the_cached_offer() {
+        await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+        await Lane(HttpStatusCode.OK, """{"definitions":[{"id":"triage","offer":"on_request"}]}""").FetchAsync(Req(), CancellationToken.None);
+
+        var result = await Lane(HttpStatusCode.ServiceUnavailable, "").FetchAsync(Req(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.CompleteWithoutContext);
+    }
+
+    [Test]
+    public async Task A_server_without_the_listing_clears_the_cached_offer() {
+        await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+        await Lane(HttpStatusCode.NotFound, "").FetchAsync(Req(), CancellationToken.None);
+
+        var result = await Lane(HttpStatusCode.ServiceUnavailable, "").FetchAsync(Req(), CancellationToken.None);
+
+        await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+    }
+
+    [Test]
+    public async Task A_flows_lane_dropped_beside_memory_is_reported() {
+        var messages = new List<string>();
+
+        await Composite(memory: (HttpStatusCode.OK, MemoryBody), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.ServiceUnavailable, ""),
+                diagnostic: messages.Add)
+            .GetAsync(Req(memory: true, flows: true));
+
+        await Assert.That(messages).Contains(m => m.Contains("flows lane skipped", StringComparison.Ordinal));
+    }
+
+    sealed class HangingHandler : HttpMessageHandler {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new UnreachableException();
+        }
     }
 }
