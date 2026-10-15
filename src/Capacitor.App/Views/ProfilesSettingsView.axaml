@@ -3,8 +3,8 @@
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              x:Class="Capacitor.App.Views.ProfilesSettingsView"
              x:DataType="vm:ProfilesSettingsViewModel">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
-        <StackPanel Spacing="16">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="24">
             <StackPanel Spacing="10">
                 <TextBlock x:Name="ProfilesTitleText" Classes="kcapTitle" Text="Profiles" LineHeight="22" />
                 <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
@@ -19,24 +19,23 @@
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:ProfileRow">
-                        <Border Classes="profileRow" Background="{StaticResource KcapSurfaceBrush}"
-                                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1" CornerRadius="12" Padding="20">
-                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                        <Border Classes="profileRow settingsSection">
+                            <StackPanel Spacing="14">
                                 <StackPanel Spacing="6">
                                     <StackPanel Orientation="Horizontal" Spacing="8">
                                         <TextBlock Classes="kcapLabel" Text="{Binding Name}" VerticalAlignment="Center" />
                                         <TextBlock Classes="profileMark" Text="Active" IsVisible="{Binding IsActive}"
-                                                   Foreground="{StaticResource KcapPurpleBrush}" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource KcapMutedBrush}" FontSize="11" FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                         <TextBlock Classes="profileMark" Text="This app" IsVisible="{Binding IsBound}"
-                                                   Foreground="{StaticResource KcapPurpleBrush}" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource KcapMutedBrush}" FontSize="11" FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
                                     <TextBlock Classes="kcapHint" Text="{Binding ServerLabel}" TextWrapping="Wrap" />
                                     <TextBlock Classes="kcapHint profileStatus" Text="{Binding StatusLabel}"
                                                Foreground="{StaticResource KcapTextBrush}" />
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Left">
                                     <Button Classes="kcapChip profileSignIn" Content="{Binding SignInLabel}" IsVisible="{Binding CanSignIn}"
                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).SignInCommand}"
                                             CommandParameter="{Binding}" />
@@ -44,7 +43,7 @@
                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).RemoveCommand}"
                                             CommandParameter="{Binding}" />
                                 </StackPanel>
-                            </Grid>
+                            </StackPanel>
                         </Border>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>

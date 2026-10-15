@@ -1,0 +1,92 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Keep native tab selection and keyboard navigation, with a rail that can grow
+         independently of the selected section. All chrome uses the app palette. -->
+    <Style Selector="TabControl.settingsSidebar">
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate>
+                <StackPanel Spacing="4" />
+            </ItemsPanelTemplate>
+        </Setter>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid ColumnDefinitions="196,*">
+                    <Border Background="{StaticResource KcapSurfaceBrush}"
+                            BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,1,0">
+                        <Grid RowDefinitions="Auto,*,Auto" Margin="16,28,16,20">
+                            <TextBlock Classes="kcapTitle" Text="Settings" FontSize="18" Margin="12,0,0,24" />
+                            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <ItemsPresenter Name="PART_ItemsPresenter"
+                                                ItemsPanel="{TemplateBinding ItemsPanel}" />
+                            </ScrollViewer>
+                            <TextBlock Grid.Row="2" Classes="kcapHint" Text="Kurrent Capacitor"
+                                       Foreground="{StaticResource KcapFaintBrush}" Margin="12,20,0,0" />
+                        </Grid>
+                    </Border>
+                    <ContentPresenter Grid.Column="1" Name="PART_SelectedContentHost"
+                                      Margin="32,28" HorizontalContentAlignment="Stretch"
+                                      VerticalContentAlignment="Stretch"
+                                      Content="{TemplateBinding SelectedContent}"
+                                      ContentTemplate="{TemplateBinding SelectedContentTemplate}" />
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="TabItem.settingsNav">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="12,11" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <ContentPresenter Name="PART_ContentPresenter" CornerRadius="8"
+                                  Background="{TemplateBinding Background}"
+                                  Foreground="{TemplateBinding Foreground}"
+                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                  Padding="{TemplateBinding Padding}"
+                                  Content="{TemplateBinding Header}"
+                                  ContentTemplate="{TemplateBinding HeaderTemplate}"
+                                  HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                  VerticalContentAlignment="Center"
+                                  RecognizesAccessKey="True" />
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="TabItem.settingsNav:pointerover">
+        <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="TabItem.settingsNav:selected">
+        <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <Style Selector="TabItem.settingsNav:focus-visible">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+    </Style>
+    <!-- Sections share the content's left edge; separators give structure without nested cards. -->
+    <Style Selector="Border.settingsSection">
+        <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        <Setter Property="BorderThickness" Value="0,0,0,1" />
+        <Setter Property="Padding" Value="0,0,0,24" />
+    </Style>
+    <Style Selector="Grid.settingsRow">
+        <Setter Property="Margin" Value="0,18" />
+    </Style>
+    <Style Selector="Border.settingsDivider">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+    </Style>
+    <Style Selector="TextBlock.settingsEyebrow">
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="LetterSpacing" Value="0.8" />
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+    </Style>
+</Styles>
