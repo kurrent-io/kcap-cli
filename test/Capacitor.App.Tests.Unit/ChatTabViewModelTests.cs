@@ -1499,29 +1499,96 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A workspace opened on an existing session recalls the user turns its transcript already
-    /// shows, and a rewritten transcript replaces them rather than appending a second copy.
+    static string User(string text) => UserLine.Replace("hello", text);
+
+    static async Task AssertRecallOrder(ChatTabViewModel chat, params string[] newestFirst) {
+        chat.ComposerText = "";
+        foreach (var expected in newestFirst) {
+            await Assert.That(chat.RecallOlder()).IsTrue();
+            await Assert.That(chat.ComposerText).IsEqualTo(expected);
+        }
+        await Assert.That(chat.RecallOlder()).IsFalse();
+    }
+
+    static async Task SendAsync(Harness h, ScriptedInput input, string text) {
+        h.Chat.ComposerText = text;
+        var send = h.Chat.SendCommand.Execute().ToTask();
+        input.Pending!.SetResult(ChatSendOutcome.Accepted);
+        await send;
+    }
+
+    /// A workspace opened on an existing session recalls what its transcript records as
+    /// submitted, slash commands included, and a rewritten transcript replaces it.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Recall_reaches_the_user_turns_the_transcript_shows() {
+    public async Task Recall_reaches_the_input_the_transcript_records() {
         await RunOnUiAsync(async () => {
             var h = Claude();
-            var path = Tmp.CreateFile("t.jsonl", [UserLine.Replace("hello", "first"), AssistantLine, UserLine]);
+            const string compact = """{"type":"user","message":{"content":"<command-name>/compact</command-name>"}}""";
+            var path = Tmp.CreateFile("t.jsonl", [User("first"), AssistantLine, compact, UserLine]);
             await h.PushAsync(Dto(path));
+            await AssertRecallOrder(h.Chat, "hello", "/compact", "first");
 
-            await Assert.That(h.Chat.RecallOlder()).IsTrue();
-            await Assert.That(h.Chat.ComposerText).IsEqualTo("hello");
-            await Assert.That(h.Chat.RecallOlder()).IsTrue();
-            await Assert.That(h.Chat.ComposerText).IsEqualTo("first");
-            await Assert.That(h.Chat.RecallNewer()).IsTrue();
-            await Assert.That(h.Chat.RecallNewer()).IsTrue();
-            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
-
-            File.WriteAllLines(path, [UserLine.Replace("hello", "rewritten")]);
+            File.WriteAllLines(path, [User("rewritten")]);
             await h.TickAsync();
-            await Assert.That(h.Chat.RecallOlder()).IsTrue();
-            await Assert.That(h.Chat.ComposerText).IsEqualTo("rewritten");
-            await Assert.That(h.Chat.RecallOlder()).IsFalse();
+            await AssertRecallOrder(h.Chat, "rewritten");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A send that lands before the read carrying older turns stays newest, and its echo moves it
+    /// into the transcript's entries rather than adding a second copy.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_send_awaiting_its_echo_is_newest_and_its_echo_does_not_double_it() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            File.AppendAllText(path, User("old") + "\n");
+            await SendAsync(h, input, "new");
+            await h.TickAsync();
+            await AssertRecallOrder(h.Chat, "new", "old");
+
+            File.AppendAllText(path, User("new") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await AssertRecallOrder(h.Chat, "new", "old");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A replay can carry an older turn with the same text as a send still in flight; that turn is
+    /// history, not the send's echo.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_replayed_turn_does_not_settle_a_newer_send_with_the_same_text() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [User("a"), User("b")]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "a");
+
+            File.WriteAllLines(path, [User("a"), User("b")]);
+            await h.TickAsync();
+            await AssertRecallOrder(h.Chat, "a", "b", "a");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Another_transcript_recalls_nothing_sent_while_reading_the_last() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [User("before")])));
+            await SendAsync(h, input, "unechoed");
+
+            await h.PushAsync(Dto(Tmp.CreateFile("o.jsonl", [User("other")])));
+            await AssertRecallOrder(h.Chat, "other");
             await h.TeardownAsync();
         });
     }
