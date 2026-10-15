@@ -1347,6 +1347,8 @@ public class ChatTabViewModelTests {
         public TaskCompletionSource<ChatSendOutcome>? Pending;
         public int Disposals;
         public bool CanAttachValue = true;
+        /// Off for a channel whose send has already gone out when the tab is torn down.
+        public bool HonoursCancellation = true;
         public List<(string Text, IReadOnlyList<string> Ids, CancellationToken Ct)> Sends { get; } = [];
         public override SendAvailability Availability => Pending is null ? SendAvailability.Ready : SendAvailability.Sending;
         public override bool CanAcceptText => Pending is null;
@@ -1357,7 +1359,7 @@ public class ChatTabViewModelTests {
             Sends.Add((text, attachmentIds, ct));
             Pending = new TaskCompletionSource<ChatSendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             this.RaisePropertyChanged(nameof(CanAcceptText));
-            return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, HonoursCancellation ? ct : CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
         public override void Dispose() => Disposals++;
     }
@@ -1455,27 +1457,37 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Pins that a send still in flight when the tab goes is not offered back as a draft — it can
-    /// land with no tab left to clear it — while an edit made after sending still is.
+    /// Pins a send that settles after its tab is gone: only a confirmed delivery clears the stored
+    /// draft, and never over text typed since — in the old tab or in the one that replaced it.
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
+    [Arguments(ChatSendOutcome.Accepted, false, false, "")]
+    [Arguments(ChatSendOutcome.Rejected, false, false, "hello")]
+    [Arguments(ChatSendOutcome.Unconfirmed, false, false, "hello")]
+    [Arguments(ChatSendOutcome.Accepted, true, false, "hello again")]
+    [Arguments(ChatSendOutcome.Accepted, false, true, "hello there")]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_draft_sent_but_not_yet_settled_is_not_restored(bool editedAfterSending) {
+    public async Task A_send_settling_after_teardown_clears_only_its_own_delivered_draft(
+            ChatSendOutcome outcome, bool editedBeforeLeaving, bool editedInReplacement, string expected) {
         await RunOnUiAsync(async () => {
             var drafts = new ComposerDrafts();
-            var input = new ScriptedInput();
+            var input = new ScriptedInput { HonoursCancellation = false };
             var first = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
             first.Chat.ComposerText = "hello";
             var send = first.Chat.SendCommand.Execute().ToTask();
-            if (editedAfterSending) first.Chat.ComposerText = "hello again";
+            var pending = input.Pending!;
+            if (editedBeforeLeaving) first.Chat.ComposerText = "hello again";
             await first.TeardownAsync();
-            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+
+            var second = new Harness(TranscriptChat.Journal, input: new ScriptedInput(), drafts: drafts);
+            if (editedInReplacement) second.Chat.ComposerText = "hello there";
+            await second.TeardownAsync();
+
+            pending.SetResult(outcome);
             await send;
 
-            var second = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
-            await Assert.That(second.Chat.ComposerText).IsEqualTo(editedAfterSending ? "hello again" : "");
-            await second.TeardownAsync();
+            var third = new Harness(TranscriptChat.Journal, input: new ScriptedInput(), drafts: drafts);
+            await Assert.That(third.Chat.ComposerText).IsEqualTo(expected);
+            await third.TeardownAsync();
         });
     }
 

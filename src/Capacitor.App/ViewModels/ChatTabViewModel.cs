@@ -248,12 +248,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly AgentOrigin _origin;
     readonly string _agentId;
 
-    // A send in flight can land after this tab is gone, with nothing left to clear its text.
-    bool DraftIsInFlight => _sending is { } sending && sending.ComposerEdits == _composerEdits && sending.Text == ComposerText;
-
     /// The unsent draft, for the same session's workspace on the other lane; this tab's stored copy is dropped.
     public string HandOffDraft() {
-        var text = DraftIsInFlight ? "" : ComposerText;
+        var text = ComposerText;
         _drafts?.Set(_origin, _agentId, "");
         return text;
     }
@@ -625,6 +622,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
+            var draftRevision = _drafts?.Revision(_origin, _agentId) ?? 0;
             var files = Tray.Snapshot();
             if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
             IReadOnlyList<string> ids = [];
@@ -667,7 +665,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 outcome = ChatSendOutcome.Unconfirmed;
             }
             finally { _sending = null; }
-            if (_lifetimeToken.IsCancellationRequested) return;
+            if (_lifetimeToken.IsCancellationRequested) {
+                // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
+                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearIfUnchanged(_origin, _agentId, draftRevision);
+                return;
+            }
             if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
             var waits = !queued.Acknowledged && outcome switch {
                 ChatSendOutcome.Accepted    => _openFeed is not null,
@@ -1224,7 +1226,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // Ahead of the disposables: the input is one of them, and an in-flight send has to see
         // the cancellation before the channel it is sending through goes away.
         foreach (var choice in _usageLimitChoices) choice.Choose.Dispose();
-        if (DraftIsInFlight) _drafts?.Set(_origin, _agentId, "");
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
         _disposables.Dispose();
         Cards.Dispose();
