@@ -70,12 +70,11 @@ static partial class NextWorkEmitter {
         "state: a PR merged, an issue closed, a question answered with nothing pending, or the user saying " +
         "they are done with it or parking it. Then declare any remaining loose ends with declare_loose_end " +
         "(one call per item, never \"none\"), call get_next_work and tell the user, in a few lines, what to " +
-        "consider working on next and why. Never present after a step inside work that is still open, and " +
-        "never right after declaring loose ends you expect to continue yourself in this session. If " +
-        "get_next_work says this session's attached work is still open, do not present unless the user " +
-        "asked for next work or said they are done with or parking that work. For example: a lookup answered, a PR merged as asked, a question answered: present. " +
-        "\"Take over these two PRs and fix my comment\" while they are still draft: do not present until " +
-        "they merge or the user parks them, however many requests that takes.";
+        "consider working on next and why. Never present after a step inside work that is still open, or " +
+        "right after declaring loose ends you will continue yourself. If get_next_work says this session's " +
+        "attached work is still open, do not present unless the user asked for next work or said they are " +
+        "done with or parking that work. So: a lookup answered or a PR merged as asked, present; draft PRs " +
+        "you were asked to fix up, wait until they merge or the user parks them, however many requests that takes.";
 
     public static string? BuildFragment(JsonNode? responseNode, bool disabled) {
         if (disabled) return null;
