@@ -62,7 +62,9 @@ public class GatedReviewerRegistryTests {
         ("kiro",        c => c.KiroUnattendedReviewerEnabled),
         ("opencode",    c => c.OpenCodeUnattendedReviewerEnabled),
         ("antigravity", c => c.AntigravityUnattendedReviewerEnabled),
-        ("pi",          c => c.PiUnattendedReviewerEnabled)
+        ("pi",          c => c.PiUnattendedReviewerEnabled),
+        ("grok",        c => c.GrokUnattendedReviewerEnabled),
+        ("muse",        c => c.MuseUnattendedReviewerEnabled)
     ];
 
     /// <summary>An unmapped vendor is refused loudly, not silently no-op'd.</summary>

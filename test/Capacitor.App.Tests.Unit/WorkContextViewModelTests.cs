@@ -31,14 +31,14 @@ public class WorkContextViewModelTests {
         public Subject<ReactiveUnit> SignIn { get; } = new();
         public int SignInRequests;
         public List<string> OpenedWorkItems { get; } = [];
-        public SessionSubagents Subagents { get; }
+        public SessionRuns Runs { get; }
         public FakePlanSource Plans { get; } = new();
         public PlanActivity PlanActivity { get; } = new();
         public WorkContextViewModel Vm { get; }
 
         public Harness() {
-            Subagents = new SessionSubagents(Time);
-            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Subagents, () => SignInRequests++, SignIn, OpenedWorkItems.Add, Plans, PlanActivity);
+            Runs = new SessionRuns(Time);
+            Vm = new WorkContextViewModel(Presence, Source, Time, Opener, Runs, () => SignInRequests++, SignIn, OpenedWorkItems.Add, Plans, PlanActivity);
         }
 
         public Task PlanSettledAsync() => Vm.Plan.PendingReadForTesting ?? Task.CompletedTask;
@@ -69,10 +69,29 @@ public class WorkContextViewModelTests {
     };
 
     static ChatProjectionResult Spawn(string callId, DateTimeOffset at) =>
-        new([], [], [new SubagentSignal.Started(callId, "Explore", "Map the UI", at)]);
+        new([], [], [new RunSignal.Started(callId, "Explore", "Map the UI", at)]);
 
     static ChatProjectionResult Finish(string callId, DateTimeOffset at) =>
-        new([], [], [new SubagentSignal.Finished(callId, null, SubagentOutcome.Done, at)]);
+        new([], [], [new RunSignal.Finished(callId, null, RunOutcome.Done, at)]);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_checkout_branch_switch_is_read_on_the_poll_and_manual_refresh() => RunOnUiAsync(async () => {
+        using var tmp = new TempDir();
+        var root = tmp.CreateDir("checkout");
+        tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/first\n");
+        var h = new Harness();
+        try {
+            await h.PushAsync(Dto() with { WorktreePath = root, Branch = "reported" });
+            await WaitUntilAsync(() => h.Vm.Branch == "first", what: "live checkout branch");
+            tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/second\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Vm.Branch == "second", what: "branch switch on poll");
+            tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/third\n");
+            await h.Vm.RefreshCommand.Execute();
+            await WaitUntilAsync(() => h.Vm.Branch == "third", what: "branch switch on refresh");
+        } finally { await h.Vm.TeardownAsync(); }
+    });
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1435,6 +1454,7 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.Requester).IsEqualTo("Ada Lovelace");
             await Assert.That(h.Vm.RequesterInitial).IsEqualTo("A");
             await Assert.That(h.Vm.RequesterRole).IsEqualTo("This session · Claude Code");
+            await Assert.That(h.Vm.RequesterAvatarUrl).IsEqualTo("https://avatars.githubusercontent.com/u/1?v=4&s=64");
 
             await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "   ", Requester = "github:1" });
             await Assert.That(h.Vm.Requester).IsEqualTo("github:1");
@@ -1443,7 +1463,27 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = null, Requester = "" });
             await Assert.That(h.Vm.Requester).IsEqualTo("You");
             await Assert.That(h.Vm.RequesterInitial).IsEqualTo("Y");
+            await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("user_01HZZZZZZZZZZZZZZZZZZZZZZZ")]
+    [Arguments("github:")]
+    [Arguments("github:-5")]
+    [Arguments("github:12x")]
+    [Arguments("12345")]
+    public async Task Only_a_github_requester_id_gets_an_avatar(string requester) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                await h.PushAsync(Dto(sessionId: null) with { RequesterDisplay = "Ada", Requester = requester });
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
         });
     }
 
@@ -1472,22 +1512,22 @@ public class WorkContextViewModelTests {
             var h = new Harness();
             var raised = new List<string?>();
             h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            await Assert.That(h.Vm.HasSubagents).IsFalse();
+            await Assert.That(h.Vm.HasRuns).IsFalse();
 
             var now = h.Time.GetUtcNow();
-            h.Subagents.Apply(Spawn("c1", now));
-            h.Subagents.Apply(Spawn("c2", now));
-            await Assert.That(h.Vm.HasSubagents).IsTrue();
-            await Assert.That(h.Vm.Subagents).Count().IsEqualTo(2);
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2 running");
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasSubagents));
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentsHeader));
+            h.Runs.Apply(Spawn("c1", now));
+            h.Runs.Apply(Spawn("c2", now));
+            await Assert.That(h.Vm.HasRuns).IsTrue();
+            await Assert.That(h.Vm.Runs).Count().IsEqualTo(2);
+            await Assert.That(h.Vm.RunsHeader).IsEqualTo("2 running");
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasRuns));
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.RunsHeader));
 
-            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 of 2 running");
-            h.Subagents.Apply(Finish("c2", now.AddSeconds(6)));
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("2");
-            await Assert.That(h.Vm.HasSubagents).IsTrue();
+            h.Runs.Apply(Finish("c1", now.AddSeconds(5)));
+            await Assert.That(h.Vm.RunsHeader).IsEqualTo("1 of 2 running");
+            h.Runs.Apply(Finish("c2", now.AddSeconds(6)));
+            await Assert.That(h.Vm.RunsHeader).IsEqualTo("2");
+            await Assert.That(h.Vm.HasRuns).IsTrue();
             await h.Vm.TeardownAsync();
         });
     }
@@ -1502,20 +1542,20 @@ public class WorkContextViewModelTests {
             var gate = h.Source.Gate();
             h.Push(Dto());
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
-            h.Subagents.Apply(Spawn("c1", h.Time.GetUtcNow()));
-            await Assert.That(h.Vm.HasSubagents).IsTrue();
-            await Assert.That(h.Vm.SubagentsHeader).IsEqualTo("1 running");
+            h.Runs.Apply(Spawn("c1", h.Time.GetUtcNow()));
+            await Assert.That(h.Vm.HasRuns).IsTrue();
+            await Assert.That(h.Vm.RunsHeader).IsEqualTo("1 running");
 
             gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable, "no response"));
             await h.Vm.PendingReadForTesting!;
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Unreachable);
-            await Assert.That(h.Vm.HasSubagents).IsTrue();
+            await Assert.That(h.Vm.HasRuns).IsTrue();
 
             h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
             await h.TickAsync();
             await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.SignedOut);
-            await Assert.That(h.Vm.HasSubagents).IsTrue();
-            await Assert.That(h.Vm.Subagents).Count().IsEqualTo(1);
+            await Assert.That(h.Vm.HasRuns).IsTrue();
+            await Assert.That(h.Vm.Runs).Count().IsEqualTo(1);
             await h.Vm.TeardownAsync();
         });
     }
@@ -1525,11 +1565,11 @@ public class WorkContextViewModelTests {
     public async Task The_subagents_section_starts_collapsed_and_the_toggle_opens_it() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
-            await h.Vm.ToggleSubagentsCommand.Execute();
-            await Assert.That(h.Vm.SubagentsExpanded).IsTrue();
-            await h.Vm.ToggleSubagentsCommand.Execute();
-            await Assert.That(h.Vm.SubagentsExpanded).IsFalse();
+            await Assert.That(h.Vm.RunsExpanded).IsFalse();
+            await h.Vm.ToggleRunsCommand.Execute();
+            await Assert.That(h.Vm.RunsExpanded).IsTrue();
+            await h.Vm.ToggleRunsCommand.Execute();
+            await Assert.That(h.Vm.RunsExpanded).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
@@ -1539,22 +1579,22 @@ public class WorkContextViewModelTests {
     public async Task The_collapsed_subagents_list_holds_the_running_rows_and_empties_when_the_session_is_over() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.HasRunningSubagents).IsFalse();
+            await Assert.That(h.Vm.HasRunningRuns).IsFalse();
 
             var now = h.Time.GetUtcNow();
-            h.Subagents.Apply(Spawn("c1", now));
-            h.Subagents.Apply(Spawn("c2", now));
-            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
-            await Assert.That(h.Vm.HasRunningSubagents).IsTrue();
-            await Assert.That(h.Vm.RunningSubagents.Select(r => r.CallId)).IsEquivalentTo(new[] { "c2" });
+            h.Runs.Apply(Spawn("c1", now));
+            h.Runs.Apply(Spawn("c2", now));
+            h.Runs.Apply(Finish("c1", now.AddSeconds(5)));
+            await Assert.That(h.Vm.HasRunningRuns).IsTrue();
+            await Assert.That(h.Vm.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "c2" });
 
             var raised = new List<string?>();
             h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            h.Subagents.SessionOver = true;
+            h.Runs.SessionOver = true;
 
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasRunningSubagents));
-            await Assert.That(h.Vm.HasRunningSubagents).IsFalse();
-            await Assert.That(h.Vm.RunningSubagents).IsEmpty();
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasRunningRuns));
+            await Assert.That(h.Vm.HasRunningRuns).IsFalse();
+            await Assert.That(h.Vm.RunningRuns).IsEmpty();
             await h.Vm.TeardownAsync();
         });
     }
@@ -1566,26 +1606,26 @@ public class WorkContextViewModelTests {
     public async Task The_collapsed_subagents_summary_counts_each_state_in_order_and_omits_the_empty_ones() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
-            await Assert.That(h.Vm.SubagentCounts).IsEmpty();
+            await Assert.That(h.Vm.RunCounts).IsEmpty();
 
             var now = h.Time.GetUtcNow();
-            h.Subagents.Apply(Spawn("c1", now));
-            h.Subagents.Apply(Spawn("c2", now));
-            h.Subagents.Apply(Spawn("c3", now));
-            h.Subagents.Apply(Finish("c1", now.AddSeconds(5)));
-            h.Subagents.Apply(new([], [], [new SubagentSignal.Finished("c2", null, SubagentOutcome.Failed, now.AddSeconds(6))]));
+            h.Runs.Apply(Spawn("c1", now));
+            h.Runs.Apply(Spawn("c2", now));
+            h.Runs.Apply(Spawn("c3", now));
+            h.Runs.Apply(Finish("c1", now.AddSeconds(5)));
+            h.Runs.Apply(new([], [], [new RunSignal.Finished("c2", null, RunOutcome.Failed, now.AddSeconds(6))]));
             var raised = new List<string?>();
             h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            await Assert.That(h.Vm.SubagentCounts).IsEquivalentTo(new SubagentCount[] {
-                new(SubagentState.Running, 1), new(SubagentState.Done, 1), new(SubagentState.Failed, 1),
+            await Assert.That(h.Vm.RunCounts).IsEquivalentTo(new RunCount[] {
+                new(RunState.Running, 1), new(RunState.Done, 1), new(RunState.Failed, 1),
             }, CollectionOrdering.Matching);
-            await Assert.That(h.Vm.SubagentCounts.Select(c => c.Label))
+            await Assert.That(h.Vm.RunCounts.Select(c => c.Label))
                 .IsEquivalentTo(new[] { "1 running", "1 completed", "1 failed" }, CollectionOrdering.Matching);
 
-            h.Subagents.SessionOver = true;
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.SubagentCounts));
-            await Assert.That(h.Vm.SubagentCounts).IsEquivalentTo(new SubagentCount[] {
-                new(SubagentState.Done, 1), new(SubagentState.Failed, 1), new(SubagentState.Stopped, 1),
+            h.Runs.SessionOver = true;
+            await Assert.That(raised).Contains(nameof(WorkContextViewModel.RunCounts));
+            await Assert.That(h.Vm.RunCounts).IsEquivalentTo(new RunCount[] {
+                new(RunState.Done, 1), new(RunState.Failed, 1), new(RunState.Stopped, 1),
             }, CollectionOrdering.Matching);
             await h.Vm.TeardownAsync();
         });

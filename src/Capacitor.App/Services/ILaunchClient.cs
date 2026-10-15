@@ -1,13 +1,15 @@
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services;
 
-/// Model "", Effort null and PermissionMode null all mean "vendor default" — the wire's own
-/// conventions (the server rejects a null model; the daemon treats whitespace as no request).
+/// Model "", Effort null, PermissionMode null and CodexPosture null all mean "vendor default" —
+/// the wire's own conventions (the server rejects a null model; the daemon treats whitespace as
+/// no request).
 public sealed record LaunchRequest(
     string DaemonName, string RepoPath, string Vendor, string? Prompt,
     string Model = "", string? Effort = null, string? PermissionMode = null,
-    IReadOnlyList<string>? AttachmentIds = null);
+    IReadOnlyList<string>? AttachmentIds = null, CodexLaunchPosture? CodexPosture = null);
 
 /// Unauthorized marks a server 401 — the caller routes it to sign-in instead of rendering the
 /// raw transport message.
@@ -35,7 +37,7 @@ public sealed record LaunchAgentRequestV2Payload {
     [JsonPropertyName("visibility")]            public          string?  Visibility          { get; init; }
     [JsonPropertyName("grants")]                public          object[]? Grants             { get; init; }
     [JsonPropertyName("vendor")]                public required string   Vendor              { get; init; }
-    [JsonPropertyName("codex_posture")]         public          object?  CodexPosture        { get; init; }
+    [JsonPropertyName("codex_posture")]         public          CodexLaunchPosture? CodexPosture { get; init; }
     [JsonPropertyName("acp_permission_preset")] public          string?  AcpPermissionPreset { get; init; }
     // Omitted when null, so an unchosen mode leaves the payload an older server expects untouched.
     [JsonPropertyName("permission_mode"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -54,5 +56,6 @@ public static class LaunchPayload {
         // Null, not an empty array: the server reads an empty array as "these ids, none of them".
         AttachmentIds = r.AttachmentIds is { Count: > 0 } ids ? [.. ids] : null,
         PermissionMode = string.IsNullOrWhiteSpace(r.PermissionMode) ? null : r.PermissionMode,
+        CodexPosture   = r.CodexPosture,
     };
 }

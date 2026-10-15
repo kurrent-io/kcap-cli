@@ -13,10 +13,12 @@ using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
+using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Models.Transcripts.Harness.Claude;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.Hosting;
@@ -254,10 +256,11 @@ internal record AgentInstance(
     /// attached, so the clamp grows back to the local-only size. Guarded by <see cref="SinksLock"/>.</summary>
     internal Dim? WebDims { get; set; }
 
-    /// <summary>Tripped when the agent terminates (CleanupAgentAsync) so an attached local
-    /// client that's blocked waiting on the user's keystrokes wakes, flushes the last output,
-    /// and sends an Exited frame instead of hanging.</summary>
+    /// <summary>Tripped when the agent terminates so an attached local client blocked on stdin wakes
+    /// and flushes its final output, and transcript discovery stops before terminal status events are sent.</summary>
     internal CancellationTokenSource ExitedCts { get; } = new();
+
+    internal Task? DiscoveryTask { get; set; }
 
     /// <summary>
     /// True for locally-launched agents: the orchestrator makes no per-agent server call
@@ -824,6 +827,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnStopAgent              += HandleUnsequencedStopAgent;
         _server.OnSendInput              += HandleSendInput;
         _server.OnSendSpecialKey         += HandleSendSpecialKey;
+        _server.OnSendRawInput           += HandleSendRawInput;
         _server.OnResizeTerminal         += HandleResizeTerminal;
         _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
         // Settlement lost-ack redelivery (D1): re-deliver unretired terminal acks POST-registration
@@ -3313,6 +3317,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Wait briefly for the process to finalize so we get a real exit code.
             await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(5));
 
+            // Stop and drain transcript discovery before setting terminal status or appending
+            // AgentRunStopped, so a late discovery callback cannot send AgentRunHeartbeat after stop.
+            try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
+            if (agent.DiscoveryTask is { } discoveryTask) await discoveryTask;
+
             var exitCode = agent.Runtime.ExitCode;
 
             var status = agent.Runtime.HasExited
@@ -3320,6 +3329,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 : "Failed";
 
             if (agent.Status is not "Completed" and not "Failed") {
+                if (!agent.Runtime.HasExited) LogOutputEndedWhileRunning(agent.Id);
+
                 // A startup failure means the process exited before establishing
                 // a real interactive session (CLI config error, auth issue, immediate
                 // crash). A real session keeps producing output throughout its
@@ -3458,6 +3469,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await CleanupAgentAsync(agent.Id);
         } catch (Exception ex) {
             LogCleanupError(ex, agent.Id);
+        } finally {
+            try { await agent.ExitedCts.CancelAsync(); } catch { /* best-effort */ }
         }
     }
 
@@ -4490,9 +4503,47 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return;
         }
 
-        if (agent.IsPrivate) return; // server-origin key ignored for private agents
+        if (agent.IsPrivate || !AcceptsTypedInput(agent.Kind)) return;
+
+        if (IsClosingToInput(agent)) return;
 
         await agent.Runtime.SendSpecialKeyAsync(key);
+    }
+
+    /// <summary>Teardown keeps the agent in <c>_agents</c> while it disposes the runtime, so a
+    /// keystroke arriving then would otherwise reach a PTY that is closing.</summary>
+    static bool IsClosingToInput(AgentInstance agent) =>
+        agent.IsCleanupStarted || agent.IsReapClaimed || agent.Runtime.HasExited;
+
+    async Task HandleSendRawInput(SendRawInputCommand cmd) {
+        if (!_agents.TryGetValue(cmd.AgentId, out var agent)) {
+            LogSendRawInputUnknownAgent(cmd.AgentId, _agents.Count);
+            return;
+        }
+
+        if (agent.IsPrivate || !AcceptsTypedInput(agent.Kind)) return;
+
+        if (IsClosingToInput(agent)) return;
+
+        byte[] bytes;
+
+        try {
+            bytes = Convert.FromBase64String(cmd.Data);
+        } catch (FormatException) {
+            LogSendRawInputUndecodable(cmd.AgentId, cmd.DispatchId);
+            return;
+        }
+
+        if (bytes.Length == 0) return;
+
+        var waitGeneration = agent.ActivityClock.WaitGeneration;
+
+        try {
+            await agent.Runtime.SendRawInputAsync(bytes);
+            if (IsSubmit(bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+        } catch (NotSupportedException) {
+            LogSendRawInputNotSupported(cmd.AgentId, agent.Runtime.Vendor);
+        }
     }
 
     Task<string[]> HandleFindRepoForRemote(FindRepoForRemoteRequest req)
@@ -5130,15 +5181,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             ? reason
             : AcpHostedAgentRuntimeFactory.FormatFallbackLaunchReason(fallbackSource); // finding 5: single owner of the format
 
-    static readonly HashSet<string> ValidEffortLevels = ["low", "medium", "high", "max"];
+    static readonly HashSet<string> ValidEffortLevels = ["low", "medium", "high", "xhigh", "max"];
 
     /// <summary>When an unlinked launch stops being ordinary slowness and starts being worth saying
-    /// out loud. A healthy codex links in about five seconds, so a minute is far past normal while
-    /// still well short of the poll timeout that ends detection entirely.</summary>
+    /// out loud. A healthy codex links in about five seconds, so a minute is far past normal.</summary>
     static readonly TimeSpan SessionIdSlowWarnAfter = TimeSpan.FromSeconds(60);
 
     static readonly TimeSpan SessionIdPollInterval = TimeSpan.FromSeconds(2);
-    static readonly TimeSpan SessionIdPollTimeout  = TimeSpan.FromMinutes(3);
 
     // Codex turn-start diagnostic: how long, and how often, to watch a hosted Codex reviewer's rollout for growth
     // after a round's input is delivered, so the daemon log can say whether Codex began a turn.
@@ -5147,55 +5196,61 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static readonly TimeSpan CodexTurnObserveInterval = TimeSpan.FromSeconds(2);
     static readonly TimeSpan CodexTurnObserveTimeout  = TimeSpan.FromMinutes(2);
 
-    /// Locates the transcript a freshly spawned PTY agent writes — Claude's per-worktree
+    /// Locates the transcript a freshly spawned agent writes — Claude's per-worktree
     /// project dir (a symlink onto the source repo's, shared with the user's own sessions,
     /// so the locator disambiguates by cwd), Codex's rollout tree (disambiguated by cwd and
-    /// spawn time). A vendor without a locator is a no-op. Best-effort background work,
-    /// cancelled with the agent; it never blocks a launch.
+    /// spawn time), Muse's log from its runtime's session or the launch's hosted-session marker. A vendor without a
+    /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
+    /// a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
             "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
                 _harnesses.Of<ClaudeHarness>().Paths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
                 _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+            "muse"   => _ => MuseHostedSessionLocator.TryLocate(
+                _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime),
+                (agent.Runtime as MuseMspHostedAgentRuntime)?.Session),
             _        => null,
         };
         if (locate is null) return Task.CompletedTask;
 
         Interlocked.Increment(ref _discoveryStarts);
-        return RunDiscoveryAsync(agent, locate);
+        var task = RunDiscoveryAsync(agent, locate);
+        agent.DiscoveryTask = task;
+        return task;
     }
 
-    internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) =>
-        RunDiscoveryAsync(agent, locate);
+    internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
+        var task = RunDiscoveryAsync(agent, locate);
+        agent.DiscoveryTask = task;
+        return task;
+    }
 
     async Task RunDiscoveryAsync(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
         try {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, _shutdownCts.Token);
-            var discovery = new TranscriptDiscovery(_time, SessionIdPollInterval, SessionIdPollTimeout);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(
+                agent.ReadCts.Token, agent.ExitedCts.Token, _shutdownCts.Token);
+            var discovery = new TranscriptDiscovery(_time, SessionIdPollInterval);
 
-            // Cancelled and awaited in the finally below, never merely dropped: an agent that exits
-            // inside the window is finalized and cleaned up without anyone touching ReadCts, and a
-            // warning that lands after that describes an agent nobody has any more.
             using var warnCts  = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
             var       warnTask = WarnIfStillUnlinkedAsync(agent, warnCts.Token);
 
             try {
+                await discovery.RunAsync(locate, async winner => {
+                    if (cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
 
-            var found = await discovery.RunAsync(locate, async winner => {
-                // Mutation first, pulse second — and the pulse before any server call, which can
-                // stall on a reconnect and must never hold the app's status push hostage.
-                agent.SessionId ??= winner.SessionId;
-                agent.TranscriptPath = winner.Path;
-                _statusNotifier.Pulse();
-                LogSessionIdDetected(agent.Id, winner.SessionId);
+                    // Mutation first, pulse second — and the pulse before any server call, which can
+                    // stall on a reconnect and must never hold the app's status push hostage.
+                    agent.SessionId ??= winner.SessionId;
+                    agent.TranscriptPath = winner.Path;
+                    _statusNotifier.Pulse();
+                    LogSessionIdDetected(agent.Id, winner.SessionId);
 
-                if (agent.IsPrivate) return;
-                await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(winner.SessionId));
-                if (TrySendAgentStatus(agent, agent.Status, winner.SessionId, out var detected)) await detected;
-            }, cts.Token);
-
-            if (!found && !cts.IsCancellationRequested) LogSessionIdNotDetected(agent.Id, SessionIdPollTimeout.TotalSeconds);
+                    if (agent.IsPrivate || cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
+                    await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(winner.SessionId));
+                    if (TrySendAgentStatus(agent, agent.Status, winner.SessionId, out var detected)) await detected;
+                }, cts.Token);
             } finally {
                 warnCts.Cancel();
                 await warnTask.ConfigureAwait(false);
@@ -5205,9 +5260,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    /// <summary>Says, once and early, what the operator is otherwise left to infer from three minutes
-    /// of nothing. Never cancels or reaps the launch — detection keeps running to its own timeout,
-    /// and a slow link still resolves.</summary>
+    /// <summary>Says, once and early, what the operator is otherwise left to infer from silence.
+    /// Never cancels or reaps the launch — detection keeps running while the agent is alive, and
+    /// a slow first turn or startup prompt still links once the transcript records its cwd.</summary>
     async Task WarnIfStillUnlinkedAsync(AgentInstance agent, CancellationToken ct) {
         try {
             await Task.Delay(SessionIdSlowWarnAfter, _time, ct).ConfigureAwait(false);
@@ -5216,7 +5271,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
 
         if (agent.SessionId is null)
-            LogSessionIdSlow(agent.Id, SessionIdSlowWarnAfter.TotalSeconds, SessionIdPollTimeout.TotalSeconds);
+            LogSessionIdSlow(agent.Id, SessionIdSlowWarnAfter.TotalSeconds);
     }
 
     async Task RunHeartbeatLoopAsync(CancellationToken ct) {
@@ -5769,6 +5824,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} exited with code {ExitCode}")]
     partial void LogAgentExited(string agentId, int? exitCode);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Output of agent {AgentId} ended while its process is still running; tearing the agent down")]
+    partial void LogOutputEndedWhileRunning(string agentId);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Stopping agent {AgentId}")]
     partial void LogStopping(string agentId);
 
@@ -5874,6 +5932,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SendSpecialKey '{Key}' dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
     partial void LogSendSpecialKeyUnknownAgent(string agentId, string key, int knownAgents);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "SendRawInput dropped: agent {AgentId} not found on this daemon ({KnownAgents} agents registered)")]
+    partial void LogSendRawInputUnknownAgent(string agentId, int knownAgents);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SendRawInput dropped: payload for agent {AgentId} (dispatch {DispatchId}) is not valid base64")]
+    partial void LogSendRawInputUndecodable(string agentId, Guid dispatchId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "SendRawInput dropped: agent {AgentId} runtime '{Vendor}' has no raw-input surface")]
+    partial void LogSendRawInputNotSupported(string agentId, string vendor);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error reading output for agent {AgentId}")]
     partial void LogOutputReadError(Exception ex, string agentId);
@@ -5998,14 +6065,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId} linked to session {SessionId} by matching its transcript file")]
     partial void LogSessionIdDetected(string agentId, string sessionId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "No transcript matched agent {AgentId}'s worktree within {Seconds:F0}s, so it has no session id: the surface cannot leave 'waiting for session to start'. The child may be parked on a startup prompt — a TUI sitting on one still renders, so it does not read as stuck.")]
-    partial void LogSessionIdNotDetected(string agentId, double seconds);
-
     [LoggerMessage(Level = LogLevel.Warning, Message = "Transcript-based session-id detection failed for agent {AgentId}; nothing else assigns one, so this agent stays unlinked")]
     partial void LogSessionIdDetectFailed(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no session id {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues until {TimeoutSeconds:F0}s.")]
-    partial void LogSessionIdSlow(string agentId, double seconds, double timeoutSeconds);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} still has no session id {Seconds:F0}s after spawn; the surface is showing 'waiting for session to start'. Detection continues while the agent is running.")]
+    partial void LogSessionIdSlow(string agentId, double seconds);
 
     [GeneratedRegex(@"\x1B\[[0-9;]*[A-Za-z]|\x1B\].*?\x07|\x1B[()][AB012]|\x1B\[[\?]?[0-9;]*[hlm]")]
     private static partial Regex StripAnsiRegex();
@@ -6109,6 +6173,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test-only entry point to the private send-input handler (bracketed-paste submit).</summary>
     internal Task HandleSendInputForTest(SendInputCommand cmd) => HandleSendInput(cmd);
+
+    internal Task HandleSendRawInputForTest(SendRawInputCommand cmd) => HandleSendRawInput(cmd);
+
+    internal Task HandleSendSpecialKeyForTest(string agentId, string key) => HandleSendSpecialKey(agentId, key);
 
     /// <summary>Test-only: run ONE selected reap exactly as the heartbeat does (claim, then stop only
     /// if the claim was won) — the seam for driving a candidate selected before some racing event.</summary>

@@ -30,7 +30,8 @@ public class VendorConfigSlotsTests {
         (HarnessId.Kiro,        c => c.KiroModel),
         (HarnessId.Pi,          c => c.PiModel),
         (HarnessId.OpenCode,    c => c.OpenCodeModel),
-        (HarnessId.Antigravity, c => c.AntigravityModel)
+        (HarnessId.Antigravity, c => c.AntigravityModel),
+        (HarnessId.Muse,        c => c.MuseModel)
     ];
 
     static HarnessId[] EveryVendor => Enum.GetValues<HarnessId>();

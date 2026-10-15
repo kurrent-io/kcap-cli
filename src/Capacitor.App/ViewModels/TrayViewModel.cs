@@ -303,7 +303,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
             IAgentDirectory directory, IObservable<IReadOnlySet<string>>? sessionsWithAttention = null) {
         var attention = sessionsWithAttention ?? Observable.Return<IReadOnlySet<string>>(FrozenSet<string>.Empty);
         var remoteRows = directory.Rows.Connect()
-            .Filter(r => r.Origin == AgentOrigin.Remote && r.Status is "Starting" or "Running")
+            .Filter(r => r.Origin == AgentOrigin.Remote && r.Status is "Starting" or "Running" or "Idle")
             .QueryWhenChanged(q => (IReadOnlyList<AgentRow>)q.Items.ToList())
             .StartWith((IReadOnlyList<AgentRow>)[]);
         var laneConnected = directory.RemoteStale.Select(stale => !stale);

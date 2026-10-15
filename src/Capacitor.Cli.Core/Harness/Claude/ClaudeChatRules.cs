@@ -9,11 +9,13 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 
 /// What the chat hides or rewrites in Claude records: meta and sidechain records, the blocks
 /// Claude Code injects around a user turn, and the finished-background-task record it injects as
-/// if the user had spoken. Also where a subagent's launch, detachment and end are read.
+/// if the user had spoken. Also where a subagent's or a background command's launch, detachment
+/// and end are read.
 public sealed partial class ClaudeChatRules : IChatDisplayRules {
     public static readonly ClaudeChatRules Instance = new();
 
     const string StoppedTaskMessage = "Successfully stopped task";
+    const string HandbackPointer = "This agent's report was delivered to you as a message";
 
     ClaudeChatRules() { }
 
@@ -22,7 +24,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
-            || IsTaskNotification(slug, raw)) return null;
+            || IsTaskNotification(slug, raw)
+            || PeerMessage(slug, raw.Text) is not null) return null;
 
         var text = raw.Text ?? "";
         if (BashCommand(text) is { } command) return "!" + command;
@@ -36,7 +39,12 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain) || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)) return null;
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
+        // A peer message delivered while the session is idle is a meta record, and it is the
+        // only record of that message.
+        if (envelope.Kind == AcpEventKind.UserMessage && PeerMessage(slug, envelope.Text) is { } peer)
+            return peer.Body.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = peer.Body, ToolKind = peer.Kind };
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)) return null;
 
         switch (envelope.Kind) {
             case AcpEventKind.UserMessage: {
@@ -62,25 +70,31 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's
     /// row. The meta flag is not consulted: a hidden row still ends its subagent.
-    public IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) {
+    public IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
 
         switch (raw.Kind) {
             case AcpEventKind.ToolCall when raw.ToolName is "Agent" or "Task" && raw.ToolCallId is { Length: > 0 } callId: {
                 var (name, description) = SpawnFacts(raw.ToolInputJson);
-                return [new SubagentSignal.Started(callId, name, description, evt.Timestamp)];
+                return [new RunSignal.Started(callId, name, description, evt.Timestamp)];
+            }
+            case AcpEventKind.ToolCall when raw.ToolName is "Bash" && raw.ToolCallId is { Length: > 0 } callId: {
+                var (name, detail) = ShellFacts(raw.ToolInputJson);
+                return [new RunSignal.Started(callId, name, detail, evt.Timestamp, RunKind.Shell, Provisional: true)];
             }
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
+                if (SchemaExtensions.Text(result, "backgroundTaskId") is { Length: > 0 } backgroundId)
+                    return [new RunSignal.Detached(callId, backgroundId)];
                 if (SchemaExtensions.Text(result, "status") == "async_launched"
                     && (SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id")) is { Length: > 0 } agentId)
-                    return [new SubagentSignal.Detached(callId, agentId)];
+                    return [new RunSignal.Detached(callId, agentId)];
                 // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
-                // task_id, from ending a running subagent.
-                if (SchemaExtensions.Text(result, "task_type") == "local_agent"
+                // task_id, from ending a running row.
+                if (SchemaExtensions.Text(result, "task_type") is "local_agent" or "local_bash"
                     && SchemaExtensions.Text(result, "task_id") is { Length: > 0 } taskId
                     && (SchemaExtensions.Text(result, "message") ?? "").AsSpan().TrimStart().StartsWith(StoppedTaskMessage, StringComparison.OrdinalIgnoreCase))
-                    return [new SubagentSignal.Finished(null, taskId, SubagentOutcome.Stopped, evt.Timestamp)];
+                    return [new RunSignal.Finished(null, taskId, RunOutcome.Stopped, evt.Timestamp)];
                 return [];
             }
             case AcpEventKind.UserMessage when IsTaskNotification(slug, raw): {
@@ -88,8 +102,17 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                 var callId = Tag(TaskToolUseId(), text);
                 var agentId = Tag(TaskId(), text);
                 if (callId is null && agentId is null) return [];
-                var outcome = string.Equals(Tag(TaskStatus(), text), "completed", StringComparison.OrdinalIgnoreCase) ? SubagentOutcome.Done : SubagentOutcome.Failed;
-                return [new SubagentSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
+                // A cut-off notification has no status and still says the run ended; a status
+                // that is not an end, such as running, says nothing.
+                RunOutcome? outcome;
+                switch (Tag(TaskStatus(), text)?.ToLowerInvariant()) {
+                    case null:        outcome = null; break;
+                    case "completed": outcome = RunOutcome.Done; break;
+                    case "failed":    outcome = RunOutcome.Failed; break;
+                    case "killed":    outcome = RunOutcome.Stopped; break;
+                    default:          return [];
+                }
+                return [new RunSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
             }
             default:
                 return [];
@@ -100,6 +123,50 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     static bool IsTaskNotification(Struct? slug, AcpEventEnvelope raw) =>
         SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) == "task-notification"
         || (raw.Text ?? "").AsSpan().TrimStart().StartsWith("<task-notification>");
+
+    const string PeerOpen = "<agent-message from=\"";
+    const string PeerClose = "</agent-message>";
+    const string PeerLead = "Another Claude session sent a message";
+    const string HandbackMark = "[Subagent hand-back]";
+    const string HandbackLead = "The report follows:\n";
+
+    /// The body of a message another agent of this session sent, and which kind it is; null for
+    /// anything else. The server's events carry no origin_kind, so without one the wrapper is
+    /// matched instead: it opens the text, after the one lead line Claude Code puts in front of an
+    /// idle delivery. Any other origin keeps a prompt that quotes the wrapper the user's own.
+    static (string Body, string Kind)? PeerMessage(Struct? slug, string? text) {
+        var origin = SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind);
+        if (text is null || origin is not (null or "peer")) return null;
+        var span = text.AsSpan().TrimStart();
+        if (span.StartsWith(PeerLead, StringComparison.Ordinal) && span.IndexOf('\n') is var lead and >= 0)
+            span = span[(lead + 1)..];
+        if (!span.StartsWith(PeerOpen, StringComparison.Ordinal))
+            return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
+        var bodyStart = span.IndexOf('\n');
+        if (bodyStart < 0) return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
+        span = span[(bodyStart + 1)..];
+        // Text after the close is Claude Code's guidance to the model. A stored record can end
+        // before the close.
+        var close = span.LastIndexOf(PeerClose, StringComparison.Ordinal);
+        if (close >= 0) span = span[..close];
+        if (!span.StartsWith(HandbackMark, StringComparison.Ordinal))
+            return (span.Trim().ToString(), ChatDisplayKind.AgentMessage);
+        var report = span.IndexOf(HandbackLead, StringComparison.Ordinal);
+        return report < 0
+            ? (span.Trim().ToString(), ChatDisplayKind.AgentReport)
+            : (Outdent(span[(report + HandbackLead.Length)..]), ChatDisplayKind.AgentReport);
+    }
+
+    /// Claude Code indents every line of a hand-back by two spaces; left in, they would end up in
+    /// every line of a code block in the report.
+    static string Outdent(ReadOnlySpan<char> report) {
+        var built = new StringBuilder(report.Length);
+        foreach (var line in report.EnumerateLines()) {
+            var cut = line.StartsWith("  ") ? line[2..] : line.TrimStart(' ');
+            built.Append(cut).Append('\n');
+        }
+        return built.ToString().Trim();
+    }
 
     static Struct? ToolUseResult(Struct? slug) =>
         slug is not null && slug.Fields.TryGetValue(ClaudeCodeExtension.ToolUseResult, out var v) && v.KindCase == Value.KindOneofCase.StructValue
@@ -116,6 +183,31 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         }
     }
 
+    const int ShellNameLimit = 80;
+
+    /// The row's name is the call's description, with the command's first line under it; a call
+    /// without a description is named by that line, which goes under it only once the name is cut.
+    static (string Name, string Detail) ShellFacts(string? inputJson) {
+        if (inputJson is null) return ("command", "");
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            var input = doc.RootElement;
+            var command = FirstLine(input.Str("command") ?? "");
+            var described = input.Str("description") is { } d && d.Trim() is { Length: > 0 } trimmed ? trimmed : null;
+            var name = described ?? (command.Length > 0 ? command : "command");
+            var cut = name.Length > ShellNameLimit;
+            return (cut ? name[..(ShellNameLimit - 1)] + "…" : name, described is null && !cut ? "" : command);
+        } catch (JsonException) {
+            return ("command", "");
+        }
+    }
+
+    static string FirstLine(string text) {
+        var trimmed = text.TrimStart();
+        var end = trimmed.IndexOf('\n');
+        return (end < 0 ? trimmed : trimmed[..end]).TrimEnd();
+    }
+
     static string? Tag(Regex tag, string text) =>
         tag.Match(text) is { Success: true } m && m.Groups[1].Value.Trim() is { Length: > 0 } value ? value : null;
 
@@ -125,6 +217,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         var raw     = envelope.Text ?? "";
         var summary = Tag(TaskSummary(), raw) ?? "";
         var body    = Tag(TaskResult(), raw) ?? "";
+        // An agent that handed its report back says so in the result instead of repeating it.
+        if (body.StartsWith(HandbackPointer, StringComparison.Ordinal)) body = "";
         var parts   = new List<string>(2);
         if (summary.Length > 0) parts.Add($"**{summary}**");
         if (body.Length > 0) parts.Add(body);

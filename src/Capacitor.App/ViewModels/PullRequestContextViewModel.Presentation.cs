@@ -84,15 +84,30 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
-    static readonly string[] PresentationProperties = [
-        nameof(HasMultipleChoices), nameof(SectionEyebrow), nameof(SectionMeta), nameof(RepositoryLabel), nameof(NumberLabel), nameof(HasNumberLabel), nameof(ProviderLabel),
-        nameof(CanOpenSource), nameof(ShowsOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
-        nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
-        nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),
-        nameof(ReviewerRows), nameof(CheckRows), nameof(DiscussionRows),
-    ];
-
     void NotifyPresentation() {
-        foreach (var property in PresentationProperties) this.RaisePropertyChanged(property);
+        NotifyValue(HasMultipleChoices);
+        NotifyValue(SectionEyebrow);
+        NotifyValue(SectionMeta);
+        NotifyValue(RepositoryLabel);
+        NotifyValue(NumberLabel);
+        NotifyValue(HasNumberLabel);
+        NotifyValue(ProviderLabel);
+        NotifyValue(CanOpenSource);
+        NotifyValue(ShowsOpenSource);
+        NotifyValue(IsChecks);
+        NotifyValue(IsReviewers);
+        NotifyValue(IsReviewSection);
+        NotifyValue(IsDiscussion);
+        NotifyValue(FreshnessLabel);
+        NotifyValue(HasStaleOverview);
+        NotifyValue(OverviewFreshnessLabel);
+        NotifyValue(SelectedTabIndex);
+        NotifyValue(SelectedReviewTabIndex);
+        NotifyValue(LifecycleStatus);
+        NotifyValue(ReviewStatus);
+        NotifyValue(ChecksStatus);
+        NotifyRows(ReviewerRows, nameof(ReviewerRows));
+        NotifyRows(CheckRows, nameof(CheckRows));
+        NotifyRows(DiscussionRows, nameof(DiscussionRows));
     }
 }

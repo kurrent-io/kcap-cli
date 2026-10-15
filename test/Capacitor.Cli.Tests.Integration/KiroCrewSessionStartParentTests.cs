@@ -40,7 +40,22 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId));
     }
 
-    async Task<JsonNode> SpawnAsync(string sessionId) {
+    /// <summary>The system clock, except that the hook's first wait between Crew lookups runs
+    /// <paramref name="onFirstPoll"/> — strictly after its first lookup, and only if it waits at all.</summary>
+    sealed class FirstCrewPoll(Action onFirstPoll) : TimeProvider {
+        int _fired;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) {
+            if (dueTime == KiroHookCommand.CrewParentPoll && Interlocked.Exchange(ref _fired, 1) == 0) onFirstPoll();
+
+            return base.CreateTimer(callback, state, dueTime, period);
+        }
+    }
+
+    FirstCrewPoll RecordsSessionOnFirstPoll() =>
+        new(() => Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId: true)));
+
+    async Task<JsonNode> SpawnAsync(string sessionId, TimeProvider? time = null) {
         await ConfigMutator.MutateAsync(Config.Root, _ => new ProfileConfig {
             ActiveProfile = "work",
             Profiles      = new() { ["work"] = new Profile { ServerUrl = _server.Url } }
@@ -54,7 +69,7 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         var watchers = TestWatchers.For(Config.Root, profiles, http, new FakeWatcherSpawner(_ => Task.CompletedTask));
 
         await new KiroHookCommand(
-                Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home),
+                Config.Root, profiles, new HookClock(time ?? TimeProvider.System), Home, TestHarnesses.Under(Home),
                 HostedAgent.Terminal, http, watchers, new GitProviderRouter(), new WorkingDirectory(AppContext.BaseDirectory))
             .Handle(new StringReader($"{{\"hook_event_name\": \"agentSpawn\", \"cwd\": \"/tmp\", \"session_id\": \"{sessionId}\"}}"),
                 ["hook", "--kiro", "--event", "agentSpawn"]);
@@ -104,13 +119,7 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         SeedSubagent(withSessionId: false);
 
         await UnderCrew(spawnedByCrew: true, async () => {
-            var late = Task.Run(async () => {
-                await Task.Delay(300);
-                Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId: true));
-            });
-
-            var body = await SpawnAsync(Child);
-            await late;
+            var body = await SpawnAsync(Child, RecordsSessionOnFirstPoll());
 
             await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
         });
@@ -125,15 +134,7 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         SeedSubagent(withSessionId: false);
 
         await UnderCrew(spawnedByCrew: false, async () => {
-            // Late enough that a slow runner's first lookup still precedes it, and inside the Crew wait,
-            // so a hook that wrongly waited would find the record.
-            var late = Task.Run(async () => {
-                await Task.Delay(1200);
-                Home.CreateFile([".kiro", "crew", "subagents", "65eed35b", "state.json"], SubagentState(withSessionId: true));
-            });
-
-            var body = await SpawnAsync(Child);
-            await late;
+            var body = await SpawnAsync(Child, RecordsSessionOnFirstPoll());
 
             await Assert.That(body["parent_session_id"]).IsNull();
         });

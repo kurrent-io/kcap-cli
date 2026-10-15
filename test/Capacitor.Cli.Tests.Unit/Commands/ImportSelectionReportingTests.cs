@@ -106,7 +106,7 @@ public class ImportSelectionReportingTests : IDisposable {
     [Test]
     public async Task A_failed_upload_lands_in_FailedIds() {
         _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet()).RespondWith(Response.Create().WithStatusCode(404));
-        _server.Given(Request.Create().WithPath("/hooks/session-start*").UsingPost()).RespondWith(Response.Create().WithStatusCode(500));
+        _server.Given(Request.Create().WithPath("/hooks/session-start*").UsingPost()).RespondWith(Response.Create().WithStatusCode(400));
         var projects = Projects();
         ImportCommand.ImportRunOutcome? finished = null;
 

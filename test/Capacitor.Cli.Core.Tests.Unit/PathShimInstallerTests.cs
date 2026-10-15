@@ -414,6 +414,91 @@ public class PathShimInstallerTests {
         await Assert.That(runner.Calls).IsEmpty();
     }
 
+    [Test]
+    public async Task InstallAsync_links_into_a_writable_stable_path_folder_without_a_prompt() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        string localBin = tmp.CreateDir(".local", "bin");
+        var link = Path.Combine(localBin, "kcap");
+        var target = tmp.CreateFile("target-cli");
+        var runner = new FakeProcessRunner();
+        var probe = ResolvingTo(link, $"relative/bin:{localBin}/");
+        var installer = new PathShimInstaller(runner, probe, home: new UserHome(tmp.Path));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
+        await Assert.That(runner.Calls.Count).IsEqualTo(0);
+    }
+
+    /// A version manager's folder is writable and early on PATH, but is replaced on the next switch.
+    [Test]
+    public async Task InstallAsync_never_links_into_a_folder_outside_the_stable_set() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        string shims = tmp.CreateDir(".pyenv", "shims");
+        string localBin = tmp.CreateDir(".local", "bin");
+        var link = Path.Combine(localBin, "kcap");
+        var target = tmp.CreateFile("target-cli");
+        var probe = ResolvingTo(link, $"{shims}:{localBin}");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: new UserHome(tmp.Path));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(File.Exists(Path.Combine(shims, "kcap"))).IsFalse();
+        await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
+    }
+
+    [Test]
+    public async Task InstallAsync_skips_a_stable_folder_holding_another_kcap() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        string localBin = tmp.CreateDir(".local", "bin");
+        var foreign = tmp.CreateFile([".local", "bin", "kcap"], "someone else's");
+        string bin = tmp.CreateDir("bin");
+        var link = Path.Combine(bin, "kcap");
+        var target = tmp.CreateFile("target-cli");
+        var probe = ResolvingTo(link, $"{localBin}:{bin}");
+        var installer = new PathShimInstaller(new FakeProcessRunner(), probe, home: new UserHome(tmp.Path));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Installed);
+        await Assert.That(File.ReadAllText(foreign)).IsEqualTo("someone else's");
+        await Assert.That(new FileInfo(link).LinkTarget).IsEqualTo(target);
+    }
+
+    /// Another kcap the terminal still prefers means the link did nothing, so it is taken back.
+    [Test]
+    public async Task InstallAsync_removes_a_shadowed_link_and_falls_back_to_the_admin_prompt() {
+        Skip.When(OperatingSystem.IsWindows(), "macOS lstat semantics");
+
+        using var tmp = new TempDir();
+        string localBin = tmp.CreateDir(".local", "bin");
+        var target = tmp.CreateFile("target-cli");
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(1, "", "execution error: User canceled. (-128)", false));
+        var probe = ResolvingTo("/somewhere/else/kcap", localBin);
+        var installer = new PathShimInstaller(runner, probe, home: new UserHome(tmp.Path));
+
+        var result = await Install(installer, tmp.PathTo("admin-kcap"), target, CancellationToken.None);
+
+        await Assert.That(result.Outcome).IsEqualTo(ShimOutcome.Cancelled);
+        await Assert.That(new FileInfo(Path.Combine(localBin, "kcap")).Exists).IsFalse();
+        await Assert.That(runner.Calls.Count).IsEqualTo(1);
+    }
+
+    static FakeLoginShellProbe ResolvingTo(string resolved, string terminalPath) => new() {
+        TerminalPathBehavior = _ => Task.FromResult<string?>(terminalPath),
+        KcapOnPathBehavior   = _ => Task.FromResult<bool?>(true),
+        KcapPathBehavior     = _ => Task.FromResult<string?>(resolved),
+    };
+
     // Drives InstallAsync against an arbitrary temp `destination` (never the real
     // /usr/local/bin/kcap) via the internal destination-overriding overload.
     static Task<ShimResult> Install(PathShimInstaller installer, string destination, string target, CancellationToken ct) =>

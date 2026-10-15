@@ -22,6 +22,16 @@ static class McpToolArguments {
         return value;
     }
 
+    /// <summary>A required non-blank string, trimmed, of at most <paramref name="maxLength"/> characters.</summary>
+    internal static string RequireBoundedString(JsonObject? args, string key, int maxLength) {
+        var value = RequireString(args, key).Trim();
+
+        if (value.Length > maxLength)
+            throw new ArgumentException($"'{key}' is {value.Length} characters; the limit is {maxLength}.");
+
+        return value;
+    }
+
     /// <summary>An optional string: absent, JSON null or blank is null (trimmed otherwise); a present
     /// non-string throws.</summary>
     internal static string? OptionalString(JsonObject? args, string key) {

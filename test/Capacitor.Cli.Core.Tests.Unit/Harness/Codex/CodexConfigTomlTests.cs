@@ -267,7 +267,7 @@ public class CodexConfigTomlTests {
         // A paid hosted launch and anything that can widen an audience stay on the tool annotations.
         await Assert.That(Mode("kcap-flows")).IsNull();
         await Assert.That(Mode("kcap-memory")).IsNull();
-        await Assert.That(Mode("kcap-artefacts")).IsNull();
+        await Assert.That(Mode("kcap-pages")).IsNull();
     }
 
     [Test]
@@ -449,6 +449,64 @@ public class CodexConfigTomlTests {
         var remaining = (TomlTable)ReadToml(path)["mcp_servers"];
         await Assert.That(remaining.ContainsKey("kcap-flows")).IsFalse();
         await Assert.That(remaining.ContainsKey("other")).IsTrue();
+    }
+
+    /// <summary>An entry kcap wrote under a name it no longer registers, with the claim taken over that
+    /// shape. The claim is a verbatim fixture: the writer under test never writes the retired name.</summary>
+    [Test]
+    public async Task RegisterKcapMcpServers_removes_an_owned_entry_under_a_retired_name() {
+        using var tmp = new TempDir();
+        var path = tmp.GetResolvedPath("config.toml");
+        tmp.CreateFile("config.toml", """
+            [mcp_servers.kcap-artefacts]
+            command = "/opt/a/kcap"
+            args = ["mcp", "artefacts"]
+            """);
+        tmp.CreateFile("mcp-ownership-v1.json", """
+            {"version":1,"entries":{"kcap-artefacts":{"fingerprint":"d48ec79329e5444634253d08f7169e8566ab071dd7c19e2ae91f53bc8f40cd66","normalized_table":{"args":[{"type":"string","value":"mcp"},{"type":"string","value":"artefacts"}],"command":{"type":"string","value":"/opt/a/kcap"}}}}}
+            """);
+
+        await Assert.That(CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => "/opt/a/kcap"))
+            .IsEqualTo(CodexConfigToml.Change.Updated);
+
+        var servers = (TomlTable)ReadToml(path)["mcp_servers"];
+        await Assert.That(servers.ContainsKey("kcap-artefacts")).IsFalse();
+        await Assert.That(servers.ContainsKey("kcap-pages")).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterKcapMcpServers_keeps_a_retired_name_entry_the_user_changed() {
+        using var tmp = new TempDir();
+        var path = tmp.GetResolvedPath("config.toml");
+        tmp.CreateFile("config.toml", """
+            [mcp_servers.kcap-artefacts]
+            command = "/opt/a/kcap"
+            args = ["mcp", "artefacts", "--verbose"]
+            """);
+        tmp.CreateFile("mcp-ownership-v1.json", """
+            {"version":1,"entries":{"kcap-artefacts":{"fingerprint":"d48ec79329e5444634253d08f7169e8566ab071dd7c19e2ae91f53bc8f40cd66","normalized_table":{"args":[{"type":"string","value":"mcp"},{"type":"string","value":"artefacts"}],"command":{"type":"string","value":"/opt/a/kcap"}}}}}
+            """);
+
+        CodexConfigToml.RegisterKcapMcpServers(path, resolveBinaryPath: () => "/opt/a/kcap");
+
+        await Assert.That(((TomlTable)ReadToml(path)["mcp_servers"]).ContainsKey("kcap-artefacts")).IsTrue();
+    }
+
+    [Test]
+    public async Task UnregisterKcapMcpServers_removes_an_owned_entry_under_a_retired_name() {
+        using var tmp = new TempDir();
+        var path = tmp.GetResolvedPath("config.toml");
+        tmp.CreateFile("config.toml", """
+            [mcp_servers.kcap-artefacts]
+            command = "/opt/a/kcap"
+            args = ["mcp", "artefacts"]
+            """);
+        tmp.CreateFile("mcp-ownership-v1.json", """
+            {"version":1,"entries":{"kcap-artefacts":{"fingerprint":"d48ec79329e5444634253d08f7169e8566ab071dd7c19e2ae91f53bc8f40cd66","normalized_table":{"args":[{"type":"string","value":"mcp"},{"type":"string","value":"artefacts"}],"command":{"type":"string","value":"/opt/a/kcap"}}}}}
+            """);
+
+        await Assert.That(CodexConfigToml.UnregisterKcapMcpServers(path)).IsEqualTo(CodexConfigToml.Change.Updated);
+        await Assert.That(ReadToml(path).ContainsKey("mcp_servers")).IsFalse();
     }
 
     [Test]

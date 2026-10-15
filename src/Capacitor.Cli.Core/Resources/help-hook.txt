@@ -12,7 +12,7 @@ Description:
   dispatch is argument-driven (no stdin payload) — see --pi / --opencode below.
 
   The command is registered via 'kcap setup' or
-  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity]',
+  'kcap plugin install [--claude|--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--muse]',
   which writes the appropriate hook configuration (or, for Pi/OpenCode/Antigravity,
   the plugin/hooks-block) for the vendor.
 
@@ -52,6 +52,29 @@ Options:
               kcap acts on the first PreInvocation of a conversation (spawns a
               watcher tailing its transcript_full.jsonl, vendor=antigravity) and
               synthesizes session-end on idle. Other events are no-ops.
+  --mistral-vibe
+              Dispatch a Mistral Vibe hook event. Self-routes on the payload's
+              hook_event_name (pre_tool/post_tool/post_agent). Vibe has no
+              session-start/-end event, so the first hook kcap sees for a session
+              spawns the watcher tailing its transcript_path
+              (vendor=mistral-vibe) and POSTs session-start; later hooks are
+              no-ops. Always exits 0 with empty stdout (a passthrough under
+              Vibe's hook contract).
+  --grok
+              Dispatch a Grok Build hook event (session_start / stop, from the
+              payload's hookEventName). session_start POSTs session-start and
+              spawns the watcher on the session's updates.jsonl (vendor=grok);
+              stop restarts a watcher that has gone. Always exits 0 with empty
+              stdout.
+  --muse      Dispatch a Muse Code hook event. Self-routes on the payload's
+              hook_event_name (SessionStart/UserPromptSubmit/SubagentStart/
+              SubagentStop/Stop/SessionEnd). Muse payloads carry no transcript
+              path, so kcap resolves ~/.local/share/muse/sessions/YYYY/MM/DD/<id>/
+              session.jsonl and spawns the watcher tailing it (vendor=muse).
+              Muse runs hooks without $XDG_DATA_HOME, so a custom data root is
+              the one saved by `kcap setup` or `kcap plugin install --muse`.
+              Always exits 0; the only stdout is the memory fragment Muse
+              appends to the model's context on SessionStart.
 
 Exit codes:
   0   Normal exit (including budget expiry, malformed payload, and

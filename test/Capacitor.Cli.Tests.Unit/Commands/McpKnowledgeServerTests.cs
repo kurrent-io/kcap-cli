@@ -71,8 +71,8 @@ public class McpKnowledgeServerTests {
         await Assert.That(edit.ToJsonString()).IsEqualTo("""{"body":"New body.","operation_id":"op-1","expected_doc_revision":7}""");
 
         var transition = McpKnowledgeServer.BuildTransitionBody(
-            Args("""{"action":"approve","operation_id":"op-2","expected_doc_revision":4,"targets":["injection","skill"]}"""));
-        await Assert.That(transition["targets"]!.AsArray().Select(t => t!.GetValue<string>())).IsEquivalentTo(new[] { "injection", "skill" });
+            Args("""{"action":"approve","operation_id":"op-2","expected_doc_revision":4,"targets":["skill"]}"""));
+        await Assert.That(transition["targets"]!.AsArray().Select(t => t!.GetValue<string>())).IsEquivalentTo(new[] { "skill" });
         await Assert.That(transition["expected_doc_revision"]!.GetValue<long>()).IsEqualTo(4);
         await Assert.That(transition["edited_body"]).IsNull();
 

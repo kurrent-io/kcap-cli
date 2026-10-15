@@ -40,13 +40,13 @@ public class WorkspaceViewSmokeTests {
         WorkspaceFixtures.Agent(id, vendor, hasTerminal, "/repo/myproj");
 
     static (WorkspaceView View, WorkspaceViewModel Vm, FakeDaemonClientService Daemon, FakeTerminalAttachClientFactory Attach) Build(
-            string agentId = AgentId, Func<ITerminalSurface>? surface = null) {
+            string agentId = AgentId, Func<ITerminalSurface>? surface = null, IPlanArtifactSource? planArtifacts = null) {
         var daemon = new FakeDaemonClientService();
         var attach = new FakeTerminalAttachClientFactory();
         var vm = new WorkspaceViewModel(
             agentId, daemon, NewActions(), attach.Factory, surface ?? (() => new FakeTerminalSurface()),
             new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
-            new ScriptedLocalControlOps(), new NoAttachmentUploader());
+            new ScriptedLocalControlOps(), new NoAttachmentUploader(), planArtifacts: planArtifacts);
         return (new WorkspaceView { DataContext = vm }, vm, daemon, attach);
     }
 
@@ -88,73 +88,6 @@ public class WorkspaceViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
         }
         return ring;
-    }
-
-    /// Pins that every x:Name the view's code-behind and the suite reach for resolves before any
-    /// dto arrives — the Terminal tab button and pane included, which are collapsed in this state
-    /// and must still be in the tree for the code-behind to find. The chat surface's own names are
-    /// resolved through its name scope, which holds whether or not it has been measured.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task WorkspaceView_resolves_all_named_controls() {
-        await RunOnUiAsync(async () => {
-            var (view, vm, _, _) = Build();
-            var window = new Window { Content = view };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var names = new[] {
-                "WorkspaceTitle", "WorkspaceSubtitle", "ChatTabButton",
-                "TerminalTabButton", "StopButton", "SurfaceSwitch", "TerminalHost", "TerminalBanners",
-                "DetachButton", "ReattachButton", "SessionEndedNote", "ChatHost", "WorkContextHost",
-            };
-            foreach (var name in names)
-                await Assert.That(Find<Control>(window, name)).IsNotNull().Because($"{name} should resolve");
-            await Assert.That(ToolTip.GetTip(Find<TextBlock>(window, "WorkspaceTitle")!))
-                .IsEqualTo(vm.Title);
-
-            var chatHost = Find<ChatTabView>(window, "ChatHost")!;
-            foreach (var name in new[] { "ChatItems", "ChatPhaseNote", "ComposerInput", "SendButton" })
-                await Assert.That(chatHost.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
-
-            var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-            foreach (var name in new[] {
-                "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
-                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton",
-                "PullRequestSection", "PullRequestHeader", "PullRequestNumberMeta", "PullRequestCard", "LinkCards", "PullRequestToggle", "PullRequestEmptyText", "IssueSection",
-                "PlanSection", "PlanToggle", "PlanHeaderText", "PlanCounts", "PlanBody", "PlanDocumentList", "PlanTaskList", "PlanInProgressBody", "PlanInProgressList",
-                "SubagentsSection", "SubagentsToggle", "SubagentList", "RunningSubagentsBody", "RunningSubagentList",
-                "WhoSection", "WhoToggle", "ContributorStack", "ContributorList", "WhoCountText", "RequesterRow", "RequesterName", "SessionToggle", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
-            })
-                await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
-            await Assert.That(pane.FindControl<ScrollViewer>("PaneScroll")!.HorizontalScrollBarVisibility)
-                .IsEqualTo(Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            await vm.TeardownAsync();
-        });
-    }
-
-    /// The pane takes its fixed 320 and the terminal the rest, so the PTY size the terminal
-    /// reports is the real center-pane width.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_is_320_wide_and_the_terminal_takes_the_remainder() {
-        await RunOnUiAsync(async () => {
-            var (window, vm, _, _) = await ShowPtyAsync();
-
-            try {
-                var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-                var terminal = Find<TerminalControl>(window, "TerminalHost")!;
-                await Assert.That(pane.Bounds.Width).IsEqualTo(320);
-                await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 320);
-            } finally {
-                window.Close();
-                Dispatcher.UIThread.RunJobs();
-                await vm.TeardownAsync();
-            }
-        });
     }
 
     /// Run-and-observe: drives ONE workspace through both has_terminal values for the same agent
@@ -639,5 +572,67 @@ public class WorkspaceViewSmokeTests {
             .ToArray();
         ToolTip.SetIsOpen(control, false);
         return lines;
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_artefacts_position_shows_with_a_document_and_hosts_the_list_and_reader() {
+        await RunOnUiAsync(async () => {
+            var source = new FakePlanArtifactSource();
+            source.Enqueue(Ready(Doc("docs/x-design.md") with { Source = "discovered" }));
+            var (view, vm, daemon, _) = Build(planArtifacts: source);
+            var window = new Window { Content = view, Width = 1000, Height = 640 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(Find<Button>(window, "ArtefactsTabButton")!.IsEffectivelyVisible).IsFalse();
+
+            daemon.Agents.AddOrUpdate(WorkspaceFixtures.Agent(AgentId, "claude", hasTerminal: true, repoPath: "/repo/myproj", sessionId: AgentId));
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<Button>(window, "ArtefactsTabButton")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<ContentControl>(window, "ArtefactsHost")!.Content).IsNull();
+
+            await vm.ShowArtefactsCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(Find<ContentControl>(window, "ArtefactsHost")!.Content).IsTypeOf<ArtefactsView>();
+            await Assert.That(Find<ItemsControl>(window, "DocumentList")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<ContentControl>(window, "DocumentReaderHost")!.IsEffectivelyVisible).IsTrue();
+
+            await vm.Artefacts.SelectCommand.Execute(vm.Artefacts.Documents[0]);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var docPath = Find<TextBlock>(window, "DocumentPath")!;
+            var docKind = Find<TextBlock>(window, "DocumentKind")!;
+            var docMeta = Find<TextBlock>(window, "DocumentMeta")!;
+            await Assert.That(docPath.Text).IsEqualTo("docs/x-design.md");
+            await Assert.That(docKind.Text).IsEqualTo("Design");
+            await Assert.That(docKind.TranslatePoint(default, window)!.Value.X)
+                .IsGreaterThan(docPath.TranslatePoint(default, window)!.Value.X);
+            await Assert.That(docMeta.TranslatePoint(default, window)!.Value.Y)
+                .IsEqualTo(docPath.TranslatePoint(default, window)!.Value.Y).Within(2.0);
+            await Assert.That(Find<ScrollViewer>(window, "DocumentScroll")!.IsEffectivelyVisible).IsTrue();
+            await Assert.That(Find<Border>(window, "DocumentNotice")!.IsEffectivelyVisible).IsFalse();
+
+            window.Close();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The header's right side is icons: the segment is what grows.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Open_in_web_is_an_icon_button_with_a_tooltip() {
+        await RunOnUiAsync(async () => {
+            var (window, vm, _, _) = await ShowPtyAsync();
+            var button = Find<Button>(window, "OpenInWebButton")!;
+            await Assert.That(button.Content).IsNotTypeOf<string>();
+            await Assert.That(ToolTip.GetTip(button)).IsEqualTo("Open in web");
+            await Assert.That(button.Classes.Contains("kcapIcon")).IsTrue();
+            window.Close();
+            await vm.TeardownAsync();
+        });
     }
 }

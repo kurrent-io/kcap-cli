@@ -61,7 +61,7 @@ public class IgnoreCommandTests {
     public async Task ShouldExclude_excludes_when_path_excluded_even_if_repo_included() {
         // Regression: when a session matches BOTH an excluded repo and an excluded path,
         // opting-in to the repo must not bypass the path exclusion.
-        var c             = MakeClassification(excludedRepoKey: "acme/secret", excludedPathKey: "/home/alice/secret-dir");
+        var c             = MakeClassification(excludedRepoKeys: ["acme/secret"], excludedPathKey: "/home/alice/secret-dir");
         var includedRepos = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "acme/secret" };
         var includedPaths = new HashSet<string>(StringComparer.Ordinal);
 
@@ -70,7 +70,7 @@ public class IgnoreCommandTests {
 
     [Test]
     public async Task ShouldExclude_excludes_when_repo_excluded_even_if_path_included() {
-        var c             = MakeClassification(excludedRepoKey: "acme/secret", excludedPathKey: "/home/alice/secret-dir");
+        var c             = MakeClassification(excludedRepoKeys: ["acme/secret"], excludedPathKey: "/home/alice/secret-dir");
         var includedRepos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var includedPaths = new HashSet<string>(StringComparer.Ordinal) { "/home/alice/secret-dir" };
 
@@ -78,8 +78,21 @@ public class IgnoreCommandTests {
     }
 
     [Test]
+    public async Task ShouldExclude_excludes_until_every_excluded_repo_is_opted_in() {
+        var c             = MakeClassification(excludedRepoKeys: ["acme/public", "acme/secret"]);
+        var includedRepos = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "acme/public" };
+        var includedPaths = new HashSet<string>(StringComparer.Ordinal);
+
+        await Assert.That(ImportCommand.ShouldExclude(c, includedRepos, includedPaths)).IsTrue();
+
+        includedRepos.Add("acme/secret");
+
+        await Assert.That(ImportCommand.ShouldExclude(c, includedRepos, includedPaths)).IsFalse();
+    }
+
+    [Test]
     public async Task ShouldExclude_includes_when_both_keys_opted_in() {
-        var c             = MakeClassification(excludedRepoKey: "acme/secret", excludedPathKey: "/home/alice/secret-dir");
+        var c             = MakeClassification(excludedRepoKeys: ["acme/secret"], excludedPathKey: "/home/alice/secret-dir");
         var includedRepos = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "acme/secret" };
         var includedPaths = new HashSet<string>(StringComparer.Ordinal) { "/home/alice/secret-dir" };
 
@@ -125,16 +138,16 @@ public class IgnoreCommandTests {
     }
 
     static ImportCommand.SessionClassification MakeClassification(
-            string? excludedRepoKey = null,
+            string[]? excludedRepoKeys = null,
             string? excludedPathKey = null
         ) => new() {
-        SessionId       = "abc",
-        FilePath        = "/tmp/transcript.jsonl",
-        EncodedCwd      = "-",
-        Meta            = new SessionMetadata(),
-        Status          = ImportCommand.ClassificationStatus.New,
-        ExcludedRepoKey = excludedRepoKey,
-        ExcludedPathKey = excludedPathKey,
+        SessionId        = "abc",
+        FilePath         = "/tmp/transcript.jsonl",
+        EncodedCwd       = "-",
+        Meta             = new SessionMetadata(),
+        Status           = ImportCommand.ClassificationStatus.New,
+        ExcludedRepoKeys = excludedRepoKeys ?? [],
+        ExcludedPathKey  = excludedPathKey,
     };
 
     [Test]

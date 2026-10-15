@@ -25,9 +25,12 @@ must stand on its own: name its subject (the issue, PR, file or feature) so it r
 to someone who never saw this session. Leave out:
 - steps the session itself was about to take (running tests, committing, pushing, opening the PR)
 - risks, caveats and accepted non-goals — those belong under Risks
-- work owned by or assigned to someone else
+- work owned by or assigned to someone else, including any item naming another person as the one to do it
 - anything already done
-Omit this section entirely when nothing remains.
+- checks the session ended by offering or asking about (confirm whether, search for, verify whether) rather than changes to make
+- housekeeping of the owner's next-work list or reminders (clearing, dismissing or refreshing an entry) — changes to the next-work feature itself still count
+Omit this section entirely when nothing remains, and always when the session did no substantive work:
+a session that did nothing handed nothing off, so working out what it was for is not unfinished work.
 
 **Risks:** Anything flagged as risky or uncertain about what was done. Omit when none.
 

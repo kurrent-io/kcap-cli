@@ -1,7 +1,9 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Harness.Muse;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -102,6 +104,65 @@ public class StatusCommandHooksTests {
         await Assert.That(CodexHooksInstaller.ReferencesKcapHook(path)).IsFalse();
     }
 
+    [Test]
+    public async Task MuseHookGapLine_is_silent_when_every_event_is_installed() {
+        await Assert.That(StatusCommand.MuseHookGapLine(MuseHooksParser.MuseHookEvents.ToHashSet())).IsNull();
+    }
+
+    [Test]
+    public async Task MuseHookGapLine_names_each_missing_event() {
+        var line = StatusCommand.MuseHookGapLine(new HashSet<string> { "SessionStart", "Stop" });
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("UserPromptSubmit, SubagentStart, SubagentStop, SessionEnd");
+        await Assert.That(line).DoesNotContain("SessionStart,");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_says_an_unparseable_settings_json_is_not_valid_json() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        await File.WriteAllTextAsync(path, "{ \"hooks\": ");
+
+        var line = StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true);
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("is not valid JSON");
+        await Assert.That(line).DoesNotContain("hooks missing");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_says_a_non_object_root_is_not_a_json_object() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        await File.WriteAllTextAsync(path, "[]");
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).Contains("is not a JSON object");
+    }
+
+    [Test]
+    public async Task MuseHooksDetailLine_is_silent_when_every_event_is_installed() {
+        using var tmp  = new TempDir();
+        var       path = tmp.PathTo("settings.json");
+        MuseHooksInstaller.Install(path);
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(path, detected: true, wired: true)).IsNull();
+    }
+
+    /// <summary>An unparseable file reads as unwired, marker or not, so this is the case the line must
+    /// still reach; a valid file with no hooks leaves it to the not-configured line.</summary>
+    [Test]
+    public async Task MuseHooksDetailLine_reports_an_unparseable_file_for_an_installed_but_unwired_muse() {
+        using var tmp     = new TempDir();
+        var       broken  = tmp.CreateFile("broken/settings.json", "{ \"hooks\": ");
+        var       hookless = tmp.CreateFile("hookless/settings.json", "{\"schema_version\":1}");
+
+        await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: true, wired: false)).Contains("is not valid JSON");
+        await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: false, wired: false)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(hookless, detected: true, wired: false)).IsNull();
+        await Assert.That(StatusCommand.MuseHooksDetailLine(tmp.PathTo("absent/settings.json"), detected: true, wired: false)).IsNull();
+    }
+
     /// Every harness the build knows appears on the line — a tenth would too, since the line is
     /// built from the registry rather than a parameter per vendor.
     [Test]
@@ -127,5 +188,81 @@ public class StatusCommandHooksTests {
         var line = StatusCommand.BuildHooksStatusLine([(HarnessId.Claude, true)]);
 
         await Assert.That(line).IsEqualTo("Claude ✓");
+    }
+
+    static readonly DateTimeOffset Now = new(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>Configured is not recording: a wired agent that never ran a hook says what to do next,
+    /// and Codex, which runs no hook until trusted, says so too.</summary>
+    [Test]
+    public async Task RecordingLine_tells_a_wired_but_silent_agent_what_to_do() {
+        await Assert.That(StatusCommand.RecordingLine(HarnessId.Claude, "Claude Code", null, Now))
+            .IsEqualTo("Claude Code: no hook event yet. Start a new Claude Code session");
+        await Assert.That(StatusCommand.RecordingLine(HarnessId.Codex, "Codex", null, Now)).Contains("trust the kcap hooks");
+    }
+
+    [Test]
+    [Arguments(0, "just now")]
+    [Arguments(5, "5m ago")]
+    [Arguments(180, "3h ago")]
+    [Arguments(4320, "3d ago")]
+    public async Task RecordingLine_reports_how_long_ago_the_last_hook_ran(int minutesAgo, string expected) {
+        var line = StatusCommand.RecordingLine(HarnessId.Claude, "Claude Code", Now.AddMinutes(-minutesAgo), Now);
+
+        await Assert.That(line).IsEqualTo($"Claude Code: hooks running, last hook event {expected}");
+    }
+
+    [Test]
+    public async Task GitHookWarning_names_only_a_git_known_to_be_too_old() {
+        await Assert.That(StatusCommand.GitHookWarning(new Version(2, 50, 1))).Contains("ignores kcap's commit hook");
+        await Assert.That(StatusCommand.GitHookWarning(new Version(2, 54, 0))).IsNull();
+        await Assert.That(StatusCommand.GitHookWarning(null)).IsNull();
+    }
+
+    static VendorAccount Account(HarnessId vendor, string dir) =>
+        new(dir, vendor, dir, Path.GetFileName(dir), DateTimeOffset.UnixEpoch);
+
+    static string DefaultOf(HarnessId vendor) => vendor is HarnessId.Claude ? "/h/.claude" : "/h/.codex";
+
+    [Test]
+    public async Task Account_lines_are_omitted_for_a_single_default_per_vendor() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
+            (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Recording),
+        ], DefaultOf);
+
+        await Assert.That(line).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task Account_lines_show_a_lone_account_outside_the_default_directory() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Recording),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains(".claude-work");
+    }
+
+    [Test]
+    public async Task Account_lines_list_each_account_with_its_state() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Claude, "/h/.claude"), RecordingState.Recording),
+            (Account(HarnessId.Claude, "/h/.claude-work"), RecordingState.Broken),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains(".claude-work");
+        await Assert.That(line).Contains("broken — run kcap accounts rewire");
+        await Assert.That(line).Contains("recording");
+    }
+
+    [Test]
+    public async Task Account_lines_share_the_accounts_command_wording_for_a_wired_codex_account() {
+        var line = StatusCommand.BuildAccountLines([
+            (Account(HarnessId.Codex, "/h/.codex"), RecordingState.Installed),
+            (Account(HarnessId.Codex, "/h/.codex-work"), RecordingState.NotWired),
+        ], DefaultOf);
+
+        await Assert.That(line).Contains("hooks installed (trust in Codex)");
+        await Assert.That(line).Contains("not wired");
     }
 }

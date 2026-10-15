@@ -7,6 +7,7 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
@@ -52,6 +53,37 @@ public class AppStartupTests {
         });
 
         await Assert.That(isVisible).IsTrue();
+    }
+
+    /// The onboarding window becomes the main window in place: the same instance, its pane gone and
+    /// the rail and launcher back, rather than a second window opened beside a closed one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task BuildAndShowMainWindow_takes_over_the_onboarding_window() {
+        var (same, paneVisible, surfaceVisible, handedVm) = await AvaloniaSession.DispatchAsync(async () => {
+            var (desktop, _) = FakeClassicDesktopLifetime.Create();
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Welcome)]);
+            await wizard.PendingEnterForTesting;
+            var onboarding = AppUnderTest.ShowWizardWindow(desktop, wizard);
+            Dispatcher.UIThread.RunJobs();
+
+            var service = new FakeDaemonClientService();
+            var (actions, notifier) = NewActions(service);
+            var window = AppUnderTest.BuildAndShowMainWindow(
+                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None,
+                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: onboarding);
+            Dispatcher.UIThread.RunJobs();
+
+            var result = (ReferenceEquals(window, onboarding), window.OnboardingPane.IsVisible,
+                window.SessionsSurface.IsVisible, window.DataContext is MainWindowViewModel);
+            window.Close();
+            return result;
+        });
+
+        await Assert.That(same).IsTrue();
+        await Assert.That(paneVisible).IsFalse();
+        await Assert.That(surfaceVisible).IsTrue();
+        await Assert.That(handedVm).IsTrue();
     }
 
     [Test]
@@ -135,7 +167,7 @@ public class AppStartupTests {
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Worktrees.Sum(w => w.Sessions.Count)));
+            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Sessions.Count));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -268,8 +300,7 @@ public class AppStartupTests {
     /// Cancel/titlebar close uses (wired here exactly like App.ShowLifecyclePromptDialogAsync
     /// does, since that wiring — not the window itself — is what owns the fallback). The overall
     /// dispatch is bounded (WaitAsync) so a SizeToContent+Wrap headless hang fails this test
-    /// instead of hanging CI; LifecyclePromptWindow
-    /// deliberately uses a fixed Width/Height instead, see its .axaml.
+    /// instead of hanging CI.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task WireDialogCancellation_resolves_false_and_closes_the_dialog() {

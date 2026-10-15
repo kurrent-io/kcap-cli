@@ -4,7 +4,7 @@ using Capacitor.Models.Transcripts.Harness.Codex;
 
 namespace Capacitor.App.ViewModels;
 
-public enum ToolCategory { Read, Edit, Command, Search, WebSearch, Fetch, Skill, Agent, Plan, Question, Other }
+public enum ToolCategory { Read, Edit, Command, Search, WebSearch, Fetch, Skill, Agent, Plan, Question, Artefact, Work, Memory, Session, Flow, Other }
 
 /// What a group of settled tool calls says about itself. The name map keys on the name the
 /// transcript carries (Codex's rollout says `shell`, its hook says `Bash`); a name in no row is
@@ -40,10 +40,16 @@ public static class ToolSummary {
         ("Ran an agent", "Ran agents"),
         ("Updated the plan", "Updated the plan"),
         ("Asked a question", "Asked questions"),
+        ("Worked on a page", "Worked on pages"),
+        ("Tracked work", "Tracked work"),
+        ("Used team memory", "Used team memory"),
+        ("Recalled sessions", "Recalled sessions"),
+        ("Ran a flow", "Ran flows"),
         ("Called a tool", "Called tools"),
     ];
 
     public static ToolCategory Categorize(string name, string? inputJson) {
+        if (KcapToolCatalogue.Match(name) is { } kcap) return kcap.Category;
         var category = Names.TryGetValue(name, out var known) ? known : ToolCategory.Other;
         if (category is not (ToolCategory.Read or ToolCategory.Command) || string.IsNullOrEmpty(inputJson)) return category;
         try {
@@ -93,8 +99,42 @@ public static class ToolSummary {
         ToolCategory.Agent     => "Task",
         ToolCategory.Plan      => "Plan",
         ToolCategory.Question  => "Question",
+        ToolCategory.Artefact  => "Page",
+        ToolCategory.Work      => "Work",
+        ToolCategory.Memory    => "Memory",
+        ToolCategory.Session   => "Recall",
+        ToolCategory.Flow      => "Flow",
         _                      => "Tool",
     };
+
+    /// Human verb for a built-in tool row whose input carries no prose description of its own.
+    public static string? RowLabel(string name, ToolCategory category, string? inputJson) {
+        if (category == ToolCategory.Question || ToolDetail.RawForKey(inputJson, "description").Length > 0) return null;
+        switch (name.ToLowerInvariant()) {
+            case "write" or "write_file":                       return "Wrote file";
+            case "ls":                                          return "Listed files";
+            case "bashoutput":                                  return "Read shell output";
+            case "killshell":                                   return "Stopped shell";
+            case "write_stdin" or "send_input" or "send_message": return "Sent input";
+            case "taskoutput":                                  return "Read agent output";
+            case "taskstop" or "interrupt_agent" or "close_agent": return "Stopped agent";
+            case "wait_agent":                                  return "Waited on agent";
+            case "resume_agent":                                return "Resumed agent";
+            case "list_agents":                                 return "Listed agents";
+        }
+        return category switch {
+            ToolCategory.Read      => "Read file",
+            ToolCategory.Edit      => "Edited file",
+            ToolCategory.Command   => "Ran command",
+            ToolCategory.Search    => "Searched files",
+            ToolCategory.WebSearch => "Searched the web",
+            ToolCategory.Fetch     => "Fetched page",
+            ToolCategory.Skill     => "Loaded skill",
+            ToolCategory.Agent     => "Ran agent",
+            ToolCategory.Plan      => "Updated the plan",
+            _                      => null,
+        };
+    }
 
     static bool IsSkillFile(string? path) =>
         path is not null && (path == "SKILL.md" || path.EndsWith("/SKILL.md", StringComparison.Ordinal));

@@ -69,9 +69,10 @@ public sealed partial class WatcherManager(
 
     /// <summary>
     /// Kills the watcher process for the given key. Returns true if the watcher was running and was killed,
-    /// false if it was already dead or no PID file existed. Always removes the per-key
-    /// heartbeat/started markers; see <see cref="DeleteHeartbeatFiles"/> for
-    /// why the spawn lock is intentionally left behind here.
+    /// false if it was already dead, no PID file existed, or the kill failed. The pid file and the
+    /// heartbeat/started markers go only once no watcher can be left running, so a failed kill leaves
+    /// them for a retry to find; see <see cref="DeleteHeartbeatFiles"/> for why the spawn lock is
+    /// intentionally left behind here.
     /// </summary>
     public async Task<bool> KillWatcher(string key) {
         var pidFile = paths.PidFile(key);
@@ -83,36 +84,58 @@ public sealed partial class WatcherManager(
             return false;
         }
 
+        if (await KillProcess(key, pidFile) is not { } killed) return false;
+
+        try { File.Delete(pidFile); } catch {
+            /* ignore */
+        }
+
+        DeleteHeartbeatFiles(key);
+
+        return killed;
+    }
+
+    /// <summary>True once no watcher for <paramref name="key"/> can still be running: killed, or gone
+    /// already. False keeps its pid file, so calling again retries the kill.</summary>
+    public async Task<bool> TryStopWatcher(string key) {
+        await KillWatcher(key);
+
+        return !File.Exists(paths.PidFile(key));
+    }
+
+    /// <summary>True when killed, false when the watcher is conclusively gone, null when it may still be running.</summary>
+    async Task<bool?> KillProcess(string key, string pidFile) {
+        int? pid   = null;
+        var  token = "";
+
         try {
             // Line 1 is the pid; line 2 (when present) is the incarnation's ProcessStartToken
             // written by the spawner — the same layout as the daemon pid file.
             var lines = await File.ReadAllLinesAsync(pidFile);
 
-            if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var pid)) {
-                File.Delete(pidFile);
-
+            if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var parsed)) {
                 return false;
             }
 
+            pid   = parsed;
+            token = lines.Length > 1 ? lines[1].Trim() : "";
+
             // "Ambiguity never kills" (ProcessStartToken): a conclusive token mismatch means the
             // watcher died and the OS recycled its pid onto an unrelated process — sweep the
-            // stale file, never signal. A missing/uncomparable token (legacy file, process gone)
-            // falls through to the kill attempt, exactly as before tokens existed.
-            var token = lines.Length > 1 ? lines[1].Trim() : "";
-
-            if (token.Length > 0 && ProcessStartToken.Matches(pid, token) == false) {
-                await Console.Error.WriteLineAsync($"Watcher {key} (PID {pid}) was recycled by another process; sweeping stale pid file");
+            // stale file, never signal. A missing/uncomparable token falls through to the kill.
+            if (token.Length > 0 && ProcessStartToken.Matches(parsed, token) == false) {
+                await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) was recycled by another process; sweeping stale pid file");
 
                 return false;
             }
 
             try {
-                var process = Process.GetProcessById(pid);
+                using var process = Process.GetProcessById(parsed);
 
                 // SIGTERM-first on Unix so the watcher runs its shutdown path (final drain +
                 // undelivered-tail spool) — Process.Kill is SIGKILL there. Windows has no
                 // SIGTERM; the stop is hard and recovery is left to the spool/import paths.
-                if (!TrySignalTerm(pid)) {
+                if (!TrySignalTerm(parsed)) {
                     process.Kill(entireProcessTree: false);
                 }
 
@@ -121,30 +144,45 @@ public sealed partial class WatcherManager(
 
                 try {
                     await process.WaitForExitAsync(cts.Token);
-                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {pid}) exited gracefully");
+                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) exited gracefully");
                 } catch (OperationCanceledException) {
                     // Force kill if it didn't exit in time
                     process.Kill(entireProcessTree: true);
-                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {pid}) force-killed after timeout");
+                    await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) force-killed after timeout");
                 }
 
                 return true;
             } catch (ArgumentException) {
-                // Process already exited
-                await Console.Error.WriteLineAsync($"Watcher {key} (PID {pid}) already exited");
+                await Console.Error.WriteLineAsync($"Watcher {key} (PID {parsed}) already exited");
 
                 return false;
             }
         } catch (Exception ex) {
-            await Console.Error.WriteLineAsync($"Error killing watcher {key}: {ex.Message}");
+            if (pid is { } known && IsGone(known, token)) {
+                await Console.Error.WriteLineAsync($"Watcher {key} (PID {known}) exited while being killed");
 
-            return false;
-        } finally {
-            try { File.Delete(pidFile); } catch {
-                /* ignore */
+                return false;
             }
 
-            DeleteHeartbeatFiles(key);
+            await Console.Error.WriteLineAsync($"Error killing watcher {key}: {ex.Message}; keeping its pid file");
+
+            return null;
+        }
+    }
+
+    /// <summary>Conclusive only: the pid left the process table, or its start token names another
+    /// incarnation. A process whose identity cannot be compared counts as the watcher.</summary>
+    static bool IsGone(int pid, string token) {
+        if (token.Length > 0 && ProcessStartToken.Matches(pid, token) == false) return true;
+
+        try {
+            using var process = Process.GetProcessById(pid);
+
+            return process.HasExited;
+        } catch (ArgumentException) {
+            return true;
+        } catch {
+            return false;
         }
     }
 
@@ -190,38 +228,33 @@ public sealed partial class WatcherManager(
         }
     }
 
-    /// <summary>PID-only liveness: the process exists, irrespective of whether it's wedged.</summary>
-    bool PidAlive(string key) {
-        var pidFile = paths.PidFile(key);
+    bool PidAlive(string key) => PidAlive(paths, key);
 
-        if (!File.Exists(pidFile)) {
-            return false;
-        }
+    /// <summary>The pid file names a process that is still this watcher's incarnation, irrespective of
+    /// whether it's wedged. A pid file that exists but cannot be read counts as alive: reading it as
+    /// gone would let a spawn overwrite it and orphan the watcher it names.</summary>
+    internal static bool PidAlive(WatcherPaths paths, string key) {
+        string[] lines;
 
         try {
-            var lines = File.ReadAllLines(pidFile);
-
-            if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var pid)) {
-                return false;
-            }
-
-            try {
-                var process = Process.GetProcessById(pid);
-
-                return !process.HasExited;
-            } catch (ArgumentException) {
-                return false;
-            }
+            lines = File.ReadAllLines(paths.PidFile(key));
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return false;
         } catch {
+            return true;
+        }
+
+        if (lines.Length == 0 || !int.TryParse(lines[0].Trim(), out var pid)) {
             return false;
         }
+
+        return !IsGone(pid, lines.Length > 1 ? lines[1].Trim() : "");
     }
 
     /// <summary>
     /// True when the watcher's PID exists AND its heartbeat isn't stale (after the startup
     /// grace) — i.e. the process is alive AND its main loop is provably still turning, not
-    /// wedged. A PID-only check (the old behavior, still available via
-    /// <see cref="PidAlive"/>) can't tell a hung watcher from a healthy one.
+    /// wedged. <see cref="PidAlive(WatcherPaths, string)"/> alone can't tell a hung watcher from a healthy one.
     /// </summary>
     internal bool IsWatcherAlive(string key) {
         if (!PidAlive(key)) {
@@ -284,25 +317,25 @@ public sealed partial class WatcherManager(
             return; // fast path: no lock needed to observe an already-healthy watcher.
         }
 
-        // Everything past this point — the kill-if-wedged step AND the spawn itself — runs
-        // under the per-key spawn lock. Guarding ONLY the kill+respawn of a wedged watcher
-        // would leave a race: KillWatcher deletes the pid file before releasing the lock, so
-        // a second hook arriving in that window would see "no pid" and take an unguarded
-        // plain-spawn path, double-spawning anyway. Locking the whole decision — including
-        // the plain "no watcher yet" spawn — closes that window.
+        // Both the reap of a wedged watcher and the spawn run under the per-key spawn lock: a
+        // hook arriving between the reap's pid-file delete and the new pid file would otherwise
+        // see "no pid" and spawn a second watcher.
         await WithSpawnLock(key, async () => {
-            // Re-check under the lock: another hook may have already reaped + respawned (or
-            // spawned from scratch) this key while we were waiting to acquire it.
             if (IsWatcherAlive(key)) {
                 return;
             }
 
             if (PidAlive(key)) {
-                // The process exists but its heartbeat is stale: wedged, not dead. Reap before
-                // respawning — still holding the lock, so no other hook can race the gap
-                // between the kill and the new pid file landing.
+                // Alive but its heartbeat is stale: wedged. A watcher the reap could not stop
+                // keeps its pid file; spawning over it would leave two watchers on this key, the
+                // first one unaddressable. A later call retries the reap.
                 await Console.Error.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
-                await KillWatcher(key);
+
+                if (!await TryStopWatcher(key)) {
+                    await Console.Error.WriteLineAsync($"Watcher {key} could not be stopped; not respawning");
+
+                    return;
+                }
             }
 
             await spawner.SpawnAsync(
@@ -458,10 +491,14 @@ public sealed partial class WatcherManager(
                 }
 
                 if (!string.IsNullOrWhiteSpace(line)) {
-                    var captured = TranscriptCapture.Encode(line);
-                    if (captured.Loss is { } loss)
-                        await Console.Error.WriteLineAsync($"Inline capture loss at line {lineIndex}: {CaptureLossMarker.ReasonName(loss)}");
-                    newLines.Add(captured.Line);
+                    var captured = TranscriptCapture.EncodeUntilHeld([line], static () => false, (loss, _) =>
+                        Console.Error.WriteLine($"Inline capture loss at line {lineIndex}: {CaptureLossMarker.ReasonName(loss)}"));
+                    if (captured.Consumed == 0) {
+                        await Console.Error.WriteLineAsync(
+                            $"Inline drain for {sessionId}: line {lineIndex} could not be redacted in time; to send it and the rest, run: kcap import --session {sessionId}");
+                        break;
+                    }
+                    newLines.Add(captured.Lines[0]);
                     newLineNumbers.Add(lineIndex);
                 }
 

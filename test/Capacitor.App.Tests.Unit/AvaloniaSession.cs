@@ -42,42 +42,30 @@ internal static class AvaloniaSession {
         return DispatchAsync(static () => { });
     }
 
-    /// ReactiveUI's builder state is process-global and effectively one-shot: whatever ran first
-    /// keeps its registrations, so every later test inherits an Avalonia scheduler bound to a
-    /// dispatcher nothing pumps — no ObserveOn(RxSchedulers.MainThreadScheduler) ever delivers and
-    /// the failure reads as a dead pipeline rather than a scheduler. Rebuilding on the UI thread
-    /// per dispatch is what ReactiveUI.Avalonia's own headless harness does; assigning
-    /// MainThreadScheduler by hand instead loses to the builder.
-    static void RebuildReactiveUI() {
-        ReactiveUIBuilder.ResetBuilderStateForTests();
-        RxAppBuilder.CreateReactiveUIBuilder().WithAvalonia().WithCoreServices().BuildApp();
-        // WithAvalonia registers AvaloniaScheduler.Instance, a static whose Dispatcher is captured
-        // at type init — under a headless session that is not Dispatcher.UIThread, and rebuilding
-        // cannot change it. Left alone, every ObserveOn(RxSchedulers.MainThreadScheduler) posts to
-        // a dispatcher nothing pumps: no value is delivered and it reads as a dead pipeline.
-        RxSchedulers.MainThreadScheduler = _immediatePinned
-            ? ImmediateScheduler.Instance
-            : new AvaloniaScheduler(Dispatcher.UIThread);
-    }
-
-    /// A rebuild happens on every dispatch, so WithImmediateRxScheduler's swap has to survive one
-    /// whichever way the two are nested.
+    static AvaloniaScheduler? _uiScheduler;
     static bool _immediatePinned;
 
+    static void EnsureReactiveUI() {
+        if (_uiScheduler is null) {
+            ReactiveUIBuilder.ResetBuilderStateForTests();
+            RxAppBuilder.CreateReactiveUIBuilder().WithAvalonia().WithCoreServices().BuildApp();
+            // AvaloniaScheduler.Instance captures its Dispatcher at type init, which under a
+            // headless session is not Dispatcher.UIThread.
+            _uiScheduler = new AvaloniaScheduler(Dispatcher.UIThread);
+        }
+        RxSchedulers.MainThreadScheduler = _immediatePinned
+            ? ImmediateScheduler.Instance
+            : _uiScheduler;
+    }
+
     public static Task<T> DispatchAsync<T>(Func<T> body) =>
-        Session.Value.Dispatch(() => { RebuildReactiveUI(); return body(); }, CancellationToken.None);
+        Session.Value.Dispatch(() => { EnsureReactiveUI(); return body(); }, CancellationToken.None);
 
     public static Task DispatchAsync(Action body) =>
-        Session.Value.Dispatch(() => { RebuildReactiveUI(); body(); return true; }, CancellationToken.None);
+        Session.Value.Dispatch(() => { EnsureReactiveUI(); body(); return true; }, CancellationToken.None);
 
-    /// Async-body variant: HeadlessUnitTestSession.Dispatch's Func&lt;Task&lt;T&gt;&gt; overload
-    /// runs `body` on the UI thread and, if it doesn't complete synchronously, pumps a
-    /// DispatcherFrame until it does — so an `await` inside `body` that captures the ambient
-    /// SynchronizationContext (e.g. `await someService.DisposeAsync()`, no ConfigureAwait) posts
-    /// its continuation back onto this same pumped loop instead of deadlocking, unlike a raw
-    /// `.GetAwaiter().GetResult()` block on the UI thread.
     public static Task<T> DispatchAsync<T>(Func<Task<T>> body) =>
-        Session.Value.Dispatch(() => { RebuildReactiveUI(); return body(); }, CancellationToken.None);
+        Session.Value.Dispatch(() => { EnsureReactiveUI(); return body(); }, CancellationToken.None);
 
     /// Pins RxSchedulers.MainThreadScheduler to an immediate System.Reactive IScheduler for
     /// the body and RESTORES the prior scheduler in finally (it is process-global). This is

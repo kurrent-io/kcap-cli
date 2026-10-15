@@ -6,8 +6,14 @@ namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 /// that called the two emitters itself would skip the session-id line, and nothing else would say so:
 /// its output is valid either way.</summary>
 public class SessionNudgesCallSiteTests {
+    /// <summary>Mistral Vibe's hooks have no session-start event and inject context only into a
+    /// tool result; Grok reads only a user-facing <c>systemMessage</c> from its session-start hook. Neither
+    /// has anywhere for a session nudge to go.</summary>
+    static readonly HashSet<HarnessId> NoSessionStartChannel = [HarnessId.MistralVibe, HarnessId.Grok];
+
     public static IEnumerable<Func<HarnessId>> Harnesses() {
-        foreach (var harness in Enum.GetValues<HarnessId>()) yield return () => harness;
+        foreach (var harness in Enum.GetValues<HarnessId>().Where(h => !NoSessionStartChannel.Contains(h)))
+            yield return () => harness;
     }
 
     static string HookCommand(HarnessId harness) {

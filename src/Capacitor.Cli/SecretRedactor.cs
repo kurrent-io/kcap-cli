@@ -20,9 +20,9 @@ public static partial class SecretRedactor {
     internal const string UnparsableOutputPlaceholder =
         """{"type":"redacted_unparsable_line","reason":"redacted line was no longer valid JSON"}""";
 
-    // A deadline only a super-linear pattern reaches: the env-var scan costs about 27 ns per char,
-    // so a 16M-char value takes under half a second, while the JSON-key pattern is quadratic on a
-    // quote-less run of keywords and would otherwise never return.
+    // A deadline only a super-linear pattern reaches: the linear patterns together cost about
+    // 90 ns per char, so a 16M-char value takes under two seconds, while the JSON-key pattern is
+    // quadratic on a quote-less run of keywords and would otherwise never return.
     internal static readonly TimeSpan OutOfProcessMatchTimeout = TimeSpan.FromSeconds(30);
 
     // The generated patterns carry the watcher's per-call deadline; a caller scanning a whole
@@ -50,19 +50,21 @@ public static partial class SecretRedactor {
     public static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine) =>
         RedactLineWithOutcome(rawJsonlLine, TimeProvider.System);
 
-    internal static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine, TimeProvider time) {
+    internal static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine, TimeProvider time) =>
+        RedactLineWithOutcome(rawJsonlLine, new RedactionBudget(time), WatcherPatterns);
+
+    internal static RedactionOutcome RedactLineWithOutcome(string rawJsonlLine, RedactionBudget budget, SecretPatterns patterns) {
         var bytes = Encoding.UTF8.GetByteCount(rawJsonlLine);
         if (bytes > MaxRecordBytes) return Lost(RedactionLossReason.InputLimit);
-        var budget = new RedactionBudget(time);
         try {
             string line;
             RedactionLossReason? loss = null;
             try {
-                line = RedactJsonStringValues(rawJsonlLine, bytes, budget) ?? rawJsonlLine;
+                line = RedactJsonStringValues(rawJsonlLine, bytes, budget, patterns) ?? rawJsonlLine;
             } catch (JsonException) {
                 if (rawJsonlLine.Length > MaxRedactableLineChars)
                     return Lost(RedactionLossReason.MalformedInput);
-                line = WatcherPatterns.RedactSecrets(rawJsonlLine, budget);
+                line = patterns.RedactSecrets(rawJsonlLine, budget);
                 loss = RedactionLossReason.MalformedInput;
             }
             budget.Check();
@@ -89,7 +91,7 @@ public static partial class SecretRedactor {
     public static string? RedactValue(ReadOnlySpan<char> value, bool keyIsSecret) =>
         OutOfProcessPatterns.Value.Redact(value, keyIsSecret, RedactionBudget.Unlimited);
 
-    static string? RedactJsonStringValues(string line, int byteCount, RedactionBudget budget) {
+    static string? RedactJsonStringValues(string line, int byteCount, RedactionBudget budget, SecretPatterns patterns) {
         if (line.Length == 0) return null;
 
         var input = ArrayPool<byte>.Shared.Rent(byteCount);
@@ -97,10 +99,10 @@ public static partial class SecretRedactor {
 
         try {
             Encoding.UTF8.GetBytes(line, input.AsSpan());
-            if (!Rewrite(input.AsSpan(0, byteCount), decoded, null, budget)) return null;
+            if (!Rewrite(input.AsSpan(0, byteCount), decoded, null, budget, patterns)) return null;
             using var output = new BoundedJsonBufferWriter(MaxRecordBytes);
             using var writer = new Utf8JsonWriter(output, WriterOptions);
-            Rewrite(input.AsSpan(0, byteCount), decoded, writer, budget);
+            Rewrite(input.AsSpan(0, byteCount), decoded, writer, budget, patterns);
             return Encoding.UTF8.GetString(output.WrittenMemory.Span);
         } finally {
             ArrayPool<char>.Shared.Return(decoded, clearArray: true);
@@ -109,7 +111,7 @@ public static partial class SecretRedactor {
     }
 
     // Scan first so an unchanged record keeps its original encoding and cannot exceed an output cap.
-    static bool Rewrite(ReadOnlySpan<byte> utf8, Span<char> decoded, Utf8JsonWriter? writer, RedactionBudget budget) {
+    static bool Rewrite(ReadOnlySpan<byte> utf8, Span<char> decoded, Utf8JsonWriter? writer, RedactionBudget budget, SecretPatterns patterns) {
         var reader = new Utf8JsonReader(utf8, ReaderOptions);
 
         var redactedAny = false;
@@ -127,9 +129,9 @@ public static partial class SecretRedactor {
             switch (reader.TokenType) {
                 case JsonTokenType.PropertyName:
                     var name = decoded[..reader.CopyString(decoded)];
-                    keyIsSecret = inSecret || WatcherPatterns.IsSecretKey(name, budget);
+                    keyIsSecret = inSecret || patterns.IsSecretKey(name, budget);
 
-                    if (WatcherPatterns.IsSecretItself(name, budget)) {
+                    if (patterns.IsSecretItself(name, budget)) {
                         writer?.WritePropertyName($"{RedactedMarker}-{++redactedKeys}");
                         redactedAny = true;
                     } else {
@@ -140,7 +142,7 @@ public static partial class SecretRedactor {
 
                 case JsonTokenType.String:
                     var value = decoded[..reader.CopyString(decoded)];
-                    if (WatcherPatterns.Redact(value, keyIsSecret || inSecret, budget) is { } clean) {
+                    if (patterns.Redact(value, keyIsSecret || inSecret, budget) is { } clean) {
                         writer?.WriteStringValue(JsonEncodedText.Encode(clean, WriterOptions.Encoder));
                         redactedAny = true;
                     } else {
@@ -220,7 +222,11 @@ public static partial class SecretRedactor {
     [GeneratedRegex("(?:AKIA|ASIA|AROA|AIDA|AIPA|AGPA|ANPA|ANVA|ASCA|APKA|ABIA|ACCA)[0-9A-Z]{16,128}(?![0-9A-Z])", RegexOptions.None, matchTimeoutMilliseconds: 100)]
     private static partial Regex AwsUniqueIdRx();
 
-    [GeneratedRegex(@"(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}", RegexOptions.None, matchTimeoutMilliseconds: 100)]
+    // Anchored: SecretPatterns finds candidates by prefix and confirms each one here.
+    internal const string VendorTokenPattern =
+        @"\G(?:ghp_|gho_|ghs_|github_pat_|cfat_|(?<![A-Za-z0-9])sk-(?:proj-|live_|test_)?|sk_live_|sk_test_|xoxb-|xoxp-|xoxa-|pypi-|npm_|glpat-|dckr_pat_|dckr_oat_)[A-Za-z0-9\-_]{10,}";
+
+    [GeneratedRegex(VendorTokenPattern, RegexOptions.None, matchTimeoutMilliseconds: 100)]
     private static partial Regex VendorTokenRx();
 
     [GeneratedRegex(
@@ -229,8 +235,12 @@ public static partial class SecretRedactor {
     )]
     private static partial Regex JsonKeySecretRx();
 
-    // The run boundary keeps scanning linear; digits must remain eligible for OAUTH2_TOKEN.
-    [GeneratedRegex(@"(?<![A-Za-z_])([A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*=)([^\s""\\]+)", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
+    // The match starts at `=` and finds the name behind it, so letters without one cost nothing;
+    // the name is the whole [A-Za-z_] run before it, so a digit ends it, as in OAUTH2_TOKEN.
+    internal const string EnvVarSecretPattern =
+        @"(?<=(?<![A-Za-z_])[A-Z_]*(?:SECRETS?|TOKENS?|PASSWORDS?|PASSWD|PWD|API_?KEYS?|PRIVATE_?KEYS?|CREDENTIALS?|CLIENT_?SECRETS?|ACCESS_?KEYS?|AUTH_?TOKENS?)[A-Z_]*)=([^\s""\\]+)";
+
+    [GeneratedRegex(EnvVarSecretPattern, RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
     private static partial Regex EnvVarSecretRx();
 
     [GeneratedRegex("""((?:""" + SecretKeywords + """)[\w.\-]*:[ \t]+)([^\s"\\]{8,})""", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]

@@ -72,7 +72,9 @@ internal static class SessionTranscriptLocator {
                     continue;
                 }
 
-                if (!IsNewEnough(File.GetCreationTimeUtc(file), File.GetLastWriteTimeUtc(file), spawnedAtUtc)) continue;
+                if (!IsNewEnough(File.GetCreationTimeUtc(file), File.GetLastWriteTimeUtc(file), spawnedAtUtc)) {
+                    continue;
+                }
 
                 switch (MatchTranscript(ReadFirstLines(file), worktreePath, DefaultPathComparison)) {
                     case CwdMatch.Yes: return (sessionId, Path.Combine(ResolveDirectory(projectDir), Path.GetFileName(file)));

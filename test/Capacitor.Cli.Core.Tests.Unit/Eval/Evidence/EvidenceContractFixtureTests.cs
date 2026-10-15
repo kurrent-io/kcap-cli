@@ -20,7 +20,7 @@ public class EvidenceContractFixtureTests {
     [Test]
     public async Task The_vocabularies_failure_codes_and_citation_cap_match() {
         await Assert.That(Fixture.GetProperty("coverage_policy_version").GetString()).IsEqualTo(EvalService.EvidenceCoveragePolicyVersion);
-        await Assert.That(Strings(Fixture.GetProperty("omission_kinds"))).IsEquivalentTo(Sorted(EvalOmissionKinds.All));
+        await Assert.That(Strings(Fixture.GetProperty("omission_kinds"))).IsEquivalentTo(Sorted(EvalOmissionKinds.V2));
         await Assert.That(Strings(Fixture.GetProperty("stop_reasons"))).IsEquivalentTo(Sorted(EvalStopReasons.All));
         await Assert.That(Strings(Fixture.GetProperty("cli_failure_codes"))).IsEquivalentTo(Sorted(EvalFailureCodes.All));
         await Assert.That(Fixture.GetProperty("max_citations").GetInt32()).IsEqualTo(EvidenceBudgets.MaxCitations);

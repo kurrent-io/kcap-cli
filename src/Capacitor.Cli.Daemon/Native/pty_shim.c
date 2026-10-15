@@ -567,6 +567,21 @@ static void child_fail_and_die(int errpipe_write_fd, int step, int err) {
     _exit(127);
 }
 
+// Async-signal-safe. Only caught handlers go back to SIG_DFL — exec would reset exactly these
+// and nothing else, so an ignored signal (SIGPIPE in a .NET host) stays ignored in the agent.
+static void reset_caught_signal_handlers(void) {
+    struct sigaction dfl;
+    memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    for (int sig = 1; sig < NSIG; sig++) {
+        struct sigaction old;
+        if (sigaction(sig, NULL, &old) != 0) continue;
+        // sa_handler and sa_sigaction share storage, so this holds whether or not SA_SIGINFO is set.
+        if (old.sa_handler != SIG_DFL && old.sa_handler != SIG_IGN) sigaction(sig, &dfl, NULL);
+    }
+}
+
 // Blocking waitpid retrying across EINTR — every cleanup path below must actually reap the
 // child before returning (never leave a live-but-unobserved process behind), and a signal
 // landing on the parent mid-wait must not be mistaken for "the child is gone".
@@ -608,11 +623,27 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
     struct winsize ws = {0};
     ws.ws_row = rows; ws.ws_col = cols;
 
+    // Every signal stays blocked from the fork until the child has dropped the daemon's handlers.
+    // The child is a copy of the .NET host, and CoreCLR's SIGTERM/SIGINT/SIGQUIT handlers re-raise
+    // to the pid cached at runtime start: a signal reaching the child before exec would be
+    // forwarded to the daemon and kill it instead.
+    sigset_t all_signals, saved_mask;
+    sigfillset(&all_signals);
+    int mask_err = pthread_sigmask(SIG_BLOCK, &all_signals, &saved_mask);
+    if (mask_err != 0) {
+        out->err_no = mask_err; out->failed_step = PTY_STEP_FORK;
+        close(errpipe[0]); close(errpipe[1]);
+        return -1;
+    }
+
     int master_fd;
     pid_t pid = forkpty(&master_fd, NULL, NULL, &ws);
+    int fork_errno = errno;
+
+    if (pid != 0) pthread_sigmask(SIG_SETMASK, &saved_mask, NULL);
 
     if (pid < 0) {
-        out->err_no = errno; out->failed_step = PTY_STEP_FORK;
+        out->err_no = fork_errno; out->failed_step = PTY_STEP_FORK;
         close(errpipe[0]); close(errpipe[1]);
         return -1;
     }
@@ -620,7 +651,10 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
     if (pid == 0) {
         // ── CHILD ── async-signal-safe calls only from here to exec (or _exit): no malloc,
         // no stdio, no non-reentrant libc — only the syscalls/functions on the POSIX
-        // async-signal-safe list (close, write, _exit, chdir, execve, kill, getpid, prctl, getppid).
+        // async-signal-safe list (close, write, _exit, chdir, execve, kill, getpid, prctl,
+        // getppid, sigaction, pthread_sigmask).
+        reset_caught_signal_handlers();
+
         close(errpipe[0]);
         // cancel_fd is caller-owned and only meaningful to the PARENT's poll loop; close our
         // inherited copy defensively (in case the caller didn't mark it CLOEXEC) rather than
@@ -650,6 +684,11 @@ int pty_spawn(const pty_exec_plan *plan, char *const envp[], const char *cwd,
 #endif
 
         if (chdir(cwd) != 0) { child_fail_and_die(errpipe[1], PTY_STEP_CHDIR, errno); }
+
+        // Unblocked as late as possible: a signal that kills the child after this line closes the
+        // error pipe with no record, which the parent reads as a successful exec.
+        int restore_err = pthread_sigmask(SIG_SETMASK, &saved_mask, NULL);
+        if (restore_err != 0) { child_fail_and_die(errpipe[1], PTY_STEP_FORK, restore_err); }
 
         if (plan->mode == PTY_EXEC_FD) {
 #ifdef __linux__

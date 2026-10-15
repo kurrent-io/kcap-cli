@@ -117,6 +117,95 @@ public class PtyHostedAgentRuntimeFactoryTests {
         }
     }
 
+    static readonly string LongPrompt = new('d', PromptFile.ArgumentBudget + 1);
+
+    (PtyHostedAgentRuntimeFactory Factory, SpyPtyProcessFactory Pty, GatedPty Process, string PromptRoot) NewPromptFactory(bool windows) {
+        var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
+        var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        var process  = new GatedPty();
+        var pty      = new SpyPtyProcessFactory(process);
+        var root     = Tmp.PathTo("prompts");
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance,
+            TimeProvider.System, windows: windows, promptRoot: root);
+        return (factory, pty, process, root);
+    }
+
+    [Test]
+    public async Task On_Windows_an_overlong_prompt_is_read_from_a_file_that_is_removed_when_the_agent_exits() {
+        var (factory, pty, process, root) = NewPromptFactory(windows: true);
+        var start = await factory.StartAsync(BuildClaudeLaunchContext(null) with { Prompt = LongPrompt }, CancellationToken.None);
+
+        try {
+            var file = Path.Combine(root, "agent-mode-1", "prompt.md");
+            await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
+            await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo(LongPrompt);
+
+            process.Exit();
+            var dir      = Path.GetDirectoryName(file)!;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (Directory.Exists(dir) && DateTime.UtcNow < deadline) await Task.Delay(20);
+            await Assert.That(Directory.Exists(dir)).IsFalse();
+        } finally {
+            process.Exit();
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task Off_Windows_an_overlong_prompt_stays_on_the_command_line() {
+        var (factory, pty, process, root) = NewPromptFactory(windows: false);
+        var start = await factory.StartAsync(BuildClaudeLaunchContext(null) with { Prompt = LongPrompt }, CancellationToken.None);
+
+        try {
+            await Assert.That(pty.LastArgs![^1]).IsEqualTo(LongPrompt);
+            await Assert.That(Directory.Exists(root)).IsFalse();
+        } finally {
+            process.Exit();
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task On_Windows_a_prompt_that_fits_stays_on_the_command_line() {
+        var (factory, pty, process, root) = NewPromptFactory(windows: true);
+        var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
+
+        try {
+            await Assert.That(pty.LastArgs![^1]).IsEqualTo("build it");
+            await Assert.That(Directory.Exists(root)).IsFalse();
+        } finally {
+            process.Exit();
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    /// <summary>A PTY that runs until <see cref="Exit"/>, so a test can look at what exists while the
+    /// agent is alive.</summary>
+    sealed class GatedPty : IPtyProcess {
+        readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Exit() => _exited.TrySetResult();
+
+        public int  Pid       => 0;
+        public bool HasExited => _exited.Task.IsCompleted;
+        public int? ExitCode  => HasExited ? 0 : null;
+
+        public ValueTask DisposeAsync() { Exit(); return default; }
+        public Task WaitForExitAsync(TimeSpan? timeout = null) => _exited.Task;
+        public Task TerminateAsync(TimeSpan?   timeout = null) { Exit(); return Task.CompletedTask; }
+
+        public async IAsyncEnumerable<byte[]> ReadOutputAsync(
+                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default) {
+            await _exited.Task.WaitAsync(ct).ConfigureAwait(false);
+            yield break;
+        }
+
+        public Task WriteAsync(string input) => Task.CompletedTask;
+        public Task WriteAsync(byte[] data) => Task.CompletedTask;
+        public void Resize(ushort     cols, ushort rows) { }
+        public void SendInterrupt() { }
+    }
+
     [Test]
     public async Task Review_launch_builds_the_MCP_command_from_CapacitorPath_not_the_agent_CliPath() {
         var launcher   = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");

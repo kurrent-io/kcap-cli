@@ -28,6 +28,19 @@ public class ServerChatInputTests {
     }
 
     [Test]
+    public async Task An_idle_remote_session_can_accept_and_send_input() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Ready();
+            h.Session.OnNext(Harness.Info("Idle"));
+            await Assert.That(h.Input.CanAcceptText).IsTrue();
+            await Assert.That(await h.Input.SendAsync("continue", [], CancellationToken.None)).IsEqualTo(ChatSendOutcome.Accepted);
+            await Assert.That(h.Lane.UserInputs).Contains(("a1", "continue"));
+            h.Input.Dispose();
+        });
+    }
+
+    [Test]
     public async Task Ready_needs_a_live_lane_an_established_session_and_a_running_agent() {
         await RunOnUiAsync(async () => {
             var h = new Harness();

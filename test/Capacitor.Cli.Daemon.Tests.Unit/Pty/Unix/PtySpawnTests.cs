@@ -181,6 +181,121 @@ public class PtySpawnTests {
         } finally { Free(plan); }
     }
 
+    /// <summary>pty_spawn blocks every signal across the fork, so it must hand the calling thread
+    /// back the mask it had — a spawner thread left with everything blocked never sees a signal
+    /// again.</summary>
+    [Test, RunOn(OS.Linux | OS.MacOs)]
+    public async Task Spawn_leaves_the_calling_threads_signal_mask_as_it_found_it() {
+        var plan = Preflight("/bin/sleep", ["sleep", "5"]);
+        try {
+            var before = CurrentThreadSignalMask();
+            var rc     = Spawn(plan, out var result);
+            var after  = CurrentThreadSignalMask();
+            try {
+                await Assert.That(rc).IsEqualTo(0);
+                await Assert.That(Convert.ToHexString(after)).IsEqualTo(Convert.ToHexString(before));
+            } finally {
+                if (result.MasterFd >= 0) UnixPtyInterop.close(result.MasterFd);
+                if (result.Pid > 0) {
+                    UnixPtyInterop.kill(result.Pid, UnixPtyInterop.SIGKILL);
+                    UnixPtyInterop.waitpid(result.Pid, out _, 0);
+                }
+            }
+        } finally { Free(plan); }
+    }
+
+    /// <summary>The agent starts with the caller's blocked set, not the block-everything mask held
+    /// across the fork, and keeps the caller's ignored signals: only caught handlers are reset,
+    /// exactly as exec alone would.</summary>
+    [Test, RunOn(OS.Linux)]
+    public async Task Child_starts_with_the_callers_blocked_and_ignored_signals() {
+        var plan = Preflight("/bin/cat", ["cat", "/proc/self/status"]);
+        try {
+            var caller = ReadStatusFields(File.ReadAllText("/proc/thread-self/status"));
+            var rc     = Spawn(plan, out var result);
+            try {
+                await Assert.That(rc).IsEqualTo(0);
+                var child = ReadStatusFields(DrainMaster(result.MasterFd));
+                await Assert.That(child.SigBlk).IsEqualTo(caller.SigBlk);
+                await Assert.That(child.SigIgn).IsEqualTo(caller.SigIgn);
+            } finally {
+                if (result.MasterFd >= 0) UnixPtyInterop.close(result.MasterFd);
+                if (result.Pid > 0) {
+                    UnixPtyInterop.kill(result.Pid, UnixPtyInterop.SIGKILL);
+                    UnixPtyInterop.waitpid(result.Pid, out _, 0);
+                }
+            }
+        } finally { Free(plan); }
+    }
+
+    /// <summary>An ignored disposition stays ignored even when it was installed with SA_SIGINFO:
+    /// the flag says how a handler would be called, not that there is one. SIGURG's default
+    /// action is to ignore, so ignoring it changes nothing a concurrent spawn could notice.</summary>
+    [Test, RunOn(OS.Linux), NotInParallel]
+    public async Task Child_keeps_a_signal_ignored_with_siginfo() {
+        const int sigurg = 23;
+        var ignore = new byte[SigactionSize];
+        BitConverter.TryWriteBytes(ignore.AsSpan(0), (nint)1 /* SIG_IGN */);
+        BitConverter.TryWriteBytes(ignore.AsSpan(SigactionFlagsOffset), 4 /* SA_SIGINFO */);
+        var saved = new byte[SigactionSize];
+        if (sigaction(sigurg, ignore, saved) != 0) throw new InvalidOperationException("sigaction failed");
+
+        var plan = Preflight("/bin/cat", ["cat", "/proc/self/status"]);
+        try {
+            var rc = Spawn(plan, out var result);
+            try {
+                await Assert.That(rc).IsEqualTo(0);
+                var ignored = Convert.ToUInt64(ReadStatusFields(DrainMaster(result.MasterFd)).SigIgn, 16);
+                await Assert.That(ignored & (1UL << (sigurg - 1))).IsNotEqualTo(0UL);
+            } finally {
+                if (result.MasterFd >= 0) UnixPtyInterop.close(result.MasterFd);
+                if (result.Pid > 0) {
+                    UnixPtyInterop.kill(result.Pid, UnixPtyInterop.SIGKILL);
+                    UnixPtyInterop.waitpid(result.Pid, out _, 0);
+                }
+            }
+        } finally {
+            Free(plan);
+            _ = sigaction(sigurg, saved, null);
+        }
+    }
+
+    // glibc's struct sigaction on 64-bit: handler, 128-byte sa_mask, then int sa_flags.
+    const int SigactionSize        = 256;
+    const int SigactionFlagsOffset = 136;
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    static extern int sigaction(int sig, byte[]? act, byte[]? oldact);
+
+    static (string SigBlk, string SigIgn) ReadStatusFields(string status) {
+        string Field(string name) =>
+            status.Split('\n').Select(l => l.Trim()).Single(l => l.StartsWith(name + ":", StringComparison.Ordinal))[(name.Length + 1)..].Trim();
+        return (Field("SigBlk"), Field("SigIgn"));
+    }
+
+    // Reads until the child closes its side: EOF, or EIO once the slave has no open handle.
+    static string DrainMaster(int masterFd) {
+        var buf = new byte[4096];
+        using var output = new MemoryStream();
+        while (true) {
+            var n = UnixPtyInterop.read(masterFd, buf, buf.Length);
+            if (n <= 0) break;
+            output.Write(buf, 0, (int)n);
+        }
+        return System.Text.Encoding.UTF8.GetString(output.ToArray());
+    }
+
+    // Large enough for either platform's sigset_t; a NULL set makes `how` irrelevant.
+    static byte[] CurrentThreadSignalMask() {
+        var mask = new byte[128];
+        var rc   = pthread_sigmask(0, IntPtr.Zero, mask);
+        if (rc != 0) throw new InvalidOperationException($"pthread_sigmask failed: {rc}");
+        return mask;
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc")]
+    static extern int pthread_sigmask(int how, IntPtr set, byte[] oldset);
+
     const int F_GETFD    = 1;
     const int FD_CLOEXEC = 1;
     [System.Runtime.InteropServices.DllImport("libc", SetLastError = true)]

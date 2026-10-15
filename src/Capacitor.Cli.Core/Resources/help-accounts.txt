@@ -1,0 +1,18 @@
+Usage: kcap accounts [list|add|remove|rename|rewire]
+
+Records every Claude Code config directory (CLAUDE_CONFIG_DIR) and Codex home (CODEX_HOME)
+you use, not only the default one.
+
+  kcap accounts                         List accounts, their recording state, and directories
+                                        found on this machine that are not added yet
+  kcap accounts add <claude|codex> <dir> [--skip-codex-network-access]
+                                        Add a directory and install kcap's recording into it
+  kcap accounts remove <id|dir>         Remove kcap's recording from an account and forget it
+                                        (the directory and its login are left alone)
+  kcap accounts rename <id|dir> <label> Change the label shown for an account
+  kcap accounts rewire [<id|dir>] [--skip-codex-network-access]
+                                        Reinstall recording into one or every account
+
+Options:
+  --skip-codex-network-access           Don't enable Codex sandbox network access for your
+                                        server(s) in a Codex account's config.toml

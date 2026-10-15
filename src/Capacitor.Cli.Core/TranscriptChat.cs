@@ -14,7 +14,7 @@ public interface IChatDisplayRules {
         displayed is { Kind: AcpEventKind.UserMessage } user ? user.Text : null;
 
     /// Subagent facts read off the raw envelope, whatever Filter decides for it.
-    IReadOnlyList<SubagentSignal> Subagents(CanonicalEvent evt, AcpEventEnvelope raw) => [];
+    IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) => [];
 }
 
 /// The chat's view of a transcript: the leaf projection, the envelope mapping, one vendor's rules.
@@ -29,14 +29,14 @@ public sealed class TranscriptChatProjection(ITranscriptProjection projection, I
         if (result.Events.Count == 0) return new([], [], []);
         var shown = new List<AcpEventEnvelope>(result.Events.Count);
         var submitted = new List<string>();
-        var subagents = new List<SubagentSignal>();
+        var runs = new List<RunSignal>();
         foreach (var evt in result.Events) {
             var projected = TranscriptChat.Project(evt, rules);
             shown.AddRange(projected.Envelopes);
             submitted.AddRange(projected.SubmittedInputs);
-            subagents.AddRange(projected.Subagents);
+            runs.AddRange(projected.Runs);
         }
-        return new(shown, submitted, subagents);
+        return new(shown, submitted, runs);
     }
 }
 
@@ -63,12 +63,12 @@ public static class TranscriptChat {
         // Written by the server from the vendor's subagent-stop hook: it says the subagent ended,
         // never how, and carries no call id.
         if (evt.Payload is SubagentCompleted { AgentId.Length: > 0 } completed)
-            return new([], [], [new SubagentSignal.Finished(null, completed.AgentId, null, evt.Timestamp)]);
+            return new([], [], [new RunSignal.Finished(null, completed.AgentId, null, evt.Timestamp)]);
         var envelopes = TranscriptEnvelopes.From(evt);
         if (envelopes.Count == 0) return new([], [], []);
         var shown = new List<AcpEventEnvelope>(envelopes.Count);
         var submitted = new List<string>();
-        var subagents = new List<SubagentSignal>();
+        var runs = new List<RunSignal>();
         foreach (var envelope in envelopes) {
             var kept = rules is null ? envelope : rules.Filter(evt, envelope);
             if (kept is { } visible) shown.Add(visible);
@@ -76,8 +76,8 @@ public static class TranscriptChat {
                 ? kept is { Kind: AcpEventKind.UserMessage } user ? user.Text : null
                 : rules.SubmittedInput(evt, envelope, kept);
             if (text is { Length: > 0 }) submitted.Add(text);
-            if (rules is not null) subagents.AddRange(rules.Subagents(evt, envelope));
+            if (rules is not null) runs.AddRange(rules.Runs(evt, envelope));
         }
-        return new(shown, submitted, subagents);
+        return new(shown, submitted, runs);
     }
 }

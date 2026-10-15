@@ -20,6 +20,31 @@ public class HostedHarnessCatalogTests {
         await Assert.That(options.All(o => o.Available)).IsTrue();
     }
 
+    /// <summary>A daemon too old to host Grok advertises nothing for it, so silence must not offer it.</summary>
+    [Test]
+    public async Task Grok_is_listed_only_when_a_daemon_advertises_it() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("grok");
+        await Assert.That(HostedHarnessCatalog.Build(["grok"]).Single(o => o.Vendor == "grok").Available).IsTrue();
+    }
+
+    [Test]
+    public async Task A_recording_only_harness_is_listed_only_when_advertised() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
+        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
+        await Assert.That(HostedHarnessCatalog.Build(["mistral-vibe"]).Single(o => o.Vendor == "mistral-vibe").Available).IsTrue();
+    }
+
+    /// <summary>A daemon too old to host Muse Code advertises nothing for it, so silence must not offer it.</summary>
+    [Test]
+    public async Task Muse_is_listed_only_when_a_daemon_advertises_it() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse");
+        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("muse");
+
+        var advertised = HostedHarnessCatalog.Build(["muse"]).Single(o => o.Vendor == "muse");
+        await Assert.That(advertised.Available).IsTrue();
+        await Assert.That(advertised.TransportFamily).IsEqualTo("rpc");
+    }
+
     [Test]
     public async Task Transport_family_matches_how_the_daemon_hosts_each_vendor() {
         var options = HostedHarnessCatalog.Build(null).ToDictionary(o => o.Vendor);
@@ -115,6 +140,14 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.TileFor("zed").Glyph).IsEqualTo("Z");
     }
 
+    /// <summary>Grok's tint is its own off-white, the one the server's session chip uses, not the
+    /// neutral tint vendors without a brand colour share.</summary>
+    [Test]
+    public async Task Grok_has_its_own_tint() {
+        await Assert.That(HostedHarnessCatalog.TileFor("grok").Color).IsEqualTo("#F5F5F5");
+        await Assert.That(HostedHarnessCatalog.TileFor("grok").Color).IsNotEqualTo(HostedHarnessCatalog.TileFor("codex").Color);
+    }
+
     [Test]
     public async Task Model_label_prefers_the_curated_name_and_falls_back_to_the_slug() {
         await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "claude-fable-5")).IsEqualTo("Claude Fable 5");
@@ -131,10 +164,11 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("low")).IsEqualTo("Low");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("medium")).IsEqualTo("Medium");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("high")).IsEqualTo("High");
-        await Assert.That(HostedHarnessCatalog.EffortLabelFor("xhigh")).IsEqualTo("Max");
+        await Assert.That(HostedHarnessCatalog.EffortLabelFor("xhigh")).IsEqualTo("Extra high");
+        await Assert.That(HostedHarnessCatalog.EffortLabelFor("max")).IsEqualTo("Max");
         await Assert.That(HostedHarnessCatalog.EffortLabelFor("weird")).IsEqualTo("weird");
         await Assert.That(HostedHarnessCatalog.EffortLadder)
-            .IsEquivalentTo(["low", "medium", "high", "xhigh"], CollectionOrdering.Matching);
+            .IsEquivalentTo(["low", "medium", "high", "xhigh", "max"], CollectionOrdering.Matching);
     }
 
     /// The tokens are the Claude CLI's own `--permission-mode` choices, listed from most to least
@@ -162,5 +196,30 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("Claude")).IsTrue();
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("codex")).IsFalse();
         await Assert.That(HostedHarnessCatalog.SupportsPermissionMode("cursor")).IsFalse();
+    }
+
+    /// The daemon validates these exact Codex CLI tokens and forwards them to argv.
+    [Test]
+    public async Task Codex_posture_choices_are_the_tokens_the_daemon_accepts() {
+        await Assert.That(HostedHarnessCatalog.CodexSandboxes.Select(m => m.Token))
+            .IsEquivalentTo(["read-only", "workspace-write", "danger-full-access"], CollectionOrdering.Matching);
+        await Assert.That(HostedHarnessCatalog.CodexApprovals.Select(m => m.Token))
+            .IsEquivalentTo(["untrusted", "on-request", "never"], CollectionOrdering.Matching);
+        await Assert.That(HostedHarnessCatalog.CodexSandboxes.Select(m => m.Token)).Contains(HostedHarnessCatalog.DefaultCodexSandbox);
+        await Assert.That(HostedHarnessCatalog.CodexApprovals.Select(m => m.Token)).Contains(HostedHarnessCatalog.DefaultCodexApproval);
+    }
+
+    [Test]
+    public async Task Only_codex_takes_a_launch_time_posture() {
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("codex")).IsTrue();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("Codex")).IsTrue();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("claude")).IsFalse();
+        await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("cursor")).IsFalse();
+    }
+
+    [Test]
+    public async Task Muse_assistant_has_the_muse_blue_monogram_but_is_never_offered_to_launch() {
+        await Assert.That(HostedHarnessCatalog.TileFor("muse-assistant")).IsEqualTo(("MA", "#2F6FE0"));
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse-assistant");
     }
 }

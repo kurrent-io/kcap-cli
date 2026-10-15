@@ -19,7 +19,7 @@ public class TenantProvisioningClientTests {
         using var http = new HttpClient();
         var client = new TenantProvisioningClient(http);
 
-        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", joinId: null, CancellationToken.None);
+        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", WorkspaceTier.Free, joinId: null, inviteCode: null, CancellationToken.None);
 
         await Assert.That(outcome.StatusCode).IsEqualTo(202);
         await Assert.That(outcome.Body!.State).IsEqualTo("provisioning");
@@ -35,6 +35,42 @@ public class TenantProvisioningClientTests {
     }
 
     [Test]
+    public async Task ProvisionAsync_sends_the_tier_it_was_given() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(202)
+                .WithBody("""{"slug":"acme","state":"provisioning"}""")
+                .WithHeader("Content-Type", "application/json"));
+
+        using var http = new HttpClient();
+        await new TenantProvisioningClient(http).ProvisionAsync(
+            server.Urls[0], "tok", "Acme Inc", "acme", WorkspaceTier.Team, joinId: null, inviteCode: null, CancellationToken.None);
+
+        var log  = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
+        var body = JsonNode.Parse(log[0].RequestMessage.Body!)!;
+        await Assert.That(body["tier"]!.GetValue<string>()).IsEqualTo("team");
+    }
+
+    [Test]
+    public async Task ProvisionAsync_sends_the_invite_code_and_parses_the_request_url() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(400)
+                .WithBody("""{"reason":"invalid_code","requestUrl":"https://site.example/get-started#request"}""")
+                .WithHeader("Content-Type", "application/json"));
+
+        using var http = new HttpClient();
+        var outcome = await new TenantProvisioningClient(http).ProvisionAsync(
+            server.Urls[0], "tok", "Acme Inc", "acme", WorkspaceTier.Free, joinId: null, inviteCode: "ABCD", CancellationToken.None);
+
+        var log  = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
+        var body = JsonNode.Parse(log[0].RequestMessage.Body!)!;
+        await Assert.That(body["code"]!.GetValue<string>()).IsEqualTo("ABCD");
+        await Assert.That(outcome.StatusCode).IsEqualTo(400);
+        await Assert.That(outcome.Body!.RequestUrl).IsEqualTo("https://site.example/get-started#request");
+    }
+
+    [Test]
     public async Task ProvisionAsync_parses_409_reason() {
         using var server = WireMockServer.Start();
         server.Given(Request.Create().WithPath("/api/signup/provision").UsingPost())
@@ -44,7 +80,7 @@ public class TenantProvisioningClientTests {
         using var http = new HttpClient();
         var client = new TenantProvisioningClient(http);
 
-        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme", "acme", joinId: null, CancellationToken.None);
+        var outcome = await client.ProvisionAsync(server.Urls[0], "tok", "Acme", "acme", WorkspaceTier.Free, joinId: null, inviteCode: null, CancellationToken.None);
         await Assert.That(outcome.StatusCode).IsEqualTo(409);
         await Assert.That(outcome.Body!.Reason).IsEqualTo("taken");
     }
@@ -150,7 +186,7 @@ public class TenantProvisioningClientTests {
         using var http = new HttpClient();
         var client = new TenantProvisioningClient(http);
 
-        var outcome = await client.ProvisionAsync(url, "tok", "Acme", "acme", joinId: null, CancellationToken.None);
+        var outcome = await client.ProvisionAsync(url, "tok", "Acme", "acme", WorkspaceTier.Free, joinId: null, inviteCode: null, CancellationToken.None);
         await Assert.That(outcome.StatusCode).IsEqualTo(0);
         await Assert.That(outcome.Body).IsNull();
     }
@@ -170,7 +206,7 @@ public class TenantProvisioningClientTests {
 
         using var http = new HttpClient();
         await new TenantProvisioningClient(http)
-            .ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", key, CancellationToken.None);
+            .ProvisionAsync(server.Urls[0], "tok", "Acme Inc", "acme", WorkspaceTier.Free, key, inviteCode: null, CancellationToken.None);
 
         var log  = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
         var body = JsonNode.Parse(log[0].RequestMessage.Body!)!;
@@ -192,7 +228,7 @@ public class TenantProvisioningClientTests {
 
         using var http = new HttpClient();
         await new TenantProvisioningClient(http).ProvisionAsync(
-            server.Urls[0], "tok", "Acme Inc", "acme", telemetry.Join.Current, CancellationToken.None);
+            server.Urls[0], "tok", "Acme Inc", "acme", WorkspaceTier.Free, telemetry.Join.Current, inviteCode: null, CancellationToken.None);
 
         var log = server.FindLogEntries(Request.Create().WithPath("/api/signup/provision").UsingPost());
         await Assert.That(log[0].RequestMessage.Body!).DoesNotContain("joinId");

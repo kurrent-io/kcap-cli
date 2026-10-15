@@ -32,6 +32,26 @@ public class SessionStatusDotsTests {
 
     static readonly RepoIdentity Repo = new("path:/repo", "repo");
 
+    [Test]
+    [Arguments("idle")]
+    [Arguments("Idle")]
+    public async Task Explicit_remote_idle_matches_the_local_idle_indicator(string status) {
+        var row = AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "r1", Status = status, DaemonName = "rail-qa", Vendor = "claude",
+        });
+        var remote = SessionStatusDots.ForRow(row, pending: false);
+        var local = SessionStatusDots.ForRow(Local("a1", awaiting: true), pending: false);
+        await Assert.That(remote.Kind).IsEqualTo(local.Kind);
+        await Assert.That(remote.ShowsClock).IsTrue();
+        await Assert.That(remote.ShowsDash).IsFalse();
+        await Assert.That(remote.IsWarning).IsTrue();
+        // Presentation parity does not fabricate the local daemon's input/attention facts.
+        await Assert.That(row.AwaitingInput).IsNull();
+        await Assert.That(SessionStatusDots.NeedsAttention(row)).IsFalse();
+        await Assert.That(SessionStatusDots.ForRow(row, pending: true).Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+        await Assert.That(SessionStatusDots.ForRow(row, pending: false, answerExpected: true).Kind).IsEqualTo(AgentStatusKind.Answer);
+    }
+
     static AgentRow Local(string id, string status = "Running", bool? awaiting = null, int? subagents = null, string? title = null) =>
         AgentRow.FromLocal(
             new(id, "agent", "claude", "/repo", status, null, null, null, DateTime.UtcNow, null, null,
@@ -66,6 +86,21 @@ public class SessionStatusDotsTests {
         var done = SessionStatusDots.ForRow(Local("a", status: "Completed"), pending: false);
         await Assert.That(done.Kind).IsEqualTo(AgentStatusKind.Done);
         await Assert.That(done.Label).IsEqualTo("Done");
+        await Assert.That(done.ShowsDash).IsTrue();
+        await Assert.That(done.ShowsRing).IsFalse();
+    }
+
+    /// A removed remote row republishes its last word, Running, as ended: it must read settled.
+    [Test]
+    public async Task An_ended_running_session_shows_the_dash_not_the_ring() {
+        var live = SessionStatusDots.Present("Running", null, false, null, false, null, null, null);
+        var ended = SessionStatusDots.Present("Running", null, false, null, false, null, null, null, ended: true);
+
+        await Assert.That(live.ShowsRing).IsTrue();
+        await Assert.That(ended.Label).IsEqualTo("Running");
+        await Assert.That(ended.ShowsRing).IsFalse();
+        await Assert.That(ended.IsInFlight).IsFalse();
+        await Assert.That(ended.ShowsDash).IsTrue();
     }
 
     [Test]

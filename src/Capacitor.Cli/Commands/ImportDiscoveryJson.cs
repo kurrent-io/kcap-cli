@@ -15,8 +15,10 @@ public sealed record ImportDiscoveryJson(
     int                                      UnmatchedSessions,
     IReadOnlyList<ImportDiscoveryWindowJson> Windows);
 
+/// <param name="Windows">This repository's sessions in each window, in the order of the report's own
+/// <see cref="ImportDiscoveryJson.Windows"/>.</param>
 public sealed record ImportDiscoveryRepoJson(
-    string Owner, string Name, int Sessions, string? LastSessionAt);
+    string Owner, string Name, int Sessions, string? LastSessionAt, IReadOnlyList<ImportDiscoveryWindowJson> Windows);
 
 /// <param name="Since">ISO date, or null for "everything".</param>
 public sealed record ImportDiscoveryWindowJson(string? Since, int Sessions);
@@ -31,7 +33,9 @@ public static class ImportDiscoveryRender {
         JsonSerializer.Serialize(
             new ImportDiscoveryJson(
                 [.. summary.Repos.Select(r => new ImportDiscoveryRepoJson(
-                    r.Owner, r.Name, r.SessionCount, r.LastSessionAt?.UtcDateTime.ToString("O")))],
+                    r.Owner, r.Name, r.SessionCount, r.LastSessionAt?.UtcDateTime.ToString("O"),
+                    [.. summary.ByWindow.Select(w => new ImportDiscoveryWindowJson(
+                        w.Since?.ToString("yyyy-MM-dd"), r.SessionsByWindow.GetValueOrDefault(w.Key)))]))],
                 summary.UnmatchedCount,
                 [.. summary.ByWindow.Select(w => new ImportDiscoveryWindowJson(
                     w.Since?.ToString("yyyy-MM-dd"), w.SessionCount))]),

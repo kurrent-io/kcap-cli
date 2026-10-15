@@ -1,7 +1,9 @@
+using System.Collections.Frozen;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
@@ -11,6 +13,88 @@ namespace Capacitor.App.Tests.Unit;
 /// MainWindowViewModelTests' header comment. Every test here runs inside
 /// AvaloniaSession.WithImmediateRxScheduler and carries [NotInParallel("AvaloniaSession")].
 public class RailSessionViewModelTests {
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Multiple_prs_open_only_the_selected_current_choice(bool remote) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var items = new[] { new RailPullRequestMenuItem(PullRequestWire.Subject(FakePullRequestSource.Link(1)), "First", "Open"),
+                new RailPullRequestMenuItem(PullRequestWire.Subject(FakePullRequestSource.Link(2)), "Second", "Draft") };
+            using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                new Dictionary<string, RailPullRequestSummary> { ["s1"] = new(items) });
+            var opened = new List<(string, AgentOrigin, PullRequestSubjectDto?)>();
+            using var row = new RailSessionViewModel((remote ? RemoteRow("a1") : Row()) with { SessionId = "s1" },
+                new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
+                pullRequests: summaries, openPullRequest: (id, origin, subject) => opened.Add((id, origin, subject)));
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(opened).IsEmpty();
+            row.OpenPullRequestChoiceCommand.Execute(items[0]).Subscribe();
+            await Assert.That(opened).IsEquivalentTo(new[] { ("a1", remote ? AgentOrigin.Remote : AgentOrigin.Local, (PullRequestSubjectDto?)items[0].Subject) });
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary>());
+            row.OpenPullRequestChoiceCommand.Execute(items[1]).Subscribe();
+            await Assert.That(opened).Count().IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pr_metadata_updates_and_its_action_is_separate_from_session_opening() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var summaries = new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                new Dictionary<string, RailPullRequestSummary>());
+            using var localReadable = new BehaviorSubject<bool>(true);
+            var openedSessions = new List<string>();
+            var openedPrs = new List<(string, AgentOrigin, PullRequestSubjectDto?)>();
+            using var row = new RailSessionViewModel(Row() with { SessionId = "s1" },
+                new BehaviorSubject<string?>(null), NoPending, NotStale, openedSessions.Add, _ => { }, TimeProvider.System,
+                pullRequests: summaries, localOnAppServer: localReadable,
+                openPullRequest: (id, origin, subject) => openedPrs.Add((id, origin, subject)));
+            var changes = new List<string?>();
+            row.PropertyChanged += (_, e) => changes.Add(e.PropertyName);
+            await Assert.That(row.HasPullRequest).IsFalse();
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> {
+                ["s1"] = new([new(PullRequestWire.Subject(FakePullRequestSource.Link(142)), null, "Draft")]),
+            });
+            await Assert.That(row.PullRequestLabel).IsEqualTo("PR #142");
+            await Assert.That(row.PullRequestStatus!.Text).IsEqualTo("Draft");
+            await Assert.That(row.PullRequestTooltip).Contains("Linked to this session: Fix the flaky test");
+            await Assert.That(row.Primary).IsEqualTo("Fix the flaky test");
+            await Assert.That(changes).Contains(nameof(RailSessionViewModel.PullRequestLabel));
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(openedPrs).IsEquivalentTo(new[] { ("a1", AgentOrigin.Local, row.PullRequest!.Subject) });
+            await Assert.That(openedSessions).IsEmpty();
+            summaries.OnNext(new Dictionary<string, RailPullRequestSummary> { ["s1"] = new([
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(1)), null, "Open"),
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(2)), null, "Open"),
+                    new(PullRequestWire.Subject(FakePullRequestSource.Link(3)), null, "Open"),
+                ]) });
+            await Assert.That(row.PullRequestLabel).IsEqualTo("3 PRs");
+            await Assert.That(row.HasPullRequestLifecycle).IsFalse();
+            localReadable.OnNext(false);
+            await Assert.That(row.HasPullRequest).IsFalse();
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(openedPrs).Count().IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_pr_opens_on_the_remote_origin_even_when_local_reads_are_disabled() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            AgentOrigin? opened = null;
+            PullRequestSubjectDto? openedSubject = null;
+            using var row = new RailSessionViewModel(RemoteRow("a1") with { SessionId = "s1" },
+                new BehaviorSubject<string?>(null), NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System,
+                pullRequests: new BehaviorSubject<IReadOnlyDictionary<string, RailPullRequestSummary>>(
+                    new Dictionary<string, RailPullRequestSummary> { ["s1"] = new([new(PullRequestWire.Subject(FakePullRequestSource.Link(142)), null, "Unknown")]) }),
+                localOnAppServer: new BehaviorSubject<bool>(false), openPullRequest: (_, origin, subject) => { opened = origin; openedSubject = subject; });
+            row.OpenPullRequestCommand.Execute().Subscribe();
+            await Assert.That(opened).IsEqualTo(AgentOrigin.Remote);
+            await Assert.That(openedSubject).IsEqualTo(row.PullRequest!.Subject);
+        });
+    }
+
     static readonly IObservable<IReadOnlySet<string>> NoPending = new BehaviorSubject<IReadOnlySet<string>>(new HashSet<string>());
     static readonly IObservable<bool> NotStale = new BehaviorSubject<bool>(false);
     static readonly RepoIdentity Repo = new("path:/repo", "repo");
@@ -136,6 +220,9 @@ public class RailSessionViewModelTests {
             await Assert.That(working.Tooltip).DoesNotContain("Waiting for input");
             await Assert.That(older.Status.Kind).IsEqualTo(AgentStatusKind.Other);
             await Assert.That(older.Status.Label).IsEqualTo("Running");
+            await Assert.That(older.Status.ShowsRing).IsTrue();
+            await Assert.That(older.Status.ShowsDash).IsFalse();
+            await Assert.That(older.Status.Pulses).IsFalse();
         });
     }
 
@@ -243,6 +330,31 @@ public class RailSessionViewModelTests {
 
             stale.OnNext(false);
             await Assert.That(remote.IsStale).IsFalse();
+        });
+    }
+
+    /// A background command keeps a finished turn Working, as a live subagent does, and the row
+    /// reads Idle again once the command ends. The count is keyed by lane: an unproven twin on the
+    /// other lane is a different session under the same id.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_background_command_keeps_a_waiting_row_working() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var commands = new BehaviorSubject<IReadOnlyDictionary<string, int>>(FrozenDictionary<string, int>.Empty);
+            using var row = new RailSessionViewModel(Row(awaitingInput: true), new BehaviorSubject<string?>(null), NoPending, NotStale,
+                _ => { }, _ => { }, TimeProvider.System, agentsRunningCommands: commands);
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+
+            commands.OnNext(new Dictionary<string, int> { ["remote:a1"] = 2 });
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
+
+            commands.OnNext(new Dictionary<string, int> { ["local:a1"] = 2 });
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(row.Status.Pulses).IsTrue();
+            await Assert.That(row.Tooltip).Contains("2 commands running");
+
+            commands.OnNext(FrozenDictionary<string, int>.Empty);
+            await Assert.That(row.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
         });
     }
 

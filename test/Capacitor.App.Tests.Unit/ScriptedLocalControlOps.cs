@@ -4,10 +4,10 @@ namespace Capacitor.App.Tests.Unit;
 
 /// Fake ILocalControlOps whose calls are gated by per-call TaskCompletionSources: a test arms the
 /// NEXT call's outcome before triggering it, so hold/release is explicit rather than timing-based.
-/// *Calls counters increment before the gate is taken, so they prove a call reached the ops layer.
-/// An already-cancelled token short-circuits the way the real ExchangeAsync does.
-/// Callers run on pool threads concurrently, so every queue and payload list is guarded by one
-/// lock and the payload properties return snapshots.
+/// A *Calls counter that records a payload is incremented in the same lock as that payload, after
+/// the payload is stored and before the gate is taken, so a waiter that observes the counter
+/// observes the payload. An already-cancelled token short-circuits the way the real ExchangeAsync
+/// does. Callers run on pool threads concurrently; payload properties return snapshots.
 sealed class ScriptedLocalControlOps : ILocalControlOps {
     readonly Lock _lock = new();
     readonly Queue<TaskCompletionSource<ConsentPolicyDto>> _gets = new();
@@ -87,57 +87,49 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
     }
 
     public Task<ConsentAckDto> PutConsentPolicyAsync(ConsentPolicyDto policy, CancellationToken ct) {
-        Interlocked.Increment(ref PutCalls);
-        Record(_putPayloads, policy);
+        Record(_putPayloads, policy, ref PutCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentAckDto>(ct);
         return Gated(Take(_puts, "Put"), ct);
     }
 
     public Task<ConsentAckDto> PutConsentPolicyV2Async(ConsentPolicyPutV2Dto put, CancellationToken ct) {
-        Interlocked.Increment(ref PutV2Calls);
-        Record(_putV2Payloads, put);
+        Record(_putV2Payloads, put, ref PutV2Calls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentAckDto>(ct);
         return Gated(Take(_putV2s, "PutV2"), ct);
     }
 
     public Task<StopAgentResult> StopAgentAsync(string agentId, bool force, CancellationToken ct) {
-        Interlocked.Increment(ref StopCalls);
-        Record(_stopPayloads, (agentId, force));
+        Record(_stopPayloads, (agentId, force), ref StopCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<StopAgentResult>(ct);
         return Gated(Take(_stops, "Stop"), ct);
     }
 
     public Task<ConsentAckDto> ResolveConsentAsync(ConsentResolveDto resolve, CancellationToken ct) {
-        Interlocked.Increment(ref ResolveCalls);
-        Record(_resolvePayloads, resolve);
+        Record(_resolvePayloads, resolve, ref ResolveCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<ConsentAckDto>(ct);
         return Gated(Take(_resolves, "Resolve"), ct);
     }
 
     public Task<PermissionAckDto> ResolvePermissionAsync(PermissionResolveDto resolve, CancellationToken ct) {
-        Interlocked.Increment(ref PermissionResolveCalls);
-        Record(_permissionResolvePayloads, resolve);
+        Record(_permissionResolvePayloads, resolve, ref PermissionResolveCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<PermissionAckDto>(ct);
         return Gated(Take(_permissionResolves, "permission resolve"), ct);
     }
 
     public Task<SendTextResult> SendTextAsync(string agentId, string text, CancellationToken ct) {
-        Interlocked.Increment(ref SendTextCalls);
-        Record(_sendTextPayloads, (agentId, text));
+        Record(_sendTextPayloads, (agentId, text), ref SendTextCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
         return Take(_sendTexts, "SendText").Task.WaitAsync(ct);
     }
 
     public Task<SendTextResult> SendTextWithAttachmentsAsync(string agentId, string text, IReadOnlyList<string> attachmentIds, CancellationToken ct) {
-        Interlocked.Increment(ref SendTextWithAttachmentsCalls);
-        Record(_sendTextWithAttachmentsPayloads, (agentId, text, attachmentIds));
+        Record(_sendTextWithAttachmentsPayloads, (agentId, text, attachmentIds), ref SendTextWithAttachmentsCalls);
         if (ct.IsCancellationRequested) return Task.FromCanceled<SendTextResult>(ct);
         return Take(_sendTexts, "SendText").Task.WaitAsync(ct);
     }
 
     public Task<DaemonSettingsAckDto> PutDaemonSettingsAsync(DaemonSettingsPutDto put, CancellationToken ct) {
-        Interlocked.Increment(ref PutSettingsCalls);
-        Record(_putSettingsPayloads, put);
+        Record(_putSettingsPayloads, put, ref PutSettingsCalls);
         SettingsPutStarted?.Invoke();
         if (ct.IsCancellationRequested) return Task.FromCanceled<DaemonSettingsAckDto>(ct);
         return Gated(Take(_settingsPuts, "PutDaemonSettings"), ct);
@@ -162,8 +154,11 @@ sealed class ScriptedLocalControlOps : ILocalControlOps {
         return tcs.Task;
     }
 
-    void Record<T>(List<T> list, T item) {
-        lock (_lock) list.Add(item);
+    void Record<T>(List<T> list, T item, ref int counter) {
+        lock (_lock) {
+            list.Add(item);
+            counter++;
+        }
     }
 
     T[] Snapshot<T>(List<T> list) {

@@ -14,6 +14,218 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_repository_updated_during_branch_lookup_is_described_to_the_registry(bool initiallyKnown) => RunOnUiAsync(async () => {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var finished = new ManualResetEventSlim();
+        var latest = new PullRequestRepository("github", "github.com", "example", "latest", "latest-hash");
+        PullRequestRepository? repository = initiallyKnown
+            ? new("github", "github.com", "example", "earlier", "earlier-hash") : null;
+        var h = new Harness(primary: () => repository, readBranch: _ => {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            finished.Set();
+            return "feature";
+        });
+        try {
+            h.Push();
+            h.Vm.SetForeground(true);
+            await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(entered.IsSet).IsTrue();
+            repository = latest;
+            release.Set();
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "current repository described");
+            await Assert.That(h.Source.Descriptions.Single().Repository).IsEqualTo(latest);
+        } finally {
+            release.Set();
+            if (entered.IsSet) await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
+            await h.Dispose();
+        }
+    });
+
+    [Test]
+    public Task Teardown_does_not_wait_for_a_stalled_branch_lookup_or_publish_its_result() => RunOnUiAsync(async () => {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var finished = new ManualResetEventSlim();
+        var h = new Harness(readBranch: _ => {
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            finished.Set();
+            return "late";
+        });
+        Task? teardown = null;
+        try {
+            h.Push();
+            h.Vm.SetForeground(true);
+            await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(entered.IsSet).IsTrue();
+            teardown = h.Vm.TeardownAsync();
+            await teardown.WaitAsync(TimeSpan.FromSeconds(2));
+            release.Set();
+            await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(finished.IsSet).IsTrue();
+            await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+            await Assert.That(h.Source.Descriptions).IsEmpty();
+            await Assert.That(h.Source.Lists).IsEqualTo(0);
+            await Assert.That(h.Vm.Choices).IsEmpty();
+        } finally {
+            release.Set();
+            await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
+            if (teardown is not null) await teardown;
+            await h.Dispose();
+        }
+    });
+
+    [Test]
+    public Task A_cancelled_branch_lookup_cannot_replace_the_new_registry_context() => RunOnUiAsync(async () => {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var finished = new ManualResetEventSlim();
+        var calls = 0;
+        var h = new Harness(readBranch: _ => {
+            if (Interlocked.Increment(ref calls) != 1) return "new";
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            finished.Set();
+            return "old";
+        });
+        try {
+            h.Push();
+            h.Vm.SetForeground(true);
+            await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(entered.IsSet).IsTrue();
+            h.SignIn.OnNext(System.Reactive.Unit.Default);
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "replacement refresh");
+            release.Set();
+            await h.Vm.TeardownAsync();
+            await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(finished.IsSet).IsTrue();
+            await Assert.That(h.Source.Descriptions.Select(item => item.Branch)).IsEquivalentTo(new string?[] { "new" });
+        } finally {
+            release.Set();
+            if (entered.IsSet) await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
+            await h.Dispose();
+        }
+    });
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public Task A_new_presence_branch_survives_an_unreadable_checkout_lookup(bool duringLookup) => RunOnUiAsync(async () => {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var h = new Harness(readBranch: _ => {
+            entered.Set();
+            if (duringLookup) release.Wait(TimeSpan.FromSeconds(10));
+            return null;
+        });
+        if (!duringLookup) h.Source.ListGate = new();
+        try {
+            h.Push();
+            h.Vm.SetForeground(true);
+            await Task.Run(() => entered.Wait(TimeSpan.FromSeconds(5)));
+            await Assert.That(entered.IsSet).IsTrue();
+            if (!duringLookup) await WaitUntilAsync(() => h.Source.Lists == 1, what: "lookup completed, list pending");
+            h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "another"));
+            h.Source.Links = [FakePullRequestSource.Link(1) with { HeadRef = "another" }, FakePullRequestSource.Link(2)];
+            release.Set();
+            h.Source.ListGate?.TrySetResult();
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new branch selected");
+            await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+            if (duringLookup) await Assert.That(h.Source.Descriptions.Single().Branch).IsEqualTo("another");
+        } finally { release.Set(); h.Source.ListGate?.TrySetResult(); await h.Dispose(); }
+    });
+
+    [Test]
+    public Task Repeated_refreshes_in_the_throttle_window_do_not_rebind_unchanged_properties() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        await h.Show();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "settled overview");
+        h.Vm.Refresh();
+        var changed = new List<string?>();
+        h.Vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        for (var i = 0; i < 10; i++) h.Vm.Refresh();
+        await Assert.That(changed).IsEmpty();
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "queued refresh");
+        await Assert.That(h.Source.Lists).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task An_explicit_pr_choice_survives_sign_in(bool alreadyListed) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        if (alreadyListed) await h.Show();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        h.Source.Capability = PullRequestCapabilityKind.SignedOut;
+        if (alreadyListed) { h.Time.Advance(TimeSpan.FromSeconds(4)); h.Vm.Refresh(); }
+        else h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Notice == "Sign in to see pull requests.", what: "sign-in notice");
+        await Assert.That(h.Vm.Choices).Count().IsEqualTo(0);
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        h.Source.Capability = PullRequestCapabilityKind.Supported;
+        h.SignIn.OnNext(System.Reactive.Unit.Default);
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "signed-in PR reader");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 2);
+        h.Time.Advance(TimeSpan.FromSeconds(4));
+        h.Source.Capability = PullRequestCapabilityKind.SignedOut;
+        h.Vm.Refresh();
+        await WaitUntilAsync(() => h.Vm.Notice == "Sign in to see pull requests.", what: "second sign-out");
+        h.Source.Capability = PullRequestCapabilityKind.Supported;
+        h.SignIn.OnNext(System.Reactive.Unit.Default);
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new choice recovered");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task An_explicit_choice_from_a_previous_session_is_not_reused() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        await h.Show();
+        h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "another-session", branch: "feature"));
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new session reader");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_menu_choice_survives_initial_session_and_link_loading(bool beforePresence) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        if (!beforePresence) h.Push();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+        if (beforePresence) h.Push();
+        await h.Show();
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+        await Assert.That(h.Vm.Selected.IsAvailable).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_menu_choice_removed_from_the_list_does_not_open_another_pr() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(99)));
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.HasListed, what: "links loaded");
+        await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(99);
+        await Assert.That(h.Vm.Selected.IsAvailable).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Reads_start_only_in_the_foreground_and_focus_loss_masks_already_loaded_bodies() => RunOnUiAsync(async () => {
         var h = new Harness();
         h.Push();
@@ -104,7 +316,8 @@ public class PullRequestContextViewModelTests {
         var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
         h.Source.Failure = "denied"; h.Time.Advance(TimeSpan.FromSeconds(16));
         await h.Vm.RefreshCommand.Execute();
-        await WaitUntilAsync(() => !h.Vm.IsReading, what: "denial applied");
+        // A refresh lists before it reads the overview, and IsReading drops between the two: wait for the denial itself.
+        await WaitUntilAsync(() => h.Vm.Notice?.Contains("cannot read") == true, what: "denial applied");
         await Assert.That(h.Vm.Description).IsNull();
         await Assert.That(h.Vm.CanDisplay).IsFalse();
         await Assert.That(h.Vm.Notice).Contains("cannot read");
@@ -389,12 +602,13 @@ public class PullRequestContextViewModelTests {
         internal FakePullRequestSource Source { get; }
         internal RecordingOpener Opener { get; } = new();
         internal PullRequestContextViewModel Vm { get; }
-        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null) {
+        internal Subject<System.Reactive.Unit> SignIn { get; } = new();
+        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null) {
             Source = new(Time);
-            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary);
+            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
-        internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); }
+        internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); SignIn.Dispose(); }
     }
 }

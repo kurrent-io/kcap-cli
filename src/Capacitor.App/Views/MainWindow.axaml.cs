@@ -5,6 +5,7 @@ using Avalonia.Controls.Notifications;
 using Avalonia.Input;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using ReactiveUI.Reactive;
 using ReactiveUI.Avalonia.Reactive;
 
@@ -20,6 +21,18 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     /// close.
     public Func<bool>? CloseInterceptor { get; set; }
 
+    /// The onboarding flow shown in place of the rail and launcher. Wizard-first mode builds this
+    /// window with no MainWindowViewModel, so the pane gets its own DataContext rather than the
+    /// window's; clearing it hands the window over to the main surface.
+    public OnboardingViewModel? Onboarding {
+        get => OnboardingPane.DataContext as OnboardingViewModel;
+        set {
+            OnboardingPane.DataContext = value;
+            OnboardingPane.IsVisible   = value is not null;
+            SessionsSurface.IsVisible  = value is null;
+        }
+    }
+
     WindowNotificationManager? _notifications;
     IDisposable? _notifierSubscription;
     IAppNotifier? _notifier;
@@ -27,7 +40,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     // Defaults to false — the Activity flyout starts closed (MainWindow.axaml), so Activity is off
     // regardless of the window's own visibility.
     bool _activityOpen;
-    WorkspaceViewModel? _foregroundWorkspace;
+    PullRequestContextViewModel? _foregroundPullRequests;
 
     /// Assigned by App.BuildAndShowMainWindow — the SAME IAppNotifier instance
     /// AgentActionService pushes into, so the toast overlay and stderr mirroring are always in
@@ -67,7 +80,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
 
         this.WhenActivated(disposables => {
-            ViewModel?.WhenAnyValue(x => x.CurrentWorkspace)
+            // Switched over the ViewModel, not read once: an onboarding window activates before
+            // the main surface hands it one.
+            Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
+                    .Select(vm => vm is null
+                        ? Observable.Return<ISessionWorkspace?>(null)
+                        : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
                     // A popup can't meaningfully survive the pane swapping under it — opening a
                     // workspace closes the feed; its Closed handler then turns the gate off.
@@ -133,14 +151,13 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void UpdateActivityVisibility() {
         if (DataContext is MainWindowViewModel vm) {
             vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.CurrentWorkspace is null);
-            // Only a local workspace owns a PR reader; a remote host has none to foreground.
-            var workspace = vm.CurrentWorkspace as WorkspaceViewModel;
-            if (_foregroundWorkspace != workspace) _foregroundWorkspace?.PullRequests?.SetForeground(false);
-            _foregroundWorkspace = workspace;
-            workspace?.PullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);
+            var pullRequests = vm.CurrentWorkspace?.PullRequests;
+            if (_foregroundPullRequests != pullRequests) _foregroundPullRequests?.SetForeground(false);
+            _foregroundPullRequests = pullRequests;
+            pullRequests?.SetForeground(IsVisible && WindowState != Avalonia.Controls.WindowState.Minimized);
         } else {
-            _foregroundWorkspace?.PullRequests?.SetForeground(false);
-            _foregroundWorkspace = null;
+            _foregroundPullRequests?.SetForeground(false);
+            _foregroundPullRequests = null;
         }
     }
 }

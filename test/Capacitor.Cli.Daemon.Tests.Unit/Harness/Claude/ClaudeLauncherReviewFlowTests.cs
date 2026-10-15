@@ -51,6 +51,21 @@ public class ClaudeLauncherReviewFlowTests {
             ReviewLaunch: new ReviewLaunchBuilder.ReviewLaunch(McpConfigPath: null, SystemPrompt: "Review PR acme/widgets#42", Mcp: mcp));
     }
 
+    /// <summary>The file sits outside the worktree, so without <c>--add-dir</c> an unattended reviewer
+    /// would stop at a permission prompt before it ever saw its instructions.</summary>
+    [Test]
+    public async Task Review_flow_launch_with_a_prompt_file_points_at_it_and_grants_its_directory() {
+        var file = Path.Combine(Home.Path, "kcap-prompts", "a-1", "prompt.md");
+        var ctx  = NewCtx(isReviewFlow: true, prompt: "the whole diff") with { PromptFile = file };
+
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        await Assert.That(args[Array.IndexOf(args, "--add-dir") + 1]).IsEqualTo(Path.GetDirectoryName(file));
+        await Assert.That(Array.IndexOf(args, "--add-dir")).IsLessThan(Array.IndexOf(args, "--"));
+        await Assert.That(args[^1]).IsEqualTo(PromptFile.Pointer(file));
+        await Assert.That(args).DoesNotContain("the whole diff");
+    }
+
     [Test]
     public async Task Review_flow_launch_bypasses_permissions() {
         var args = NewLauncher().BuildArgs(NewCtx(isReviewFlow: true)).Args;

@@ -112,6 +112,7 @@ public sealed class WizardTenantProvisioner(
         TimeProvider            time) : ITenantProvisioner {
     internal const int PollIntervalMs = 4000;
     internal const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
+    internal const int MaxInviteCodeAttempts = 3;
 
     readonly TimeProvider _time = time;
 
@@ -122,7 +123,25 @@ public sealed class WizardTenantProvisioner(
     public Func<string, string, CancellationToken, Task<bool>>?        ConfirmCreate { get; set; }
     public Action<int, int>?                                           PollProgress  { get; set; }
 
+    /// Asks for the next invite code, given where to request one and why the last code was refused
+    /// (null on the first ask). Null or blank means the user gave up.
+    public Func<string?, string?, CancellationToken, Task<string?>>? PromptInviteCode { get; set; }
+
+    /// Asks the signup service whether a slug is free, with the token the offer is running under.
+    /// Set only while an offer runs, so a form can check its slug as the user types it.
+    public Func<string, CancellationToken, Task<AvailabilityResponse?>>? CheckSlug { get; private set; }
+
     public async Task<ProvisionOffer> OfferCreateAsync(WorkOSTokenSource tokens, CancellationToken ct = default) {
+        CheckSlug = async (slug, token) => await client.CheckAvailabilityAsync(baseUrl, await tokens.GetAsync(token), slug, token);
+
+        try {
+            return await OfferCreateCoreAsync(tokens, ct);
+        } finally {
+            CheckSlug = null;
+        }
+    }
+
+    async Task<ProvisionOffer> OfferCreateCoreAsync(WorkOSTokenSource tokens, CancellationToken ct) {
         // Says what was actually established, not more: single sign-on returned nothing.
         progress.Notice("Single sign-on found no Capacitor workspace for your account.");
         progress.Notice("A workspace that signs in with the GitHub App won't appear here.");
@@ -157,24 +176,49 @@ public sealed class WizardTenantProvisioner(
 
         telemetry.Funnel.WorkspaceRequested();
 
-        var outcome = await client.ProvisionAsync(
-            baseUrl, await tokens.GetAsync(ct), orgName, slug, telemetry.Join.Current, ct);
+        string? code       = null;
+        string? requestUrl = null;
+        var     wrongCodes = 0;
 
-        switch (outcome.StatusCode) {
-            case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
-                telemetry.Funnel.WorkspaceProvisioned();
+        while (true) {
+            var outcome = await client.ProvisionAsync(
+                baseUrl, await tokens.GetAsync(ct), orgName, slug, WorkspaceTier.Free, telemetry.Join.Current, code, ct);
 
-                return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
-            case 202 or 200:
-                return await PollAsync(tokens, slug, orgName, origin, ct);
-            case 400:
-                return Failed(Reason400(outcome.Body?.Reason), outcome.Body?.Reason ?? "invalid_request");
-            case 409:
-                return Failed(Reason409(outcome.Body?.Reason, slug), outcome.Body?.Reason ?? "conflict");
-            case 0:
-                return Failed("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
-            default:
-                return Failed($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
+            switch (outcome.StatusCode) {
+                case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
+                    telemetry.Funnel.WorkspaceProvisioned();
+
+                    return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
+                case 202 or 200:
+                    return await PollAsync(tokens, slug, orgName, origin, ct);
+                case 403 when outcome.Body?.Reason == "invite_required":
+                case 400 when outcome.Body?.Reason == "invalid_code":
+                case 409 when outcome.Body?.Reason == "code_exhausted": {
+                    var reason       = outcome.Body.Reason;
+                    requestUrl       = outcome.Body.RequestUrl is { Length: > 0 } fresh ? fresh : requestUrl;
+                    var codeRejected = code is not null || reason != "invite_required";
+
+                    // Three rejected codes end the offer; a 403 to a supplied code counts as one.
+                    if (codeRejected && ++wrongCodes >= MaxInviteCodeAttempts)
+                        return Failed(InviteRefusal(reason, requestUrl, codeRejected), reason);
+
+                    code = PromptInviteCode is null
+                        ? null
+                        : (await PromptInviteCode(requestUrl, codeRejected ? CodeComplaint(reason) : null, ct))?.Trim();
+
+                    if (string.IsNullOrEmpty(code)) return Failed(InviteRefusal(reason, requestUrl, codeRejected), reason);
+
+                    continue;
+                }
+                case 400:
+                    return Failed(Reason400(outcome.Body?.Reason), outcome.Body?.Reason ?? "invalid_request");
+                case 409:
+                    return Failed(Reason409(outcome.Body?.Reason, slug), outcome.Body?.Reason ?? "conflict");
+                case 0:
+                    return Failed("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
+                default:
+                    return Failed($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
+            }
         }
     }
 
@@ -223,7 +267,7 @@ public sealed class WizardTenantProvisioner(
 
     async Task<ProvisionOffer> PollAsync(
             WorkOSTokenSource tokens, string slug, string orgName, string origin, CancellationToken ct) {
-        var retry = $"join '{slug}' from the Connect step";
+        var retry = $"sign in to '{slug}' with \"I have a workspace URL\"";
 
         for (var attempt = 0; attempt < MaxPolls; attempt++) {
             await Task.Delay(TimeSpan.FromMilliseconds(PollIntervalMs), _time, ct);
@@ -253,7 +297,7 @@ public sealed class WizardTenantProvisioner(
 
         // Notice, not Error: the workspace is being created, nothing has gone wrong. The reason on the
         // result is what lets the step headline it as pending rather than failed.
-        progress.Notice($"Still provisioning — finish later by joining '{slug}' from the Connect step.");
+        progress.Notice($"Still provisioning — finish later by signing in to '{slug}' with \"I have a workspace URL\".");
         telemetry.Funnel.WorkspaceFailed("poll_timeout");
 
         return ProvisionOffer.InProgress(slug);
@@ -273,6 +317,18 @@ public sealed class WizardTenantProvisioner(
         telemetry.Funnel.WorkspaceFailed(reason);
 
         return ProvisionOffer.Failed;
+    }
+
+    static string CodeComplaint(string reason) => reason switch {
+        "invalid_code"   => "That invite code isn't valid.",
+        "code_exhausted" => "That invite code has been used up.",
+        _                => "That invite code wasn't accepted."
+    };
+
+    static string InviteRefusal(string reason, string? requestUrl, bool codeRejected) {
+        var why = codeRejected ? CodeComplaint(reason) : "Capacitor is invite-only right now.";
+
+        return LinkPolicy.IsOpenable(requestUrl) ? $"{why} Request an invite at {requestUrl}." : why;
     }
 
     static string Reason400(string? reason) => reason switch {
@@ -325,8 +381,8 @@ public static class WizardSignInOperation {
             ConnectIntent.Paste paste => await facade.LoginAsync(
                 ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true, precondition: precondition),
             // Creation runs inside WorkOS discovery, after the org-less sign-in finds no tenant.
-            ConnectIntent.Discover or ConnectIntent.Create =>
-                await facade.DiscoverAsync(AuthProvider.WorkOS, forceDevice: false, ct),
+            ConnectIntent.Discover discover =>
+                await facade.DiscoverAsync(AuthProvider.WorkOS, discover.ForceDevice, ct),
             _ => new AuthResult.Failed("No connection was chosen.")
         };
 

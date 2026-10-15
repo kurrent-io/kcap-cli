@@ -22,4 +22,19 @@ public class DaemonStatusServingTests {
         await Assert.That(DaemonCommands.DescribeRunningDaemon(12345, serving: false))
             .IsEqualTo("running (PID 12345, starting — not yet serving)");
     }
+
+    [Test]
+    public async Task DescribePriority_names_the_word_and_the_daemon_for_the_background_band() {
+        await Assert.That(DaemonCommands.DescribePriority("alexey", "adaptive"))
+            .IsEqualTo("  priority: loaded as adaptive — background priority; run `kcap daemon service refresh --name alexey --force` to reload (ends this daemon's hosted agents)");
+        await Assert.That(DaemonCommands.DescribePriority("alexey", "background")).IsNotNull();
+    }
+
+    [Test]
+    public async Task DescribePriority_is_silent_for_positive_and_unknown_words() {
+        await Assert.That(DaemonCommands.DescribePriority("alexey", "daemon")).IsNull();
+        await Assert.That(DaemonCommands.DescribePriority("alexey", "interactive")).IsNull();
+        await Assert.That(DaemonCommands.DescribePriority("alexey", "app")).IsNull();
+        await Assert.That(DaemonCommands.DescribePriority("alexey", null)).IsNull();
+    }
 }

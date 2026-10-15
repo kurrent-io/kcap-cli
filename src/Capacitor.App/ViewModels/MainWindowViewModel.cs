@@ -6,7 +6,9 @@ using System.Reactive.Subjects;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.Cli.Core.PullRequests;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -34,15 +36,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         message == ReconnectingMessage
         || message == DaemonLifecycleController.AlreadyRunningReconnectStatus;
 
-    // StatusColors (shared with TrayIconRenderer's tray-icon overlay) is hex-only
-    // constants (plain strings, not Brush instances). A Brush is an AvaloniaObject with UI-thread
-    // affinity enforced the moment the renderer references it; caching one as a shared
-    // `static readonly` field would tie its affinity to whichever thread happens to trigger this
-    // type's static initializer FIRST (e.g. a plain unit test calling a static helper off the UI
-    // thread) and then poison every later render that reuses the same cached instance. Paint
-    // below constructs a fresh instance per call instead — cheap, and always on whatever thread
-    // the caller is on.
-    static IBrush Paint(string hex) => new SolidColorBrush(Color.Parse(hex));
+    static readonly IBrush ConnectedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Connected));
+    static readonly IBrush InProgressBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.InProgress));
+    static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
+    static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
+
+    static IBrush Paint(string hex) => hex switch {
+        StatusColors.Connected => ConnectedBrush,
+        StatusColors.InProgress => InProgressBrush,
+        StatusColors.Disrupted => DisruptedBrush,
+        _ => UnavailableBrush,
+    };
 
     readonly IDaemonClientService _service;
 
@@ -85,8 +89,34 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string?>? _restartPendingText;
     public string? RestartPendingText => _restartPendingText?.Value;
 
+    internal const string BackgroundPriorityMessage = "Daemon runs at background priority — agent terminals lag under load.";
+
+    ObservableAsPropertyHelper<bool>? _backgroundPriority;
+    /// The attached daemon runs in launchd's background band. Connected only: it describes the daemon on screen.
+    public bool BackgroundPriority => _backgroundPriority?.Value ?? false;
+
+    ObservableAsPropertyHelper<string?>? _backgroundPriorityText;
+    public string? BackgroundPriorityText => _backgroundPriorityText?.Value;
+
+    ObservableAsPropertyHelper<string?>? _reloadFailureText;
+    /// The standing reload outcome's line. Not gated on the attach: a reload that left the daemon
+    /// unreachable is exactly the outcome this line exists to show.
+    public string? ReloadFailureText => _reloadFailureText?.Value;
+
+    ObservableAsPropertyHelper<bool>? _isReloading;
+    public bool IsReloading => _isReloading?.Value ?? false;
+
+    ObservableAsPropertyHelper<bool>? _showsReloadBlock;
+    public bool ShowsReloadBlock => _showsReloadBlock?.Value ?? false;
+
+    public ReactiveCommand<Unit, Unit> ReloadDaemonCommand { get; }
+
     ObservableAsPropertyHelper<AttachState>? _state;
     public AttachState State => _state?.Value ?? AttachState.Connecting;
+    ObservableAsPropertyHelper<bool>? _loadingSessions;
+    public bool LoadingSessions => _loadingSessions?.Value ?? true;
+    ObservableAsPropertyHelper<bool>? _showsNoSessions;
+    public bool ShowsNoSessions => _showsNoSessions?.Value ?? false;
 
     // Display text for why we're not connected: friendly copy only — never a raw wire token
     // like daemon_unreachable. Null outside Unreachable.
@@ -155,13 +185,26 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// the coordinator's close paths route through.
     public ReactiveCommand<Unit, Unit> CloseWorkspaceCommand { get; }
 
-    /// The header refresh on the open local workspace. Disabled with no workspace, no session
+    /// The header refresh on the open workspace. Disabled with no workspace, no session
     /// id, or a refresh the user already asked for still running — the same intervals the button is.
     public ReactiveCommand<Unit, Unit> RefreshWorkCommand { get; }
 
     /// Opens the product documentation. Enabled whatever the server says — a user who cannot reach
     /// a tenant is exactly the one who needs the docs.
     public ReactiveCommand<Unit, Unit> OpenDocsCommand { get; }
+
+    public ReactiveCommand<Unit, Unit> OpenChangelogCommand { get; }
+
+    /// Enabled once the app has a Settings window to open — the same action the app menu and tray
+    /// use.
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+    volatile Action? _openSettings;
+
+    /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
+    /// rail's help flyout instead.
+    public bool AppMenuInWindow { get; }
+
+    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
 
     /// Opens the bug/feedback window for one category; inert without an action to route it to.
     public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
@@ -171,6 +214,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Opens the re-auth sign-in surface. Inert without an action to route it to.
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
+    public ReactiveCommand<Unit, Unit> SetupCommand { get; }
+    public bool CanOpenSetup { get; }
+    public HistoryImportRun? HistoryImport { get; }
+    public bool HistoryImportVisible => HistoryImport is not null;
+    public string HistoryImportStatus => HistoryImport is not { } run ? ""
+        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.State is ImportRunState.Failed or ImportRunState.Cancelled
+            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
+        : $"History imported · {run.Imported:N0} sessions uploaded";
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -266,7 +318,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
-            Action? requestSignIn = null) {
+            Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
+            bool? appMenuInWindow = null, Action? requestSetup = null,
+            HistoryImportRun? historyImport = null,
+            IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         _service = service;
         _time = time;
         Activity = activity;
@@ -280,15 +336,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
-        var canRefreshWork = this.WhenAnyValue(x => x.CurrentWorkspace)
-            .Select(CanRefreshOpenWork)
-            .Switch()
+        var canRefreshWork = Observable.Switch(this.WhenAnyValue(x => x.CurrentWorkspace)
+            .Select(CanRefreshOpenWork))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         RefreshWorkCommand = ReactiveCommand.Create(RefreshOpenWork, canRefreshWork);
         CanOpenFeedback     = openFeedback is not null;
         OpenFeedbackCommand = ReactiveCommand.Create<FeedbackCategory>(c => openFeedback?.Invoke(c), Observable.Return(CanOpenFeedback));
         OpenDocsCommand     = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.DocsUrl));
+        OpenChangelogCommand = ReactiveCommand.Create(() => LinkPolicy.Open(opener ?? new ShellUrlOpener(), AppMenuBar.ChangelogUrl));
+        AppMenuInWindow     = appMenuInWindow ?? !OperatingSystem.IsMacOS();
+        var settings        = settingsAction ?? Observable.Return<Action?>(null);
+        settings.Subscribe(open => _openSettings = open);
+        OpenSettingsCommand = ReactiveCommand.Create(
+            () => _openSettings?.Invoke(),
+            settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
+        CanOpenSetup = requestSetup is not null;
+        SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());
+        HistoryImport = historyImport;
         var offersSignIn    = requestSignIn is not null;
 
         // ReactiveCommand's own CanExecute observable already ANDs the supplied canExecute with
@@ -325,7 +390,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         home?.AttachDaemonRecovery(
             StartDaemonCommand, RetryCommand, canStart, canRetry, _startMessageChanges);
 
+        var reloadAction = reloadDaemon ?? (_ => Task.CompletedTask);
+        ReloadDaemonCommand = ReactiveCommand.CreateFromTask(
+            (CancellationToken ct) => reloadAction(ct),
+            service.Status
+                .CombineLatest(isReloading ?? Observable.Return(false), (st, reloading) => st.State == AttachState.Connected && !reloading)
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler));
+
         this.WhenActivated(disposables => {
+            if (historyImport is not null)
+                historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
 
@@ -396,8 +474,46 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.RestartPendingText, (string?)null)
                 .DisposeWith(disposables);
 
+            var backgroundSource = (backgroundPriority ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
+            var reloadingSource  = (isReloading ?? Observable.Return(false)).ObserveOn(RxSchedulers.MainThreadScheduler);
+            var reloadSource     = (reloadState ?? Observable.Return<ReloadState?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+
+            var backgroundWhileConnected = status
+                .CombineLatest(backgroundSource, (st, bg) => bg && st.State == AttachState.Connected)
+                .DistinctUntilChanged();
+            _backgroundPriority = backgroundWhileConnected
+                .ToProperty(this, x => x.BackgroundPriority, false)
+                .DisposeWith(disposables);
+            _backgroundPriorityText = backgroundWhileConnected.Select(b => b ? BackgroundPriorityMessage : null)
+                .ToProperty(this, x => x.BackgroundPriorityText, (string?)null)
+                .DisposeWith(disposables);
+
+            _isReloading = reloadingSource
+                .ToProperty(this, x => x.IsReloading, false)
+                .DisposeWith(disposables);
+
+            var failureText = reloadSource.Select(state => state is null ? null : ReloadCopy.For(state));
+            _reloadFailureText = failureText
+                .ToProperty(this, x => x.ReloadFailureText, (string?)null)
+                .DisposeWith(disposables);
+            _showsReloadBlock = backgroundWhileConnected
+                .CombineLatest(failureText, (bg, text) => bg || text is not null)
+                .DistinctUntilChanged()
+                .ToProperty(this, x => x.ShowsReloadBlock, false)
+                .DisposeWith(disposables);
+
             _state = status.Select(s => s.State)
                 .ToProperty(this, x => x.State, AttachState.Connecting)
+                .DisposeWith(disposables);
+
+            var loadingSessions = status.Select(s => s.State == AttachState.Connecting).DistinctUntilChanged();
+            _loadingSessions = loadingSessions
+                .ToProperty(this, x => x.LoadingSessions, true)
+                .DisposeWith(disposables);
+            var railEmpty = Rail?.WhenAnyValueUnsafe(r => r.IsEmpty) ?? Observable.Return(false);
+            _showsNoSessions = loadingSessions.CombineLatest(railEmpty, (loading, empty) => !loading && empty)
+                .DistinctUntilChanged()
+                .ToProperty(this, x => x.ShowsNoSessions, false)
                 .DisposeWith(disposables);
 
             _reason = status.Select(ReasonText)
@@ -449,7 +565,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// so; without an origin the id is resolved, and a same-id pair on both lanes resolves local.
     /// Refused once shutdown has latched — a new workspace is a new attach, and quiesce is already
     /// running. True when the session is the open workspace afterwards.
-    public bool OpenSession(string agentId, AgentOrigin? origin = null) {
+    public bool OpenSession(string agentId, AgentOrigin? origin = null) => OpenSessionCore(agentId, origin, revealInRail: true);
+
+    bool OpenSessionCore(string agentId, AgentOrigin? origin, bool revealInRail) {
         if (_navigation.ShutdownLatched) return false;
 
         // Neither lane holds the id: opening the local workspace for it would attach a terminal to
@@ -459,7 +577,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         // Re-clicking the open session must not tear down and rebuild a live attach. The other
         // lane's same-id agent is a different agent, and a remote host the local daemon has taken
         // over no longer owns the id at all: both are a real swap.
-        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) return true;
+        if (CurrentWorkspace is { } open && open.AgentId == agentId && !Superseded(open, lane)) {
+            if (revealInRail) Rail?.NotifySessionOpened(agentId, lane);
+            return true;
+        }
 
         ISessionWorkspace? next = lane == AgentOrigin.Remote && _remoteFactory is { } remote
             ? remote(agentId)
@@ -467,8 +588,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (next is null) return false;
 
         SwapTo(next);
-        Rail?.NotifySessionOpened(agentId);
+        if (revealInRail) Rail?.NotifySessionOpened(agentId, lane);
         return true;
+    }
+
+    public void OpenSessionPullRequest(string agentId, AgentOrigin origin, PullRequestSubjectDto? subject = null) {
+        if (_navigation.ShutdownLatched) return;
+        OpenSession(agentId, origin);
+        if (CurrentWorkspace?.AgentId != agentId || Superseded(CurrentWorkspace, origin)) return;
+        CurrentWorkspace.OpenPullRequest(subject);
     }
 
     static bool Superseded(ISessionWorkspace open, AgentOrigin lane) =>
@@ -498,14 +626,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public void CloseWorkspace() => SwapTo(null);
 
     static IObservable<bool> CanRefreshOpenWork(ISessionWorkspace? workspace) =>
-        workspace is WorkspaceViewModel { WorkContext: var work }
+        workspace is { WorkContext: var work }
             ? work.WhenAnyValue(w => w.HasSession, w => w.IsRefreshing, (hasSession, refreshing) => hasSession && !refreshing)
             : Observable.Never<bool>().StartWith(false);
 
     // The menu gesture and the key binding can both deliver one press. IsRefreshing flips
     // inside the work command, before this returns, so the second delivery no-ops.
     void RefreshOpenWork() {
-        if (CurrentWorkspace is not WorkspaceViewModel { WorkContext: { HasSession: true, IsRefreshing: false } work }) return;
+        if (CurrentWorkspace is not { WorkContext: { HasSession: true, IsRefreshing: false } work }) return;
         work.RefreshCommand.Execute().Subscribe();
     }
 
@@ -540,11 +668,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Where(moved => moved)
                 .Take(1)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive)),
+                .Subscribe(_ => Rebind(remote, AgentOrigin.Local, remote.IsTerminalActive, remote.IsPullRequestActive)),
             // Not a one-shot: a swap the host cannot complete leaves the watch armed for the next
             // proof, and one that completes retires it through the swap's own re-arming.
             WorkspaceViewModel local when _directory is { } directory => LocalRowMoves(directory, local.AgentId)
-                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive)),
+                .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
         // A watch that fired while it was still being armed has already swapped the workspace and
@@ -585,14 +713,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         && !SessionStatusDots.IsTerminal(twin.Status)
         && twin.SessionId == droppedSession;
 
-    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal) {
+    void Rebind(ISessionWorkspace open, AgentOrigin origin, bool terminal, bool pullRequest) {
         if (!ReferenceEquals(CurrentWorkspace, open)) return;
-        OpenSession(open.AgentId, origin);
-        if (!terminal || ReferenceEquals(CurrentWorkspace, open)) return;
-        switch (CurrentWorkspace) {
-            case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
-            case RemoteSessionViewModel remote: remote.ShowTerminalCommand.Execute().Subscribe(); break;
-        }
+        var subject = open.PullRequests?.Selected?.Subject;
+        OpenSessionCore(open.AgentId, origin, revealInRail: false);
+        if (ReferenceEquals(CurrentWorkspace, open)) return;
+        if (terminal) {
+            switch (CurrentWorkspace) {
+                case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;
+                case RemoteSessionViewModel remote: remote.ShowTerminalCommand.Execute().Subscribe(); break;
+            }
+        } else if (pullRequest) CurrentWorkspace?.OpenPullRequest(subject);
     }
 
     // A VM built without a tracker (a test, or any caller predating workspaces) must still not

@@ -178,7 +178,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         ? "Use lowercase letters, numbers, dots, hyphens or underscores, with no surrounding spaces or repeated hyphens." : null;
     public string? CapacityError => Capacity is not { } value || value < 0 || value > int.MaxValue || decimal.Truncate(value) != value
         ? "Enter a whole number (0 = unlimited)." : null;
-    public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS."
+    public string? RenameHint => !_canRenameOnPlatform ? "Renaming is available on macOS and Windows."
         : _needsAppRestart ? "Restart this app to manage the renamed daemon."
         : _nameOverridden ? "The name is set by KCAP_DAEMON_NAME. Remove that environment override and restart the app before renaming."
         : !_startupSettled.IsCompletedSuccessfully ? "Waiting for daemon startup to finish…"

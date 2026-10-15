@@ -232,6 +232,28 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
+    public async Task Discovery_stops_when_agent_exits_before_writing_transcript() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var agent = new AgentInstance("exit-1", null, "", null, "/r", "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow };
+        orch.RegisterAgentForTest(agent);
+
+        var run = orch.RunDiscoveryForTest(agent, _ => {
+            agent.ExitedCts.Cancel();
+            return ("sid-after-exit", "/late.jsonl");
+        });
+
+        await run;
+        await Assert.That(agent.SessionId).IsNull();
+        await Assert.That(agent.TranscriptPath).IsNull();
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task RegisterAgentAsync_registers_public_agent_and_skips_private() {
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
@@ -975,6 +997,28 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
 
         // Mirrors the read-only test: an unprotected agent's stdin really does reach the PTY.
+        await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
+    }
+
+    /// A PR-review agent is a dialogue the reviewer types into, unlike a flow participant.
+    [Test]
+    public async Task Attaching_to_a_review_agent_stays_read_write() {
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             pty    = new RecordingPtyProcess();
+        orch.SeedAgentForTest("rev-1", kind: LaunchKind.Review, pty: pty);
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Stdin("hello"u8.ToArray()), default);
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("rev-1", client, default);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.Attached);
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
     }
 

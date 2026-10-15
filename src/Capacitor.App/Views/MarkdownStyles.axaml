@@ -1,5 +1,6 @@
 <Styles xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
         xmlns:mv="using:MarkView.Avalonia"
         xmlns:mri="using:MarkView.Avalonia.Rendering.Inlines">
     <!-- MarkView's own theme paints on `:is(TextBlock).markdown-*` classes and its paragraphs are a
@@ -37,6 +38,24 @@
         <Setter Property="FontFamily" Value="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-paragraph,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-list-marker">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="LineHeight" Value="20" />
+    </Style>
+    <Style Selector="views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h1,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h2,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h3,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h4,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h5,
+                     views|MarkdownView.thinking mv|MarkdownViewer :is(TextBlock).markdown-h6">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="views|MarkdownView.thinking mv|MarkdownViewer Run.markdown-code-inline">
+        <Setter Property="FontSize" Value="12.5" />
     </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-code-block">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
@@ -177,11 +196,8 @@
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="0" />
     </Style>
-    <Style Selector="mv|MarkdownViewer Path.markdown-details-chevron">
-        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" />
-        <Setter Property="StrokeThickness" Value="1.8" />
-        <Setter Property="StrokeLineCap" Value="Round" />
-        <Setter Property="StrokeJoin" Value="Round" />
+    <Style Selector="mv|MarkdownViewer views|AppIcon.markdown-details-chevron">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
     </Style>
     <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary">
         <Setter Property="Background" Value="Transparent" />

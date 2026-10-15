@@ -1,4 +1,3 @@
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.PullRequests;
 using ReactiveUI.Reactive;
 
@@ -20,18 +19,26 @@ public sealed partial class PullRequestContextViewModel {
             if (manual) Notify();
             return;
         }
+        // A fresh manual discovery supersedes overview/page reads using the old provider state.
+        if (manual) CancelReads();
         var refresh = _refreshDiscovery;
         _refreshDiscovery = false;
         _queuedRefresh = false;
         _refreshing = true;
         _lastRefresh = _time.GetTimestamp();
         Notify();
-        var repository = _primaryRepo?.Invoke();
-        // The daemon reports the branch the worktree was cut on; a session that switched since
-        // opens its PR on the new one, which only the checkout's HEAD knows.
-        var branch = _branch = GitRepository.CurrentBranch(_worktree) ?? _branch;
+        var worktree = _worktree;
+        var reportedBranch = _branch;
+        var generation = _generation;
         Start(async ct => {
-            _readers?.DescribeSession(session, repository, branch);
+            var branch = await Task.Run(() => _readBranch(worktree), ct).WaitAsync(ct).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => {
+                ct.ThrowIfCancellationRequested();
+                if (_disposed || generation != _generation) throw new OperationCanceledException(ct);
+                // A reported branch can advance while the filesystem lookup is in flight.
+                branch = _worktree == worktree && _branch == reportedBranch ? branch ?? reportedBranch : _branch;
+                _readers?.DescribeSession(session, _primaryRepo?.Invoke(), branch);
+            });
             var capability = await _source.DiscoverAsync(refresh, ct).ConfigureAwait(false);
             var links = capability.Kind switch {
                 PullRequestCapabilityKind.Supported => await _source.ListAsync(session, ct).ConfigureAwait(false),
@@ -39,6 +46,7 @@ public sealed partial class PullRequestContextViewModel {
                 _ => null
             };
             return () => {
+                if (_worktree == worktree && _branch == reportedBranch) _branch = branch;
                 _refreshing = false;
                 _legacy = capability.Kind is PullRequestCapabilityKind.Legacy or PullRequestCapabilityKind.Unsupported;
                 if (links is null) {
@@ -69,7 +77,7 @@ public sealed partial class PullRequestContextViewModel {
     }
 
     void RequestOverview() {
-        if (_disposed || !_foreground || _legacy || _stopped || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
+        if (_disposed || !_foreground || _legacy || _stopped || _refreshing || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
             || _retryAt > _time.GetUtcNow().UtcDateTime || _lastOverview is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) return;
         _overviewPending = true;
         _lastOverview = _time.GetTimestamp();
@@ -126,7 +134,7 @@ public sealed partial class PullRequestContextViewModel {
             return () => {
                 if (read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale && read.Data is { } page && AcceptAccess(read)) {
                     var state = _sections.GetValueOrDefault(key) ?? new PullRequestSectionState(key);
-                    if (state.Snapshot is not null && state.Snapshot != page.SnapshotId && cursor is not null) { FailProtocol(); return; }
+                    if (state.Snapshot is not null && state.Snapshot != page.SnapshotId && cursor is not null) { FailProtocol(read.Reader); return; }
                     if (refresh || state.Snapshot != page.SnapshotId) { state.Pages.Clear(); state.Earlier.Clear(); }
                     var rows = page.Items.Select(item => project(item, choice.Subject)).ToArray();
                     var existing = state.Pages.FindIndex(item => item.Cursor == page.PageCursor);
@@ -135,7 +143,7 @@ public sealed partial class PullRequestContextViewModel {
                     else if (earlier) { state.Pages.Insert(0, saved); state.Earlier.Remove(page.PageCursor); }
                     else {
                         var known = state.Pages.SelectMany(p => p.Rows).Select(row => row.Id).ToHashSet(StringComparer.Ordinal);
-                        if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(); return; }
+                        if (rows.Any(row => !known.Add(row.Id))) { FailProtocol(read.Reader); return; }
                         state.Pages.Add(saved);
                     }
                     if (_headRestartSection == key) _headRestartSection = null;
@@ -196,6 +204,7 @@ public sealed partial class PullRequestContextViewModel {
         SetNotice(Reason(read));
     }
     void ApplyChoices(bool listed) {
+        if (_selected is null) ApplyRequestedSubject();
         var incoming = _sessionItems.Select(link => new PullRequestChoice(link)).ToList();
         var previous = _selected?.Subject;
         var selected = _explicitSelection ? incoming.FirstOrDefault(choice => choice.Subject == previous) : null;
@@ -208,9 +217,10 @@ public sealed partial class PullRequestContextViewModel {
         try {
             if (!_choices.SequenceEqual(incoming)) { _choices.Clear(); _choices.AddRange(incoming); }
         } finally { _updatingChoices = false; }
-        if (previous != selected?.Subject) Select(selected);
+        if (previous != selected?.Subject) Select(selected, explicitSelection: _explicitSelection);
         else { _selected = selected; this.RaisePropertyChanged(nameof(Selected)); }
         if (listed) {
+            _requestedSubject = null;
             if (selected is { IsAvailable: false }) {
                 CancelReads(); ClearProtected(); SetNotice("This pull request is no longer linked or visible. Select another PR or retry.");
             }
@@ -253,6 +263,13 @@ public sealed partial class PullRequestContextViewModel {
         Select(best);
         return true;
     }
-    void ForgetChoices() { CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null; }
-    void FailProtocol() { ClearProtected(); SetNotice("The server returned an inconsistent PR response. Retry after updating the server and app."); }
+    void ForgetChoices() {
+        if (_explicitSelection && _selected is not null) _requestedSubject = _selected.Subject;
+        CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null;
+    }
+    void FailProtocol(string? reader) {
+        ClearProtected();
+        SetNotice(reader is null ? "The server returned an inconsistent PR response. Retry after updating the server and app."
+            : $"{reader} returned an inconsistent PR response. Refresh to reload it.");
+    }
 }

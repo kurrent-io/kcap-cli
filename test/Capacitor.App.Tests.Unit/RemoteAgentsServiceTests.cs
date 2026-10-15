@@ -54,8 +54,9 @@ public class RemoteAgentsServiceTests {
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
         await Eventually(() => svc.Agents.Count == 1);
-        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
-        await Task.Delay(100);
+        // Status edges refresh synchronously; no throttle timer is involved.
+        lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
         await Assert.That(svc.Agents.Count).IsEqualTo(1);
     }
 
@@ -87,10 +88,11 @@ public class RemoteAgentsServiceTests {
     public async Task StaleFetchCompletingAfterIdentityChangeIsDiscarded() {
         var callCount = 0;
         var gate = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fresh = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
         var lane = new FakeServerLane();
         using var svc = new RemoteAgentsService(lane, async _ => {
             var n = Interlocked.Increment(ref callCount);
-            return n == 1 ? await gate.Task : new RemoteFetch([Agent("a2")]);
+            return await (n == 1 ? gate.Task : fresh.Task);
         }, TimeSpan.Zero);
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1")); // fetch #1 in flight
@@ -98,12 +100,14 @@ public class RemoteAgentsServiceTests {
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2")); // clear + generation bump
 
+        // The next fetch can start only after the stale result has been processed.
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
         gate.SetResult(new RemoteFetch([Agent("a1")])); // u1's stale rows land after the identity change
 
-        await Task.Delay(150); // give the stale completion a chance to (wrongly) publish
+        await Eventually(() => Volatile.Read(ref callCount) == 2);
         await Assert.That(svc.Agents.Count).IsEqualTo(0);
 
-        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default); // a fresh fetch under u2
+        fresh.SetResult(new RemoteFetch([Agent("a2")]));
         await Eventually(() => svc.Agents.Count == 1 && svc.Agents.Lookup("a2").HasValue);
     }
 
@@ -116,7 +120,6 @@ public class RemoteAgentsServiceTests {
         await Eventually(() => svc.Agents.Count == 1);
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
-        await Task.Delay(100);
         await Assert.That(svc.Agents.Count).IsEqualTo(1);
     }
 
@@ -185,10 +188,11 @@ public class RemoteAgentsServiceTests {
         var parkCalls = 0;
         var callCount = 0;
         var gate = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fresh = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
         var lane = new FakeServerLane();
         using var svc = new RemoteAgentsService(lane, async _ => {
             var n = Interlocked.Increment(ref callCount);
-            return n == 1 ? await gate.Task : new RemoteFetch([Agent("a2")]);
+            return await (n == 1 ? gate.Task : fresh.Task);
         }, TimeSpan.Zero, onUnauthorized: _ => Interlocked.Increment(ref parkCalls));
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1")); // fetch #1 in flight
@@ -196,9 +200,13 @@ public class RemoteAgentsServiceTests {
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2")); // generation bump
 
+        // The next fetch can start only after the stale result has been processed.
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
         gate.SetResult(new RemoteFetch(null, Unauthorized: true)); // u1's stale Unauthorized lands late
 
-        await Task.Delay(150); // give the stale completion a chance to (wrongly) park
+        await Eventually(() => Volatile.Read(ref callCount) == 2);
+        fresh.SetResult(new RemoteFetch([Agent("a2")]));
+        await Eventually(() => svc.Agents.Count == 1);
         await Assert.That(Volatile.Read(ref parkCalls)).IsEqualTo(0);
     }
 
@@ -210,10 +218,11 @@ public class RemoteAgentsServiceTests {
         var parkCalls = 0;
         var callCount = 0;
         var gate = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fresh = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
         var lane = new FakeServerLane();
         using var svc = new RemoteAgentsService(lane, async _ => {
             var n = Interlocked.Increment(ref callCount);
-            return n == 1 ? await gate.Task : new RemoteFetch(null, Unauthorized: true);
+            return await (n == 1 ? gate.Task : fresh.Task);
         }, TimeSpan.Zero, onUnauthorized: _ => Interlocked.Increment(ref parkCalls));
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1")); // fetch #1 in flight
@@ -221,12 +230,14 @@ public class RemoteAgentsServiceTests {
 
         lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1")); // same-subject reconnect
 
+        // The next fetch can start only after the stale result has been processed.
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
         gate.SetResult(new RemoteFetch(null, Unauthorized: true)); // pre-reconnect fetch's stale Unauthorized
 
-        await Task.Delay(150);
+        await Eventually(() => Volatile.Read(ref callCount) == 2);
         await Assert.That(Volatile.Read(ref parkCalls)).IsEqualTo(0);
 
-        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default); // a fresh post-reconnect fetch
+        fresh.SetResult(new RemoteFetch(null, Unauthorized: true));
         await Eventually(() => Volatile.Read(ref parkCalls) == 1);
     }
 
@@ -246,5 +257,33 @@ public class RemoteAgentsServiceTests {
 
         await Eventually(() => receivedEpoch is not null);
         await Assert.That(receivedEpoch).IsEqualTo(7);
+    }
+
+    /// When the agents HTTP fetch finishes ahead of GetConnectedDaemonsAsync on Connect, Agents
+    /// must wait for Daemons to publish so AgentDirectory never observes remote rows against an
+    /// unseeded empty daemon list.
+    [Test]
+    public async Task ConnectPublishesDaemonsBeforeAgentsWhenAgentsFetchFinishesFirst() {
+        var daemonsGate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane { DaemonsHandler = () => daemonsGate.Task };
+        using var svc = new RemoteAgentsService(lane, _ => Task.FromResult(new RemoteFetch([Agent("a1")])), TimeSpan.Zero);
+
+        IReadOnlyList<DaemonInfo> seenDaemons = [];
+        var published = new TaskCompletionSource<IReadOnlyList<DaemonInfo>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var daemonsSub = svc.Daemons.Subscribe(d => seenDaemons = d);
+        using var agentsSub = svc.Agents.Connect().Subscribe(changes => {
+            if (changes.Count > 0) published.TrySetResult(seenDaemons);
+        });
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+        // The synchronous fetch has reached the daemon gate before OnNext returns.
+        await Assert.That(svc.Agents.Count).IsEqualTo(0);
+
+        daemonsGate.SetResult([new DaemonInfo { Name = "work-mac", MachineId = "m1", OwnerUserId = "u1", Connected = true }]);
+
+        // Cache count can change before Connect delivers its notification. Await the observer.
+        var daemonsWhenAgentsPublished = await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(daemonsWhenAgentsPublished.Count).IsEqualTo(1);
+        await Assert.That(svc.Agents.Count).IsEqualTo(1);
     }
 }

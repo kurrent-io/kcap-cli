@@ -6,7 +6,6 @@ using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Collections;
-using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
@@ -44,31 +43,24 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
     static readonly IReadOnlyList<HarnessOption> DefaultHarnessOptions = HostedHarnessCatalog.Build(null);
 
-    internal const string WaitingNote      = "Waiting for the session to register…";
-    internal const string LoadingNote      = "Loading work context…";
-    internal const string NoWorkItemNote   = "No work item attached yet. The agent's declare tool attaches one.";
-    internal const string NoRepositoryNote = "This session has no repository. A work item cannot attach until the work lands in one.";
+    internal const string WaitingNote      = "Waiting for session…";
+    internal const string LoadingNote      = "Loading…";
+    internal const string NoWorkItemNote   = "No work item yet — the agent can attach one with declare.";
+    internal const string NoRepositoryNote = "No repository on this session, so a work item cannot attach.";
     internal const string SignedOutNote    = "Sign in to see the work context.";
     internal const string NotInPlanNote    = "Work items are not in this workspace's plan.";
     internal const string UnreachableNote  = "Couldn't reach the server.";
 
-    sealed class ReadLease(string sessionId) {
-        public string SessionId { get; } = sessionId;
-        public CancellationTokenSource Cts { get; } = new();
-        public Task? Pending;
-        public bool RefreshPending;
-        public bool IsReading => Pending is { IsCompleted: false };
-    }
-
+    readonly bool _isRemote;
     readonly IWorkContextSource _source;
+    readonly SingleFlightReader<string, WorkContextRead> _reader;
+    readonly SingleFlightReader<(string? Path, string? Reported), string> _branchReader;
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly Action<string>? _openWorkItem;
-    readonly SessionSubagents _subagents;
+    readonly SessionRuns _runs;
     readonly BehaviorSubject<bool> _canOpenWorkItem = new(false);
     readonly CompositeDisposable _disposables = new();
-    readonly List<ReadLease> _outstanding = [];
-    ReadLease? _current;
     ITimer? _timer;
     bool _tornDown;
     AgentStatusDto? _dto;
@@ -102,15 +94,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     /// The session's subagents, shared with the chat tab; a session-local fact like the ones
     /// under SESSION, so it renders in every pane phase.
-    public IAvaloniaReadOnlyList<SubagentRow> Subagents => _subagents.Rows;
-    public bool HasSubagents => _subagents.Rows.Count > 0;
+    public IAvaloniaReadOnlyList<RunRow> Runs => _runs.Rows;
+    public bool HasRuns => _runs.Rows.Count > 0;
     /// What the collapsed section lists.
-    public IAvaloniaReadOnlyList<SubagentRow> RunningSubagents => _subagents.Running;
-    public bool HasRunningSubagents => _subagents.RunningCount > 0;
-    public string SubagentsHeader {
+    public IAvaloniaReadOnlyList<RunRow> RunningRuns => _runs.Running;
+    public bool HasRunningRuns => _runs.RunningCount > 0;
+    public string RunsHeader {
         get {
-            var running = _subagents.RunningCount;
-            var total = _subagents.Rows.Count;
+            var running = _runs.RunningCount;
+            var total = _runs.Rows.Count;
             return running switch {
                 0                     => $"{total}",
                 var r when r == total => $"{r} running",
@@ -119,23 +111,23 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
 
-    static readonly SubagentState[] SubagentCountOrder =
-        [SubagentState.Running, SubagentState.Done, SubagentState.Failed, SubagentState.Stopped];
+    static readonly RunState[] RunCountOrder =
+        [RunState.Running, RunState.Done, RunState.Failed, RunState.Stopped];
 
     /// What the collapsed header shows: one entry per state something is in, so the numbers
     /// add up to the list.
-    public IReadOnlyList<SubagentCount> SubagentCounts =>
-        [.. SubagentCountOrder.Select(state => new SubagentCount(state, _subagents.Count(state))).Where(c => c.Count > 0)];
+    public IReadOnlyList<RunCount> RunCounts =>
+        [.. RunCountOrder.Select(state => new RunCount(state, _runs.Count(state))).Where(c => c.Count > 0)];
 
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
     public PlanSectionViewModel Plan { get; }
 
-    void RefreshSubagents() {
-        this.RaisePropertyChanged(nameof(HasSubagents));
-        this.RaisePropertyChanged(nameof(HasRunningSubagents));
-        this.RaisePropertyChanged(nameof(SubagentsHeader));
-        this.RaisePropertyChanged(nameof(SubagentCounts));
+    void RefreshRuns() {
+        this.RaisePropertyChanged(nameof(HasRuns));
+        this.RaisePropertyChanged(nameof(HasRunningRuns));
+        this.RaisePropertyChanged(nameof(RunsHeader));
+        this.RaisePropertyChanged(nameof(RunCounts));
     }
 
     internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
@@ -182,9 +174,18 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     string? _reportedBranch;
     // The daemon reports the branch the worktree was cut on; HEAD knows a switch made since.
-    void ResolveBranch() {
-        var branch = GitRepository.CurrentBranch(WorktreePath) ?? _reportedBranch;
-        Branch = string.IsNullOrWhiteSpace(branch) ? "—" : branch;
+    void ResolveBranch(bool refresh = false) {
+        if (_isRemote) {
+            Branch = string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch;
+            return;
+        }
+        var state = (Path: WorktreePath, Reported: _reportedBranch);
+        if (_branchReader.HasCurrent && _branchReader.CurrentState == state) {
+            if (refresh) _branchReader.Refresh();
+            return;
+        }
+        Branch = string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch;
+        _branchReader.Switch(state);
     }
 
     bool _isStale;
@@ -232,25 +233,46 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ? $"Refresh this work · {RefreshShortcut.Label} or {fromTerminal}"
             : $"Refresh this work · {RefreshShortcut.Label}";
 
+    /// The Artefacts tab's model, when this pane's workspace has one; the pane switches and
+    /// refreshes its session beside the plan's.
+    public ArtefactsTabViewModel? Artefacts { get; }
+
     public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
     /// The item's own page in the web UI; enabled once a read has named the item.
     public ReactiveCommand<Unit, Unit> OpenWorkItemCommand { get; }
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
 
     /// Test-only seam: the current lease's read, or the last one started.
-    internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
+    internal Task? PendingReadForTesting => _reader.PendingReadForTesting;
 
     public WorkContextViewModel(
             IObservable<AgentStatusDto?> presence, IWorkContextSource source, TimeProvider time, IUrlOpener opener,
-            SessionSubagents subagents, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
-            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null) {
+            SessionRuns runs, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null,
+            Action<string>? openWorkItem = null, IPlanSource? plans = null, PlanActivity? planActivity = null,
+            ArtefactsTabViewModel? artefacts = null, bool isRemote = false) {
+        _isRemote = isRemote;
         _source = source;
+        _branchReader = new SingleFlightReader<(string? Path, string? Reported), string>(
+            (state, ct) => Task.Run(() => {
+                var branch = GitRepository.CurrentBranch(state.Path) ?? state.Reported;
+                return string.IsNullOrWhiteSpace(branch) ? "—" : branch;
+            }, ct),
+            _ => string.IsNullOrWhiteSpace(_reportedBranch) ? "—" : _reportedBranch,
+            branch => Branch = branch,
+            "checkout branch");
+        _reader = new SingleFlightReader<string, WorkContextRead>(
+            _source.ReadAsync,
+            ex => WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message),
+            Apply,
+            "work context",
+            reading => IsReading = reading);
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
+        Artefacts = artefacts;
         _opener = opener;
         _time = time;
         _openWorkItem = openWorkItem;
-        _subagents = subagents;
-        _subagents.Changed += RefreshSubagents;
+        _runs = runs;
+        _runs.Changed += RefreshRuns;
         InitializeProjections();
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
@@ -261,13 +283,13 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         // the click with no feedback.
         RefreshCommand = ReactiveCommand.Create(
             () => {
-                ResolveBranch();
+                ResolveBranch(refresh: true);
                 PullRequests?.Refresh();
                 Plan.Refresh();
-                if (_current is null) return;
+                Artefacts?.Refresh();
+                if (!_reader.HasCurrent) return;
                 IsRefreshing = true;
-                if (_current.IsReading) _current.RefreshPending = true;
-                else StartRead(_current);
+                _reader.Refresh();
             },
             _hasSessionChanges);
         _disposables.Add(RefreshCommand);
@@ -291,8 +313,21 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _dto = dto;
         UpdateFacts(dto);
         HasAgent = true;
-        if (dto.SessionId is { Length: > 0 } id && (_current is null || !string.Equals(_current.SessionId, id, StringComparison.Ordinal)))
+        if (dto.SessionId is { Length: > 0 } id && !string.Equals(_reader.CurrentState, id, StringComparison.Ordinal))
             SwitchSession(id);
+        else if (_isRemote && string.IsNullOrEmpty(dto.SessionId) && HasSession) {
+            _reader.ClearCurrent();
+            HasSession = false;
+            IsReading = false;
+            SessionIdText = "resolving…";
+            PrimaryRepository = null;
+            ClearServerProjections();
+            IsStale = false;
+            Phase = WorkContextPhase.WaitingForSession;
+            Plan.SwitchSession(null);
+            Artefacts?.SwitchSession(null, null);
+            _runs.Clear();
+        }
         this.RaisePropertyChanged(nameof(PhaseNote));
     }
 
@@ -305,7 +340,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     void UpdateFacts(AgentStatusDto dto) {
         Repository = RepoLabel.Leaf(dto.RepoPath);
         RepositoryPath = dto.RepoPath;
-        var checkout = CheckoutLabel.CheckoutPathFor(dto);
+        var checkout = _isRemote ? dto.WorktreePath : CheckoutLabel.CheckoutPathFor(dto);
         WorktreePath = checkout;
         Worktree = checkout is null
             ? "—"
@@ -315,72 +350,42 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         var vendorLabel = HostedHarnessCatalog.LabelFor(DefaultHarnessOptions, dto.Vendor);
         Harness = $"{vendorLabel} · {HostedHarnessCatalog.ModelLabelFor(dto.Vendor, dto.Model ?? "")}";
         Transport = TransportLabel(HostedHarnessCatalog.EffectiveFamily(dto.HasTerminal, dto.Vendor));
-        if (_current is null) SessionIdText = dto.SessionId ?? "resolving…";
+        if (!_reader.HasCurrent) SessionIdText = dto.SessionId ?? "resolving…";
         UpdateRequester(dto, vendorLabel);
     }
 
     void SwitchSession(string id) {
-        var old = _current;
-        _current = new ReadLease(id);
-        old?.Cts.Cancel();
         HasSession = true;
         SessionIdText = id;
         PrimaryRepository = null;
         ClearServerProjections();
         IsStale = false;
         Phase = WorkContextPhase.Loading;
-        StartRead(_current);
+        _reader.Switch(id);
         Plan.SwitchSession(id);
-    }
-
-    void StartRead(ReadLease lease) {
-        lease.RefreshPending = false;
-        lease.Pending = RunReadAsync(lease);
-        _outstanding.Add(lease);
-        if (ReferenceEquals(lease, _current)) IsReading = true;
-    }
-
-    async Task RunReadAsync(ReadLease lease) {
-        WorkContextRead? read = null;
-        try {
-            read = await _source.ReadAsync(lease.SessionId, lease.Cts.Token).ConfigureAwait(false);
-        } catch (OperationCanceledException) {
-        } catch (Exception ex) {
-            read = WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message);
-        }
-        try {
-            await Dispatcher.UIThread.InvokeAsync(() => Settle(lease, read));
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: work context: {ex.Message}");
-        }
-    }
-
-    void Settle(ReadLease lease, WorkContextRead? read) {
-        _outstanding.Remove(lease);
-        var current = ReferenceEquals(lease, _current) && !_tornDown;
-        if (!current) { lease.Cts.Dispose(); return; }
-        try {
-            if (read is not null) Apply(read);
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: work context: {ex.Message}");
-        }
-        // A queued refresh keeps the pane reading, so the click that queued it keeps its progress.
-        if (lease.RefreshPending) { StartRead(lease); return; }
-        IsReading = false;
+        Artefacts?.SwitchSession(id, _isRemote ? null : WorktreePath ?? RepositoryPath);
     }
 
     void OnTick() {
         if (_tornDown) return;
+        if (_dto is not null) ResolveBranch(refresh: true);
         Plan.Refresh();
-        if (_current is { IsReading: false } lease) StartRead(lease);
+        if (Artefacts is { IsShown: true } or { LastReadFailed: true }) Artefacts.Refresh();
+        _reader.StartIfIdle();
+    }
+
+    internal void Reconnected() {
+        if (_tornDown) return;
+        Plan.Refresh();
+        Artefacts?.Refresh();
+        _reader.Refresh();
     }
 
     void OnSignInCompleted() {
         if (_tornDown) return;
         Plan.Refresh();
-        if (_current is not { } lease) return;
-        if (lease.IsReading) lease.RefreshPending = true;
-        else StartRead(lease);
+        Artefacts?.Refresh();
+        _reader.Refresh();
     }
 
     /// Applies one read for the current lease. Section-level merging lives in the projections half.
@@ -412,18 +417,12 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public async Task TeardownAsync() {
         if (_tornDown) return;
         _tornDown = true;
-        _subagents.Changed -= RefreshSubagents;
+        _runs.Changed -= RefreshRuns;
         _timer?.Dispose();
         _timer = null;
         _disposables.Dispose();
-        var leases = _outstanding.ToArray();
-        foreach (var lease in leases) lease.Cts.Cancel();
-        _current = null;
-        foreach (var lease in leases)
-            if (lease.Pending is { } pending) {
-                try { await pending; } catch (Exception) { }
-            }
-        foreach (var lease in leases) lease.Cts.Dispose();
+        await _reader.TeardownAsync();
+        await _branchReader.TeardownAsync();
         await Plan.TeardownAsync();
     }
 }

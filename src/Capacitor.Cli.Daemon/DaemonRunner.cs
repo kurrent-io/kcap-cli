@@ -11,6 +11,8 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -388,6 +390,8 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(sp => new PermissionDecisionLog(
             coverageStateDir, sp.GetRequiredService<ILogger<PermissionDecisionLog>>()));
         builder.Services.AddSingleton<PolicySnapshotProvider>();
+        builder.Services.AddSingleton(sp => PolicyJudgeGateway.ForHook(
+            sp.GetRequiredService<ICapacitorHttpClient>(), config.ServerUrl, time));
 
         // The DaemonStatus push: ONE notifier singleton shared by ServerConnection (pulses on hub
         // state transitions) and AgentOrchestrator (pulses on agent mutation) via their optional
@@ -479,7 +483,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -489,7 +494,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -499,7 +505,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -509,7 +516,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
@@ -519,7 +527,19 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<ServerConnection>(), time,
                 permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
-                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
+            )
+        );
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new AcpHostedAgentRuntimeFactory(
+                AcpVendorDescriptors.Grok,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<ServerConnection>(), time,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>(),
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>()
             )
         );
 
@@ -544,6 +564,20 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<TimeProvider>(),
                 paths: harnesses.Of<Core.Harness.Pi.PiHarness>().Paths
+            )
+        );
+
+        // MSP is Muse's own JSON-RPC over one `muse serve` child per agent. Recording rides the hook
+        // and watcher path, so the runtime exposes no transcript source.
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
+            new Harness.Muse.MuseHostedAgentRuntimeFactory(
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ServerConnection>(),
+                paths: harnesses.Of<Core.Harness.Muse.MuseHarness>().Paths,
+                permissionBroker: sp.GetRequiredService<PermissionPromptBroker>(),
+                permissionDecisionLog: sp.GetRequiredService<PermissionDecisionLog>()
             )
         );
 
@@ -1262,6 +1296,8 @@ public static partial class DaemonRunner {
         "opencode"    => v => config.OpenCodeUnattendedReviewerEnabled    = v,
         "antigravity" => v => config.AntigravityUnattendedReviewerEnabled = v,
         "pi"          => v => config.PiUnattendedReviewerEnabled          = v,
+        "grok"        => v => config.GrokUnattendedReviewerEnabled        = v,
+        MuseVendor    => v => config.MuseUnattendedReviewerEnabled        = v,
         _ => throw new NotSupportedException(
             $"Gated reviewer '{vendor}' is in GatedReviewers.All but no DaemonConfig flag is wired to "
           + $"its opt-out switch, so setting {GatedReviewers.Resolve(vendor)?.EnableEnvVar ?? "it"} "
@@ -1330,6 +1366,13 @@ public static partial class DaemonRunner {
 
         SeedReviewerAffirmation(
             stateDir, PiVendor, config.PiUnattendedReviewerEnabled, config.PiPath, binaries);
+
+        SeedReviewerAffirmation(
+            stateDir, AcpVendorDescriptors.Grok.Vendor,
+            config.GrokUnattendedReviewerEnabled, config.GrokPath, binaries);
+
+        SeedReviewerAffirmation(
+            stateDir, MuseVendor, config.MuseUnattendedReviewerEnabled, config.MusePath, binaries);
 
         SeedVersionFloor(stateDir, AntigravityVendor, config.AntigravityPath, binaries);
     }
@@ -1457,13 +1500,17 @@ public static partial class DaemonRunner {
     internal const string CopilotLauncherPolicyVersion = "copilot-unattended-v1";
     internal const string AntigravityLauncherPolicyVersion = "antigravity-unattended-v1";
     internal const string OpenCodeLauncherPolicyVersion = "opencode-unattended-v1";
+    internal const string GrokLauncherPolicyVersion = "grok-unattended-v1";
     internal const string PiLauncherPolicyVersion = "pi-unattended-v1";
+    internal const string MuseLauncherPolicyVersion = "muse-unattended-v1";
 
     /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
     /// name, and the server routes on the vendor.</summary>
     internal const string AntigravityVendor = "antigravity";
 
     internal const string PiVendor = "pi";
+
+    internal const string MuseVendor = "muse";
 
     /// <param name="advertised">The already-classified advertised vendors, when the caller has them.
     /// Passing them avoids re-running a classification that spawns vendor binaries; omitting them
@@ -1497,7 +1544,9 @@ public static partial class DaemonRunner {
                 "copilot" => CopilotLauncherPolicyVersion,
                 AntigravityVendor => AntigravityLauncherPolicyVersion,
                 "opencode" => OpenCodeLauncherPolicyVersion,
+                "grok"    => GrokLauncherPolicyVersion,
                 PiVendor  => PiLauncherPolicyVersion,
+                MuseVendor => MuseLauncherPolicyVersion,
                 _         => $"{vendor}-unattended-v1"
             };
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,

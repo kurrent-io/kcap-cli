@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              x:Class="Capacitor.App.Views.AttachmentChipStrip">
     <ItemsControl x:Name="ChipItems">
@@ -31,12 +32,14 @@
                             <TextBlock Text="{Binding SizeLabel}" FontSize="10.5"
                                        Foreground="{StaticResource KcapFaintBrush}" />
                         </StackPanel>
-                        <Button x:Name="ChipRemove" Command="{Binding RemoveCommand}" Content="✕"
+                        <Button x:Name="ChipRemove" Command="{Binding RemoveCommand}" AutomationProperties.Name="Remove attachment"
                                 ToolTip.Tip="Remove" Width="20" Height="20" Padding="0" FontSize="10"
                                 CornerRadius="10" Cursor="Hand" VerticalAlignment="Center"
                                 HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                 Background="Transparent" BorderThickness="0"
-                                Foreground="{StaticResource KcapMutedBrush}" />
+                                Foreground="{StaticResource KcapMutedBrush}">
+                            <views:AppIcon Kind="X" Size="14" />
+                        </Button>
                     </StackPanel>
                 </Border>
             </DataTemplate>

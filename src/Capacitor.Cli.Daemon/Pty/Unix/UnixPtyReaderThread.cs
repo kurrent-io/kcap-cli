@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
@@ -85,23 +86,48 @@ sealed class UnixPtyReaderThread {
         }
     }
 
+    /// <summary>Bytes read, or 0 once the slave side has hung up or the stop token fired. Throws
+    /// <see cref="IOException"/> for any other failure: the end of the stream is what tears an agent
+    /// down, so a failure that is not a hangup must surface as one rather than pass for an exit.</summary>
     int ReadChunk(byte[] buf) {
+        const short hangup = UnixPtyInterop.POLLHUP | UnixPtyInterop.POLLERR;
+
         var pfd = new UnixPtyInterop.PollFd { fd = _masterFd, events = UnixPtyInterop.POLLIN };
 
         while (!_stop.IsCancellationRequested) {
+            pfd.revents = 0;
             var pollResult = UnixPtyInterop.poll(ref pfd, 1, PollTimeoutMs);
 
-            switch (pollResult) {
-                case > 0 when (pfd.revents & UnixPtyInterop.POLLIN) != 0:
-                    return (int)UnixPtyInterop.read(_masterFd, buf, buf.Length);
-                case > 0 when (pfd.revents & (UnixPtyInterop.POLLHUP | UnixPtyInterop.POLLERR)) != 0:
-                    // Slave side closed or errored without buffered data — EOF
-                    return 0;
-                case < 0:
-                    return -1;
+            if (pollResult < 0) {
+                var errno = Marshal.GetLastPInvokeError();
+                if (UnixPtyInterop.IsTransient(errno)) continue;
+
+                throw Failure("poll", errno);
             }
+
+            if (pollResult == 0) continue;
+
+            if ((pfd.revents & UnixPtyInterop.POLLIN) != 0) {
+                var bytesRead = (int)UnixPtyInterop.read(_masterFd, buf, buf.Length);
+                if (bytesRead >= 0) return bytesRead;
+
+                var errno = Marshal.GetLastPInvokeError();
+                if (UnixPtyInterop.IsTransient(errno)) continue;
+
+                // Linux reports the slave's last close to a master read as EIO, not as EOF.
+                if (errno == UnixPtyInterop.EIO && (pfd.revents & hangup) != 0) return 0;
+
+                throw Failure("read", errno);
+            }
+
+            if ((pfd.revents & hangup) != 0) return 0;
+
+            if ((pfd.revents & UnixPtyInterop.POLLNVAL) != 0) throw Failure("poll", UnixPtyInterop.EBADF);
         }
 
         return 0;
     }
+
+    static IOException Failure(string call, int errno) =>
+        new($"PTY {call} failed: {Marshal.GetPInvokeErrorMessage(errno)} (errno {errno})");
 }

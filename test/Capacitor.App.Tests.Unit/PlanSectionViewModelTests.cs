@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Plans;
@@ -52,6 +53,27 @@ public class PlanSectionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Switch_session_keeps_the_section_visible_while_loading() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var gate = h.Source.Gate();
+            h.Vm.SwitchSession(SessionA);
+
+            await Assert.That(h.Vm.IsLoading).IsTrue();
+            await Assert.That(h.Vm.ShowsPlan).IsTrue();
+            await Assert.That(h.Vm.HasPlan).IsFalse();
+
+            gate.SetResult(Ready());
+            await h.SettledAsync();
+
+            await Assert.That(h.Vm.IsLoading).IsFalse();
+            await Assert.That(h.Vm.ShowsPlan).IsFalse();
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_section_is_hidden_until_a_read_names_a_plan_then_lists_tasks_in_order_and_counts_them() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
@@ -94,7 +116,7 @@ public class PlanSectionViewModelTests {
             await h.SwitchAsync(SessionA);
 
             await Assert.That(h.Vm.Counts).IsEquivalentTo(new PlanTaskCount[] {
-                new(PlanTaskState.Pending, 2), new(PlanTaskState.InProgress, 1), new(PlanTaskState.Completed, 2),
+                new(PlanTaskState.Pending, 2), new(PlanTaskState.InProgress, 1, true), new(PlanTaskState.Completed, 2),
             }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
             await Assert.That(h.Vm.Counts.Select(c => c.Label))
                 .IsEquivalentTo(new[] { "2 pending", "1 in progress", "2 done" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
@@ -190,7 +212,7 @@ public class PlanSectionViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Documents_list_plan_then_spec_then_design_by_file_name_and_a_plan_of_documents_alone_still_shows() {
+    public async Task A_plan_of_documents_alone_without_tasks_keeps_the_section_hidden() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Source.Enqueue(Ready(Plan("p1", documents: [
@@ -199,13 +221,9 @@ public class PlanSectionViewModelTests {
 
             await h.SwitchAsync(SessionA);
 
-            await Assert.That(h.Vm.HasPlan).IsTrue();
             await Assert.That(h.Vm.HasTasks).IsFalse();
-            await Assert.That(h.Vm.HasDocuments).IsTrue();
-            await Assert.That(h.Vm.Documents.Select(d => d.Kind)).IsEquivalentTo(new[] { "plan", "spec", "design" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.Documents.Select(d => d.FileName)).IsEquivalentTo(
-                new[] { "widget.md", "SPEC.md", "2026-09-21-widget-design.md" }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
-            await Assert.That(h.Vm.Documents[2].Path).IsEqualTo("docs/superpowers/specs/2026-09-21-widget-design.md");
+            await Assert.That(h.Vm.HasPlan).IsFalse();
+            await Assert.That(h.Vm.ShowsPlan).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }
@@ -407,11 +425,13 @@ public class PlanSectionViewModelTests {
             h.Source.Enqueue(Ready(Plan("p1", tasks: Todo("t1", 1, "in_progress"))));
             await h.SwitchAsync(SessionA);
             await Assert.That(h.Vm.Tasks.Single().IsActive).IsTrue();
+            await Assert.That(h.Vm.Counts.Single().IsActive).IsTrue();
 
             h.Activity.SessionOver = true;
 
             await Assert.That(h.Vm.Tasks.Single().IsInProgress).IsTrue();
             await Assert.That(h.Vm.Tasks.Single().IsActive).IsFalse();
+            await Assert.That(h.Vm.Counts.Single().IsActive).IsFalse();
             await h.Vm.TeardownAsync();
         });
     }

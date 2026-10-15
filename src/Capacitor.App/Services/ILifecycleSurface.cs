@@ -26,6 +26,8 @@ public sealed record LifecyclePrompt(
     public const string KindQuarantine    = "quarantine";
     public const string KindUpdateReady   = "update-ready";
     public const string KindUpdateInfo    = "update-info";
+    public const string KindReloadService = "reload-service";
     public const string KindRename        = "rename";
     public const string KindRemoveProfile = "remove-profile";
+    public const string KindSetup         = "setup";
 }

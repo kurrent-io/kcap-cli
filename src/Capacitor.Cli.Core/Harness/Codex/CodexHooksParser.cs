@@ -29,10 +29,10 @@ public static class CodexHooksParser {
     /// older CLI versions.
     /// </summary>
     public static bool EntryReferencesCapacitorCodexHook(JsonNode? entry) {
-        if (entry?["hooks"] is not JsonArray hooks) return false;
+        if (entry is not JsonObject obj || obj["hooks"] is not JsonArray hooks) return false;
 
         foreach (var hook in hooks) {
-            if (hook?["command"] is JsonValue jv &&
+            if (hook is JsonObject h && h["command"] is JsonValue jv &&
                 jv.TryGetValue<string>(out var cmd) &&
                 IsCapacitorCodexHookCommand(cmd)) {
                 return true;

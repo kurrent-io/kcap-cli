@@ -87,6 +87,27 @@ public class ImportHandoffFileTests {
     }
 
     [Test]
+    public async Task A_cohort_override_wins_over_the_count_rule() {
+        var file = ImportHandoffFile.Compose(
+            RunId, Now, true, null, Outcome(candidates: 3), new(BackgroundImportStatus.Running, null, null, null),
+            "https://acme.kcap.ai", "work", unattributedOnDisk: 0, cohortOverride: HandoffCohort.PartialExact);
+
+        await Assert.That(file.Cohort).IsEqualTo(HandoffCohort.PartialExact);
+        await Assert.That(file.SessionIds.Count).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Scope_is_written() {
+        var file = ImportHandoffFile.Compose(
+            RunId, Now, true, null, Outcome(), new(BackgroundImportStatus.Failed, null, null, "x"),
+            "https://acme.kcap.ai", "work", unattributedOnDisk: 0, scope: "repos");
+        var json = JsonNode.Parse(file.ToJson())!.AsObject();
+
+        await Assert.That(json["scope"]!.GetValue<string>()).IsEqualTo("repos");
+        await Assert.That(json["background"]!.GetValue<string>()).IsEqualTo("failed");
+    }
+
+    [Test]
     public async Task Write_publishes_owner_only_and_prunes_files_older_than_seven_days() {
         var stale = Config.Root.Path("import-handoff-ffffffffffffffffffffffffffffffff.json");
         await File.WriteAllTextAsync(stale, "{}");

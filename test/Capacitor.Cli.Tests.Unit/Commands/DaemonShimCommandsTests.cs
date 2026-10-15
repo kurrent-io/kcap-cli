@@ -27,7 +27,8 @@ public class DaemonShimCommandsTests {
             Func<string, ShimPreflight>? preflight = null, bool isMacOs = false) {
         using var capture = ConsoleOutput.StartFullCapture();
         var exit = await DaemonShimCommands.Ensure(args, TimeProvider.System, resolveTarget: () => target,
-            probe: new FakeProbe(onPath), install: install, preflight: preflight, isMacOs: isMacOs);
+            probe: new FakeProbe(onPath), install: install,
+            preflight: preflight ?? (_ => ShimPreflight.Installable), isMacOs: isMacOs);
         var text = capture.GetCapturedOutput() + capture.GetCapturedError();
         ShimEnsureJson? json = null;
         if (text.Contains("{\"capability\"")) json = JsonSerializer.Deserialize<ShimEnsureJson>(text, ShimJsonContext.Default.ShimEnsureJson);
@@ -212,20 +213,17 @@ public class DaemonShimCommandsTests {
     }
 
     [Test]
-    public async Task Ensure_conflict_preflight_is_a_coded_refusal_with_what_was_found() {
+    public async Task Ensure_a_conflict_at_usr_local_bin_does_not_stop_a_path_folder_install() {
         var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,
+            install: (_, _) => Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null)),
             preflight: _ => ShimPreflight.Conflict);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(0);
         await Assert.That(json).IsNotNull();
-        await Assert.That(json!.Outcome).IsEqualTo("refused");
-        await Assert.That(json.Reason).IsEqualTo("conflict");
-        await Assert.That(json.Detail).Contains("left untouched");
+        await Assert.That(json!.Outcome).IsEqualTo("installed");
     }
 
-    // The outer preflight and the installer's checks are not atomic — an entry can appear between
-    // them, or the non-forcing ln -s can lose the race. A failed install whose fresh preflight now
-    // sees a foreign entry is the coded conflict row the flow was promised, not a generic failure.
+    // A failed install with a foreign entry at the destination is the coded conflict row, not a generic failure.
     [Test]
     public async Task Ensure_failed_install_with_conflict_now_is_still_the_coded_conflict_row() {
         var (exit, json, _) = await Run(["--json"], onPath: false, isMacOs: true,

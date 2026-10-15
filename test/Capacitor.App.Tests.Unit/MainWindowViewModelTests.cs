@@ -6,6 +6,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Remote.Models;
 using DynamicData;
 using Microsoft.Extensions.Time.Testing;
@@ -58,6 +59,7 @@ public class MainWindowViewModelTests {
         public RemoteHost() => _access = new SessionAccessService(_lane, new FakeTimeProvider());
 
         public FakeAgentDirectory Directory { get; } = new();
+        public FakeWorkContextSource WorkSource { get; } = new();
 
         // A separate overload rather than an optional parameter: the factory parameter takes this
         // as a method group, and that conversion needs an exact one-argument signature.
@@ -65,15 +67,15 @@ public class MainWindowViewModelTests {
 
         /// A session id only where a test needs one: it is what a local row is compared against
         /// before the removal counts as an origin change rather than an ended session.
-        public RemoteSessionViewModel New(string agentId, string? sessionId) {
+        public RemoteSessionViewModel New(string agentId, string? sessionId, IPullRequestSource? pullRequests = null) {
             var row = AgentRow.FromRemote(new AgentInstanceDto {
                 AgentId = agentId, SessionId = sessionId, Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1",
                 Vendor = "claude", RegisteredAt = DateTime.UtcNow,
             });
             Directory.Rows.AddOrUpdate(row);
             return new RemoteSessionViewModel(row, Directory, _access, _permissions, WorkspaceFixtures.NewActions(), _lane,
-                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(),
-                () => new FakeTerminalSurface());
+                (_, _) => Task.FromResult(new SessionDetailFetch(null)), new RecordingOpener(), new FakeTimeProvider(), WorkSource,
+                () => new FakeTerminalSurface(), pullRequests: pullRequests);
         }
 
         public void Dispose() {
@@ -96,12 +98,66 @@ public class MainWindowViewModelTests {
         return (vm, home, tmp);
     }
 
-    static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, string agentId) {
+    static WorkspaceViewModel NewWorkspace(FakeDaemonClientService service, string agentId, IPullRequestSource? pullRequests = null) {
         var (actions, _) = NewActions(service);
         var attach = new FakeTerminalAttachClientFactory();
         return new WorkspaceViewModel(
             agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader());
+            new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_origin_handoff_keeps_the_explicit_pr_choice(bool startRemote) {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var source = new FakePullRequestSource(new FakeTimeProvider());
+            var service = new FakeDaemonClientService();
+            var dto = WorkspaceFixtures.Agent("a1", "claude", hasTerminal: false, "/repos/kcap-cli", sessionId: "s1");
+            service.Agents.AddOrUpdate(dto);
+            var localRow = AgentRow.FromLocal(dto, new RepoIdentity("path:/repos/kcap-cli", "kcap-cli"));
+            if (!startRemote) host.Directory.Rows.AddOrUpdate(localRow);
+            var vm = NewVm(service,
+                workspaceFactory: id => NewWorkspace(service, id, source),
+                originOf: _ => startRemote ? AgentOrigin.Remote : AgentOrigin.Local,
+                remoteWorkspaceFactory: id => host.New(id, "s1", source),
+                trackWorkspaceTeardown: teardown => _ = teardown(), directory: host.Directory);
+            try {
+                vm.OpenSessionPullRequest("a1", startRemote ? AgentOrigin.Remote : AgentOrigin.Local, PullRequestWire.Subject(source.Links[0]));
+                var before = vm.CurrentWorkspace switch {
+                    WorkspaceViewModel local => local.PullRequests!,
+                    RemoteSessionViewModel remote => remote.PullRequests!,
+                    _ => throw new InvalidOperationException(),
+                };
+                before.SetForeground(true);
+                await WorkspaceFixtures.WaitUntilAsync(() => before.CanReveal && !before.IsReading, what: "chosen PR");
+                await Assert.That(before.Selected!.Subject.Number).IsEqualTo(1);
+                if (startRemote) {
+                    host.Directory.ProvenTwins.Add("a1");
+                    host.Directory.Rows.AddOrUpdate(localRow);
+                    host.Directory.Rows.Remove("remote:a1");
+                } else {
+                    host.Directory.Rows.AddOrUpdate(AgentRow.FromRemote(new AgentInstanceDto {
+                        AgentId = "a1", SessionId = "s1", Status = "Running", DaemonName = "work-mac", OwnerUserId = "u1", Vendor = "claude",
+                    }));
+                    host.Directory.Rows.Remove("local:a1");
+                }
+                var after = vm.CurrentWorkspace switch {
+                    WorkspaceViewModel local when startRemote && local.IsPullRequestActive => local.PullRequests!,
+                    RemoteSessionViewModel remote when !startRemote && remote.IsPullRequestActive => remote.PullRequests!,
+                    _ => throw new InvalidOperationException("Handoff did not preserve the PR tab"),
+                };
+                after.SetForeground(true);
+                await WorkspaceFixtures.WaitUntilAsync(() => after.CanReveal && !after.IsReading, what: "PR after handoff");
+                await Assert.That(after.Selected!.Subject.Number).IsEqualTo(1);
+            } finally {
+                var current = vm.CurrentWorkspace;
+                vm.CloseWorkspace();
+                if (current is not null) await current.TeardownAsync();
+            }
+        });
     }
 
     [Test]
@@ -216,17 +272,17 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
-    [Arguments(AttachState.Connecting, null, "connected", "#FFB300")]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", "#9E9E9E")]
-    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", "#E53935")]
-    [Arguments(AttachState.Connected, null, "connected", "#4CAF50")]
-    [Arguments(AttachState.Connected, null, "connecting", "#FFB300")]
-    [Arguments(AttachState.Connected, null, "reconnecting", "#FFB300")]
-    [Arguments(AttachState.Connected, null, "disconnected", "#E53935")]
+    [Arguments(AttachState.Connecting, null, "connected", StatusColors.InProgress)]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", StatusColors.Unavailable)]
+    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", StatusColors.Disrupted)]
+    [Arguments(AttachState.Connected, null, "connected", StatusColors.Connected)]
+    [Arguments(AttachState.Connected, null, "connecting", StatusColors.InProgress)]
+    [Arguments(AttachState.Connected, null, "reconnecting", StatusColors.InProgress)]
+    [Arguments(AttachState.Connected, null, "disconnected", StatusColors.Disrupted)]
     public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
             AttachState state, string? reason, string daemonConnection, string expectedHex) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (SolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection);
         await Assert.That(brush.Color).IsEqualTo(Color.Parse(expectedHex));
     }
 
@@ -236,8 +292,8 @@ public class MainWindowViewModelTests {
     public async Task StatusBrushFor_signed_out_uses_the_disrupted_color(
             AttachState state, string? reason, string daemonConnection) {
         var status = new AttachStatus(state, reason, null);
-        var brush = (SolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
-        await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+        var brush = (ISolidColorBrush)MainWindowViewModel.StatusBrushFor(status, daemonConnection, signInExpired: true);
+        await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
     }
 
     [Test]
@@ -262,8 +318,8 @@ public class MainWindowViewModelTests {
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
             await Assert.That(home.ConnectionNotice).IsEqualTo(HomeViewModel.SignInExpiredNotice);
             await Assert.That(vm.ConnectionDisplay).IsEqualTo(MainWindowViewModel.SignedOutDisplay);
-            var brush = (SolidColorBrush)vm.StatusBrush;
-            await Assert.That(brush.Color).IsEqualTo(Color.Parse("#E53935"));
+            var brush = (ISolidColorBrush)vm.StatusBrush;
+            await Assert.That(brush.Color).IsEqualTo(Color.Parse(StatusColors.Disrupted));
         });
     }
 
@@ -725,6 +781,49 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_or_reopening_a_session_reveals_only_its_repository(bool remote) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            const string id = "a1";
+            var row = AgentRow.FromLocal(WorkspaceFixtures.Agent(id, "claude", false, "/repos/alpha"),
+                new RepoIdentity("path:/repos/alpha", "alpha"));
+            RemoteSessionViewModel? remoteWorkspace = null;
+            if (remote) remoteWorkspace = host.New(id);
+            else host.Directory.Rows.AddOrUpdate(row);
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(WorkspaceFixtures.Agent("other", "claude", false, "/repos/beta"),
+                new RepoIdentity("path:/repos/beta", "beta")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            var vm = NewVm(service, id => NewWorkspace(service, id), rail,
+                originOf: _ => remote ? AgentOrigin.Remote : AgentOrigin.Local,
+                remoteWorkspaceFactory: _ => remoteWorkspace, directory: host.Directory);
+            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
+            var target = rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id));
+            var other = rail.Repos.Single(repo => repo != target);
+            vm.OpenSessionIfCurrent(id, vm.NavigationGeneration);
+            await Assert.That(target.IsExpanded).IsTrue();
+            await Assert.That(other.IsExpanded).IsFalse();
+            await Assert.That(rail.SelectedAgentId).IsEqualTo(id);
+            var workspace = vm.CurrentWorkspace;
+            target.ToggleCommand.Execute().Subscribe();
+            vm.OpenSession(id);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(workspace);
+            await Assert.That(target.IsExpanded).IsTrue();
+            await Assert.That(other.IsExpanded).IsFalse();
+            // Remember the navigation expansion if a refresh recreates the group.
+            var current = host.Directory.Rows.Items.Single(r => r.Id == id);
+            host.Directory.Rows.Remove(current.Key);
+            host.Directory.Rows.AddOrUpdate(current);
+            await Assert.That(rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id)).IsExpanded).IsTrue();
+            vm.CloseWorkspace();
+            await workspace!.TeardownAsync();
+        });
+    }
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task OpenSession_reports_an_id_neither_lane_holds_as_not_opened() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
@@ -746,12 +845,12 @@ public class MainWindowViewModelTests {
             var directory = new AgentDirectory(
                 service, new FakeRemoteAgents(), new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p, null, null,
                 TimeProvider.System);
-            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, p => p);
+            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
             var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail);
 
             vm.OpenSession("a1");
             await Assert.That(rail.SelectedAgentId).IsEqualTo("a1");
-            await Assert.That(rail.Repos[0].Worktrees[0].IsExpanded).IsTrue(); // NotifySessionOpened ran
+            await Assert.That(rail.Repos[0].Sessions[0].IsSelected).IsTrue();
 
             vm.CloseWorkspace();
             await Assert.That(rail.SelectedAgentId).IsNull();
@@ -781,6 +880,28 @@ public class MainWindowViewModelTests {
             vm.CloseWorkspace();
             await Assert.That(vm.CurrentWorkspace).IsNull();
             await Assert.That(torn).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Refresh_work_command_refreshes_the_remote_workspace() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var vm = NewVm(service, originOf: _ => AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "s1"));
+            vm.OpenSession("r1");
+            var work = vm.CurrentWorkspace!.WorkContext;
+            await WorkspaceFixtures.WaitUntilAsync(() => host.WorkSource.Requested.Count == 1 && !work.IsReading,
+                what: "remote work context loaded");
+            await WorkspaceFixtures.WaitUntilAsync(() => ((System.Windows.Input.ICommand)vm.RefreshWorkCommand).CanExecute(null), what: "refresh enabled");
+            await vm.RefreshWorkCommand.Execute().ToTask();
+            await WorkspaceFixtures.WaitUntilAsync(() => host.WorkSource.Requested.Count == 2 && !work.IsReading,
+                what: "remote work context refreshed");
+            var workspace = vm.CurrentWorkspace;
+            vm.CloseWorkspace();
+            await workspace!.TeardownAsync();
         });
     }
 
@@ -857,7 +978,11 @@ public class MainWindowViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
-            var vm = NewVm(service,
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("other", "claude", false, "/repos/kcap-cli"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            var vm = NewVm(service, rail: rail,
                 workspaceFactory: id => NewWorkspace(service, id),
                 originOf: _ => AgentOrigin.Remote,
                 remoteWorkspaceFactory: id => host.New(id, "s1"),
@@ -865,6 +990,7 @@ public class MainWindowViewModelTests {
                 directory: host.Directory);
 
             vm.OpenSession("r1");
+            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
             var remote = (RemoteSessionViewModel)vm.CurrentWorkspace!;
             await remote.ShowTerminalCommand.Execute().ToTask();
             await Assert.That(remote.IsTerminalActive).IsTrue();
@@ -875,6 +1001,7 @@ public class MainWindowViewModelTests {
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             host.Directory.Rows.Remove("remote:r1");
 
+            await Assert.That(rail.Repos.Any(repo => repo.IsExpanded)).IsFalse();
             await Assert.That(remote.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
@@ -1157,6 +1284,109 @@ public class MainWindowViewModelTests {
             await with.OpenDocsCommand.Execute().ToTask();
             await Assert.That(opened).IsEquivalentTo([FeedbackCategory.Feedback]);
             await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl]);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Changelog_opens_through_the_link_policy() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var opener = new RecordingOpener();
+            var vm = NewVm(new FakeDaemonClientService(), opener: opener);
+
+            await vm.OpenChangelogCommand.Execute().ToTask();
+
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Background_priority_shows_only_while_connected_and_the_failure_text_always() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var background = new BehaviorSubject<bool>(true);
+            var reload = new BehaviorSubject<ReloadState?>(new ReloadState(ReloadOutcomeKind.Failed, "unit_missing", 1, "daemon-a", 1));
+            var reloading = new BehaviorSubject<bool>(false);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                backgroundPriority: background, reloadState: reload, isReloading: reloading, reloadDaemon: _ => Task.CompletedTask);
+            using var activation = vm.Activator.Activate();
+            var canReload = false;
+            using var canExecuteSub = vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canReload = x);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            await Assert.That(vm.BackgroundPriority).IsFalse();
+            await Assert.That(vm.BackgroundPriorityText).IsNull();
+            await Assert.That(canReload).IsFalse();
+            await Assert.That(vm.ReloadFailureText).IsEqualTo(ReloadCopy.For(reload.Value!));
+            await Assert.That(vm.ShowsReloadBlock).IsTrue();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await Assert.That(vm.BackgroundPriority).IsTrue();
+            await Assert.That(vm.BackgroundPriorityText).IsEqualTo(MainWindowViewModel.BackgroundPriorityMessage);
+            await Assert.That(canReload).IsTrue();
+
+            reloading.OnNext(true);
+            await Assert.That(vm.IsReloading).IsTrue();
+            await Assert.That(canReload).IsFalse();
+
+            reloading.OnNext(false);
+            reload.OnNext(null);
+            background.OnNext(false);
+            await Assert.That(vm.ReloadFailureText).IsNull();
+            await Assert.That(vm.ShowsReloadBlock).IsFalse();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_view_model_built_while_unreachable_shows_the_replayed_failure() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var reload = new BehaviorSubject<ReloadState?>(new ReloadState(ReloadOutcomeKind.Unconfirmed, "unconfirmed", null, "daemon-a", 1));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, reloadState: reload);
+            using var activation = vm.Activator.Activate();
+            await Assert.That(vm.ReloadFailureText).IsEqualTo(ReloadCopy.For(reload.Value!));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Reload_command_can_execute_when_activated_while_already_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                backgroundPriority: new BehaviorSubject<bool>(true), isReloading: new BehaviorSubject<bool>(false),
+                reloadDaemon: _ => Task.CompletedTask);
+            using var activation = vm.Activator.Activate();
+
+            var canExecute = false;
+            using (vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canExecute = x)) { }
+            await Assert.That(canExecute).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Reload_command_runs_the_controller_action_only_when_it_can() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var calls = 0;
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                backgroundPriority: new BehaviorSubject<bool>(true), isReloading: new BehaviorSubject<bool>(false),
+                reloadDaemon: _ => { calls++; return Task.CompletedTask; });
+            using var activation = vm.Activator.Activate();
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            await vm.ReloadDaemonCommand.Execute().ToTask();
+            await Assert.That(calls).IsEqualTo(1);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var canExecute = false;
+            using (vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canExecute = x)) { }
+            await Assert.That(canExecute).IsFalse();
         });
     }
 }

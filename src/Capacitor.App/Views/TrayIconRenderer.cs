@@ -23,7 +23,7 @@ public static class TrayIconRenderer {
     const int MaxDigitCount = 9; // above this, CountBadge collapses to "9+"
     const int CountCap = 10;     // cache-key clamp: every count >= this renders the same "9+" badge
 
-    const string BadgeBackgroundHex = "#1B5E20"; // dark green — legible under the white numeral
+    const string BadgeBackgroundHex = "#173F36"; // KcapSuccessDim — legible under the white numeral
 
     static readonly IBrush BadgeText = Brushes.White;
     static readonly IBrush BadgeBackground = new SolidColorBrush(Color.Parse(BadgeBackgroundHex));

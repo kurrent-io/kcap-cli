@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
@@ -7,6 +8,7 @@ using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Harness.MuseAssistant;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -49,11 +51,13 @@ public static class CommandServices {
         services.AddSingleton(sp => HarnessRegistry.FromEnvironment(
             sp.GetRequiredService<UserHome>(), sp.GetRequiredService<BinaryProbe>()));
         services.AddSingleton(sp => LegacySkillsRoots.FromEnvironment(sp.GetRequiredService<UserHome>()));
+        services.AddSingleton(sp => AccountStore.Beside(sp.GetRequiredService<DaemonStore>()));
         services.AddSingleton(sp => PluginEnvironment.FromProcess(
                 sp.GetRequiredService<ProfileContext>().Snapshot,
                 sp.GetRequiredService<UserHome>(),
                 sp.GetRequiredService<HarnessRegistry>(),
-                sp.GetRequiredService<BinaryProbe>()));
+                sp.GetRequiredService<BinaryProbe>(),
+                sp.GetRequiredService<AccountStore>()));
 
         services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
         services.AddCapacitorHttp(env, machine);
@@ -87,6 +91,7 @@ public static class CommandServices {
         // Shared by every hook lane and carrying no per-run state, unlike the commands below.
         services.AddSingleton<WatcherManager>();
 
+        services.AddTransient<AccountsCommand>();
         services.AddTransient<AgentCommand>();
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
@@ -103,6 +108,13 @@ public static class CommandServices {
         services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
+        services.AddTransient<MuseAssistantCommand>();
+        services.AddTransient<MuseAssistantIngest>();
+        services.AddTransient<MuseAssistantScope>();
+        services.AddTransient<MuseAssistantIdentity>();
+        services.AddTransient<MuseAssistantActionRunner>();
+        services.AddSingleton<MuseAssistantStateStoreFactory>();
+        services.AddTransient<IMuseAssistantPoster, MuseAssistantHttpPoster>();
         services.AddTransient<PluginCommand>();
         services.AddTransient<ProfileCommand>();
         services.AddTransient<ProjectsCommand>();
@@ -118,6 +130,7 @@ public static class CommandServices {
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();
         services.AddSingleton<IBackgroundImportSpawner, BackgroundImportSpawner>();
+        services.AddTransient<DetachedImportPlanRunner>();
         services.AddTransient<SkillsCommand>();
         services.AddTransient<StatusCommand>();
         services.AddTransient<McpFlowResultServer>();
@@ -134,6 +147,12 @@ public static class CommandServices {
         services.AddTransient<McpJudgeServer>();
         services.AddTransient<UninstallCommand>();
         services.AddTransient<UpdateCommand>();
+        services.AddTransient<RefreshCommand>();
+        // A script install checks the installer's channel manifest; every other install checks npm.
+        services.AddTransient<IReleaseFeed>(sp => InstallProvenance.Kind() == InstallKind.Script
+            ? sp.GetRequiredService<KcapReleaseClient>()
+            : sp.GetRequiredService<NpmRegistryClient>());
+        services.AddTransient<ScriptUpdater>();
         services.AddTransient<UseCommand>();
         services.AddTransient<ValidatePlanCommand>();
         services.AddTransient<WatchCommand>();
@@ -148,6 +167,9 @@ public static class CommandServices {
         services.AddTransient<CursorHookCommand>();
         services.AddTransient<GeminiHookCommand>();
         services.AddTransient<KiroHookCommand>();
+        services.AddTransient<MistralVibeHookCommand>();
+        services.AddTransient<GrokHookCommand>();
+        services.AddTransient<MuseHookCommand>();
         services.AddTransient<OpenCodeHookCommand>();
         services.AddTransient<PiHookCommand>();
 

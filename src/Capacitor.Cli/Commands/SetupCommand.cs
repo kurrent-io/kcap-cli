@@ -1,6 +1,5 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
@@ -8,16 +7,21 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Grok;
+using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Core.Toml;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Codex;
@@ -25,6 +29,9 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Grok;
+using Capacitor.Cli.Harness.MistralVibe;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Spectre.Console;
@@ -127,14 +134,17 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
         if (capability == FirstRunMachineCapabilities.DaemonService) _wait.Stop();
 
         Say(SetupAuthProgress.Indent(capability switch {
-            FirstRunMachineCapabilities.PathShim =>
-                "The browser asked to put kcap on your terminal PATH. "
-              + "[dim]Your Mac will ask for your password.[/]",
+            FirstRunMachineCapabilities.PathShim => PathShimNotice(OperatingSystem.IsMacOS()),
             FirstRunMachineCapabilities.DaemonService =>
                 "The browser asked to run the agent daemon as a service, so this machine stays reachable.",
             _ => "The browser asked this machine to do something this version of kcap does not know."
         }));
     }
+
+    /// <summary>The password prompt comes from macOS's own dialog; elsewhere the link needs none.</summary>
+    internal static string PathShimNotice(bool macOS) =>
+        "The browser asked to put kcap on your terminal PATH."
+      + (macOS ? " [dim]Your Mac will ask for your password.[/]" : "");
 
     public void ActionEnded() => Refresh();
 
@@ -149,7 +159,8 @@ sealed class SpectreFirstRunFlowProgress(TimeProvider time, IKeyWatcher? keys = 
             ? $"{n} session{(n == 1 ? "" : "s")} from {repos} repositor{(repos == 1 ? "y" : "ies")}"
             : $"{repos} repositor{(repos == 1 ? "y" : "ies")}";
 
-        AnsiConsole.MarkupLine(SetupAuthProgress.Indent($"Importing {what}, as chosen in the browser."));
+        AnsiConsole.MarkupLine(SetupAuthProgress.Indent(
+            $"Importing your newest sessions first, of {what} chosen in the browser. The rest will continue in the background."));
     }
 
     public void ImportEnded() => Refresh();
@@ -241,7 +252,19 @@ sealed class SetupImportLane(
         HarnessRegistry harnesses,
         GitProviderRouter router,
         TimeProvider time,
-        Func<SetupImportLane.Pass, Task<ImportCommand.ImportRunOutcome?>>? runner = null) : IFirstRunImportLane {
+        IBackgroundImportSpawner spawner,
+        string serverUrl,
+        string profileName,
+        string defaultVisibility,
+        string workingDirectory,
+        CodingAgentsStep.Paths paths,
+        Func<SetupImportLane.Pass, Task<SetupImportRun>>? runner = null,
+        Action<ImportHandoffFile>? writeHandoff = null,
+        AccountStore? accounts = null) : IFirstRunImportLane {
+    /// <summary>The handoff suppression for a file that could not be written, so the page never offers
+    /// a prompt whose file does not exist.</summary>
+    internal const string HandoffFileUnwritten = "handoff_file_unwritten";
+
     /// <summary>One invocation's arguments, so a test can assert what each level asked for without
     /// running an import.</summary>
     internal sealed record Pass(
@@ -249,16 +272,17 @@ sealed class SetupImportLane(
         IReadOnlyList<FirstRunImportChoice> Repos,
         DateOnly?                           Since,
         bool                                SkipTitle,
-        IReadOnlyList<HarnessId>?           Vendors);
+        IReadOnlyList<HarnessId>?           Vendors,
+        int?                                MaxSessions);
 
     public async Task<ReportFirstRunImportRequest?> DiscoverAsync(
             IReadOnlyList<HarnessId>? vendors, DateTimeOffset asOf, CancellationToken ct) {
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
             filterCwd:    null,
-            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors),
+            sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors, accounts?.TryLoad(), home),
             discoverOnly: true,
             discoverJson: true,
             windowsAsOf:  asOf,
@@ -306,29 +330,58 @@ sealed class SetupImportLane(
     /// reporting a backfill that did not happen.</summary>
     public bool Failed { get; private set; }
 
-    async Task<ImportCommand.ImportRunOutcome?> Run(Pass pass) {
-        ImportCommand.ImportRunOutcome? outcome = null;
+    readonly List<(FirstRunImportLevel Level, SetupImportRun Run)> _runs = [];
 
-        await new ImportCommand(config, profiles, home, harnesses, http, router, time).HandleImport(
-            filterCwd:          null,
-            sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors),
-            since:              pass.Since,
-            scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
-            skipConfirmation:   true,
-            forcePrivate:       pass.Level is FirstRunImportLevel.OnlyMe,
-            autoSkipExclusions: true,
-            skipTitle:          pass.SkipTitle,
-            // What makes the shared stop honest, since the profile default cannot reach the class the
-            // visibility predicate admits unconditionally.
-            shareWithOrg:       pass.Level is FirstRunImportLevel.Shared,
-            onFinished:         o => outcome = o,
-            nested:             true);
+    /// <summary>The eval-watch prompt the last import offered, or null.</summary>
+    internal string? HandoffPrompt { get; private set; }
 
-        return outcome;
+    /// <summary>The child the last import spawned for the remainder, or null when no level was chosen.</summary>
+    internal BackgroundImportLaunch? Background { get; private set; }
+
+    /// <summary>Every pass this lane ran, in run order — a pass that threw included, carrying its
+    /// fault.</summary>
+    internal IReadOnlyList<(FirstRunImportLevel Level, SetupImportRun Run)> Runs => _runs;
+
+    /// <summary>One level's import, totalized: anything but a cancellation comes back as the run's
+    /// <see cref="SetupImportRun.Fault"/>.</summary>
+    internal static async Task<SetupImportRun> RunPassAsync(
+            ConfigRoot config, ProfileContext profiles, UserHome home, ICapacitorHttpClient http,
+            HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time, Pass pass,
+            AccountStore? accounts = null) {
+        ImportRunSelection?             selection = null;
+        ImportCommand.ImportRunOutcome? outcome   = null;
+
+        try {
+            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
+                filterCwd:          null,
+                sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors, accounts?.TryLoad(), home),
+                since:              pass.Since,
+                scope:              new ImportScope.Repo([.. pass.Repos.Select(c => (c.Owner, c.Name))]),
+                skipConfirmation:   true,
+                forcePrivate:       pass.Level is FirstRunImportLevel.OnlyMe,
+                autoSkipExclusions: true,
+                skipTitle:          pass.SkipTitle,
+                // What makes the shared stop honest, since the profile default cannot reach the class the
+                // visibility predicate admits unconditionally.
+                shareWithOrg:       pass.Level is FirstRunImportLevel.Shared,
+                maxSessions:        pass.MaxSessions,
+                onSelected:         s => selection = s,
+                onFinished:         o => outcome = o,
+                nested:             true);
+
+            return new SetupImportRun(exit, selection, outcome, null);
+        } catch (OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            return new SetupImportRun(1, selection, outcome, ex);
+        }
     }
 
-    public async Task<FirstRunImportTotals?> ImportAsync(
-            FirstRunImportAnswer answer, DateOnly today, CancellationToken ct) {
+    Task<SetupImportRun> Run(Pass pass) =>
+        RunPassAsync(config, profiles, home, http, harnesses, router, time, pass, accounts);
+
+    public async Task<FirstRunImportResult> ImportAsync(
+            FirstRunImportAnswer answer, DateOnly today, CancellationToken ct, FirstRunAgentsAnswer? agents = null) {
         var since   = answer.Since(today);
         var totals  = new FirstRunImportTotals(0, 0, 0);
         var counted = true;
@@ -338,27 +391,31 @@ sealed class SetupImportLane(
         foreach (var level in (FirstRunImportLevel[])[FirstRunImportLevel.OnlyMe, FirstRunImportLevel.Shared]) {
             if (answer.At(level) is not { Count: > 0 } chosen) continue;
 
-            ImportCommand.ImportRunOutcome? outcome;
+            SetupImportRun run;
 
-            // Per pass, so a throw in the private one does not cancel the shared one, and so a
-            // failure that arrived as an exception counts the same as one the run reported.
             try {
-                outcome = await (runner ?? Run)(
-                    new Pass(level, chosen, since, answer.SkipTitle, answer.Vendors));
+                run = await (runner ?? Run)(new Pass(
+                    level, chosen, since, answer.SkipTitle, answer.Vendors, SetupCommand.ForegroundImportCap));
             } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
                 Failed = true;
 
                 throw;
             } catch (Exception ex) {
+                run = new SetupImportRun(1, null, null, ex);
+            }
+
+            _runs.Add((level, run));
+
+            if (run.Fault is { } fault) {
                 Failed  = true;
                 counted = false;
 
-                AnsiConsole.MarkupLine(
-                    $"  [yellow]![/] That history did not import: {Markup.Escape(ex.Message)}. "
-                  + "Run [cyan]kcap import[/] to retry it.");
+                AnsiConsole.MarkupLine($"  [yellow]![/] That history did not import: {Markup.Escape(fault.Message)}.");
 
                 continue;
             }
+
+            var outcome = run.Outcome;
 
             // The exit code cannot answer this: an import is best-effort and returns 0 for a run whose
             // sessions failed, so reading it would call a partial or total failure a success. A run
@@ -366,8 +423,7 @@ sealed class SetupImportLane(
             if (outcome is null || outcome.AnythingFailed) {
                 Failed = true;
 
-                AnsiConsole.MarkupLine(
-                    "  [yellow]![/] Some of that history did not import. Run [cyan]kcap import[/] to retry it.");
+                AnsiConsole.MarkupLine("  [yellow]![/] Some of that history did not import.");
             }
 
             if (outcome is null) {
@@ -384,7 +440,75 @@ sealed class SetupImportLane(
                 outcome.Counts.Failed + outcome.VisibilityFailures);
         }
 
-        return counted ? totals : null;
+        if (_runs.Count == 0) return new FirstRunImportResult(counted ? totals : null);
+
+        return HandOff(answer, since, counted ? totals : null, agents);
+    }
+
+    /// <summary>One child for every chosen level, whatever the foreground selected: the capped passes
+    /// defer visibility work on sessions they did not select, and only the uncapped child performs it.</summary>
+    FirstRunImportResult HandOff(
+            FirstRunImportAnswer answer, DateOnly? since, FirstRunImportTotals? totals, FirstRunAgentsAnswer? agents) {
+        var runId = Guid.NewGuid().ToString("N");
+
+        var (merged, cohort, remaining) = ForegroundImportMerge.Merge(
+            [.. _runs.Select(r => ForegroundImportOutcome.From(r.Run))]);
+
+        var launch = Spawn(runId, answer, since);
+        Background = launch;
+
+        SetupCommand.PrintBackground(launch, browser: true);
+
+        if (Failed) AnsiConsole.MarkupLine(RetryLine(launch));
+
+        var decision = HandoffDecision.Decide(
+            merged, launch.Status,
+            HandoffVendorEligibility.Eligible(
+                harnesses, paths, h => agents is not null && (agents.Records(h) || agents.Tools(h))).Count,
+            HandoffVendorEligibility.Detected(harnesses));
+
+        var file = ImportHandoffFile.Compose(
+            runId, time.GetUtcNow(), decision.Offered, decision.Reason, merged, launch,
+            serverUrl, profileName, unattributedOnDisk: 0, cohortOverride: cohort, scope: "repos");
+
+        try {
+            (writeHandoff ?? (f => f.Write(config, time)))(file);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            AnsiConsole.MarkupLine($"  [yellow]![/] Could not write the import handoff file: {Markup.Escape(ex.Message)}");
+
+            return new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: HandoffFileUnwritten);
+        }
+
+        if (decision.Offered) HandoffPrompt = SetupCommand.HandoffPromptText(runId);
+
+        return decision.Offered
+            ? new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffPrompt)
+            : new FirstRunImportResult(totals, launch.Status.Wire(), remaining, HandoffSuppressed: decision.Reason!.Value.Wire());
+    }
+
+    /// <summary>The child re-imports every chosen level, so while it runs it is the retry; only a child
+    /// that is not running leaves re-running setup as the remedy.</summary>
+    internal static string RetryLine(BackgroundImportLaunch launch) =>
+        launch.Status is BackgroundImportStatus.Running
+            ? $"  [dim]The background import retries what did not import · log: {Markup.Escape(launch.LogPath ?? "")}[/]"
+            : "  Run [cyan]kcap setup[/] again and choose the same repositories and levels to retry what did not import.";
+
+    BackgroundImportLaunch Spawn(string runId, FirstRunImportAnswer answer, DateOnly? since) {
+        var plan = new ImportPlan(serverUrl, [
+            .. _runs.Select(r => new ImportPlanLevel(r.Level, answer.At(r.Level), since, answer.Vendors, answer.SkipTitle))
+        ]);
+        var planPath = ImportPlan.PathFor(config, runId);
+
+        try {
+            plan.Write(planPath);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return new BackgroundImportLaunch(
+                BackgroundImportStatus.Failed, null, null, $"could not write the import plan: {ex.Message}");
+        } finally {
+            ImportPlan.Prune(config, time.GetUtcNow());
+        }
+
+        return spawner.Spawn(new BackgroundImportRequest(runId, profileName, defaultVisibility, workingDirectory, planPath));
     }
 }
 
@@ -424,7 +548,7 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries) {
+        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
@@ -439,11 +563,12 @@ sealed class SetupCommand(
         // server, equivalent to --server-url. A bare single label expands to {slug}.kcap.ai.
         if (serverUrlArg is null && args.Length > 1 && !args[1].StartsWith('-'))
             serverUrlArg = ServerInput.ResolveTenantArg(args[1]);
-        var noPrompt         = args.Contains("--no-prompt");
+        var museAssistant    = args.Contains(MuseAssistantPosture.Flag);
+        var noPrompt         = args.Contains("--no-prompt") || museAssistant;
         // Also when there is no keyboard: a redirected stdin cannot press the escape-hatch key, so a
         // loopback wait there can only end in the listener timeout. Not a headless guess - an
         // interactive SSH session has a keyboard and keeps the browser.
-        var forceDevice      = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device"), ConsoleKeyWatcher.Instance.CanWatch);
+        var forceDevice      = OAuthLoginFlow.DeviceRouteRequired(args.Contains("--device") || museAssistant, ConsoleKeyWatcher.Instance.CanWatch);
         var skipClaudeFlag   = args.Contains("--skip-claude-hooks");
         var skipCodexFlag    = args.Contains("--skip-codex-hooks");
         var skipCodexNetworkFlag = args.Contains("--skip-codex-network-access");
@@ -468,7 +593,12 @@ sealed class SetupCommand(
         var skipAntigravityMcpFlag = args.Contains("--skip-antigravity-mcp");
         var skipAntigravityInstructionsFlag = args.Contains("--skip-antigravity-instructions");
         var skipAntigravitySkillsFlag = args.Contains("--skip-antigravity-skills");
-        var skipImport       = args.Contains("--skip-import");
+        var skipVibeFlag     = args.Contains("--skip-mistral-vibe-hooks");
+        var skipVibeMcpFlag  = args.Contains("--skip-mistral-vibe-mcp");
+        var skipGrokFlag     = args.Contains("--skip-grok-hooks");
+        var skipMuseFlag     = args.Contains("--skip-muse-hooks");
+        var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
+        var skipImport       = args.Contains("--skip-import") || museAssistant;
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -478,6 +608,12 @@ sealed class SetupCommand(
         var serverUrlGiven = serverUrlArg is not null
                           || args.Contains("--server-url")
                           || args.Any(a => a.StartsWith("--server-url=", StringComparison.Ordinal));
+
+        if (museAssistant && MuseAssistantPosture.ArgumentError(tenantGiven: serverUrlArg is not null) is { } museError) {
+            await Console.Error.WriteLineAsync($"  {museError}");
+
+            return 1;
+        }
 
         var (requestedWorkspace, workspaceArgError) = ParseRequestedWorkspace(args, serverUrlGiven);
 
@@ -495,6 +631,17 @@ sealed class SetupCommand(
             await Console.Error.WriteLineAsync("  Add --no-prompt.");
 
             return 1;
+        }
+
+        // Plain Console.Out: an agent reads this from redirected output. Ahead of the funnel event,
+        // which flushes to the telemetry host at once, so no card appears before its explanation.
+        var museHosts = museAssistant ? MuseAssistantPosture.ApprovalHosts(serverUrlArg!) : null;
+
+        if (museHosts is not null) {
+            foreach (var line in MuseAssistantPosture.HostNoticeLines(museHosts)) await Console.Out.WriteLineAsync(line);
+            await Console.Out.WriteLineAsync();
+        } else if (MuseAssistantEnvironment.IsMuseAssistant(home)) {
+            AnsiConsole.MarkupLine(MuseAssistantPosture.AdviceLine);
         }
 
         var profile = await AppConfig.LoadProfileConfig(config);
@@ -519,6 +666,7 @@ sealed class SetupCommand(
             return 1;
         }
         AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
+
 
         // Check if already configured
         var activeProfile  = profile.ActiveName;
@@ -545,9 +693,22 @@ sealed class SetupCommand(
 
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
-            if (resolved is null) return 1;
+
+            if (resolved is null) {
+                if (museHosts is not null)
+                    foreach (var line in MuseAssistantPosture.UnreachableHintLines(museHosts)) await Console.Out.WriteLineAsync(line);
+
+                return 1;
+            }
 
             (serverUrl, provider) = resolved.Value;
+
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.SignInNoticeLines(MuseAssistantPosture.SignInHosts(provider)))
+                    await Console.Out.WriteLineAsync(line);
+
+            // A named server can be one still being created, which the provisioner says to re-run setup against.
+            if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         } else if (noPrompt && requestedWorkspace is null) {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace)");
@@ -564,6 +725,10 @@ sealed class SetupCommand(
             activeProfile = string.IsNullOrWhiteSpace(afterDiscovery.ActiveProfile)
                 ? "default"
                 : afterDiscovery.ActiveProfile;
+
+            // GitHub discovery has already exchanged a token at the workspace itself, which only a live one
+            // answers; a WorkOS workspace can be listed after its tenant is gone, or before it is up.
+            if (provider == AuthProvider.WorkOS && !await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         }
 
         await Console.Out.WriteLineAsync();
@@ -571,13 +736,73 @@ sealed class SetupCommand(
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
-        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile);
+        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
         if (loginStepResult != 0) return loginStepResult;
+
+        // Ahead of the browser leg, whose import decides the eval-watch handoff from them.
+        var pluginPath = ResolvePluginPath();
+
+        // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
+        // guard at the top of HandleAsync returns 1 otherwise).
+        var claudeSettingsPath = legacyProjectScope
+            ? Path.Combine(gitRoot!, ".claude", "settings.local.json")
+            : harnesses.Of<ClaudeHarness>().Paths.UserSettings;
+
+        var copilot  = harnesses.Of<CopilotHarness>().Paths;
+        var pi       = harnesses.Of<PiHarness>().Paths;
+        var kiro     = harnesses.Of<KiroHarness>().Paths;
+        var kiroCrew = harnesses.Of<KiroHarness>().Crew;
+        var codex    = harnesses.Of<CodexHarness>().Paths;
+        var opencode = harnesses.Of<OpenCodeHarness>().Paths;
+        var cursor   = harnesses.Of<CursorHarness>().Paths;
+        var gemini   = harnesses.Of<GeminiHarness>().Paths;
+        var agy      = harnesses.Of<AntigravityHarness>().Paths;
+        var vibe     = harnesses.Of<MistralVibeHarness>().Paths;
+        var grok     = harnesses.Of<GrokHarness>().Paths;
+        var muse     = harnesses.Of<MuseHarness>().Paths;
+
+        var stepPaths = new CodingAgentsStep.Paths(
+            ClaudeSettingsPath:   claudeSettingsPath,
+            ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
+            PluginDir:            pluginPath,
+            CodexHooksPath:       codex.UserHooksJson,
+            CursorHooksPath:      cursor.UserHooksJson,
+            CopilotHooksPath:     copilot.KcapHooksJson,
+            GeminiSettingsPath:   gemini.SettingsJson,
+            AgentsSkillsDir:      agents.UserSkillsDir,
+            LegacyCodexSkillsDir: codex.SkillsDir,
+            KiroHooksPath:        kiro.KcapAgentJson,
+            PiExtensionPath:      pi.KcapExtension,
+            OpenCodeExtensionPath: opencode.KcapPlugin,
+            AntigravityHooksPath: agy.GlobalHooksJson,
+            CodexConfigTomlPath:  codex.ConfigToml,
+            CursorMcpPath:        cursor.UserMcpJson,
+            CopilotMcpPath:       copilot.McpConfigJson,
+            CopilotInstructionsPath: copilot.InstructionsMd,
+            GeminiInstructionsPath: gemini.GeminiMd,
+            AntigravityMcpPath:       agy.McpConfigJson,
+            AntigravityInstructionsPath: agy.InstructionsMd,
+            AntigravitySkillsDir:     agy.SkillsDir,
+            OpenCodeMcpPath:      opencode.McpConfigJson,
+            OpenCodeInstructionsPath: opencode.AgentsMd,
+            KiroMcpPath:          kiro.SettingsMcpJson,
+            KiroSkillsDir:        kiro.SkillsDir,
+            KiroCrewHookScript:   kiroCrew.SpawnHookScript,
+            KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
+            PiMcpExtensionPath:   pi.KcapMcpExtension,
+            PiAgentsMdPath:       pi.AgentsMd,
+            VibeHooksPath:        vibe.HooksToml,
+            VibeConfigPath:       vibe.ConfigToml,
+            GrokHooksPath:        grok.KcapHooksJson,
+            MuseSettingsPath:     muse.SettingsJson);
 
         // The browser leg, where the tenant serves one. Unnumbered because it is not a step: the
         // steps below run either way, and on every tenant that has not turned the flow on this
         // returns without a word. It has to sit after login — both routes are authenticated.
-        var browserAnswers = await RunBrowserFlowStepAsync(serverUrl, provider, noPrompt);
+        var browserAnswers = await RunBrowserFlowStepAsync(
+            serverUrl, provider, noPrompt, activeProfile,
+            (await AppConfig.LoadProfileConfig(config)).Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility ?? "org_public",
+            stepPaths);
         var browserAgents  = browserAnswers.Agents;
 
         await Console.Out.WriteLineAsync();
@@ -597,7 +822,8 @@ sealed class SetupCommand(
                       .Profiles.GetValueOrDefault(activeProfile)?.DefaultVisibility ?? "org_public");
 
         if (noPrompt) {
-            defaultVisibility = (GetArg(args, "--default-visibility") ?? "org_public").ToLowerInvariant();
+            defaultVisibility = (GetArg(args, "--default-visibility")
+                              ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility : "org_public")).ToLowerInvariant();
 
             if (!AppConfig.ValidVisibilities.Contains(defaultVisibility)) {
                 await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}");
@@ -635,7 +861,6 @@ sealed class SetupCommand(
         await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your harnesses.");
         await Console.Out.WriteLineAsync();
 
-        var pluginPath = ResolvePluginPath();
         var detected   = new CodingAgentsStep.DetectedAgents(
             Claude:      harnesses.Detected(HarnessId.Claude),
             Codex:       harnesses.Detected(HarnessId.Codex),
@@ -645,7 +870,10 @@ sealed class SetupCommand(
             Kiro:        harnesses.Detected(HarnessId.Kiro),
             Pi:          harnesses.Detected(HarnessId.Pi),
             OpenCode:    harnesses.Detected(HarnessId.OpenCode),
-            Antigravity: harnesses.Detected(HarnessId.Antigravity));
+            Antigravity: harnesses.Detected(HarnessId.Antigravity),
+            Vibe:        harnesses.Detected(HarnessId.MistralVibe),
+            Grok:        harnesses.Detected(HarnessId.Grok),
+            Muse:        harnesses.Detected(HarnessId.Muse));
 
         bool PromptYesNo(string text) =>
             AnsiConsole.Prompt(new ConfirmationPrompt(text) { DefaultValue = true });
@@ -667,19 +895,14 @@ sealed class SetupCommand(
             // entry named a vendor this build has never heard of asks for nothing this build can do —
             // and the step's own writes are gated on this, not on the per-vendor skips.
             installAgents = answered.Choices.Count > 0;
+        } else if (museAssistant) {
+            installAgents = false;
+            AnsiConsole.MarkupLine(MuseAssistantPosture.SkippedHarnessesLine);
         } else {
-            // The single install-consent decision, replacing the nine per-vendor prompts. Made
-            // BEFORE CodingAgentsStep.Options is constructed, so it uses the LOCAL `noPrompt` (there
-            // is no `options` object yet). NoPrompt alone would not imply InstallAgents, so this must
-            // be set explicitly here or `--no-prompt` would silently stop installing agents.
+            // Set explicitly: NoPrompt alone does not imply InstallAgents, so leaving it to the
+            // Options default would make --no-prompt stop installing agents.
             installAgents = SetupDecisions.DecideInstallAgents(detected, noPrompt, PromptYesNo);
         }
-
-        // gitRoot is guaranteed non-null here when legacyProjectScope is true (the early
-        // guard at the top of HandleAsync returns 1 otherwise).
-        var claudeSettingsPath = legacyProjectScope
-            ? Path.Combine(gitRoot!, ".claude", "settings.local.json")
-            : harnesses.Of<ClaudeHarness>().Paths.UserSettings;
 
         var stepOptions = new CodingAgentsStep.Options(
             SkipClaude:  skipClaude,
@@ -707,9 +930,16 @@ sealed class SetupCommand(
             SkipKiroSkills: skipKiroSkillsFlag,
             SkipPiMcp: skipPiMcpFlag,
             SkipPiInstructions: skipPiInstructionsFlag,
-            InstallAgents: installAgents);
+            InstallAgents: installAgents,
+            SkipMistralVibe: skipVibeFlag,
+            SkipMistralVibeMcp: skipVibeMcpFlag,
+            SkipGrok: skipGrokFlag,
+            SkipMuse: skipMuseFlag,
+            SkipMuseMcp: skipMuseMcpFlag);
 
-        stepOptions = SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
+        stepOptions = museAssistant
+            ? MuseAssistantPosture.Apply(stepOptions)
+            : SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 
         // allowlist the Capacitor server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
@@ -725,47 +955,6 @@ sealed class SetupCommand(
             browserAgents is null
                 ? new[] { serverUrl }.Concat(profilesForDomains.Profiles.Values.Select(p => p.ServerUrl))
                 : [serverUrl]);
-
-        var copilot  = harnesses.Of<CopilotHarness>().Paths;
-        var pi       = harnesses.Of<PiHarness>().Paths;
-        var kiro     = harnesses.Of<KiroHarness>().Paths;
-        var kiroCrew = harnesses.Of<KiroHarness>().Crew;
-        var codex    = harnesses.Of<CodexHarness>().Paths;
-        var opencode = harnesses.Of<OpenCodeHarness>().Paths;
-        var cursor   = harnesses.Of<CursorHarness>().Paths;
-        var gemini   = harnesses.Of<GeminiHarness>().Paths;
-        var agy      = harnesses.Of<AntigravityHarness>().Paths;
-
-        var stepPaths = new CodingAgentsStep.Paths(
-            ClaudeSettingsPath:   claudeSettingsPath,
-            ClaudeScopeLabel:     legacyProjectScope ? "project" : "user",
-            PluginDir:            pluginPath,
-            CodexHooksPath:       codex.UserHooksJson,
-            CursorHooksPath:      cursor.UserHooksJson,
-            CopilotHooksPath:     copilot.KcapHooksJson,
-            GeminiSettingsPath:   gemini.SettingsJson,
-            AgentsSkillsDir:      agents.UserSkillsDir,
-            LegacyCodexSkillsDir: codex.SkillsDir,
-            KiroHooksPath:        kiro.KcapAgentJson,
-            PiExtensionPath:      pi.KcapExtension,
-            OpenCodeExtensionPath: opencode.KcapPlugin,
-            AntigravityHooksPath: agy.GlobalHooksJson,
-            CodexConfigTomlPath:  codex.ConfigToml,
-            CursorMcpPath:        cursor.UserMcpJson,
-            CopilotMcpPath:       copilot.McpConfigJson,
-            CopilotInstructionsPath: copilot.InstructionsMd,
-            GeminiInstructionsPath: gemini.GeminiMd,
-            AntigravityMcpPath:       agy.McpConfigJson,
-            AntigravityInstructionsPath: agy.InstructionsMd,
-            AntigravitySkillsDir:     agy.SkillsDir,
-            OpenCodeMcpPath:      opencode.McpConfigJson,
-            OpenCodeInstructionsPath: opencode.AgentsMd,
-            KiroMcpPath:          kiro.SettingsMcpJson,
-            KiroSkillsDir:        kiro.SkillsDir,
-            KiroCrewHookScript:   kiroCrew.SpawnHookScript,
-            KiroCrewSkillsDir:    kiroCrew.IsPresent() ? kiroCrew.SkillsDir : "",
-            PiMcpExtensionPath:   pi.KcapMcpExtension,
-            PiAgentsMdPath:       pi.AgentsMd);
 
         var stepInstallers = new CodingAgentsStep.Installers(
             InstallClaudePlugin:    InstallPlugin,
@@ -810,15 +999,38 @@ sealed class SetupCommand(
             // Pi has no JSON MCP config — the "MCP" is a second extension file (kcap-mcp.ts).
             InstallPiMcp:             PiMcpExtensionInstaller.Install,
             InstallPiInstructions:    () => AgentInstructionsWriter.Write(
-                pi.AgentsMd, KcapAgentInstructions.Body));
+                pi.AgentsMd, KcapAgentInstructions.Body),
+            // Vibe's hooks.toml and MCP config.toml are TOML (not the JSON writer / Codex map).
+            InstallVibeHooks:         p => MistralVibeHooksInstaller.Install(p) != TomlConfigFile.Outcome.Failed,
+            RegisterVibeMcp:          () => MistralVibeConfigToml.RegisterKcapMcpServers(vibe.ConfigToml),
+            InstallGrokHooks:         GrokHooksInstaller.Install,
+            // Muse's hooks and MCP servers share one JSON settings.json; an unparseable file is a failure, not a success.
+            InstallMuseHooks:         p => InstallMuseHooks(p, home, muse, WriteLine),
+            RegisterMuseMcp:          () => MuseSettingsJson.RegisterKcapMcpServers(muse.SettingsJson, home));
 
         void WriteLine(string line) => AnsiConsole.MarkupLine(line);
 
         var installResult = await CodingAgentsStep.RunAsync(
             stepOptions, detected, stepPaths, stepInstallers, PromptYesNo, WriteLine);
 
-        if (installResult.AnyHooksInstalled && new GitHookInstaller(home).Install())
-            WriteLine("  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](git 2.54+, off: git config --global hook.kcap.enabled false)[/]");
+        new AccountSetupStep(accounts, pluginEnv, time).Run(
+            stepOptions, AnsiConsole.Profile.Capabilities.Interactive, PromptYesNo, WriteLine);
+
+        var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
+        var gitHook        = new GitHookInstaller(home);
+
+        if (installResult.AnyHooksInstalled && gitHook.Install(out var gitConfigChanged)) {
+            WriteLine(GitHookLine(GitHookInstaller.InstalledGitVersion()));
+
+            if (gitConfigChanged) installedPaths.Add(gitHook.ConfigFilePath);
+        }
+
+        if (CodexTrustReminder(installResult) is { } codexTrust) WriteLine(codexTrust);
+
+        // A run that ends early from here on has still changed these, so it lists them on the way out.
+        void ListChangedBeforeExit() {
+            foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
+        }
 
         // Record that setup offered these detected agents, so the new-harness nudge doesn't later
         // re-offer a vendor the user just saw at the Step 4 prompt (whether they said yes or no).
@@ -835,7 +1047,11 @@ sealed class SetupCommand(
         OfferedIf(detected.Pi,          skipPiFlag,          HarnessId.Pi);
         OfferedIf(detected.OpenCode,    skipOpenCodeFlag,    HarnessId.OpenCode);
         OfferedIf(detected.Antigravity, skipAntigravityFlag, HarnessId.Antigravity);
-        new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
+        OfferedIf(detected.Vibe,        skipVibeFlag,        HarnessId.MistralVibe);
+        OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
+        OfferedIf(detected.Muse,        skipMuseFlag,        HarnessId.Muse);
+        // The posture offers no harness, so nothing may be recorded as offered.
+        if (!museAssistant) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -844,9 +1060,13 @@ sealed class SetupCommand(
         var anthropicSet     = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY"));
         var openaiSet        = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
         var promptApiKey      = (anthropicSet && !skipClaude) || (openaiSet && !skipCodexFlag);
+        // Discovery can switch the active profile after `existing` was read, so what this run keeps comes
+        // from the profile it is about to write.
+        var selected = (await AppConfig.LoadProfileConfig(config)).Profiles.GetValueOrDefault(activeProfile);
+
         // Preserve any previous opt-in when no key is in the current env (we just
         // don't have anything to prompt about; the on-disk value is still valid).
-        var useProviderApiKey = existing?.UseProviderApiKey ?? false;
+        var useProviderApiKey = selected?.UseProviderApiKey ?? false;
 
         if (promptApiKey) {
             await Console.Out.WriteLineAsync();
@@ -869,11 +1089,17 @@ sealed class SetupCommand(
                     if (parsed is null) {
                         await Console.Error.WriteLineAsync(
                             $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
+                        ListChangedBeforeExit();
+
                         return 1;
                     }
                     useProviderApiKey = parsed.Value;
                 }
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
+            } else if (browserAgents is not null) {
+                // The browser has no question for this, and a terminal prompt after it has said setup
+                // finished goes unseen. Keep the setting and say how to change it.
+                AnsiConsole.MarkupLine(ProviderApiKeyKeptLine(useProviderApiKey));
             } else {
                 useProviderApiKey = AnsiConsole.Prompt(
                     new ConfirmationPrompt("  Use these API keys for kcap's headless calls?") { DefaultValue = useProviderApiKey });
@@ -885,11 +1111,18 @@ sealed class SetupCommand(
         // Step 5: Daemon name + save
         AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
-        var    defaultName = Environment.UserName.ToLowerInvariant();
+        // The daemon resolves its name the same way, so the name written here is the one it runs under.
+        var    defaultName = DaemonNameResolver.Resolve([]);
         string daemonName;
 
         if (noPrompt) {
             daemonName = GetArg(args, "--daemon-name") ?? defaultName;
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else if (browserAgents is not null) {
+            // Not asked: the browser has no daemon-name screen, and its service request waits on this
+            // name. The profile's own name comes before the default so a re-run never renames a daemon
+            // in use.
+            daemonName = GetArg(args, "--daemon-name") ?? DaemonNameResolver.Resolve([], selected?.Daemon?.Name);
             await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
         } else {
             daemonName = AnsiConsole.Prompt(
@@ -903,6 +1136,12 @@ sealed class SetupCommand(
         var loggedInto   = new ProfileContext(
             new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
 
+        // The browser path cannot fall back to a prompt: the user is looking at the browser, and its
+        // service request waits on this name. So it walks a bounded list instead.
+        var browserFallbacks = browserAgents is null
+            ? null
+            : new Queue<string>(BrowserDaemonNameFallbacks(daemonName, MachineSlug()));
+
         while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
             AnsiConsole.MarkupLine(
                 $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
@@ -911,8 +1150,24 @@ sealed class SetupCommand(
 
             if (noPrompt) {
                 await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+                ListChangedBeforeExit();
 
                 return 1;
+            }
+
+            if (browserFallbacks is not null) {
+                if (!browserFallbacks.TryDequeue(out var next)) {
+                    await Console.Error.WriteLineAsync(
+                        "  Every fallback daemon name is taken too. Re-run `kcap setup --daemon-name <name>`.");
+                    ListChangedBeforeExit();
+
+                    return 1;
+                }
+
+                daemonName = next;
+                await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+
+                continue;
             }
 
             daemonName = AnsiConsole.Prompt(
@@ -952,6 +1207,8 @@ sealed class SetupCommand(
         // Here rather than in the browser leg, and after the write above rather than before it: the unit
         // bakes the profile, the expected server and the daemon name, and `saved` is the only context that
         // carries what this run actually chose.
+        FirstRunMachineActionResult? daemonService = null;
+
         if (browserAnswers.FlowId is { } browserFlowId) {
             try {
                 // Every flow route is authenticated, and a poll that 401s answers an empty body —
@@ -987,7 +1244,7 @@ sealed class SetupCommand(
                         ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
                         : null;
 
-                    await SetupDaemonService.RunAsync(
+                    daemonService = await SetupDaemonService.RunAsync(
                         channel, serverUrl, browserFlowId, config, saved, home, time);
                 }
                 else
@@ -1049,7 +1306,10 @@ sealed class SetupCommand(
             WorkingDirectory:    workdir.Path,
             Paths:               stepPaths,
             BrowserImport:       browserAnswers.Import,
-            BrowserImportFailed: browserAnswers.ImportFailed));
+            BrowserImportFailed: browserAnswers.ImportFailed,
+            BrowserFinished:     browserAnswers.FlowStillLive,
+            BrowserHandoffPrompt: browserAnswers.HandoffPrompt,
+            BrowserBackground:   browserAnswers.Background));
 
         await Console.Out.WriteLineAsync();
 
@@ -1059,6 +1319,7 @@ sealed class SetupCommand(
         grid.AddRow("[bold]Server[/]",     Markup.Escape(serverUrl));
         grid.AddRow("[bold]Visibility[/]", Markup.Escape(defaultVisibility));
         grid.AddRow("[bold]Daemon[/]",     Markup.Escape(daemonName));
+        if (museAssistant) grid.AddRow("[bold]Posture[/]", MuseAssistantPosture.SummaryValue);
 
         if (useProviderApiKey) {
             grid.AddRow("[bold]Provider API key[/]", "kept in headless spawns");
@@ -1071,6 +1332,8 @@ sealed class SetupCommand(
         grid.AddRow("[bold]Config[/]", Markup.Escape(AppConfig.GetConfigPath(config)));
 
         AnsiConsole.Write(new Padder(grid).Padding(2, 0, 0, 0));
+
+        foreach (var line in InstalledInLines(installedPaths, home.Path)) AnsiConsole.MarkupLine(line);
 
         // hooks only load at coding-agent session start. The common case is a user
         // running `kcap setup` from inside an already-running session, which won't stream
@@ -1087,10 +1350,9 @@ sealed class SetupCommand(
             new FirstRunNoticeStore(config).Arm();
         }
 
-        // Setup itself is user-scope and works fine outside a repo, but sessions recorded
-        // from non-repo directories have no owner/repo/branch/PR enrichment (see
-        // RepositoryDetection.DetectRepositoryAsync), which weakens grouping in the UI.
-        if (gitRoot is null) {
+        // Sessions recorded outside a repo carry no owner/repo/branch enrichment. A Muse VM records
+        // nothing from a checkout, so the tip is noise there.
+        if (gitRoot is null && !museAssistant) {
             AnsiConsole.MarkupLine(
                 $"\n  [yellow]Tip:[/] you ran setup outside a git working tree ([dim]{Markup.Escape(workdir.Path)}[/]).");
             AnsiConsole.MarkupLine(
@@ -1099,7 +1361,7 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        AnsiConsole.MarkupLine("\n  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]");
+        if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -1113,6 +1375,7 @@ sealed class SetupCommand(
             installResult.ClaudeInstalled, installResult.CodexHooksInstalled, installResult.CursorHooksInstalled,
             installResult.CopilotHooksInstalled, installResult.GeminiHooksInstalled, installResult.KiroHooksInstalled,
             installResult.PiExtensionInstalled, installResult.OpenCodeExtensionInstalled, installResult.AntigravityHooksInstalled,
+            installResult.VibeHooksInstalled, installResult.GrokHooksInstalled, installResult.MuseHooksInstalled,
         }.Count(installed => installed);
 
         telemetry.Funnel.Succeeded(agentsConfigured);
@@ -1290,7 +1553,10 @@ sealed class SetupCommand(
         string                        WorkingDirectory,
         CodingAgentsStep.Paths        Paths,
         FirstRunImportAnswer?         BrowserImport,
-        bool                          BrowserImportFailed);
+        bool                          BrowserImportFailed,
+        bool                          BrowserFinished = false,
+        string?                       BrowserHandoffPrompt = null,
+        BackgroundImportLaunch?       BrowserBackground = null);
 
     /// <summary><see cref="RunId"/> and <see cref="Handoff"/> are null whenever the foreground pass
     /// never ran (browser-answered, skipped, declined or <c>--no-prompt</c>). <see cref="PasteBlock"/>
@@ -1312,7 +1578,27 @@ sealed class SetupCommand(
         // so it reports rather than prompting. Re-prompting would offer to import one repository
         // again, right after a screen that chose several.
         if (inputs.BrowserImport is { } browser) {
-            foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed)) AnsiConsole.MarkupLine(line);
+            foreach (var line in BrowserImportSummary(browser, inputs.BrowserImportFailed, inputs.BrowserBackground)) AnsiConsole.MarkupLine(line);
+
+            // The browser offered the prompt on installs still to run; one that was skipped or failed
+            // leaves no agent able to answer it.
+            if (inputs.BrowserHandoffPrompt is not null && HandoffVendorEligibility.Eligible(harnesses, inputs.Paths).Count == 0) {
+                AnsiConsole.MarkupLine(
+                    $"  [yellow]![/] No agent has the kcap {EvalWatchSkillName} skill, so the prompt the browser showed has nothing to answer it. "
+                  + $"Follow the import in Capacitor instead: {Markup.Escape(inputs.ServerUrl.TrimEnd('/'))}/sessions?status=ended");
+
+                return new ImportStepResult(false, null, null, null);
+            }
+
+            return new ImportStepResult(false, null, null, inputs.BrowserHandoffPrompt);
+        }
+
+        // A browser flow that finished without an import answer left nothing to run, and the user is
+        // looking at the browser, not here. Handing back with `t` or abandoning the tab leaves
+        // BrowserFinished false, so the terminal prompt still covers those.
+        if (inputs.BrowserFinished) {
+            AnsiConsole.MarkupLine(
+                "  [dim]· Nothing chosen to import in the browser. Run[/] [cyan]kcap import --all[/] [dim]to import past sessions later.[/]");
 
             return new ImportStepResult(false, null, null, null);
         }
@@ -1404,11 +1690,10 @@ sealed class SetupCommand(
 
         PrintBackground(launch);
 
-        var analyticsAllowed = PlanEntitlementStore.Get(inputs.ServerUrl, config, time.GetUtcNow()).Allows(PlanFeature.Analytics);
-        var eligible          = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
-        var detectedVendors   = HandoffVendorEligibility.Detected(harnesses);
+        var eligible        = HandoffVendorEligibility.Eligible(harnesses, inputs.Paths);
+        var detectedVendors = HandoffVendorEligibility.Detected(harnesses);
 
-        var handoff = HandoffDecision.Decide(outcome, launch.Status, analyticsAllowed, eligible.Count, detectedVendors);
+        var handoff = HandoffDecision.Decide(outcome, launch.Status, eligible.Count, detectedVendors);
 
         // Best-effort: Write's own contract already leaves no temp behind on failure, so the only
         // thing this step adds is the warning and the promise to carry on regardless.
@@ -1438,7 +1723,9 @@ sealed class SetupCommand(
           + $"{attributed} session{(attributed == 1 ? "" : "s")} attributed, "
           + $"{unmatched} session{(unmatched == 1 ? "" : "s")} on disk with no repository match.");
 
-    static void PrintBackground(BackgroundImportLaunch launch) {
+    /// <param name="browser">The browser flow's import is per repository and per level, which plain
+    /// <c>kcap import</c> cannot reproduce, so its retry names setup instead.</param>
+    internal static void PrintBackground(BackgroundImportLaunch launch, bool browser = false) {
         var log = Markup.Escape(launch.LogPath ?? "");
 
         switch (launch.Status) {
@@ -1452,7 +1739,9 @@ sealed class SetupCommand(
                 var code = launch.ExitCode is { } c ? $" (exit {c})" : "";
                 AnsiConsole.MarkupLine(
                     $"  [yellow]![/] Background import did not start{code}: {Markup.Escape(launch.Error ?? "unknown error")}. "
-                  + "Run [cyan]kcap import --all --yes[/] to import the rest.");
+                  + (browser
+                        ? "Run [cyan]kcap setup[/] again and choose the same repositories and levels to import the rest."
+                        : "Run [cyan]kcap import --all --yes[/] to import the rest."));
                 break;
             case BackgroundImportStatus.NotNeeded:
             default:
@@ -1461,13 +1750,11 @@ sealed class SetupCommand(
     }
 
     /// <summary>A suppression tied to the import's own outcome (nothing new, nothing landed, or it
-    /// failed) prints nothing beyond what the step already said; one tied to eligibility (plan, skill,
+    /// failed) prints nothing beyond what the step already said; one tied to eligibility (skill,
     /// detection) names the reason. With no agent able to follow along, the two detection-tied
     /// reasons also point at the web UI, so the run is still watchable.</summary>
     static void PrintSuppressed(HandoffSuppressedReason reason, string serverUrl) {
         var line = reason switch {
-            HandoffSuppressedReason.AnalyticsNotInPlan =>
-                "  Insights isn't in this workspace's plan, so the eval-watch handoff is skipped.",
             HandoffSuppressedReason.SkillNotInstalled =>
                 $"  No detected agent has the kcap {EvalWatchSkillName} skill.",
             HandoffSuppressedReason.NoAgentDetected =>
@@ -1559,13 +1846,18 @@ sealed class SetupCommand(
     /// already scoped to what the user kept.</param>
     internal static IReadOnlyList<IImportSource> BuildImportSources(
             ConfigRoot config, HarnessRegistry harnesses, GitProviderRouter router, TimeProvider time,
-            IReadOnlyCollection<HarnessId>? vendors = null) {
+            IReadOnlyCollection<HarnessId>? vendors = null, AccountRegistry? accounts = null, UserHome? home = null) {
         var cursor   = harnesses.Of<CursorHarness>().Paths;
         var opencode = harnesses.Of<OpenCodeHarness>().Paths;
 
+        var claudeRoots = DistinctRoots(harnesses.Of<ClaudeHarness>().Paths.Projects, accounts, home, HarnessId.Claude,
+                                        dir => AccountLayouts.Claude(home!, dir).Projects);
+        var codexRoots  = DistinctRoots(harnesses.Of<CodexHarness>().Paths.Sessions, accounts, home, HarnessId.Codex,
+                                        dir => AccountLayouts.Codex(home!, dir).Sessions);
+
         IReadOnlyList<IImportSource> all = [
-            new ClaudeImportSource(config, harnesses.Of<ClaudeHarness>().Paths.Projects, router, time),
-            new CodexImportSource(config, harnesses.Of<CodexHarness>().Paths.Sessions, router, time),
+            .. claudeRoots.Select(r => (IImportSource)new ClaudeImportSource(config, r, router, time)),
+            .. codexRoots.Select(r => (IImportSource)new CodexImportSource(config, r, router, time)),
             new CursorImportSource(config, cursor.ProjectsDir, cursor.WorkspaceStorageDir, router, time, titlePaths: cursor),
             new CopilotImportSource(config, harnesses.Of<CopilotHarness>().Paths, router, time),
             new GeminiImportSource(harnesses.Of<GeminiHarness>().Paths.TmpDir, time),
@@ -1574,7 +1866,10 @@ sealed class SetupCommand(
             new OpenCodeImportSource(
                     Path.Combine(opencode.DataDir, "opencode.db"),
                     opencode.ImportLedgerJson, time),
-            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time)
+            new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
+            new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
+            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time),
+            new MuseImportSource(harnesses.Of<MuseHarness>().Paths, WatcherPaths.FromEnvironment(config), time)
         ];
 
         if (vendors is null) return all;
@@ -1582,6 +1877,20 @@ sealed class SetupCommand(
         var wanted = vendors.ToHashSet();
 
         return [.. all.Where(s => wanted.Contains(s.Vendor))];
+    }
+
+    /// <summary>The environment layout's root first, then each registered account's root that is not
+    /// the same directory.</summary>
+    static List<string> DistinctRoots(
+            string environmentRoot, AccountRegistry? accounts, UserHome? home, HarnessId vendor, Func<string, string> rootOf) {
+        var roots = new List<string> { environmentRoot };
+
+        if (accounts is null || home is null) return roots;
+
+        foreach (var root in accounts.Accounts.Where(a => a.Vendor == vendor).Select(a => rootOf(a.Directory)))
+            if (!roots.Any(r => AccountDirectory.Same(r, root))) roots.Add(root);
+
+        return roots;
     }
 
     /// <summary>
@@ -1618,6 +1927,52 @@ sealed class SetupCommand(
             AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(ex.Message)}");
             return null;
         }
+    }
+
+    /// <summary>Matches the provisioner's own poll budget: a workspace it reports active can still be
+    /// minutes from serving.</summary>
+    internal static readonly TimeSpan NewWorkspaceWait = TimeSpan.FromMinutes(10);
+
+    static readonly TimeSpan WorkspacePollGap = TimeSpan.FromSeconds(5);
+
+    const int WorkspaceProgressEvery = 6;
+
+    /// <summary>
+    /// Holds setup until the workspace discovery chose answers, so nothing after this configures a host
+    /// that is not there. False after saying why; the profile discovery wrote stays, so a re-run naming
+    /// the workspace picks up where this left off.
+    /// </summary>
+    internal async Task<bool> WaitForWorkspaceAsync(string serverUrl, TimeSpan budget, CancellationToken ct = default) {
+        using var client = http.Anonymous();
+
+        if (await WorkspaceProbe.AskAsync(client, serverUrl, time, ct) == WorkspaceAnswer.Live) return true;
+
+        await Console.Out.WriteLineAsync($"  Waiting for {serverUrl} to answer — a new workspace can take a few minutes…");
+
+        var started  = time.GetUtcNow();
+        var deadline = started + budget;
+
+        // A line rather than a spinner: an agent driving setup reads redirected output, where a live
+        // display shows nothing until it ends.
+        for (var poll = 1; time.GetUtcNow() < deadline; poll++) {
+            await Task.Delay(WorkspacePollGap, time, ct);
+
+            if (await WorkspaceProbe.AskAsync(client, serverUrl, time, ct) == WorkspaceAnswer.Live) {
+                AnsiConsole.MarkupLine($"  [green]✓[/] {Markup.Escape(serverUrl)} is answering");
+
+                return true;
+            }
+
+            if (poll % WorkspaceProgressEvery == 0)
+                await Console.Out.WriteLineAsync($"  Still waiting ({(time.GetUtcNow() - started):m\\:ss} of {budget:m\\:ss})…");
+        }
+
+        // Console rather than AnsiConsole so the command survives being copied: Spectre hard-wraps.
+        await Console.Error.WriteLineAsync($"  {serverUrl} is not answering, so setup stopped before configuring anything else.");
+        await Console.Error.WriteLineAsync(
+            $"  If it was just created, run `kcap setup --server-url {serverUrl}` once it is up. If not, it may have been removed.");
+
+        return false;
     }
 
     internal static readonly SetupAuthProgress StepProgress = new(new ConsoleAuthProgress(SetupAuthProgress.StepIndent));
@@ -1663,7 +2018,8 @@ sealed class SetupCommand(
     /// since setup's whole job is configuring that profile for the chosen server.
     /// </summary>
     internal async Task<int> RunLoginStepAsync(
-            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile) {
+            bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile,
+            bool museAssistant = false) {
         if (loginComplete) {
             // Discovery's WorkOS leg reports the sign-in itself, naming the workspace it picked. Every
             // other provider's discovery reports a tenant count and no identity, so this is its only one.
@@ -1681,6 +2037,9 @@ sealed class SetupCommand(
 
         if (result is not AuthResult.Committed { CredentialSaved: true }) {
             await Console.Error.WriteLineAsync("  Login failed.");
+
+            if (museAssistant)
+                foreach (var line in MuseAssistantPosture.LoginFailedHintLines(result, provider)) await Console.Out.WriteLineAsync(line);
 
             return 1;
         }
@@ -1752,7 +2111,9 @@ sealed class SetupCommand(
     /// vendor keys and booleans, and the install runs through the same one place the terminal prompt
     /// does. Every outcome leaves setup running: sign-in has already happened, so nothing in this leg
     /// can strand a machine.</summary>
-    async Task<BrowserFlowAnswers> RunBrowserFlowStepAsync(string serverUrl, string provider, bool noPrompt) {
+    async Task<BrowserFlowAnswers> RunBrowserFlowStepAsync(
+            string serverUrl, string provider, bool noPrompt,
+            string profileName, string defaultVisibility, CodingAgentsStep.Paths paths) {
         // --no-prompt is a scripted run and this waits on a human. None has no identity for a flow to
         // be owned by, and its routes are authenticated. Headless is deliberately NOT a skip: a
         // machine with no browser of its own is exactly the one whose user is sitting at another, and
@@ -1799,7 +2160,8 @@ sealed class SetupCommand(
                     Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
                 importing = new SetupImportLane(
-                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time);
+                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time,
+                    spawner, serverUrl, profileName, defaultVisibility, workdir.Path, paths, accounts: accounts);
 
                 using var progress = new SpectreFirstRunFlowProgress(time);
 
@@ -1831,7 +2193,9 @@ sealed class SetupCommand(
             FirstRunFlowOutcomes.Import(result),
             importing?.Failed == true,
             FlowId(result),
-            result is FirstRunFlowResult.Finished);
+            result is FirstRunFlowResult.Finished,
+            importing?.HandoffPrompt,
+            importing?.Background);
     }
 
     /// <summary>
@@ -1847,12 +2211,18 @@ sealed class SetupCommand(
     /// leg that finished: every other ending relinquished, and a relinquish is the machine stating it has
     /// gone. Read before beating again — saying this machine is here, after saying it had gone, is worse
     /// than the silence it would be covering.</param>
+    /// <param name="HandoffPrompt">The eval-watch prompt the import offered, printed again at the end of
+    /// setup for a user who closed the tab.</param>
+    /// <param name="Background">The child importing the rest of the chosen history, or null where the
+    /// import spawned none.</param>
     internal sealed record BrowserFlowAnswers(
-            FirstRunAgentsAnswer? Agents,
-            FirstRunImportAnswer? Import,
-            bool                  ImportFailed  = false,
-            string?               FlowId        = null,
-            bool                  FlowStillLive = false) {
+            FirstRunAgentsAnswer?   Agents,
+            FirstRunImportAnswer?   Import,
+            bool                    ImportFailed  = false,
+            string?                 FlowId        = null,
+            bool                    FlowStillLive = false,
+            string?                 HandoffPrompt = null,
+            BackgroundImportLaunch? Background    = null) {
         /// <summary>No browser leg ran, or it ended with nothing to spend.</summary>
         public static BrowserFlowAnswers None { get; } = new(null, null);
     }
@@ -1884,13 +2254,16 @@ sealed class SetupCommand(
     /// from the write so the copy is testable.</summary>
     /// <param name="failed">A pass returned non-zero. The line then says so rather than showing a
     /// tick, or the closing summary contradicts the warning the import itself already printed.</param>
-    internal static IReadOnlyList<string> BrowserImportSummary(FirstRunImportAnswer answer, bool failed = false) {
+    /// <param name="background">The child importing the rest. While it runs nothing is finished yet and
+    /// it is already the retry; one that did not start leaves the rest unimported.</param>
+    internal static IReadOnlyList<string> BrowserImportSummary(
+            FirstRunImportAnswer answer, bool failed = false, BackgroundImportLaunch? background = null) {
         if (answer.IsDecline) return ["  [dim]· You chose not to import past sessions in the browser.[/]"];
 
         if (answer.NoReadableVendors)
             return [
                 "  [yellow]![/] Nothing was imported: those sessions come from agents this version of kcap "
-              + "does not know. Run 'kcap update', then 'kcap import' to bring them in."
+              + "does not know. Run 'kcap update', then 'kcap setup' to bring them in."
             ];
 
         var lines = new List<string>();
@@ -1900,15 +2273,22 @@ sealed class SetupCommand(
             var subject = $"{repos} repositor{(repos == 1 ? "y" : "ies")} as chosen in the browser "
                         + $"[dim]({Markup.Escape(FirstRunImportWindows.Label(answer.Window))})[/]";
 
-            lines.Add(failed
-                ? $"  [yellow]![/] Partly imported {subject}. Run [cyan]kcap import[/] to finish it."
-                : $"  [green]✓[/] Imported {subject}");
+            var running = background is { Status: BackgroundImportStatus.Running };
+            var rest    = running ? $" [dim]· the rest is importing in the background · log: {Markup.Escape(background!.LogPath ?? "")}[/]" : "";
+
+            lines.Add((failed || background is { Status: BackgroundImportStatus.Failed }, running) switch {
+                (true, true)  => $"  [yellow]![/] Partly imported {subject}{rest}",
+                (true, false) => $"  [yellow]![/] Partly imported {subject}. "
+                               + "Run [cyan]kcap setup[/] again and choose the same repositories and levels to finish it.",
+                (false, true) => $"  [green]✓[/] Imported your newest sessions from {subject}{rest}",
+                _             => $"  [green]✓[/] Imported {subject}",
+            });
         }
 
         if (answer.Unreadable > 0)
             lines.Add(
                 $"  [yellow]![/] {answer.Unreadable} of those repositories asked for something this version of "
-              + "kcap does not know, and were left alone. Run 'kcap update' and import them with 'kcap import'.");
+              + "kcap does not know, and were left alone. Run 'kcap update', then 'kcap setup' to import them.");
 
         return lines;
     }
@@ -1976,23 +2356,40 @@ sealed class SetupCommand(
     }
 
     /// <summary>
-    /// Reads <c>--org</c>/<c>--slug</c> into the answers the create-a-workspace prompts would have
-    /// collected, or the error that stops the run; (null, null) when neither was passed. Every
-    /// rejection is a combination that would otherwise take the flags and never act on them.
+    /// Reads <c>--org</c>/<c>--slug</c>/<c>--tier</c>/<c>--invite-code</c> into the answers the
+    /// create-a-workspace prompts would have collected, or the error that stops the run; (null, null)
+    /// when neither --org nor --slug was passed. Every rejection is a combination that would
+    /// otherwise take the flags and never act on them.
     /// </summary>
     internal static (RequestedWorkspace? Workspace, string? Error) ParseRequestedWorkspace(
             string[] args, bool haveServerUrl) {
         const string Usage = "kcap setup --org \"<name>\" --slug <slug> --no-prompt";
 
-        var (orgGiven, orgName) = ValuedFlag(args, "--org");
-        var (slugGiven, slug)   = ValuedFlag(args, "--slug");
+        var (orgGiven, orgName)   = ValuedFlag(args, "--org");
+        var (slugGiven, slug)     = ValuedFlag(args, "--slug");
+        var (tierGiven, tierText) = ValuedFlag(args, "--tier");
+        var (codeGiven, code)     = ValuedFlag(args, "--invite-code");
 
-        if (!orgGiven && !slugGiven) return (null, null);
+        if (!orgGiven && !slugGiven) {
+            if (tierGiven) return (null, $"--tier picks the plan for a workspace to create, so it needs --org and --slug: {Usage}");
+            if (codeGiven) return (null, $"--invite-code redeems an invite for a workspace to create, so it needs --org and --slug: {Usage}");
+
+            return (null, null);
+        }
+
+        var tier = !tierGiven ? WorkspaceTier.Free : tierText?.Trim().ToLowerInvariant() switch {
+            "team" => WorkspaceTier.Team,
+            "free" => WorkspaceTier.Free,
+            _      => (WorkspaceTier?)null
+        };
+
+        if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 
         // Present-but-empty is rejected rather than read as absent: a script whose $ORG expanded to
         // nothing still asked for a workspace.
         if (orgGiven && orgName is null)   return (null, $"--org needs a value: {Usage}");
         if (slugGiven && slug is null)     return (null, $"--slug needs a value: {Usage}");
+        if (codeGiven && code is null)     return (null, $"--invite-code needs a value: {Usage} --invite-code <code>");
 
         // Both or neither. The slug becomes a permanent public hostname, so deriving one from the
         // name would pick it on the user's behalf in the one run nobody is watching.
@@ -2014,7 +2411,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value, code?.Trim()), null);
     }
 
     static readonly string[] DiscoverFlags =
@@ -2195,39 +2592,47 @@ sealed class SetupCommand(
 
     internal static string? ResolvePluginPath(string? overrideDir = null) {
         overrideDir ??= Environment.GetEnvironmentVariable("KCAP_PLUGIN_DIR");
+        return ResolvePluginPathForExecutable(Environment.ProcessPath, overrideDir);
+    }
+
+    internal static string? ResolvePluginPathForExecutable(string? exePath, string? overrideDir = null) {
         if (!string.IsNullOrWhiteSpace(overrideDir) && Directory.Exists(overrideDir)) {
             return overrideDir;
         }
 
-        var exePath = Environment.ProcessPath;
-
         if (exePath is null) return null;
+
+        // Through `current`, so the Claude plugin registration follows a script-install update.
+        if (ScriptInstallLayout.FromBinary(exePath, File.Exists) is { } script) {
+            var stablePlugin = Path.Combine(script.Current, "kcap");
+
+            if (Directory.Exists(stablePlugin))
+                return stablePlugin;
+        }
 
         var exeDir = Path.GetDirectoryName(exePath);
 
         if (exeDir is null) return null;
 
-        // Try: <exe_dir>/../../../../plugin  (npm optional-deps layout)
-        // Binary is at <wrapper>/node_modules/@kurrent/<platform-pkg>/bin/kcap
-        // Plugin is at <wrapper>/plugin
+        var bundlePluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "Resources", "kcap"));
+        if (Directory.Exists(bundlePluginPath)) return bundlePluginPath;
+
+        // npm optional dependencies: <wrapper>/node_modules/@kurrent/<platform>/bin/kcap.
         var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kcap"));
 
         if (Directory.Exists(optDepsPluginPath))
             return optDepsPluginPath;
 
-        // Try: <exe_dir>/../../kcap/plugin  (npm flat layout)
         var npmPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap", "kcap"));
 
         if (Directory.Exists(npmPluginPath))
             return npmPluginPath;
 
-        // Try: <exe_dir>/../plugin  (wrapper package direct layout)
         var wrapperPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "kcap"));
 
         if (Directory.Exists(wrapperPluginPath))
             return wrapperPluginPath;
 
-        // Try: repo root layout (dev mode)
         var repoPlugin = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "kcap"));
 
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
@@ -2244,22 +2649,6 @@ sealed class SetupCommand(
     //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)), so the wall-clock bound holds
     //     independently of what HttpClient does internally. If the delay wins, disposal on
     //     method-exit cancels the in-flight POST.
-    /// <summary>
-    /// The cli-setup ping body, hand-built on purpose. A typed DTO here would inherit
-    /// CapacitorJsonContext's global SnakeCaseLower policy and serialise <c>cli_version</c>,
-    /// silently breaking an endpoint that works today — the mirror image of why
-    /// <c>ProvisionRequest.JoinId</c> needs an explicit attribute. So both names stay literal
-    /// camelCase, and <c>joinId</c> is omitted entirely rather than sent as null when telemetry is
-    /// off. Both inputs are ours — an assembly version and 32 hex chars — so neither can carry a
-    /// quote that would break the literal.
-    /// </summary>
-    internal static string CliSetupPingBody(string? version, string? joinId) {
-        var versionJson = version is null ? "null" : $"\"{version}\"";
-        var joinJson    = joinId is null ? "" : $",\"joinId\":\"{joinId}\"";
-
-        return $$"""{"cliVersion":{{versionJson}}{{joinJson}}}""";
-    }
-
     async Task PingCliSetupAsync(string serverUrl, string profile, string provider) {
         // The ping is intentionally silent (see method-doc), which also hides why the
         // dashboard welcome modal never flips when it fails — e.g. a token the server
@@ -2301,11 +2690,11 @@ sealed class SetupCommand(
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
-                CliSetupPingBody(version, telemetry.Join.Current),
+                CliSetupReport.Body(version, telemetry.Join.Current),
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            var pingTask = client.PostAsync($"{serverUrl.TrimEnd('/')}/api/users/me/cli-setup", payload);
+            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload);
             var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
 
             if (winner == pingTask) {
@@ -2327,6 +2716,89 @@ sealed class SetupCommand(
         } catch (Exception e) {
             // Swallow — see method-doc. KCAP_DEBUG surfaces the reason.
             Debug($"failed — {e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>The provider-key line for a run the browser answered, which keeps the stored setting.</summary>
+    internal static string ProviderApiKeyKeptLine(bool useProviderApiKey) => useProviderApiKey
+        ? "  Use provider API key: yes [dim](kept; turn off with[/] [cyan]kcap config set use_provider_api_key false[/][dim])[/]"
+        : "  Use provider API key: no [dim](kept; turn on with[/] [cyan]kcap config set use_provider_api_key true[/][dim])[/]";
+
+    /// <summary>
+    /// The closing daemon line. Suggesting <c>kcap daemon start -d</c> after the browser's request put
+    /// the daemon under a service would start a second one beside it.
+    /// </summary>
+    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => service?.Outcome switch {
+        FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled =>
+            "  [green]✓[/] The agent daemon runs as a background service.",
+        FirstRunMachineActionOutcomes.EnabledUnverified =>
+            "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
+        _ => "  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]"
+    };
+
+    /// <summary>
+    /// The git hook's line. An older git ignores the entry silently, so setup says so rather than
+    /// reporting a hook that will never run, and a version it could not read earns no tick either.
+    /// </summary>
+    internal static string GitHookLine(Version? git) => git switch {
+        null => $"  [yellow]![/] Git hook added, but setup could not read your git version; the hook runs only on git {GitHookInstaller.MinimumGit}+.",
+        _ when git < GitHookInstaller.MinimumGit =>
+            $"  [yellow]![/] Git hook added, but git {git.ToString(3)} ignores it [dim](needs {GitHookInstaller.MinimumGit}+)[/]. "
+          + "Commits are filed from the agent's shell commands until you upgrade git.",
+        _ => "  [green]✓[/] Git hook: every commit is filed under the agent session that made it [dim](off: git config --global hook.kcap.enabled false)[/]"
+    };
+
+    /// <summary>
+    /// True only once every event carries kcap's hook. The roots are written whenever any kcap hook is in
+    /// the file, complete or not: a hook Muse runs finds its session log only through them.
+    /// </summary>
+    internal static bool InstallMuseHooks(string settingsPath, UserHome home, MusePaths muse, Action<string> writeLine) {
+        var installed = MuseHooksInstaller.Install(settingsPath) is SettingsEdit.Changed or SettingsEdit.Unchanged
+                     && MuseHooksInstaller.HasAllHooks(settingsPath);
+
+        if (MuseHooksInstaller.IsWired(settingsPath) && !MuseHookRoots.Persist(home, muse))
+            writeLine($"  [yellow]⚠[/] Could not write {Markup.Escape(MuseHookRoots.PathFor(home))} — "
+                    + "Muse hooks may look for sessions outside this shell's XDG roots.");
+
+        return installed;
+    }
+
+    /// <summary>
+    /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the
+    /// machine-suffixed name the terminal prompt would offer, then numbered variants of it.
+    /// </summary>
+    internal static IEnumerable<string> BrowserDaemonNameFallbacks(string chosen, string machine) {
+        var suffixed = $"{chosen}-{machine}";
+
+        yield return suffixed;
+
+        for (var n = 2; n <= 4; n++) yield return $"{suffixed}-{n}";
+    }
+
+    /// <summary>
+    /// Codex runs only hooks the user has trusted, so installed hooks record nothing until then. Null when
+    /// this run installed no Codex hooks.
+    /// </summary>
+    internal static string? CodexTrustReminder(CodingAgentsStep.Result result) => result.CodexHooksInstalled
+        ? "  [yellow]![/] Codex records nothing until you trust the kcap hooks: accept the prompt on the next "
+        + "[cyan]codex[/] launch, or in the Codex desktop app use Settings → Hooks."
+        : null;
+
+    /// <summary>
+    /// The closing list of everything outside kcap's own config that this run changed, so nothing it
+    /// wrote into an agent or git is a surprise later. Empty when it changed nothing.
+    /// </summary>
+    internal static IEnumerable<string> InstalledInLines(IReadOnlyCollection<string> paths, string home) {
+        if (paths.Count == 0) yield break;
+
+        yield return "\n  [bold]Changed on this machine[/]";
+
+        foreach (var path in paths) {
+            var shown = path.StartsWith(home + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                ? "~" + path[home.Length..]
+                : path;
+
+            yield return $"    {Markup.Escape(shown)}";
         }
     }
 
@@ -2364,63 +2836,11 @@ sealed class SetupCommand(
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
-    static readonly JsonSerializerOptions WriteOpts = new() { WriteIndented = true };
-
     /// <summary>
     /// Registers the kcap plugin in a Claude Code settings.json file by merging
     /// the marketplace source and enabling the plugin. Preserves all existing settings.
     /// </summary>
-    internal static bool InstallPlugin(string settingsPath, string marketplacePath) {
-        try {
-            JsonObject root = [];
+    internal static bool InstallPlugin(string settingsPath, string marketplacePath) =>
+        ClaudePluginWriter.Install(settingsPath, marketplacePath) is SettingsEdit.Changed or SettingsEdit.Unchanged;
 
-            if (File.Exists(settingsPath)) {
-                try {
-                    if (JsonNode.Parse(File.ReadAllText(settingsPath)) is JsonObject obj)
-                        root = obj;
-                } catch {
-                    // Malformed JSON — start fresh
-                }
-            }
-
-            // Ensure extraKnownMarketplaces.kcap exists with the correct path
-            if (root["extraKnownMarketplaces"] is not JsonObject marketplaces) {
-                marketplaces                   = [];
-                root["extraKnownMarketplaces"] = marketplaces;
-            }
-
-            marketplaces["kcap"] = new JsonObject {
-                ["source"] = new JsonObject {
-                    ["source"] = "directory",
-                    ["path"]   = marketplacePath
-                }
-            };
-
-            // Remove stale marketplace entries from earlier shapes
-            marketplaces.Remove("kurrent");
-            marketplaces.Remove("kapacitor");
-
-            // Ensure enabledPlugins.kcap@kcap is true
-            if (root["enabledPlugins"] is not JsonObject enabled) {
-                enabled                = [];
-                root["enabledPlugins"] = enabled;
-            }
-
-            enabled["kcap@kcap"] = true;
-
-            // Remove stale plugin entries from earlier shapes
-            enabled.Remove("kcap@kurrent");
-            enabled.Remove("kapacitor@kapacitor");
-            enabled.Remove("kapacitor@kurrent");
-
-            Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-            File.WriteAllText(settingsPath, root.ToJsonString(WriteOpts));
-
-            ClaudePluginInstaller.WriteMarker(settingsPath);
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
 }

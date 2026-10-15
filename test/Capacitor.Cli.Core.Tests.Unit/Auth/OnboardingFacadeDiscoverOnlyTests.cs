@@ -55,6 +55,21 @@ public class OnboardingFacadeDiscoverOnlyTests {
         await Assert.That(WrittenUnderConfigRoot()).IsNotEmpty();
     }
 
+    // A removed workspace whose organization survives must not be reported, nor stop the account
+    // being offered a new one.
+    [Test]
+    public async Task A_workspace_that_no_longer_answers_is_left_out_and_creation_offered() {
+        using var handler = AuthHttp.Script(proxyConfig: WorkOSProxy, workosTenants: SoleWorkOSTenant, orgSwitch: OrgSwitch);
+
+        var report = await NewFacade(
+                Config.Root, new RecordingAuthProgress(), handler, workosLogin: OnboardingFacadeTests.OrglessAda,
+                probe: (_, _, _) => Task.FromResult(WorkspaceAnswer.Gone))
+            .DiscoverOnlyAsync(AuthProvider.WorkOS, forceDevice: false, CancellationToken.None);
+
+        await Assert.That(report.Tenants).IsEmpty();
+        await Assert.That(report.CanCreate).IsTrue();
+    }
+
     [Test]
     public async Task Several_workos_workspaces_are_all_reported_without_asking_the_picker() {
         using var handler = AuthHttp.Script(

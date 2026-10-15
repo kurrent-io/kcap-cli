@@ -15,7 +15,8 @@ public sealed record ServiceStatusJson(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath,
     string? InstallBinaryPath, int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive,
     string? UnitProfile = null, string? UnitServerUrl = null,
-    string? UnitExpectedServer = null, string? UnitConsentSeed = null);
+    string? UnitExpectedServer = null, string? UnitConsentSeed = null,
+    string? LoadedSpawnType = null);
 
 /// <summary>Machine-readable outcome for <c>kcap daemon service ensure</c> — what the ladder did, and
 /// (on a refusal) which recovery surface the flow should offer. <see cref="Recovery"/> is non-null on
@@ -64,7 +65,8 @@ internal static class ServiceStatusRender {
         var dto = new ServiceStatusJson(
             serviceId, q.UnitPresent, state, q.BinaryPath,
             installBinaryPath, q.JobPid, daemonPid, txnMarker, txnActive,
-            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed);
+            unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
+            q.LoadedSpawnType);
 
         return (JsonSerializer.Serialize(dto, ServiceJsonContext.Default.ServiceStatusJson), 0);
     }

@@ -22,6 +22,9 @@ internal static class VendorConfigSlots {
             HarnessId.Pi          => new(() => config.PiPath,          v => config.PiPath          = v),
             HarnessId.OpenCode    => new(() => config.OpenCodePath,    v => config.OpenCodePath    = v),
             HarnessId.Antigravity => new(() => config.AntigravityPath, v => config.AntigravityPath = v),
+            HarnessId.MistralVibe => new(() => config.MistralVibePath,        v => config.MistralVibePath        = v),
+            HarnessId.Grok        => new(() => config.GrokPath,        v => config.GrokPath        = v),
+            HarnessId.Muse        => new(() => config.MusePath,        v => config.MusePath        = v),
         };
 
         /// <summary>Null for the vendors we hand no model at all, which then pick their own. Exactly
@@ -33,8 +36,10 @@ internal static class VendorConfigSlots {
             HarnessId.Pi          => new(() => config.PiModel,          v => config.PiModel          = v),
             HarnessId.OpenCode    => new(() => config.OpenCodeModel,    v => config.OpenCodeModel    = v),
             HarnessId.Antigravity => new(() => config.AntigravityModel, v => config.AntigravityModel = v),
+            HarnessId.Muse        => new(() => config.MuseModel,        v => config.MuseModel        = v),
 
-            HarnessId.Claude or HarnessId.Codex or HarnessId.Copilot or HarnessId.Gemini => null,
+            HarnessId.Claude or HarnessId.Codex or HarnessId.Copilot or HarnessId.Gemini
+                or HarnessId.MistralVibe or HarnessId.Grok => null,
         };
     }
 }

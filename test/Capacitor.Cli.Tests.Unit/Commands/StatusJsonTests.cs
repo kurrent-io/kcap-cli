@@ -33,6 +33,22 @@ public class StatusJsonTests {
         await Assert.That(r.GetProperty("harnesses")[0].GetProperty("install_command").GetString())
             .IsEqualTo("kcap plugin install");
         await Assert.That(r.GetProperty("daemon").GetProperty("daemons")[0].GetProperty("pid").GetInt32()).IsEqualTo(42);
+        await Assert.That(r.GetProperty("harnesses")[0].GetProperty("last_hook_event").ValueKind).IsEqualTo(JsonValueKind.Null);
+    }
+
+    [Test]
+    public async Task Renders_the_last_hook_event_of_a_wired_harness() {
+        var at = new DateTimeOffset(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+        var payload = StatusCommand.BuildPayload(
+            "default", new StatusCommand.ServerReach(Server, true, null),
+            new StatusCommand.AuthSnapshot(StatusAuthState.Valid, "george", Expiry),
+            "1.1.2", new UpdateAdvisory("1.1.2", null, Newer: false, ServerCapped: false), bundled: false,
+            [new StatusHarnessJson("codex", true, true, null, at)], []);
+
+        using var doc = JsonDocument.Parse(StatusJsonRender.Render(payload));
+
+        await Assert.That(doc.RootElement.GetProperty("harnesses")[0].GetProperty("last_hook_event").GetDateTimeOffset())
+            .IsEqualTo(at);
     }
 
     // The question a caller deciding whether to run setup is actually asking.

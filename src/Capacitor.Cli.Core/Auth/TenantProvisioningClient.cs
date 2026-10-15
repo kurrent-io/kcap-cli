@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace Capacitor.Cli.Core.Auth;
 
 // Result of a provision POST: HTTP status + parsed body (202 provisioning /
-// 200 active / 400 / 409). StatusCode 0 signals a transport/parse failure
+// 200 active / 400 / 403 / 409). StatusCode 0 signals a transport/parse failure
 // (network error, timeout, or unreadable body); the caller maps it to a failed
 // offer. Not serialized — no JSON context entry.
 public sealed record ProvisionOutcome(int StatusCode, ProvisionResponse? Body);
@@ -41,9 +41,10 @@ public sealed class TenantProvisioningClient(HttpClient http) {
     /// only the two that provision a workspace have a telemetry facade to take one from.
     /// </param>
     public async Task<ProvisionOutcome> ProvisionAsync(
-            string baseUrl, string token, string orgName, string slug, string? joinId, CancellationToken ct) {
+            string baseUrl, string token, string orgName, string slug, WorkspaceTier tier, string? joinId,
+            string? inviteCode, CancellationToken ct) {
         var payload = JsonSerializer.Serialize(
-            new ProvisionRequest { OrgName = orgName, Slug = slug, Tier = "free", JoinId = joinId },
+            new ProvisionRequest { OrgName = orgName, Slug = slug, Tier = tier.Wire(), JoinId = joinId, Code = inviteCode },
             CapacitorJsonContext.Default.ProvisionRequest);
 
         try {

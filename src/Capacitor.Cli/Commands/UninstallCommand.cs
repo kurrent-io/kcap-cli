@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Antigravity;
@@ -8,6 +9,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
@@ -21,8 +23,8 @@ namespace Capacitor.Cli.Commands;
 /// Cursor / Gemini hook files, deletes the kcap-owned Copilot hooks file, the
 /// kcap Kiro agent (~/.kiro/agents/kcap.json) — restoring the default agent it
 /// replaced — and the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts),
-/// removes agent skills (and legacy Codex skills), and deletes the kcap config
-/// directory.
+/// removes agent skills (and legacy Codex skills), deletes the kcap config
+/// directory and, last, the vendor account registry.
 ///
 /// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
@@ -67,6 +69,7 @@ public sealed class UninstallCommand(
         await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<PiHarness>().Paths.KcapExtension}");
         await Console.Out.WriteLineAsync($"  • Remove {harnesses.Of<OpenCodeHarness>().Paths.KcapPlugin}");
         await Console.Out.WriteLineAsync($"  • Remove the kcap plugin from {harnesses.Of<AntigravityHarness>().Paths.PluginDir}");
+        await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MuseHarness>().Paths.SettingsJson}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {agents.UserSkillsDir}");
 
         if (projectRoot is not null) {
@@ -129,7 +132,8 @@ public sealed class UninstallCommand(
         // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
         if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
 
-        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries);
+        var accountStore  = AccountStore.Beside(store);
+        var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries, accountStore);
         var pluginCommand = new PluginCommand(env, workdir);
 
         // User-level agent integrations. Each remove command is idempotent and
@@ -144,12 +148,20 @@ public sealed class UninstallCommand(
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--pi"])          != 0) hadFailures = true; // Pi extension (~/.pi/agent/extensions/kcap.ts)
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--opencode"])    != 0) hadFailures = true; // OpenCode plugin (~/.config/opencode/plugins/kcap.ts)
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--antigravity"]) != 0) hadFailures = true; // Antigravity kcap plugin (~/.gemini/config/plugins/kcap/)
+        if (await pluginCommand.HandleAsync(["plugin", "remove", "--grok"])        != 0) hadFailures = true; // ~/.grok/hooks/kcap.json
+        if (await pluginCommand.HandleAsync(["plugin", "remove", "--muse"])        != 0) hadFailures = true; // Muse hooks + MCP in settings.json
 
         // Skills are removed by --codex above, but call --skills explicitly in
         // case the user only ever installed Cursor / agent-agnostic skills and
         // never had Codex hooks (the --codex path short-circuits on a missing
         // hooks file).
         if (await pluginCommand.HandleAsync(["plugin", "remove", "--skills"]) != 0) hadFailures = true;
+
+        if (pluginCommand.AccountsMayStillBeWired) {
+            await Console.Error.WriteLineAsync(
+                "Some vendor accounts may still record to kcap: check them with `kcap accounts`, then re-run `kcap uninstall`.");
+            hadFailures = true;
+        }
 
         new GitHookInstaller(home).Remove();
 
@@ -225,6 +237,19 @@ public sealed class UninstallCommand(
                     await Console.Error.WriteLineAsync($"Could not remove config directory {configDir}: {ex.Message}");
                     hadFailures = true;
                 }
+            }
+        }
+
+        // The registry is what the plugin removals above read to unwire each account, so it goes last,
+        // and only once nothing failed: a re-run needs it to finish the unwiring. It is not part of
+        // the config directory, so --keep-config does not spare it.
+        if (!hadFailures && Directory.Exists(accountStore.Directory)) {
+            try {
+                Directory.Delete(accountStore.Directory, recursive: true);
+                await Console.Out.WriteLineAsync($"Removed account registry: {accountStore.Directory}");
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Could not remove account registry {accountStore.Directory}: {ex.Message}");
+                hadFailures = true;
             }
         }
 

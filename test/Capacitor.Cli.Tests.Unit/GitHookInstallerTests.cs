@@ -14,6 +14,38 @@ public class GitHookInstallerTests {
         return git.ExitCode == 0 ? git.Text : null;
     }
 
+    /// <summary>The vendor suffixes Apple and Git for Windows append must not hide the version setup
+    /// compares against the config-hook minimum.</summary>
+    [Test]
+    [Arguments("git version 2.50.1 (Apple Git-155)", "2.50.1")]
+    [Arguments("git version 2.54.0.windows.1", "2.54.0")]
+    [Arguments("git version 2.54.0", "2.54.0")]
+    [Arguments("git version 3.0", "3.0.0")]
+    public async Task ParseGitVersion_reads_vendor_builds(string output, string expected) {
+        await Assert.That(GitHookInstaller.ParseGitVersion(output)).IsEqualTo(Version.Parse(expected));
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments("git: command not found")]
+    [Arguments("git version unknown")]
+    [Arguments("git version -1.54")]
+    [Arguments("git version 2.-1")]
+    public async Task ParseGitVersion_returns_null_for_output_it_cannot_read(string output) {
+        await Assert.That(GitHookInstaller.ParseGitVersion(output)).IsNull();
+    }
+
+    /// <summary>Setup lists the git config as changed only on a write, so an install that finds the entry
+    /// current must say it changed nothing.</summary>
+    [Test]
+    public async Task An_install_reports_a_change_only_when_it_writes() {
+        await Assert.That(Installer.Install(out var first)).IsTrue();
+        await Assert.That(first).IsTrue();
+
+        await Assert.That(Installer.Install(out var second)).IsTrue();
+        await Assert.That(second).IsFalse();
+    }
+
     [Test]
     public async Task A_refresh_adds_no_entry_and_an_install_adds_one_for_every_event() {
         await Assert.That(Installer.Refresh()).IsFalse();

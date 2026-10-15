@@ -20,7 +20,7 @@ public class ChatComposerTests {
         var opener = new RecordingOpener();
         var terminal = new TerminalTabViewModel("a1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
         var chat = new ChatTabViewModel(
-            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), opener, time, new FakePermissionService(), new SessionSubagents(time));
+            "a1", daemon, new TerminalChatInput(terminal, "a1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), opener, time, new FakePermissionService(), new SessionRuns(time));
         daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude", "codex"]));
         daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo", model: "claude-opus-5") with { Status = "Running" });
         // The Avalonia scheduler always posts, even when the caller is already on the UI thread,
@@ -180,7 +180,7 @@ public class ChatComposerTests {
             var terminal = new TerminalTabViewModel("r1", daemon, factory.Factory, () => new FakeTerminalSurface(), time);
             var chat = new ChatTabViewModel(
                 "r1", daemon, new TerminalChatInput(terminal, "r1", daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), new NoAttachmentUploader(), TranscriptChat.For("claude"), new RecordingOpener(), time,
-                new FakePermissionService(), new SessionSubagents(time));
+                new FakePermissionService(), new SessionRuns(time));
             daemon.Agents.AddOrUpdate(
                 Agent("r1", "claude", hasTerminal: true, kind: "review-flow") with { FlowRunId = "f1", FlowRole = "reviewer" });
             await (terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
@@ -200,10 +200,19 @@ public class ChatComposerTests {
     [Test]
     public async Task Participant_notice_mirrors_the_daemon_protection_reason() {
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true))).IsEqualTo("");
-        await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "review"))).IsEqualTo("review agent");
+        await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "review"))).IsEqualTo("");
         await Assert.That(ChatTabViewModel.ParticipantNotice(
             Agent("a", "claude", true, kind: "review-flow") with { FlowRunId = "f1" })).IsEqualTo("review-flow agent (flow f1)");
         await Assert.That(ChatTabViewModel.ParticipantNotice(Agent("a", "claude", true, kind: "sidekick"))).IsEqualTo("sidekick agent");
+    }
+
+    /// A review agent takes text but no files: both daemon lanes refuse its attachments, so offering
+    /// the picker would upload files only for the send to fail.
+    [Test]
+    public async Task Only_a_plain_agent_takes_attachments() {
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true), ended: false).TakesAttachments).IsTrue();
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true, kind: "review"), ended: false).TakesAttachments).IsFalse();
+        await Assert.That(ChatSessionInfo.FromLocal(Agent("a", "claude", true, kind: "review-flow"), ended: false).TakesAttachments).IsFalse();
     }
 
     /// Thread identity: the hint's own change lands on the UI thread even when the terminal's

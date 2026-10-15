@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 static class McpReviewContextServer {
     internal const string ModeEnvVar = "KCAP_REVIEW_CONTEXT_MODE";
     internal const string UrlEnvVar = "KCAP_REVIEW_CONTEXT_URL";
-    internal const string ToolName = "get_branch_authored_mcp_configs";
+    internal const string ToolName = KcapMcpRegistry.ReviewContextTool;
     const string RouteSuffix = "/review-context/workspace-mcp-configs";
     const string Instructions =
         "Call get_branch_authored_mcp_configs before concluding a borrowed review is clean. " +
@@ -132,7 +132,7 @@ static class McpReviewContextServer {
             id,
             new McpInitResult(
                 McpProtocol.NegotiateVersion(request), new(new()),
-                new("kcap-review-context", "1.0.0"), Instructions),
+                new(KcapMcpRegistry.ReviewContextServerId, "1.0.0"), Instructions),
             McpJsonContext.Default.McpInitResult);
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>

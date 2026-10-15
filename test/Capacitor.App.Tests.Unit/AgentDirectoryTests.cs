@@ -178,6 +178,16 @@ public class AgentDirectoryTests {
     }
 
     [Test]
+    public async Task LowercaseIdleRemoteAgentsRemainVisibleAndUseTheCanonicalStatus() {
+        var (_, remote, _, dir) = Build();
+        using var _d = dir;
+        remote.Cache.AddOrUpdate(Remote("b1", status: "idle"));
+
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("remote:b1").Value.Status).IsEqualTo("Idle");
+    }
+
+    [Test]
     public async Task NoOpRecomputeSkipsUpdateChanges() {
         var (_, remote, _, dir) = Build();
         using var _d = dir;
@@ -272,5 +282,36 @@ public class AgentDirectoryTests {
 
         local.Agents.AddOrUpdate(LocalAgent("a1", status: "Completed"));
         await Assert.That(dir.IsProvenLocalTwin("a1")).IsFalse();
+    }
+
+    /// DaemonClientService.Apply(Connected) publishes Snapshots, Agents, and Pending before Status
+    /// flips to Connected. That sequence must never briefly emit the twin's remote row while
+    /// Snapshots has set the server URL ahead of Status.
+    [Test]
+    public async Task LocalConnectSequenceDoesNotFlashRemoteTwinRowsBeforeStatusFlips() {
+        var (local, remote, _, dir) = Build();
+        using var _d = dir;
+        remote.DaemonsSubject.OnNext([new DaemonInfo { Name = "daemon-a", MachineId = "m1", OwnerUserId = "u1", Connected = true }]);
+        remote.Cache.AddOrUpdate(Remote("a1", daemon: "daemon-a", status: "idle"));
+
+        // While local is still Connecting (no snapshot yet), twin is unproven; once the Connected
+        // frame's snapshot lands, the twin's remote row is suppressed immediately without waiting
+        // for the trailing Status flip.
+        var recording = false;
+        var sawRemoteTwin = false;
+        using var sub = dir.Rows.Connect().Subscribe(_ => {
+            if (recording && dir.Rows.Lookup("remote:a1").HasValue) sawRemoteTwin = true;
+        });
+
+        recording = true;
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        await Assert.That(dir.Rows.Lookup("remote:a1").HasValue).IsFalse();
+
+        local.Agents.AddOrUpdate(LocalAgent("a1"));
+        local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/1"]));
+
+        await Assert.That(sawRemoteTwin).IsFalse();
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("remote:a1").HasValue).IsFalse();
     }
 }

@@ -14,6 +14,9 @@ static class StartAgentTool {
 
     internal const int MaxPromptBytes = 16_384;
 
+    /// <summary>The server's session-title column bound.</summary>
+    internal const int MaxTitleLength = 200;
+
     /// <summary>The POST is never re-sent, because a second one would start a second agent. The bound
     /// keeps a server that stops answering from holding the serial tool loop.</summary>
     internal static readonly TimeSpan StartTimeout = TimeSpan.FromSeconds(60);
@@ -28,7 +31,7 @@ static class StartAgentTool {
         "This server cannot start agents: POST /api/agents/start was answered 404 or 405 with no refusal code, so the server has no such route or has the feature switched off. Nothing was started.";
 
     internal const string UnreadableAnswer =
-        "Error: the server accepted the start (POST /api/agents/start) but its answer could not be read. An agent was most likely started: open the agents page before starting it again.";
+        "Error: the server's start response (POST /api/agents/start) could not be read. Dispatch cannot be confirmed: inspect the agents page and loose-end ledger before starting again.";
 
     internal const string RequestedNotice =
         "Requested, not confirmed: this call returned when the launch command was sent, before the agent registered. The agent runs on its own from here. Do not wait for it and do not poll; give the user the url.";
@@ -39,22 +42,24 @@ static class StartAgentTool {
         "This is the tool for handing work to another agent that runs on its own: not your harness's built-in subagent or background-agent tool, which runs inside this session and is recorded as part of it, not a flow (start_flow, start_review_flow), and not the `kcap agent` CLI. " +
         "EXPLICIT INTENT: call only after the user asked for separate agents and approved the list of starts. Each call starts one agent, which runs a paid model in its own session and its own worktree. " +
         "Call list_start_agent_options first: it says whether a daemon runs on this machine and which harnesses it can start. When none runs here, do not call this. When the user did not name a harness, ask which one before calling. " +
-        "This call does not block and nothing polls: it answers `requested` when the launch command has been sent, before the agent registers, with the agent id and the url of its page. The user supervises the agent from the dashboard. Do not wait for it, and do not call this again to check on it. " +
+        "This call does not block and nothing polls: `requested` means the launch command was sent, not that the agent registered. `pending` means loose-end ownership was reserved but dispatch is unknown or not_sent; do not launch again. Return the claim id and agent page for inspection. The user supervises the agent from the dashboard. Do not wait for it, and do not call this again to check on it. " +
         "The prompt is all the agent gets. It shares none of this conversation, so write a task that stands alone and name this session's id as its source. " +
-        "work_item is required and has no default: name the work item or loose end the task belongs to, `requester` for this session's own work item, or `none`. The server attempts ONE attach of the new session to that item after the session starts; nothing is attached when this call returns. " +
+        "title is required: it names the new session from its first moment, and titles the harness or Capacitor generate later do not replace it. " +
+        "work_item is required and has no default: name the work item or loose end the task belongs to, `requester` for this session's own work item, or `none`. A le: target acquires a durable claim before dispatch, including itemless work; do not claim it for the caller first. Attachment is separate: the server attempts ONE attach when an item exists and the new session is known; nothing is attached when this call returns. " +
         "A refusal states its reason: no daemon on this machine, the daemon at capacity, the limit of live agents, a start on the same key already in progress. Relay it to the user instead of retrying in a loop.",
         new(
             "object",
             new() {
                 ["cwd"]        = new("string", "Absolute path of a directory on this machine, inside the git repository the agent should work in. The agent gets its own worktree of that repository; a path inside a linked worktree resolves to the repository the worktree belongs to."),
                 ["prompt"]     = new("string", "The task, self-contained. At most 16384 bytes of UTF-8."),
+                ["title"]      = new("string", $"Required. The new session's title: a short phrase naming this agent's task, specific enough to tell it apart from the other sessions in the repository, e.g. 'Cap gh output while the PR reader reads it'. At most {MaxTitleLength} characters."),
                 ["work_item"]  = new("string", "Required. One of: a `wi:` or `le:` target key exactly as get_next_work printed it; a work item id; `requester` (this session's primary work item); `none`."),
                 ["vendor"]     = new("string", "The harness to start, as a lowercase token listed by list_start_agent_options (e.g. 'claude', 'codex'). Pass the one the user chose; ask them when they did not name one. Defaults to the harness running this session, and is required when that harness cannot be identified."),
                 ["model"]      = new("string", "Optional. The vendor's own model id or alias: letters, digits and . _ : - / only, at most 64 characters. Omit to let the daemon use the vendor's default."),
                 ["daemon"]     = new("string", "Optional. A daemon's name. Needed only after the server answers ambiguous_daemon because several of your daemons run on this machine."),
                 ["session_id"] = new("string", "Optional. The calling session. Defaults to the session this server runs in; a value given here wins.")
             },
-            ["cwd", "prompt", "work_item"]
+            ["cwd", "prompt", "title", "work_item"]
         ),
         McpToolAnnotations.Launch
     );
@@ -64,6 +69,7 @@ static class StartAgentTool {
         var sessionId = McpSessionId.ResolveWithin(arguments, ambientSessionId);
         var cwd       = McpToolArguments.RequireString(arguments, "cwd").Trim();
         var prompt    = McpToolArguments.RequireString(arguments, "prompt");
+        var title     = McpToolArguments.RequireBoundedString(arguments, "title", MaxTitleLength);
         var workItem  = McpToolArguments.RequireString(arguments, "work_item").Trim();
         var vendor    = (McpToolArguments.OptionalString(arguments, "vendor") ?? driverVendor)?.ToLowerInvariant()
                      ?? throw new ArgumentException(NoVendorMessage);
@@ -75,7 +81,7 @@ static class StartAgentTool {
                 $"'prompt' is {promptBytes} bytes of UTF-8; the limit is {MaxPromptBytes}. Shorten it, or have the agent read the detail from a file.");
 
         return new(
-            sessionId, cwd, RepoPathOf(cwd), prompt, workItem, vendor, machineId, callerAgentId,
+            sessionId, cwd, RepoPathOf(cwd), prompt, title, workItem, vendor, machineId, callerAgentId,
             McpToolArguments.OptionalString(arguments, "model"),
             McpToolArguments.OptionalString(arguments, "daemon"));
     }
@@ -102,12 +108,12 @@ static class StartAgentTool {
 
     internal static string Unanswered(string how) => $"Error: the start request (POST {Route}) {how}. {OutcomeUnknown}";
 
-    internal static (string Text, bool IsError) Render(int status, string body) {
+    internal static (string Text, bool IsError) Render(int status, string body, string workItem) {
         using var document = TryParse(body);
         var root = document?.RootElement ?? default;
 
         if (status is >= 200 and < 300)
-            return FormatRequested(root) is { } requested ? (requested, false) : (UnreadableAnswer, true);
+            return FormatStart(root, workItem.StartsWith("le:", StringComparison.Ordinal)) is { } result ? (result, false) : (UnreadableAnswer, true);
 
         var code = root.Str("error") is { Length: > 0 } stated ? stated : null;
 
@@ -141,12 +147,18 @@ static class StartAgentTool {
         }
     }
 
-    static string? FormatRequested(JsonElement root) {
+    static string? FormatStart(JsonElement root, bool requiresClaim) {
         if (root.Str("agent_id") is not { Length: > 0 } agentId) return null;
+        var status = root.Str("status") ?? "requested";
+        var dispatch = root.Str("dispatch_state");
+        if (status is not ("requested" or "pending")) return null;
+        var hasClaim = !string.IsNullOrWhiteSpace(root.Str("loose_end_claim_id"));
+        if (status == "pending" && (!hasClaim || dispatch is not ("unknown" or "not_sent"))) return null;
+        if (requiresClaim && (!hasClaim || status == "requested" && dispatch != "sent")) return null;
 
-        var text = new StringBuilder($"status: requested\nagent_id: {agentId}\n");
+        var text = new StringBuilder($"status: {status}\nagent_id: {agentId}\n");
 
-        foreach (var field in (string[])["url", "daemon", "repo_path", "vendor", "model"])
+        foreach (var field in (string[])["url", "daemon", "repo_path", "vendor", "model", "loose_end_claim_id", "dispatch_state"])
             if (root.Str(field) is { Length: > 0 } value) text.Append($"{field}: {value}\n");
 
         var workItem = root.Obj("work_item") ?? default;
@@ -156,7 +168,10 @@ static class StartAgentTool {
             ? $"work_item: {id} ({reason}): an attach will be attempted once the agent's session is known; none has happened yet\n"
             : $"work_item: none ({reason})\n");
 
-        return text.Append(RequestedNotice).ToString();
+        var notice = status == "requested" ? RequestedNotice
+            : (dispatch == "not_sent" ? "Ownership reserved; dispatch has not happened. " : "Ownership reserved; launch delivery is unknown. ")
+              + "Do not start it again. Give the user the claim id and agent page to inspect; do not poll or treat this as completion.";
+        return text.Append(notice).ToString();
     }
 
     static void AppendNames(StringBuilder text, JsonElement root, string key) {

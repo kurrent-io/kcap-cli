@@ -1,9 +1,12 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Services;
 
@@ -11,8 +14,8 @@ namespace Capacitor.Cli.Commands;
 
 public sealed class StatusCommand(
         DaemonStore store, ProfileContext profiles, ConfigRoot config, TokenStore tokenStore, HarnessRegistry harnesses,
-        ICapacitorHttpClient http, NpmRegistryClient npm, MachineAuth machine, TimeProvider time,
-        bool? appBundled = null) {
+        ICapacitorHttpClient http, IReleaseFeed npm, MachineAuth machine, TimeProvider time,
+        AccountStore accounts, UserHome home, bool? appBundled = null) {
 
     readonly bool _appBundled = appBundled ?? InstallProvenance.IsAppBundled();
 
@@ -42,6 +45,11 @@ public sealed class StatusCommand(
 
         await Console.Out.WriteLineAsync(line);
 
+        var accountLines = BuildAccountLines(
+            accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
+            vendor => AccountLayouts.DefaultDirectory(vendor, home));
+        if (accountLines.Length > 0) await Console.Out.WriteLineAsync(accountLines);
+
         // Newly-installed-but-unconfigured harnesses. Ledger-independent (a dismissed vendor is
         // still surfaced here) — status always tells the truth, unlike the nudge which respects
         // dismissals. Shares the wired-check with the Hooks line above, so the two never disagree.
@@ -51,6 +59,20 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync(
                 $"           {h.Label} installed but kcap not configured — run `{InstallCommandFor(h.Id)}`");
         }
+
+        var activity = new HookActivity(config, time);
+
+        foreach (var h in harnesses.Where(h => h.Signals.IsWired))
+            await Console.Out.WriteLineAsync(
+                $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
+
+        if (harnesses.FirstOrDefault(h => h.Id == HarnessId.Muse) is { } muse
+            && MuseHooksDetailLine(harnesses.Of<MuseHarness>().Paths.SettingsJson,
+                   detected: harnesses.Detected(HarnessId.Muse), wired: muse.Signals.IsWired) is { } museGap)
+            await Console.Out.WriteLineAsync($"           {museGap}");
+
+        if (new GitHookInstaller(home).IsInstalled() && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
+            await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
 
         // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
         Console.Write("  Daemon:  ");
@@ -71,13 +93,17 @@ public sealed class StatusCommand(
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
 
+        var activity = new HookActivity(config, time);
+
         var payload = BuildPayload(
             profiles.Name, server, auth, current, advisory, bundled,
             [.. harnesses.Select(h => {
                 var installed = harnesses.Detected(h.Id);
                 var wired     = h.Signals.IsWired;
 
-                return new StatusHarnessJson(h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null);
+                return new StatusHarnessJson(
+                    h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null,
+                    wired ? activity.LastEvent(h.VendorId) : null);
             })],
             ReadDaemonEntries(store));
 
@@ -221,7 +247,7 @@ public sealed class StatusCommand(
 
         if (args.Contains("--no-update-check") || profile?.UpdateCheck == false) return (current, default, false);
 
-        var channel = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+        var channel = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result  = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config), false);
@@ -272,7 +298,7 @@ public sealed class StatusCommand(
             return;
         }
 
-        var channel  = UpdateCommand.ResolveChannel(args, profile?.UpdateChannel);
+        var channel  = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         // Cap the recommendation at the connected server's version (min(npm latest, server)).
@@ -379,6 +405,62 @@ public sealed class StatusCommand(
     internal sealed record DaemonEntry(string Name, int? Pid, bool Alive);
 
     /// <summary>
+    /// Whether a wired agent has run a kcap hook on this machine: proof the hooks loaded (and, for
+    /// Codex, were trusted), not that a session reached the server. Hooks load only in a new session.
+    /// </summary>
+    internal static string RecordingLine(HarnessId id, string label, DateTimeOffset? lastEvent, DateTimeOffset now) =>
+        lastEvent is { } at
+            ? $"{label}: hooks running, last hook event {Ago(now - at)}"
+            : id is HarnessId.Codex
+                ? $"{label}: no hook event yet. Start a new {label} session and accept its prompt to trust the kcap hooks"
+                : $"{label}: no hook event yet. Start a new {label} session";
+
+    /// <summary>Muse has one hook group per lifecycle event, so a hand-edited settings.json can leave
+    /// the harness wired with some events missing. Null when every event is present.</summary>
+    internal static string? MuseHookGapLine(IReadOnlySet<string> installedEvents) {
+        var missing = MuseHooksParser.MuseHookEvents.Where(e => !installedEvents.Contains(e)).ToList();
+
+        return missing.Count == 0
+            ? null
+            : $"{HarnessRegistry.LabelOf(HarnessId.Muse)}: hooks missing for {string.Join(", ", missing)}. Run `kcap plugin install --muse`";
+    }
+
+    /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
+    /// claim every event is missing, and re-running the install cannot fix it. It is reported for an
+    /// installed but unwired Muse too, since an unparseable file is what keeps it from reading as wired;
+    /// missing hooks are reported only once wired, where the not-configured line does not already.</summary>
+    internal static string? MuseHooksDetailLine(string settingsPath, bool detected, bool wired) {
+        if (!detected && !wired) return null;
+
+        var label = HarnessRegistry.LabelOf(HarnessId.Muse);
+
+        try {
+            if (!File.Exists(settingsPath)) return null;
+
+            return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
+                ? wired ? MuseHookGapLine(MuseHooksParser.InstalledEvents(root)) : null
+                : $"{label}: {settingsPath} is not a JSON object, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+        } catch (JsonException) {
+            return $"{label}: {settingsPath} is not valid JSON, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return $"{label}: {settingsPath} could not be read, so its hooks were not checked";
+        }
+    }
+
+    static string Ago(TimeSpan elapsed) => elapsed switch {
+        { TotalMinutes: < 1 } => "just now",
+        { TotalHours: < 1 }   => $"{(int)elapsed.TotalMinutes}m ago",
+        { TotalDays: < 2 }    => $"{(int)elapsed.TotalHours}h ago",
+        _                     => $"{(int)elapsed.TotalDays}d ago"
+    };
+
+    /// <summary>Only a git known to be too old is worth a line: a missing git has nothing to attribute.</summary>
+    internal static string? GitHookWarning(Version? git) =>
+        git is not null && git < GitHookInstaller.MinimumGit
+            ? $"{git.ToString(3)} ignores kcap's commit hook (needs {GitHookInstaller.MinimumGit}+); commits are read from the agent's shell commands"
+            : null;
+
+    /// <summary>
     /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"
     /// means is each vendor's own — Gemini merges its hooks into the shared
     /// <c>~/.gemini/settings.json</c>, while Pi and OpenCode track a live-ingest extension file
@@ -387,6 +469,17 @@ public sealed class StatusCommand(
     /// </summary>
     internal static string BuildHooksStatusLine(IEnumerable<(HarnessId Id, bool Wired)> wiring) =>
         string.Join("  ", wiring.Select(w => $"{ShortLabel(w.Id)} {(w.Wired ? "✓" : "✗")}"));
+
+    /// <summary>One line per registered account, but only once some account is not its vendor's
+    /// environment-derived directory: those alone are what the Hooks line already reports.</summary>
+    internal static string BuildAccountLines(
+            IEnumerable<(VendorAccount Account, RecordingState State)> accounts, Func<HarnessId, string> defaultDirectoryOf) {
+        var list = accounts.ToList();
+        if (list.All(a => AccountDirectory.Same(a.Account.Directory, defaultDirectoryOf(a.Account.Vendor)))) return "";
+
+        return string.Join(Environment.NewLine, list.Select(a =>
+            $"  Account: {a.Account.Vendor.ToString().ToLowerInvariant(),-6} {a.Account.Label,-20} {AccountStateLabels.For(a.Account.Vendor, a.State)}"));
+    }
 
     /// <summary>Every vendor shares one line, so the one label carrying a product suffix is
     /// shortened to fit beside the rest.</summary>

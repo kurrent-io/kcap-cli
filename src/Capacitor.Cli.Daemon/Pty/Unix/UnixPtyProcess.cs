@@ -3,9 +3,9 @@ using System.Text;
 namespace Capacitor.Cli.Daemon.Pty.Unix;
 
 public sealed class UnixPtyProcess : IPtyProcess {
-    readonly int                     _masterFd;
+    readonly PtyMasterHandle         _master;
     readonly CancellationTokenSource _cts = new();
-    bool                             _disposed;
+    int                              _disposed;
 
     public int     Pid           { get; }
     public bool    HasExited     { get; private set; }
@@ -18,9 +18,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
     readonly TimeProvider        _time;
     readonly UnixPtyReaderThread _reader;
 
-    UnixPtyProcess(int masterFd, int childPid, string startIdentity, TimeProvider time) {
+    UnixPtyProcess(PtyMasterHandle master, int masterFd, int childPid, string startIdentity, TimeProvider time) {
         _time         = time;
-        _masterFd     = masterFd;
+        _master       = master;
         Pid           = childPid;
         StartIdentity = startIdentity;
         _reader       = new(masterFd, childPid, _cts.Token);
@@ -165,15 +165,28 @@ public sealed class UnixPtyProcess : IPtyProcess {
                     $"pty_spawn failed: step {result.FailedStep}, errno {result.ErrNo}");
             }
 
-            try {
-                return new UnixPtyProcess(result.MasterFd, result.Pid, result.StartIdentityString, time);
-            } catch {
-                Abandon(result.MasterFd, result.Pid);
-
-                throw;
-            }
+            return Adopt(
+                result.MasterFd, result.Pid,
+                master => new UnixPtyProcess(master, result.MasterFd, result.Pid, result.StartIdentityString, time)
+            );
         } finally {
             UnixPtyInterop.pty_plan_free(ref plan); // the plan is spent whether spawn succeeded or failed
+        }
+    }
+
+    /// <summary>Wraps the master fd in its handle for <paramref name="create"/>, and abandons the
+    /// child if that throws. <see cref="Abandon"/> closes the fd, so the handle is disowned first:
+    /// its finalizer would close the same number again, by then possibly another file's.</summary>
+    internal static T Adopt<T>(int masterFd, int pid, Func<PtyMasterHandle, T> create) {
+        var master = new PtyMasterHandle(masterFd);
+
+        try {
+            return create(master);
+        } catch {
+            master.SetHandleAsInvalid();
+            Abandon(masterFd, pid);
+
+            throw;
         }
     }
 
@@ -216,18 +229,19 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
     }
 
-    public Task WriteAsync(string input) {
-        var bytes = Encoding.UTF8.GetBytes(input);
+    internal int MasterFdForTest => (int)_master.DangerousGetHandle();
 
-        return Task.Run(() => UnixPtyInterop.write(_masterFd, bytes, bytes.Length));
-    }
+    public Task WriteAsync(string input) => WriteAsync(Encoding.UTF8.GetBytes(input));
 
+    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go.</summary>
     public Task WriteAsync(byte[] data) {
-        return Task.Run(() => UnixPtyInterop.write(_masterFd, data, data.Length));
+        if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
+
+        return Task.Run(() => _master.TryUse(fd => UnixPtyInterop.write(fd, data, data.Length)));
     }
 
     public void Resize(ushort cols, ushort rows) {
-        UnixPtyInterop.SetWinSize(_masterFd, rows, cols);
+        _master.TryUse(fd => UnixPtyInterop.SetWinSize(fd, rows, cols));
     }
 
     public void SendInterrupt() {
@@ -252,11 +266,23 @@ public sealed class UnixPtyProcess : IPtyProcess {
             }
         }
 
-        if (!HasExited) {
-            SignalGroup(UnixPtyInterop.SIGKILL);
+        if (HasExited) return;
+
+        SignalGroup(UnixPtyInterop.SIGKILL);
+
+        // The kill lands asynchronously, and once this runtime is disposed nothing else will reap the
+        // child: a single immediate check leaves a zombie behind whenever the host is busy.
+        var reapDeadline = _time.GetUtcNow().UtcDateTime + KillReapBound;
+
+        CheckExited();
+
+        while (!HasExited && _time.GetUtcNow().UtcDateTime < reapDeadline) {
+            await Task.Delay(ExitPollGap, _time);
             CheckExited();
         }
     }
+
+    static readonly TimeSpan KillReapBound = TimeSpan.FromSeconds(5);
 
     /// <summary>Serializes the reap (<see cref="CheckExited"/>'s waitpid) against group signalling
     /// (<see cref="SignalGroup"/>). The leader's unreaped zombie is what pins its pid AND pgid
@@ -321,11 +347,9 @@ public sealed class UnixPtyProcess : IPtyProcess {
     }
 
     public async ValueTask DisposeAsync() {
-        if (_disposed) {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) {
             return;
         }
-
-        _disposed = true;
 
         await _cts.CancelAsync();
 
@@ -334,7 +358,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
         }
 
         await _reader.Stopped;
-        UnixPtyInterop.close(_masterFd);
+        _master.Dispose();
         _cts.Dispose();
     }
 }

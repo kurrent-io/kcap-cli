@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Core.Mcp;
 /// <paramref name="AutoApprove"/> marks a server safe to run without a per-call prompt where the
 /// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
 /// reads, or writes only to the session's own Capacitor record, the destination the hooks already
-/// post to unprompted. kcap-flows launches a paid hosted agent; kcap-memory, kcap-artefacts
+/// post to unprompted. kcap-flows launches a paid hosted agent; kcap-memory, kcap-pages
 /// and kcap-knowledge can change shared content or its audience, so they rely on each tool's
 /// annotations instead: a harness that reads them still runs the reads and additive writes
 /// unprompted and gates the destructive
@@ -42,13 +42,17 @@ public static class KcapMcpServers {
             "Declare the plan, spec or design document a session works from and the plan's task list; update task status and read the plan back after compaction.", AutoApprove: true),
         new("kcap-handoff", ["mcp", "handoff"], NeedsProjectCwd: false,
             "Continue a session whose agent is gone: attach this session to its work items and unfinished plans.", AutoApprove: true),
-        new("kcap-artefacts", ["mcp", "artefacts"], NeedsProjectCwd: true,
+        new("kcap-pages", ["mcp", "pages"], NeedsProjectCwd: true,
             "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. Sandboxed with no network access, so everything is inlined; private until you set visibility."),
         new("kcap-analytics", ["mcp", "analytics"], NeedsProjectCwd: true,
             "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with read-only SQL. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide.", AutoApprove: true),
         new("kcap-knowledge", ["mcp", "knowledge"], NeedsProjectCwd: true,
             "Read retained facts and curated skills, and fine-tune skills by editing drafts, changing lifecycle or membership, and curating facts. Repo-aware: defaults to the current repo."),
     ];
+
+    /// <summary>Server names an existing harness config may still carry. Registration and uninstall remove
+    /// an entry kcap owns under one of these; an entry the user changed is left alone.</summary>
+    public static readonly IReadOnlyList<string> Retired = ["kcap-artefacts"];
 
     /// <summary>Codex receives every canonical server. Flows is never auto-approved.</summary>
     public static IReadOnlyList<KcapMcpServer> ForCodex => All;

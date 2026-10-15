@@ -54,6 +54,10 @@ public static class JsonMcpConfigWriter {
                 changed = true;
             }
 
+            foreach (var name in KcapMcpServers.Retired)
+                if (block[name] is JsonNode retired && marker.Owns(configPath, name, retired) && block.Remove(name))
+                    changed = true;
+
             return changed;
         });
 
@@ -71,6 +75,13 @@ public static class JsonMcpConfigWriter {
             // canonical shape it renders.
             try { marker.Record(configPath, written); }
             catch { /* degraded: ownership heals via adoption on the next pass */ }
+        }
+
+        // A retired name is never written again, so a claim left on it would only let a later
+        // hand-added entry under that name read as kcap's and be deleted.
+        if (change != Change.Failed) {
+            try { marker.Forget(configPath, KcapMcpServers.Retired); }
+            catch { /* best-effort, like Record */ }
         }
         return change;
     }
@@ -98,6 +109,7 @@ public static class JsonMcpConfigWriter {
     static JsonObject RenderEntry(KcapMcpServer s, McpConfigShape shape, string? cwd, string command) {
         var o = new JsonObject();
         if (shape.TypeValue is not null) o["type"] = shape.TypeValue;
+        if (shape.TransportValue is not null) o["transport"] = shape.TransportValue;
 
         if (shape.CommandAsArgvArray) {
             // Use the implicit string -> JsonValue conversion (cast to JsonNode?) rather
@@ -116,8 +128,9 @@ public static class JsonMcpConfigWriter {
 
         if (cwd is not null && s.NeedsProjectCwd) o["cwd"] = cwd;
         if (shape.Enable == EnableStyle.EnabledTrue) o["enabled"] = true;
+        if (shape.ModeValue is not null) o["mode"] = shape.ModeValue;
 
-        // Only where the harness has a per-server trust knob; flows, memory and artefacts keep prompting.
+        // Only where the harness has a per-server trust knob; flows, memory and pages keep prompting.
         if (s.AutoApprove && shape.Trust == TrustStyle.TrustBool) o["trust"] = true;   // Gemini
 
         return o;

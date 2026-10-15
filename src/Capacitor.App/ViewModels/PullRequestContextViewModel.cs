@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.PullRequests.Readers;
@@ -16,6 +17,7 @@ namespace Capacitor.App.ViewModels;
 public sealed partial class PullRequestContextViewModel : ReactiveObject {
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
+    readonly Func<string?, string?> _readBranch;
     readonly TimeProvider _time;
     readonly IUrlOpener _opener;
     readonly Action _openReader;
@@ -41,6 +43,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     string? _branch;
     PullRequestChoice? _selected;
     bool _explicitSelection;
+    PullRequestSubjectDto? _requestedSubject;
     bool _updatingChoices;
     PullRequestOverviewDto? _overview;
     PullRequestRead<PullRequestOverviewDto>? _overviewRead;
@@ -67,7 +70,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
-    string _notice = "Waiting for the session to register…";
+    string _notice = WorkContextViewModel.WaitingNote;
     PullRequestReaderNote? _readerNote;
 
     public IAvaloniaReadOnlyList<PullRequestChoice> Choices => _choices;
@@ -79,7 +82,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public string ReaderNote => _readerNote?.Text ?? "";
     public bool HasReaderNote => _readerNote is not null;
     public bool ShowsInstallTool => _readerNote?.InstallUrl is not null;
-    public string InstallToolLabel => _readerNote is null ? "" : "Install " + _readerNote.ToolName;
+    public string InstallToolLabel => _readerNote?.InstallLabel ?? "";
     public bool IsReading => _refreshing || _queuedRefresh || _overviewPending || _pageRequests.Count > 0;
     bool _userRefresh;
     /// Progress for a refresh someone asked for; the background poll reads silently.
@@ -120,8 +123,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
-        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null) {
+        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null) {
         _source = source;
+        _readBranch = readBranch ?? GitRepository.CurrentBranch;
         _time = time;
         _opener = opener;
         _openReader = openReader;
@@ -150,6 +154,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _subscriptions.Add(LoadMoreCommand); _subscriptions.Add(ReloadEarlierCommand); _subscriptions.Add(ExpandThreadCommand);
         _subscriptions.Add(OpenRowCommand); _subscriptions.Add(OpenGitHubCommand); _subscriptions.Add(OpenBodyLinkCommand);
         _subscriptions.Add(SignInCommand); _subscriptions.Add(LinkGitHubCommand);
+        _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
@@ -158,6 +163,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
+            if (_session is not null) _requestedSubject = null;
             _session = id;
             _choices.Clear();
             _sessionItems.Clear();
@@ -168,6 +174,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             ClearProtected();
             _stopped = false;
             _hasListed = false;
+            ApplyRequestedSubject();
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
@@ -176,7 +183,27 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             if (_session is null || _disposed) return;
             CancelReads(); ClearProtected(); _source.ResetSession(_session); _stopped = false; _lastRefresh = null; RequestRefresh(manual: true);
         }).DisposeWith(_subscriptions);
-        _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    internal void ClearSession() {
+        if (_disposed) return;
+        CancelReads();
+        _session = null;
+        _requestedSubject = null;
+        _choices.Clear();
+        _sessionItems.Clear();
+        _selected = null;
+        _explicitSelection = false;
+        _positions.Clear();
+        _lifecycles.Clear();
+        _hasListed = true;
+        _queuedRefresh = false;
+        _userRefresh = false;
+        _stopped = false;
+        _retryAt = null;
+        _lastRefresh = null;
+        ClearProtected();
+        SetNotice(WorkContextViewModel.WaitingNote);
     }
 
     public void SetForeground(bool foreground) {
@@ -223,9 +250,42 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         Notify();
         if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
+    public void SelectSubject(PullRequestSubjectDto subject) {
+        if (_disposed) return;
+        _requestedSubject = subject;
+        ApplyRequestedSubject();
+    }
+
+    void ApplyRequestedSubject() {
+        if (_session is null || _requestedSubject is not { } subject) return;
+        var choice = _choices.FirstOrDefault(item => item.Subject == subject);
+        if (choice is null) {
+            // A fresh list confirms availability; never fall back to a different PR while loading.
+            choice = new PullRequestChoice(new PullRequestLinkDto {
+                Provider = subject.Provider, Host = subject.Host, RepoHash = subject.RepoHash,
+                Owner = subject.Owner, RepoName = subject.RepoName, Number = subject.Number,
+            }, IsAvailable: false);
+            _choices.Add(choice);
+        }
+        _explicitSelection = true;
+        if (!_hasListed) {
+            // Pin the requested subject without cancelling the initial link discovery.
+            _selected = choice;
+            this.RaisePropertyChanged(nameof(Selected));
+            Notify();
+            return;
+        }
+        Select(choice, explicitSelection: true);
+    }
+
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
-        if (_disposed || choice?.Subject == _selected?.Subject) return;
+        if (_disposed) return;
         if (choice is not null && !_choices.Contains(choice)) return;
+        if (explicitSelection) {
+            _requestedSubject = choice?.Subject;
+            _explicitSelection = true;
+        }
+        if (choice?.Subject == _selected?.Subject) return;
         _explicitSelection = explicitSelection;
         if (_selected is not null) {
             if (_positions.Count >= 20 && !_positions.ContainsKey(_selected.Subject)) _positions.Remove(_positions.MinBy(x => x.Value.Touched).Key);
@@ -258,7 +318,35 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         else if (state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
     }
     internal static readonly TimeSpan RowsFreshFor = TimeSpan.FromSeconds(30);
+    void ScheduleTick() {
+        if (_disposed) return;
+        var next = double.PositiveInfinity;
+        if (_foreground && _session is not null) {
+            if (!_stopped && !_refreshing) {
+                var pollGap = _queuedRefresh ? 3 : Math.Max(30, _pollAfter);
+                next = _lastRefresh is { } last ? pollGap - _time.GetElapsedTime(last).TotalSeconds : 1;
+                if (_retryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
+                    next = Math.Max(next, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+            }
+            if (!_masked && !_grace && _accessSeconds > 0) next = Math.Min(next, Remaining);
+            if (_grace) next = Math.Min(next, (TimeSpan.FromMinutes(5) - _time.GetElapsedTime(_graceStarted)).TotalSeconds);
+            if (!_legacy && !_stopped && !_refreshing && !_overviewPending && _selected is { IsAvailable: true }) {
+                var overviewGap = _lastOverview is { } last ? 15 - _time.GetElapsedTime(last).TotalSeconds : 0;
+                var overviewDue = Math.Max(Remaining - 5, overviewGap);
+                if (_retryAt is { } retry) overviewDue = Math.Max(overviewDue, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+                next = Math.Min(next, overviewDue);
+            }
+        }
+        _timer.Change(double.IsPositiveInfinity(next) ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Math.Max(1, next)), Timeout.InfiniteTimeSpan);
+    }
+
     void Tick() {
+        if (_disposed) return;
+        TickCore();
+        ScheduleTick();
+    }
+
+    void TickCore() {
         if (_disposed || !_foreground) return;
         if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
         if (_grace && _time.GetElapsedTime(_graceStarted) >= TimeSpan.FromMinutes(5)) { _masked = true; _grace = false; Notify(); }
@@ -335,5 +423,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _cancel.Dispose(); foreach (var retired in _retired) retired.Dispose();
         _tasks.Clear(); _retired.Clear(); _positions.Clear(); _choices.Clear(); ClearProtected();
         _hasPullRequest.Dispose();
+        _notified.Clear();
     }
 }

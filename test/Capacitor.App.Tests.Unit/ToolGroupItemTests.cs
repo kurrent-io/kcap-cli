@@ -58,24 +58,43 @@ public class ToolGroupItemTests {
             await Assert.That(group.ShowsSummaryHeader).IsFalse();
             await Assert.That(group.ShowsKindChip).IsTrue();
             await Assert.That(group.KindChip).IsEqualTo("Command");
-            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
             await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { call });
         });
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Header_icon_follows_the_first_settled_category() {
+    public async Task Header_icon_represents_the_settled_categories_named_by_the_summary() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
             var a = Call("Bash", ToolCategory.Command);
             var b = Call("Read", ToolCategory.Read);
             group.Add(a);
             group.Add(b);
+            await Assert.That(group.HeaderIconKind).IsNull();
             b.Outcome = ToolOutcome.Done;
-            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
             a.Outcome = ToolOutcome.Done;
-            await Assert.That(group.HeaderIconData).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Command));
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Other));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_summary_of_one_category_keeps_its_specific_icon_while_other_categories_are_live() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var first = Call("Read", ToolCategory.Read);
+            var second = Call("read_file", ToolCategory.Read);
+            group.Add(first);
+            group.Add(second);
+            group.Add(Call("Bash", ToolCategory.Command));
+            first.Outcome = ToolOutcome.Done;
+            second.Outcome = ToolOutcome.Done;
+
+            await Assert.That(group.Summary).IsEqualTo("Read files");
+            await Assert.That(group.HeaderIconKind).IsEqualTo(ToolCategoryIcons.ForCategory(ToolCategory.Read));
         });
     }
 
@@ -178,5 +197,52 @@ public class ToolGroupItemTests {
         var bare = Call("Bash", ToolCategory.Command);
         await Assert.That(bare.HasDetail).IsFalse();
         await Assert.That(bare.LineText).IsEqualTo("Bash");
+    }
+
+    /// A card is the point of the group; folding hides settled rows, never a card.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_folded_group_keeps_its_cards_beside_the_live_calls() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var read = Call("Read", ToolCategory.Read);
+            var publish = new ToolCallItem("publish_artefact", "Retention brief", ToolCategory.Artefact, "Published page", ToolCardKind.Page, "{}");
+            var live = Call("Bash", ToolCategory.Command);
+            group.Add(read);
+            group.Add(publish);
+            group.Add(live);
+
+            publish.SetCard(new ToolCard(ToolCardKind.Page, "Published page", "Retention brief", "v1 · Org", "https://x/artefacts/1", null), open: null);
+            publish.Outcome = ToolOutcome.Done;
+            read.Outcome = ToolOutcome.Done;
+
+            await Assert.That(group.IsExpanded).IsFalse();
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { publish, live }, CollectionOrdering.Matching);
+            await Assert.That(group.LiveCalls).IsEquivalentTo(new[] { live });
+
+            group.Toggle();
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { read, publish, live }, CollectionOrdering.Matching);
+        });
+    }
+
+    /// A card attached after the call settled still surfaces in the folded list.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_card_set_after_settling_joins_the_folded_list() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            var a = Call("Read", ToolCategory.Read);
+            var b = new ToolCallItem("declare_plan_document", "x.md", ToolCategory.Plan, "Declared document", ToolCardKind.Document, "{}");
+            group.Add(a);
+            group.Add(b);
+            a.Outcome = ToolOutcome.Done;
+            b.Outcome = ToolOutcome.Done;
+            await Assert.That(group.HasVisibleCalls).IsFalse();
+
+            b.SetCard(new ToolCard(ToolCardKind.Document, "Declared plan", "x.md", "x.md", null, "x.md"), open: null);
+
+            await Assert.That(group.VisibleCalls).IsEquivalentTo(new[] { b });
+            await Assert.That(group.HasVisibleCalls).IsTrue();
+        });
     }
 }
