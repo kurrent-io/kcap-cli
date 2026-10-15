@@ -74,6 +74,19 @@ public class DaemonShimCommandsTests {
     }
 
     [Test]
+    public async Task ResolveLinkTarget_on_Windows_uses_the_npm_prefix_shim_for_a_flat_install() {
+        var prefix   = Path.GetFullPath("/Users/someone/AppData/Roaming/npm");
+        var modules  = Path.Combine(prefix, "node_modules");
+        var native   = Path.Combine(modules, "@kurrent", "kcap-win-x64", "bin", "kcap.exe");
+        var launcher = Path.Combine(modules, "@kurrent", "kcap", "bin", "kcap.js");
+        var shim     = Path.Combine(prefix, "kcap.cmd");
+
+        var target = DaemonShimCommands.ResolveLinkTarget(() => native, p => p == launcher || p == shim, windows: true);
+
+        await Assert.That(target).IsEqualTo(shim);
+    }
+
+    [Test]
     public async Task ResolveLinkTarget_on_Windows_uses_the_running_binary_outside_npm() {
         var native = Path.GetFullPath("/Users/someone/AppData/Local/KurrentCapacitor/current/kcap.exe");
         var target = DaemonShimCommands.ResolveLinkTarget(() => native, _ => false, windows: true);
