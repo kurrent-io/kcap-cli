@@ -99,7 +99,8 @@ public class ComposerHistoryTests {
         await Assert.That(history.Newer("second")).IsEqualTo("third");
     }
 
-    /// The recalled entry can be the one pushed out the front; ↓ then resumes at the new oldest.
+    /// The recalled entry can be pushed out the front, and more after it; ↓ then resumes at the
+    /// oldest entry left.
     [Test]
     public async Task Observe_past_capacity_keeps_the_recall_cursor_in_step() {
         var history = With(Enumerable.Range(0, ComposerHistory.Capacity).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray());
@@ -107,8 +108,9 @@ public class ComposerHistoryTests {
         for (var i = 0; i < ComposerHistory.Capacity; i++) current = history.Older(current)!;
         await Assert.That(current).IsEqualTo("0");
         history.Observe("new");
+        history.Observe("newer");
         await Assert.That(history.Older(current)).IsNull();
-        await Assert.That(history.Newer(current)).IsEqualTo("1");
+        await Assert.That(history.Newer(current)).IsEqualTo("2");
     }
 
     [Test]

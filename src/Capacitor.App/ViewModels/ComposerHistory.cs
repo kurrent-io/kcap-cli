@@ -22,7 +22,7 @@ public sealed class ComposerHistory {
     /// collapses into it, and an arrival never interrupts a recall in progress.
     public void Observe(string text) {
         if (string.IsNullOrWhiteSpace(text)) return;
-        if (Append(text) && _shown is not null) _cursor--;
+        if (Append(text) && _shown is not null) _cursor = Math.Max(_cursor - 1, -1);
     }
 
     /// The transcript is being replayed from the start, so what it showed is about to arrive again.
