@@ -54,8 +54,7 @@ public sealed class ClaudeHookCommand(
     };
 
     /// <summary>The session-start POST and the memory and flows fetches share what is left after
-    /// <see cref="HookBudget.Safety"/>; 3.5s of it regularly ran out on a busy tenant, starting the
-    /// session without them.</summary>
+    /// <see cref="HookBudget.Safety"/>; must match the session-start timeout in <c>kcap/hooks/hooks.json</c>.</summary>
     internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(9);
 
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {

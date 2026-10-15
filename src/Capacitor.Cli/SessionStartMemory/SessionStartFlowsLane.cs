@@ -15,45 +15,46 @@ internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpCli
     const int WhenToUseCap = 300;
     const int IdCap        = 64;
 
-    /// <summary>Held back from the request budget so the cached catalogue is still delivered when the fetch runs out of time.</summary>
-    static readonly TimeSpan CacheReserve = TimeSpan.FromMilliseconds(250);
-
     public const string Header = "Flows you may offer. When one fits what you just finished, offer it unprompted, and start it only after the user says yes:";
     public const string Footer = "Before starting one, call get_flow_definition(<id>) and follow its guide.";
 
     public async Task<SessionStartMemoryContextResult> FetchAsync(SessionStartMemoryContextRequest request, CancellationToken ct) {
-        var window = request.Budget > CacheReserve * 2 ? request.Budget - CacheReserve : request.Budget / 2;
-        using var deadline = new CancellationTokenSource(window, time);
-        using var linked   = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
-
         SessionStartFetchOutcome outcome;
         try {
             outcome = await SessionStartContextFetch.FetchAsync(
-                await client(linked.Token), request.BaseUrl.TrimEnd('/') + "/api/flows/definitions", time, linked.Token);
+                await client(ct), request.BaseUrl.TrimEnd('/') + "/api/flows/definitions", time, ct);
         } catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException or InvalidDataException) {
             return FromCache(request.BaseUrl) ?? SessionStartMemoryContextResult.Retry;
         }
 
-        // A server older than the listing has nothing to offer, now or on a retry.
-        if (outcome.Status == HttpStatusCode.NotFound) {
-            cache.Delete(request.BaseUrl);
-            return SessionStartMemoryContextResult.Empty;
+        if (outcome.Body is null) {
+            // A server older than the listing has nothing to offer, now or on a retry; a denied caller
+            // must not be offered what it can no longer start.
+            if (outcome.Status is HttpStatusCode.NotFound or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                cache.Delete(request.BaseUrl);
+            if (outcome.Status == HttpStatusCode.NotFound) return SessionStartMemoryContextResult.Empty;
+
+            var retry = new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
+
+            // Only a server that could not answer is stood in for; one that refused the listing, such as a
+            // catalogue still catching up, may have withdrawn a cached flow.
+            return Unavailable(outcome.Status) ? FromCache(request.BaseUrl) ?? retry : retry;
         }
-        if (outcome.Body is null)
-            return FromCache(request.BaseUrl)
-                ?? new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
 
         JsonNode? root;
         try {
             root = JsonNode.Parse(outcome.Body);
         } catch (JsonException) {
-            return SessionStartMemoryContextResult.Empty;
+            root = null;
         }
 
         cache.Write(request.BaseUrl, root);
 
         return Result(root);
     }
+
+    static bool Unavailable(HttpStatusCode status) =>
+        status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int)status >= 500;
 
     SessionStartMemoryContextResult? FromCache(string baseUrl) => cache.Read(baseUrl) is { } cached ? Result(cached) : null;
 

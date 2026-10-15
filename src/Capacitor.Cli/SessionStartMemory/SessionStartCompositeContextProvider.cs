@@ -17,7 +17,9 @@ internal sealed class SessionStartCompositeContextProvider(
         if (request.AllLanesDisabled) return SessionStartMemoryContextResult.Empty;
         if (request.Budget <= TimeSpan.Zero) return SessionStartMemoryContextResult.Retry;
 
-        using var expiry = new CancellationTokenSource(request.Budget, time);
+        // The lanes stop short of the budget, so what they return still reaches a caller waiting exactly that long.
+        var cutoff = request.Budget > LaneReserve * 2 ? request.Budget - LaneReserve : request.Budget / 2;
+        using var expiry = new CancellationTokenSource(cutoff, time);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken, expiry.Token);
 
         var flowsTask = request.FlowsDisabled ? null : RunLaneAsync(() => flows.FetchAsync(request, cts.Token));
@@ -49,7 +51,7 @@ internal sealed class SessionStartCompositeContextProvider(
 
     SessionStartMemoryContextResult? ReportFlows(SessionStartMemoryContextResult? flows) {
         if (flows?.Disposition == SessionStartMemoryDisposition.RetryableFailure)
-            diagnostic?.Invoke("SessionStart flows lane skipped: the flow catalogue was unreachable and none is cached");
+            diagnostic?.Invoke("SessionStart flows lane skipped: no flow catalogue could be fetched or used from the cache");
 
         return flows;
     }
@@ -63,7 +65,8 @@ internal sealed class SessionStartCompositeContextProvider(
         }
     }
 
-    // Flows content alone must not commit the lease while memory or guidelines want a retry.
+    // Flows content alone must not commit the lease while memory or guidelines want a retry, but it is
+    // marker-less and safe to deliver again, so it rides along with the retry.
     static SessionStartMemoryContextResult Combine(
             SessionStartMemoryContextResult? memoryResult, SessionStartMemoryContextResult? guidelinesResult, SessionStartMemoryContextResult? flowsResult) {
         var memoryFragment     = Fragment(memoryResult);
@@ -74,7 +77,7 @@ internal sealed class SessionStartCompositeContextProvider(
             return Committed(Compose(memoryFragment, [guidelinesFragment, flowsFragment]));
 
         if (IsRetry(memoryResult) || IsRetry(guidelinesResult))
-            return Retry([memoryResult, guidelinesResult, flowsResult]);
+            return Retry([memoryResult, guidelinesResult, flowsResult]) with { Fragment = flowsFragment is null ? null : Compose(null, [flowsFragment]) };
 
         if (flowsFragment is not null) return Committed(Compose(null, [flowsFragment]));
         if (IsRetry(flowsResult)) return Retry([flowsResult]);
@@ -101,6 +104,8 @@ internal sealed class SessionStartCompositeContextProvider(
 
         return present.Count == 0 ? memoryFragment : memoryFragment + "\n\n" + rest;
     }
+
+    static readonly TimeSpan LaneReserve = TimeSpan.FromMilliseconds(250);
 
     static bool IsFailOpen(Exception ex) =>
         ex is HttpRequestException or IOException or JsonException or

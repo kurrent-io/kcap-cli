@@ -28,7 +28,7 @@ internal sealed class SessionStartFlowsCatalogCache(string root) {
 
     public void Write(string baseUrl, JsonNode? catalogue) {
         var proactive = new JsonArray();
-        if (catalogue?["definitions"] is JsonArray definitions) {
+        if (catalogue is JsonObject { } obj && obj["definitions"] is JsonArray definitions) {
             foreach (var d in definitions.OfType<JsonObject>()) {
                 if (Str(d, "offer") != "proactive") continue;
                 proactive.Add((JsonNode)new JsonObject { ["id"] = Str(d, "id"), ["offer"] = "proactive", ["when_to_use"] = Str(d, "when_to_use") });
@@ -36,7 +36,10 @@ internal sealed class SessionStartFlowsCatalogCache(string root) {
         }
 
         var bytes = Encoding.UTF8.GetBytes(new JsonObject { ["definitions"] = proactive }.ToJsonString());
-        if (bytes.Length > MaxBytes) return;
+        if (bytes.Length > MaxBytes) {
+            Delete(baseUrl);
+            return;
+        }
 
         string? temp = null;
         try {
