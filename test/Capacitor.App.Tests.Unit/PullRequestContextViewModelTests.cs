@@ -253,6 +253,8 @@ public class PullRequestContextViewModelTests {
         h.Vm.SetForeground(true);
         await WaitUntilAsync(() => h.Vm.HasChoice && h.Source.Overviews == 1, what: "choice listed, overview pending");
         await Assert.That(h.Vm.ShowsOpenSource).IsFalse();
+        await Assert.That(h.Vm.IsSelectionLoading).IsTrue();
+        await Assert.That(h.Vm.HasNotice).IsFalse();
         overview.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
         await WaitUntilAsync(() => h.Vm.CanDisplay, what: "overview admitted");
         await Assert.That(h.Vm.ShowsOpenSource).IsTrue();
@@ -292,22 +294,93 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
-    public Task Transient_grace_retains_only_the_current_view_and_cannot_open_a_new_section() => RunOnUiAsync(async () => {
+    public Task Transient_grace_retains_cached_sections_and_cannot_open_an_uncached_section() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
         h.Vm.SetReaderVisible(true);
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "checks page cached");
+        await h.Vm.ShowSectionCommand.Execute("overview");
         h.Source.Failure = "transient";
         h.Time.Advance(TimeSpan.FromSeconds(21));
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "access refresh fails");
         await Assert.That(h.Vm.CanReveal).IsFalse();
+        await Assert.That(h.Vm.CanNavigate).IsTrue();
+        await Assert.That(h.Vm.HasNotice).IsFalse();
+        await Assert.That(h.Vm.FreshnessDetail).Contains("Couldn't load pull request context");
         await Assert.That(h.Vm.Description).IsEqualTo("Private description");
         await h.Vm.ShowSectionCommand.Execute("reviews");
-        await Assert.That(h.Source.Pages).IsEqualTo(0);
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "overview renewal attempted");
+        await Assert.That(h.Source.Pages).IsEqualTo(1);
+        await Assert.That(h.Vm.Section).IsEqualTo("reviews");
+        await Assert.That(h.Vm.Rows).IsEmpty();
+        await Assert.That(h.Vm.PageNote).Contains("Couldn't load pull request context");
+        h.Source.Failure = null;
+        await h.Vm.ShowSectionCommand.Execute("conversation");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1 && !h.Vm.IsReading, what: "clicking uncached tab renews access and loads section");
+        await Assert.That(h.Vm.Section).IsEqualTo("conversation");
+        await Assert.That(h.Vm.PageNote).IsEmpty();
+        h.Source.Failure = "transient";
+        h.Time.Advance(TimeSpan.FromSeconds(21));
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "access refresh fails again");
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await Assert.That(h.Source.Pages).IsEqualTo(2);
+        await Assert.That(h.Vm.Section).IsEqualTo("checks");
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
         h.Vm.SetReaderVisible(false); h.Vm.SetReaderVisible(true);
-        await Assert.That(h.Vm.Description).IsNull();
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
         h.Time.Advance(TimeSpan.FromMinutes(6)); Dispatcher.UIThread.RunJobs();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "grace expires");
         await Assert.That(h.Vm.CanDisplay).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Thirty_second_background_poll_renews_overview_without_flashing_grace_or_stale() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        var sawStale = false;
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(PullRequestContextViewModel.HasStaleOverview) && h.Vm.HasStaleOverview)
+                sawStale = true;
+        };
+        var slowList = new TaskCompletionSource();
+        h.Source.ListGate = slowList;
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => h.Source.Overviews == 2, what: "overview renewed on 30s tick while list refresh is in flight");
+        await Assert.That(sawStale).IsFalse();
+        await Assert.That(h.Vm.HasStaleOverview).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsTrue();
+        slowList.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh completes");
+        await Assert.That(sawStale).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Refreshing_on_checks_with_a_new_head_keeps_existing_rows_visible_until_replacement_arrives() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Vm.SetReaderVisible(true);
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "initial checks page");
+        var emptied = false;
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(PullRequestContextViewModel.Rows) && h.Vm.Rows.Count == 0)
+                emptied = true;
+        };
+        var pageGate = new TaskCompletionSource();
+        h.Source.PageGate = pageGate;
+        h.Source.HeadSha = new string('b', 40);
+        h.Time.Advance(TimeSpan.FromSeconds(16));
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => h.Source.Pages == 2, what: "replacement checks page requested");
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+        await Assert.That(emptied).IsFalse();
+        pageGate.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "replacement checks page applied");
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+        await Assert.That(emptied).IsFalse();
         await h.Dispose();
     });
 
@@ -336,6 +409,21 @@ public class PullRequestContextViewModelTests {
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
         h.Vm.Selected = h.Vm.Choices[1];
         await Assert.That(h.Vm.Rows).IsEmpty();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Switching_to_another_PR_clears_retry_backoff_and_notice_from_the_previous_PR() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var retry = h.Time.GetUtcNow().UtcDateTime.AddMinutes(2);
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied", RetryAt: retry)));
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Notice.Contains("cannot read"), what: "initial PR failed with retry backoff");
+        h.Vm.Selected = h.Vm.Choices[0];
+        await Assert.That(h.Vm.HasNotice).IsFalse();
+        await WaitUntilAsync(() => h.Vm.CanReveal && h.Vm.Selected?.Subject.Number == 1, what: "second PR loaded immediately despite previous PR RetryAt");
         await h.Dispose();
     });
 

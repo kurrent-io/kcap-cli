@@ -30,15 +30,20 @@ public sealed partial class PullRequestContextViewModel {
         var worktree = _worktree;
         var reportedBranch = _branch;
         var generation = _generation;
+        var skipBranchLookup = worktree is null && !_hasCustomBranchReader;
+        if (skipBranchLookup) _readers?.DescribeSession(session, _primaryRepo?.Invoke(), reportedBranch);
         Start(async ct => {
-            var branch = await Task.Run(() => _readBranch(worktree), ct).WaitAsync(ct).ConfigureAwait(false);
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => {
-                ct.ThrowIfCancellationRequested();
-                if (_disposed || generation != _generation) throw new OperationCanceledException(ct);
-                // A reported branch can advance while the filesystem lookup is in flight.
-                branch = _worktree == worktree && _branch == reportedBranch ? branch ?? reportedBranch : _branch;
-                _readers?.DescribeSession(session, _primaryRepo?.Invoke(), branch);
-            });
+            var branch = reportedBranch;
+            if (!skipBranchLookup) {
+                var resolved = await Task.Run(() => _readBranch(worktree), ct).WaitAsync(ct).ConfigureAwait(false);
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => {
+                    ct.ThrowIfCancellationRequested();
+                    if (_disposed || generation != _generation) throw new OperationCanceledException(ct);
+                    // A reported branch can advance while the filesystem lookup is in flight.
+                    branch = _worktree == worktree && _branch == reportedBranch ? resolved ?? reportedBranch : _branch;
+                    _readers?.DescribeSession(session, _primaryRepo?.Invoke(), branch);
+                });
+            }
             var capability = await _source.DiscoverAsync(refresh, ct).ConfigureAwait(false);
             var links = capability.Kind switch {
                 PullRequestCapabilityKind.Supported => await _source.ListAsync(session, ct).ConfigureAwait(false),
@@ -53,17 +58,20 @@ public sealed partial class PullRequestContextViewModel {
                     _retryAt = capability.RetryAt;
                     if (capability.Kind == PullRequestCapabilityKind.SignedOut) ForgetChoices();
                     ClearProtected();
-                    SetNotice(capability.Kind == PullRequestCapabilityKind.SignedOut ? "Sign in to see pull requests."
-                        : "Couldn't discover pull request support. Retry when the server is reachable.");
+                    _notice = capability.Kind == PullRequestCapabilityKind.SignedOut ? "Sign in to see pull requests."
+                        : "Couldn't discover pull request support. Retry when the server is reachable.";
                     return;
                 }
                 if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
                     if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") {
                         ForgetChoices(); ClearProtected();
                         _stopped = links.Reason == "retries_stopped";
-                    } else EnterGrace();
-                    SetNotice(_stopped ? "This session's pull requests are unavailable. Use Retry to check again."
-                        : links.Kind == PullRequestReadKind.SignedOut ? "Sign in to see pull requests." : "Couldn't refresh the linked pull requests.");
+                        _notice = _stopped ? "This session's pull requests are unavailable. Use Retry to check again."
+                            : links.Kind == PullRequestReadKind.SignedOut ? "Sign in to see pull requests." : "Couldn't refresh the linked pull requests.";
+                    } else {
+                        EnterGrace("Couldn't refresh the linked pull requests.");
+                        if (!_grace) _notice = "Couldn't refresh the linked pull requests.";
+                    }
                     return;
                 }
                 _retryAt = null;
@@ -77,7 +85,7 @@ public sealed partial class PullRequestContextViewModel {
     }
 
     void RequestOverview() {
-        if (_disposed || !_foreground || _legacy || _stopped || _refreshing || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
+        if (_disposed || !_foreground || _legacy || _stopped || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
             || _retryAt > _time.GetUtcNow().UtcDateTime || _lastOverview is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) return;
         _overviewPending = true;
         _lastOverview = _time.GetTimestamp();
@@ -86,22 +94,22 @@ public sealed partial class PullRequestContextViewModel {
             var read = await _source.OverviewAsync(session, choice.Subject, ct).ConfigureAwait(false);
             return () => {
                 if (read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale && read.Data is not null && AcceptAccess(read)) {
-                    // Checks belong to a commit: a new head drops the old rows, and the open tab reloads below.
-                    if (_overview?.HeadSha is { } old && old != read.Data.HeadSha) _sections.Remove("checks");
+                    var headChanged = _overview?.HeadSha is { } old && old != read.Data.HeadSha;
                     var rollupMoved = _overview?.Checks?.Rollup != read.Data.Checks?.Rollup;
                     _overview = read.Data; _overviewRead = read;
-                    SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier snapshot while GitHub is unavailable." : "");
+                    _notice = "";
                     if (Learn(choice.Subject, read.Data.Lifecycle) && ReconsiderDefault()) return;
                     // Check rows are a snapshot while the summary tracks the overview: reload them while
                     // any is still running, or the summary goes green beside rows that still say pending.
                     var checksLive = _section == "checks" && CurrentSection is { } checks
-                        && (rollupMoved || checks.Pages.Any(page => page.Rows.Any(row => row.Outcome == "pending")));
+                        && (headChanged || rollupMoved || checks.Pages.Any(page => page.Rows.Any(row => row.Outcome == "pending")));
                     // The open tab follows the poll too, unless the reader paged past the first page:
                     // a reload restarts at page one and would pull the rows they were reading away.
                     var onePage = CurrentSection is { Pages.Count: 1, Earlier.Count: 0 };
                     var stoppedChecks = _section == "checks" && CurrentSection is { Stopped: true };
                     var reload = _refreshPage || checksLive || onePage || stoppedChecks;
                     if (_readerVisible && _section != "overview" && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
+                    else if (headChanged) _sections.Remove("checks");
                     _refreshPage = false;
                 } else Fail(read);
             };
@@ -153,20 +161,17 @@ public sealed partial class PullRequestContextViewModel {
                     _sections[key] = state;
                     EnforcePageBudget(state, saved, earlier);
                     state.Next = state.Pages.LastOrDefault()?.Next;
-                    SetNotice(read.Kind == PullRequestReadKind.Stale ? "Showing an earlier page while GitHub is unavailable." : "");
+                    _notice = "";
                 } else if (read.Kind == PullRequestReadKind.Restart && read.Reason == "head_changed" && _headRestartSection is null) {
                     // Learn the new head from a fresh overview, whose apply reloads this section. Once
                     // only for that section: an overview still on the old head would bounce straight back here.
                     _headRestartSection = key;
-                    _sections.Remove(key);
                     _lastOverview = null;
                     restartOverview = true;
                 } else if (read.Kind == PullRequestReadKind.Restart && read.Reason is not ("identity_changed" or "integration_changed")) {
                     var state = _sections.GetValueOrDefault(key) ?? new PullRequestSectionState(key);
                     state.Stopped = true; state.Error = read.Reason == "head_changed" ? "Catching up with a new commit." : "This snapshot can no longer load pages. Refresh to start again.";
-                    if (read.Reason == "head_changed") state.Pages.Clear();
                     _sections[key] = state;
-                    Notify();
                 } else Fail(read);
             };
         }, () => { _pageRequests.Remove(key); if (restartOverview) RequestOverview(); });
@@ -195,13 +200,17 @@ public sealed partial class PullRequestContextViewModel {
     }
     void Fail<T>(PullRequestRead<T> read) where T : class {
         _retryAt = read.RetryAt;
+        var reason = Reason(read);
         // A superseded provider, a changed identity or a lost reader outlives its own request: cancel the
         // in-flight reads it left behind and advance the generation, or a stale completion would still land.
         if (read.Kind == PullRequestReadKind.Restart && read.Reason is "identity_changed" or "integration_changed" || read.Reason == "no_reader") { CancelReads(); ClearProtected(); }
         else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
-            || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") EnterGrace();
+            || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") {
+            EnterGrace(reason);
+            if (_grace) return;
+        }
         else ClearProtected();
-        SetNotice(Reason(read));
+        SetNotice(reason);
     }
     void ApplyChoices(bool listed) {
         if (_selected is null) ApplyRequestedSubject();
@@ -226,7 +235,10 @@ public sealed partial class PullRequestContextViewModel {
             }
             else if (_legacy) { ClearProtected(); SetNotice("Open on GitHub. Native PR reading requires a compatible server and app."); }
             else if (selected is null) { ClearProtected(); SetNotice(""); }
-            else RequestOverview();
+            else {
+                if (_notice == "Loading pull requests…") _notice = "";
+                RequestOverview();
+            }
         }
         Notify();
     }

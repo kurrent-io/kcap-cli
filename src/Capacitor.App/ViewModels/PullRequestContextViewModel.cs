@@ -18,6 +18,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
     readonly Func<string?, string?> _readBranch;
+    readonly bool _hasCustomBranchReader;
     readonly TimeProvider _time;
     readonly IUrlOpener _opener;
     readonly Action _openReader;
@@ -50,8 +51,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     long _accessStarted;
     int _accessSeconds;
     long _graceStarted;
-    string? _graceSection;
     bool _grace;
+    string? _staleReason;
     bool _hasDisplayed;
     bool _foreground;
     bool _readerVisible;
@@ -96,7 +97,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public double ScrollOffset { get; set; }
     public bool CanReveal => _foreground && !_masked && Remaining > 0 && !_legacy;
     public bool CanDisplay => _foreground && !_masked && (Remaining > 0 || _grace && _time.GetElapsedTime(_graceStarted) < TimeSpan.FromMinutes(5));
-    bool CanDisplayReader => _readerVisible && CanDisplay && (Remaining > 0 || _graceSection == SectionKey);
+    public bool CanNavigate => CanDisplay && !_legacy;
+    bool CanDisplayReader => _readerVisible && CanDisplay && (Remaining > 0 || _section == "overview" || _sections.ContainsKey(SectionKey));
     double Remaining => Math.Max(0, _accessSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds);
     string SectionKey => _section == "thread_comments" ? _section + ":" + _thread : _section == "threads" ? _section + ":" + _resolved : _section;
     string _resolved = "unresolved";
@@ -126,6 +128,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null) {
         _source = source;
         _readBranch = readBranch ?? GitRepository.CurrentBranch;
+        _hasCustomBranchReader = readBranch is not null;
         _time = time;
         _opener = opener;
         _openReader = openReader;
@@ -213,11 +216,11 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _accessSeconds = 0;
         _masked = true;
         _grace = false;
-        _graceSection = null;
+        _staleReason = null;
         Notify();
         // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
         // already fresh; force only a genuine return, where a prior refresh could have gone stale.
-        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; RequestRefresh(); }
+        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; _lastOverview = null; RequestRefresh(); }
     }
     public void Reconnected() {
         if (_disposed) return;
@@ -246,7 +249,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
         _readerVisible = visible;
-        if (!visible && _grace) _graceSection = null;
         Notify();
         if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
@@ -294,22 +296,26 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         CancelReads();
         _selected = choice;
         ClearProtected();
+        _retryAt = null;
         _section = "overview"; _thread = null; _resolved = "unresolved"; ScrollOffset = 0;
         if (choice is not null && _positions.TryGetValue(choice.Subject, out var position)) {
             _section = position.Section; _thread = position.Thread; _resolved = position.Resolved; ScrollOffset = position.Scroll;
         }
+        if (choice is not null) _notice = "";
         this.RaisePropertyChanged(nameof(Selected));
         Notify();
         RequestOverview();
     }
     void ShowSection(string section) {
-        if (!CanReveal || section is not ("overview" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
+        if (!CanNavigate || section is not ("overview" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
         _section = section;
         ScrollOffset = 0;
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section != "overview") LoadOrRefreshSection();
+        if (section == "overview") return;
+        if (CanReveal) LoadOrRefreshSection();
+        else if (CurrentSection is null && !(_retryAt > _time.GetUtcNow().UtcDateTime)) { _lastOverview = null; RequestOverview(); }
     }
     /// A tab the poll skipped while it was hidden comes back stale; the summary stops trusting rows
     /// older than 30s, so rows kept past that would disagree with it.
@@ -328,9 +334,9 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
                 if (_retryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
                     next = Math.Max(next, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
             }
-            if (!_masked && !_grace && _accessSeconds > 0) next = Math.Min(next, Remaining);
+            if (!_masked && !_grace && _accessSeconds > 0 && !_refreshing && !_overviewPending) next = Math.Min(next, Remaining);
             if (_grace) next = Math.Min(next, (TimeSpan.FromMinutes(5) - _time.GetElapsedTime(_graceStarted)).TotalSeconds);
-            if (!_legacy && !_stopped && !_refreshing && !_overviewPending && _selected is { IsAvailable: true }) {
+            if (!_legacy && !_stopped && !_overviewPending && _selected is { IsAvailable: true }) {
                 var overviewGap = _lastOverview is { } last ? 15 - _time.GetElapsedTime(last).TotalSeconds : 0;
                 var overviewDue = Math.Max(Remaining - 5, overviewGap);
                 if (_retryAt is { } retry) overviewDue = Math.Max(overviewDue, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
@@ -348,17 +354,19 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
 
     void TickCore() {
         if (_disposed || !_foreground) return;
-        if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
-        if (_grace && _time.GetElapsedTime(_graceStarted) >= TimeSpan.FromMinutes(5)) { _masked = true; _grace = false; Notify(); }
-        if (_retryAt > _time.GetUtcNow().UtcDateTime || _stopped) return;
-        if (_queuedRefresh || _lastRefresh is null || _time.GetElapsedTime(_lastRefresh.Value).TotalSeconds >= Math.Max(30, _pollAfter)) RequestRefresh();
-        else if (Remaining <= 5 && !_legacy) RequestOverview();
+        if (_grace && _time.GetElapsedTime(_graceStarted) >= TimeSpan.FromMinutes(5)) { _masked = true; _grace = false; _staleReason = null; Notify(); }
+        if (!_masked && _accessSeconds > 0 && Remaining <= 5 && !_legacy && !_stopped && !_overviewPending
+            && !(_retryAt > _time.GetUtcNow().UtcDateTime)) RequestOverview();
+        if (!(_retryAt > _time.GetUtcNow().UtcDateTime) && !_stopped
+            && (_queuedRefresh || _lastRefresh is null || _time.GetElapsedTime(_lastRefresh.Value).TotalSeconds >= Math.Max(30, _pollAfter))) RequestRefresh();
+        if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace && !_refreshing && !_overviewPending) EnterGrace();
     }
-    void EnterGrace() {
+    void EnterGrace(string? reason = null) {
         _accessSeconds = 0;
         if (!_hasDisplayed || !_foreground || _masked) { _masked = true; Notify(); return; }
-        if (!_grace) { _grace = true; _graceStarted = _time.GetTimestamp(); _graceSection = _readerVisible ? SectionKey : null; }
-        SetNotice("Access could not be refreshed. Showing the last view temporarily; opening more content is paused.");
+        if (!_grace) { _grace = true; _graceStarted = _time.GetTimestamp(); }
+        if (reason is not null) _staleReason = reason;
+        SetNotice("");
     }
     bool AcceptAccess<T>(PullRequestRead<T> read) where T : class {
         if (!read.CanReveal(_time) || read.Subject != _selected?.Subject) return false;
@@ -366,6 +374,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _accessSeconds = read.AccessValidForSeconds;
         _masked = false;
         _grace = false;
+        _staleReason = read.Kind == PullRequestReadKind.Stale ? Reason(read) : null;
         _hasDisplayed = true;
         _retryAt = read.RetryAt;
         _pollAfter = Math.Max(15, read.PollAfterSeconds);
@@ -373,7 +382,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     }
     void ClearProtected() {
         _overview = null; _overviewRead = null; _sections.Clear(); _accessSeconds = 0;
-        _masked = true; _grace = false; _hasDisplayed = false; _graceSection = null;
+        _reviewerRows.Clear(); _checkRows.Clear(); _discussionRows.Clear();
+        _masked = true; _grace = false; _staleReason = null; _hasDisplayed = false;
         Notify();
     }
     void CancelReads() {

@@ -46,7 +46,7 @@
             <TextBlock x:Name="SelectionLoading" Text="Loading…" IsVisible="{Binding IsSelectionLoading}" Classes="prNote" />
             <StackPanel IsVisible="{Binding CanDisplay}">
                 <Button x:Name="SidebarChecksButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
-                        IsEnabled="{Binding CanReveal}" ToolTip.Tip="{Binding ChecksStatus.Tip}"
+                        IsEnabled="{Binding CanNavigate}" ToolTip.Tip="{Binding ChecksStatus.Tip}"
                         AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
@@ -54,7 +54,7 @@
                     </Grid>
                 </Button>
                 <Button x:Name="SidebarReviewsButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
-                        IsEnabled="{Binding CanReveal}" ToolTip.Tip="{Binding ReviewStatus.Tip}"
+                        IsEnabled="{Binding CanNavigate}" ToolTip.Tip="{Binding ReviewStatus.Tip}"
                         AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
@@ -62,7 +62,6 @@
                     </Grid>
                 </Button>
             </StackPanel>
-            <TextBlock x:Name="OverviewFreshness" Text="{Binding OverviewFreshnessLabel}" IsVisible="{Binding HasStaleOverview}" Classes="prNote" />
             <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" Classes="prNote" />
             <TextBlock Text="{Binding ReaderNote}" IsVisible="{Binding HasReaderNote}" Classes="prNote" />
             <WrapPanel IsVisible="{Binding HasReaderNote}">

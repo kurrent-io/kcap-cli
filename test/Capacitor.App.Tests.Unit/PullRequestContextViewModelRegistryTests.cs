@@ -151,7 +151,8 @@ public class PullRequestContextViewModelRegistryTests {
         h.Time.Advance(TimeSpan.FromSeconds(3));
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
-        await WaitUntilAsync(() => h.Vm.Notice == "Couldn't read this pull request through GitHub CLI. Refresh to try again.", what: "tool-named notice");
+        await WaitUntilAsync(() => h.Vm.FreshnessDetail == "Couldn't read this pull request through GitHub CLI. Refresh to try again.", what: "tool-named freshness detail");
+        await Assert.That(h.Vm.HasNotice).IsFalse();
         await h.Dispose();
     });
 

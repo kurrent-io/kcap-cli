@@ -11,6 +11,8 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
     readonly Lock _views = new();
     readonly Dictionary<string, Task<(GitHubCliView? View, GitHubCliResult Result)>> _inflight = new(StringComparer.Ordinal);
     readonly Dictionary<string, (long At, GitHubCliView View)> _recent = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Task<IReadOnlyList<PullRequestLinkDto>>> _inflightDiscovery = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (long At, IReadOnlyList<PullRequestLinkDto> Links)> _recentDiscovery = new(StringComparer.Ordinal);
     HashSet<string> _hosts = new(StringComparer.OrdinalIgnoreCase);
     Dictionary<string, string> _accounts = new(StringComparer.OrdinalIgnoreCase);
     PullRequestReaderStatus? _status;
@@ -52,7 +54,7 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
         _status = status;
         _probedAt = _time.GetTimestamp();
         // A switched account can still return the previous one's view from the reuse window; drop it rather than serve it under a new identity.
-        if (Identity != previousIdentity) { lock (_views) _recent.Clear(); _cursors.Clear(); }
+        if (Identity != previousIdentity) { lock (_views) { _recent.Clear(); _recentDiscovery.Clear(); } _cursors.Clear(); }
         return status;
     }
 
@@ -79,12 +81,34 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
             && (actual.Equals(path, StringComparison.OrdinalIgnoreCase) || actual.Equals(path + "/files", StringComparison.OrdinalIgnoreCase)) ? safe : null;
     }
 
-    public async Task<IReadOnlyList<PullRequestLinkDto>> DiscoverAsync(PullRequestRepository repository, string branch, CancellationToken ct) {
-        if (!Serves(repository.Provider, repository.Host) || !GitHubCliRunner.ValidOwner(repository.Owner)
-            || !GitHubCliRunner.ValidRepo(repository.RepoName) || !GitHubCliRunner.ValidBranch(branch)) return [];
-        var result = await cli.RunAsync(["pr", "list", "--repo", Repo(repository.Host, repository.Owner, repository.RepoName), "--head", branch,
-            "--state", "all", "--limit", "20", "--json", "number,title,url,headRefName,state,isDraft"], ct: ct).ConfigureAwait(false);
-        return result.Outcome == GitHubCliOutcome.Ok ? GitHubCliMapping.Links(result.Stdout, repository) : [];
+    public Task<IReadOnlyList<PullRequestLinkDto>> DiscoverAsync(PullRequestRepository repository, string branch, CancellationToken ct) {
+        if (cli.IsStopped || !Serves(repository.Provider, repository.Host) || !GitHubCliRunner.ValidOwner(repository.Owner)
+            || !GitHubCliRunner.ValidRepo(repository.RepoName) || !GitHubCliRunner.ValidBranch(branch)) return Task.FromResult<IReadOnlyList<PullRequestLinkDto>>([]);
+        var key = $"{repository.Host}|{repository.Owner}|{repository.RepoName}|{branch}|{Identity}".ToLowerInvariant();
+        Task<IReadOnlyList<PullRequestLinkDto>> task;
+        lock (_views) {
+            if (_recentDiscovery.TryGetValue(key, out var recent) && _time.GetElapsedTime(recent.At) < TimeSpan.FromSeconds(10))
+                return Task.FromResult(recent.Links);
+            if (!_inflightDiscovery.TryGetValue(key, out task!)) {
+                task = FetchDiscoveryAsync(repository, branch, key);
+                if (!task.IsCompleted) _inflightDiscovery[key] = task;
+            }
+        }
+        return task.WaitAsync(ct);
+    }
+
+    async Task<IReadOnlyList<PullRequestLinkDto>> FetchDiscoveryAsync(PullRequestRepository repository, string branch, string key) {
+        try {
+            var result = await cli.RunAsync(["pr", "list", "--repo", Repo(repository.Host, repository.Owner, repository.RepoName), "--head", branch,
+                "--state", "all", "--limit", "20", "--json", "number,title,url,headRefName,state,isDraft"], ct: CancellationToken.None).ConfigureAwait(false);
+            if (result.Outcome != GitHubCliOutcome.Ok) return [];
+            var links = GitHubCliMapping.Links(result.Stdout, repository);
+            lock (_views) {
+                _recentDiscovery[key] = (_time.GetTimestamp(), links);
+                while (_recentDiscovery.Count > 64) _recentDiscovery.Remove(_recentDiscovery.MinBy(pair => pair.Value.At).Key);
+            }
+            return links;
+        } finally { lock (_views) _inflightDiscovery.Remove(key); }
     }
 
     public async Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
@@ -245,7 +269,9 @@ public sealed class GitHubCliReaderProvider(GitHubCliRunner cli, TimeProvider ti
     DateTime Now => _time.GetUtcNow().UtcDateTime;
     static string Key(PullRequestSubjectDto subject) => $"{subject.Host}|{subject.Owner}|{subject.RepoName}|{subject.Number.ToString(CultureInfo.InvariantCulture)}".ToLowerInvariant();
 
-    public void ResetSession(string sessionId) { }
+    public void ResetSession(string sessionId) {
+        lock (_views) { _recent.Clear(); _recentDiscovery.Clear(); }
+    }
 
     public static string Repo(string host, string owner, string name) => $"{host}/{owner}/{name}";
 

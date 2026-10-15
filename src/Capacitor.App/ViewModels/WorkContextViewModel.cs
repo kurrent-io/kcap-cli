@@ -35,6 +35,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
             }
             this.RaisePropertyChanged(nameof(PullRequests));
+            this.RaisePropertyChanged(nameof(IsStale));
             RebuildLinks();
         }
     }
@@ -170,6 +171,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             or nameof(PullRequestContextViewModel.HasPullRequest)
             or nameof(PullRequestContextViewModel.HasListed))
             RaiseRelated();
+        if (e.PropertyName == nameof(PullRequestContextViewModel.HasStaleOverview))
+            this.RaisePropertyChanged(nameof(IsStale));
     }
 
     string? _reportedBranch;
@@ -189,7 +192,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     }
 
     bool _isStale;
-    public bool IsStale { get => _isStale; private set => this.RaiseAndSetIfChanged(ref _isStale, value); }
+    public bool IsStale {
+        get => _isStale || _pullRequests?.HasStaleOverview == true;
+        private set {
+            if (_isStale == value) return;
+            _isStale = value;
+            this.RaisePropertyChanged(nameof(IsStale));
+        }
+    }
     bool _isReading;
     public bool IsReading {
         get => _isReading;

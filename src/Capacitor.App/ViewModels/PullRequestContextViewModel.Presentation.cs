@@ -20,10 +20,15 @@ public sealed partial class PullRequestContextViewModel {
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
     public bool IsDiscussion => _section is "reviews" or "threads" or "thread_comments" or "conversation";
-    public IReadOnlyList<PullRequestRow> ReviewerRows => IsReviewers ? Rows : [];
-    public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? Rows : [];
-    public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? Rows : [];
-    public string FreshnessLabel => IsOverview ? FetchedLabel : SnapshotLabel;
+    public IReadOnlyList<PullRequestRow> ReviewerRows => IsReviewers ? _reviewerRows : [];
+    public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? _checkRows : [];
+    public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? _discussionRows : [];
+    public string FreshnessLabel {
+        get {
+            var time = IsOverview || HasStaleOverview ? FetchedLabel : SnapshotLabel;
+            return HasStaleOverview ? "Earlier snapshot" + (time.Length > 0 ? " · " + time : "") : time;
+        }
+    }
     public bool HasStaleOverview => CanDisplay && (_grace || _overviewRead?.Kind == PullRequestReadKind.Stale);
     public string OverviewFreshnessLabel => HasStaleOverview ? "Earlier snapshot" + (FetchedLabel.Length > 0 ? " · " + FetchedLabel : "") : FetchedLabel;
 
@@ -106,8 +111,8 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(LifecycleStatus);
         NotifyValue(ReviewStatus);
         NotifyValue(ChecksStatus);
-        NotifyRows(ReviewerRows, nameof(ReviewerRows));
-        NotifyRows(CheckRows, nameof(CheckRows));
-        NotifyRows(DiscussionRows, nameof(DiscussionRows));
+        NotifyValue(!ReferenceEquals(ReviewerRows, _reviewerRows), nameof(ReviewerRows));
+        NotifyValue(!ReferenceEquals(CheckRows, _checkRows), nameof(CheckRows));
+        NotifyValue(!ReferenceEquals(DiscussionRows, _discussionRows), nameof(DiscussionRows));
     }
 }

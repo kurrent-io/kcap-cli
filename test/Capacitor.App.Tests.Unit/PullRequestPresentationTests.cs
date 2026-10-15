@@ -478,8 +478,7 @@ public class PullRequestPresentationTests {
         h.Model.SelectedTabIndex = 2;
         await h.SettleAsync();
         await Assert.That(h.Model.HasNotice).IsFalse();
-        var freshness = h.Card.FindControl<TextBlock>("OverviewFreshness")!;
-        await Assert.That(freshness.IsEffectivelyVisible).IsTrue();
+        var freshness = h.Reader.FindControl<TextBlock>("FreshnessText")!;
         await Assert.That(freshness.Text).Contains("Earlier snapshot");
         await Assert.That(freshness.Text).Contains(h.Model.FetchedLabel);
     });
