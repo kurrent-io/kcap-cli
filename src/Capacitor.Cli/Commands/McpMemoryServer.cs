@@ -283,11 +283,31 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     internal static JsonObject BuildRescopeBody(JsonObject? args) {
         var audience = args?["audience"]?.GetValue<string>();
         var project  = args?["project"]?.GetValue<string>();
+        var repoHash = args?["repo_hash"]?.GetValue<string>();
+        var global   = ReadBool(args, "global");
+
+        if (repoHash is not null && string.IsNullOrWhiteSpace(repoHash))
+            throw new ArgumentException("repo_hash must be a repo hash when supplied.");
+
+        var placeTargets = (string.IsNullOrWhiteSpace(project) ? 0 : 1) + (repoHash is null ? 0 : 1) + (global ? 1 : 0);
+        if (placeTargets > 1)
+            throw new ArgumentException("Pass at most one of project, repo_hash or global: true.");
+
+        if (repoHash is not null || global) {
+            // A server that does not know repo_hash/global drops them and would apply the audience
+            // fields alone — a place move turned into a publish. Sent by itself, it gets a 400 instead.
+            string[] audienceFields = ["audience", "team", "audience_project"];
+            if (audienceFields.Any(f => !string.IsNullOrWhiteSpace(args?[f]?.GetValue<string>())))
+                throw new ArgumentException("repo_hash and global: true must be sent alone — change the audience in a separate rescope_memory call.");
+
+            return repoHash is not null ? new() { ["repo_hash"] = repoHash } : new() { ["global"] = true };
+        }
+
         // Mirror the server: a project context move takes precedence and is audience-independent, so
         // audience is required ONLY when project is absent. Whitespace-only counts as absent — a blank
         // slug would never resolve server-side, so reject it locally instead of sending an invalid move.
         if (string.IsNullOrWhiteSpace(audience) && string.IsNullOrWhiteSpace(project))
-            throw new ArgumentException("audience or project is required");
+            throw new ArgumentException("audience, project, repo_hash or global: true is required");
         return new() {
             ["audience"] = string.IsNullOrWhiteSpace(audience) ? null : audience,
             ["team"]     = args?["team"]?.GetValue<string>(),
@@ -297,6 +317,13 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             ["audience_project"] = args?["audience_project"]?.GetValue<string>(),
         };
     }
+
+    static bool ReadBool(JsonObject? args, string key) =>
+        args?[key] switch {
+            null                                            => false,
+            JsonValue v when v.TryGetValue<bool>(out var b) => b,
+            _                                               => throw new ArgumentException($"'{key}' must be true or false.")
+        };
 
     /// <summary>
     /// Reads a numeric field as int, tolerant of JsonValue holding any underlying numeric type
@@ -403,13 +430,15 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["kind"]        = new("string", "preference | feedback | project | reference")
             }, ["id"]), McpToolAnnotations.Destructive),
         new("rescope_memory",
-            "Change a memory's audience — who can see + edit it (promote your user memory to team, org, or a project's members) — or move its home context to a project (where it surfaces). Two orthogonal axes: audience_project sets the PEOPLE (audience 'project'); project sets the PLACE (context move — takes precedence and is independent of audience).",
+            "Change a memory's audience — who can see + edit it (promote your user memory to team, org, or a project's members) — or move its home (where it surfaces) to a project, a repo, or the whole org. Two orthogonal axes: audience_project sets the PEOPLE (audience 'project'); project, repo_hash or global: true sets the PLACE — at most one per call. A project move takes precedence over audience; a repo_hash or global move must be sent alone, with no audience, team, audience_project or project — change the audience in a separate call.",
             new("object", new() {
                 ["id"]               = new("string", "Memory id"),
                 ["audience"]         = new("string", "user | team | org | project"),
                 ["team"]             = new("string", "Target team when audience is 'team'"),
                 ["audience_project"] = new("string", "Target project slug when audience is 'project' — the PEOPLE axis (its members become editors; you must be a member). Distinct from 'project' below"),
-                ["project"]          = new("string", "Target project slug — the PLACE axis: moves the memory's home context to that project (takes precedence over audience)")
+                ["project"]          = new("string", "Target project slug — the PLACE axis: moves the memory's home to that project, surfacing it across the project's repos (takes precedence over audience)"),
+                ["repo_hash"]        = new("string", "Target repo hash — the PLACE axis: homes the memory at that single repo. Must be sent alone"),
+                ["global"]           = new("boolean", "true = the PLACE axis: homes the memory at the org, not tied to any repo or project. Must be sent alone; false is not a target")
             }, ["id"]), McpToolAnnotations.Destructive),
         new("archive_memory",
             "Archive (soft-delete) a memory.",
