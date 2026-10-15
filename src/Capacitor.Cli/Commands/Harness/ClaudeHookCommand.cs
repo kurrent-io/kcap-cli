@@ -1328,12 +1328,12 @@ public sealed class ClaudeHookCommand(
 
         // The memory subsystem is optional, and the whole fetch stays inside the fail-open boundary.
         try {
+            Action<string> diagnostic = message => Console.Error.WriteLine($"[kcap] {message}");
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time,
-                diagnostic: message => Console.Error.WriteLine($"[kcap] {message}"));
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time, diagnostic: diagnostic);
 
             // Claude's guidelines arrive with the SessionStart response, so the composite runs memory and flows only.
-            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
+            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time, diagnostic).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
