@@ -1578,6 +1578,26 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Claude records a slash command as its name and trimmed arguments joined by one space.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_slash_command_sent_with_extra_spacing_is_acknowledged_by_its_receipt() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "/review   1504 ");
+            await Assert.That(h.Chat.HasQueuedMessages).IsTrue();
+
+            File.AppendAllText(path, """{"type":"user","message":{"content":"<command-name>/review</command-name><command-args>1504</command-args>"}}""" + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await AssertRecallOrder(h.Chat, "/review 1504");
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Another_transcript_recalls_nothing_sent_while_reading_the_last() {
