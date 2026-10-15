@@ -949,6 +949,10 @@ switch (command) {
         if (args.Contains("--claude") && args.Contains("--task-list")) {
             return await Run<ClaudeHookCommand>().HandleTaskList(new StringReader(claudeHookBody!));
         }
+        // Async, but fires on every file write, so it leaves the spool drain to the catch-all hook.
+        if (args.Contains("--claude") && args.Contains("--plan-edit")) {
+            return await Run<ClaudeHookCommand>().HandlePlanEdit(new StringReader(claudeHookBody!));
+        }
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
         // added (removed from their Handle methods so this runs exactly once per invocation) and

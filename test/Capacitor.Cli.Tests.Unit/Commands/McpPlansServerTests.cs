@@ -97,6 +97,25 @@ public class McpPlansServerTests {
     }
 
     [Test]
+    public async Task A_recorded_declaration_replays_every_argument_with_the_file_as_it_now_is() {
+        var (root, doc) = SeedRepo("# Spec\n");
+        var design = root.CreateFile(["docs", "design.md"], "# Design\n");
+        var first = McpPlansServer.BuildDeclaration(
+            Args("""{"session_id":"s1","kind":"spec","path":"docs/plan.md","argues_from":"docs/design.md","work_item_id":"wi-1"}"""), cwd: root, repoRoot: root);
+
+        await Assert.That(first.Document.Path).IsEqualTo(doc);
+        await Assert.That(first.Document.ArguesFrom).IsEqualTo(design);
+
+        File.WriteAllText(doc, "# Spec, revised\n");
+        var replay = McpPlansServer.BuildDeclaration(first.Document.ToArguments(first.SessionId), first.Document.Cwd, first.Document.RepoRoot);
+
+        var expected = first.Body.DeepClone().AsObject();
+        expected["content"]      = "# Spec, revised\n";
+        expected["content_hash"] = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("# Spec, revised\n")));
+        await Assert.That(JsonNode.DeepEquals(replay.Body, expected)).IsTrue();
+    }
+
+    [Test]
     public async Task Declaration_resolves_a_relative_path_against_the_project_directory() {
         var (root, _) = SeedRepo();
         var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"spec","path":"docs/plan.md"}"""), cwd: root, repoRoot: root);

@@ -15,6 +15,7 @@ using WireMock.Server;
 
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Plans;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
@@ -878,6 +879,83 @@ public class ClaudeHookCommandTests {
 
         await Assert.That(stdout.ToString()).IsEqualTo("");
         await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
+    }
+
+    static string PlanEditPayload(string sid, string tool, string path) =>
+        new JsonObject {
+            ["hook_event_name"] = "PostToolUse", ["session_id"] = sid, ["cwd"] = "/repo", ["tool_name"] = tool,
+            ["tool_input"]      = new JsonObject { ["file_path"] = path },
+        }.ToJsonString();
+
+    static List<JsonNode> DocumentPosts(Fixture fx) =>
+        [.. fx.Sent.Where(s => s.StartsWith("/api/plans/documents|", StringComparison.Ordinal)).Select(s => JsonNode.Parse(s.Split('|', 2)[1])!)];
+
+    /// <summary>A repo holding a spec the session declared as arguing from a design, recorded in the
+    /// ledger the way the plans MCP server records it.</summary>
+    (string Sid, string Spec) DeclaredSpec() {
+        var root = Tmp.CreateDir("repo");
+        root.CreateDir(".git");
+        var spec = root.CreateFile(["docs", "spec.md"], "# Spec\n");
+        root.CreateFile(["docs", "design.md"], "# Design\n");
+        var sid = Guid.NewGuid().ToString();
+        var canonical = sid.Replace("-", "");
+        var declared = McpPlansServer.BuildDeclaration(
+            new JsonObject { ["session_id"] = canonical, ["kind"] = "spec", ["path"] = "docs/spec.md", ["argues_from"] = "docs/design.md", ["work_item_id"] = "wi-1" },
+            root, root);
+        new DeclaredDocumentLedger(Config.Root, TimeProvider.System).Record(canonical, declared.Document);
+        return (sid, spec);
+    }
+
+    [Test]
+    [Arguments("Write")]
+    [Arguments("Edit")]
+    [Arguments("MultiEdit")]
+    public async Task plan_edit_declares_a_declared_document_again_with_its_current_text(string tool) {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec();
+        File.WriteAllText(spec, "# Spec, revised\n");
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, tool, spec));
+
+        var posted = DocumentPosts(fx).Single();
+        await Assert.That(posted["session_id"]!.GetValue<string>()).IsEqualTo(sid.Replace("-", ""));
+        await Assert.That(posted["kind"]!.GetValue<string>()).IsEqualTo("spec");
+        await Assert.That(posted["path"]!.GetValue<string>()).IsEqualTo("docs/spec.md");
+        await Assert.That(posted["argues_from"]!.GetValue<string>()).IsEqualTo("docs/design.md");
+        await Assert.That(posted["work_item_id"]!.GetValue<string>()).IsEqualTo("wi-1");
+        await Assert.That(posted["content"]!.GetValue<string>()).IsEqualTo("# Spec, revised\n");
+    }
+
+    [Test]
+    public async Task plan_edit_leaves_a_file_the_session_never_declared_alone() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, _) = DeclaredSpec();
+        var other = Tmp.CreateFile(["repo", "docs", "notes.md"], "# Notes\n");
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", other));
+        await fx.PlanEditAsync(PlanEditPayload(Guid.NewGuid().ToString(), "Edit", Tmp.PathTo("repo", "docs", "spec.md")));
+
+        await Assert.That(DocumentPosts(fx)).IsEmpty();
+    }
+
+    [Test]
+    public async Task plan_edit_ignores_a_tool_that_does_not_write_the_file() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec();
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Read", spec));
+
+        await Assert.That(DocumentPosts(fx)).IsEmpty();
+    }
+
+    [Test]
+    public async Task session_end_forgets_the_documents_the_session_declared() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec();
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{sid}}","cwd":"/repo","reason":"exit"}""");
+
+        await Assert.That(new DeclaredDocumentLedger(Config.Root, TimeProvider.System).Find(sid.Replace("-", ""), spec)).IsNull();
     }
 
     static string TaskListPayload(string sid, string tool, JsonObject? input = null) =>
@@ -1975,6 +2053,11 @@ public class ClaudeHookCommandTests {
             return new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
                 .HandlePlanReadCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client), stdout);
         }
+
+        /// <summary>One plan-edit hook invocation, posting through the stub client.</summary>
+        public Task<int> PlanEditAsync(string stdin) =>
+            new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
+                .HandlePlanEditCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client));
 
         /// <summary>One task-list hook invocation.</summary>
         public Task<int> TaskListAsync(string stdin, TextWriter stdout) =>

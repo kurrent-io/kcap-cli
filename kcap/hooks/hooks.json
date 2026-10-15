@@ -111,6 +111,17 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --plan-edit --no-update-check",
+            "timeout": 5,
+            "async": true
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
