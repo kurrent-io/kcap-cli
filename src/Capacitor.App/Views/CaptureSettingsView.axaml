@@ -1,0 +1,101 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels" xmlns:onboarding="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             x:Class="Capacitor.App.Views.CaptureSettingsView" x:DataType="vm:CaptureSettingsViewModel">
+    <Grid RowDefinitions="*,Auto" IsEnabled="{Binding !Busy}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Classes="settingsPage">
+                <StackPanel Spacing="10">
+                    <TextBlock Classes="kcapTitle" Text="Capture &amp; privacy" />
+                    <TextBlock Classes="kcapSubtitle" Text="Choose what gets recorded and who can read new sessions." TextWrapping="Wrap" />
+                    <Border Classes="settingsContextChip">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="Profile" FontSize="11" FontWeight="Medium" LetterSpacing="0.2"
+                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ProfileName}" FontSize="12" FontWeight="SemiBold"
+                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <Border Classes="settingsSection">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="kcapLabel" Text="Who can read new sessions" />
+                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                       Text="Applies to new sessions. Sessions already on the server keep their visibility." />
+                        </StackPanel>
+                        <ComboBox x:Name="VisibilityInput" Classes="kcapField" HorizontalContentAlignment="Left" ItemsSource="{Binding VisibilityOptions}"
+                                  SelectedValueBinding="{Binding Value}" SelectedValue="{Binding Visibility, Mode=TwoWay}"
+                                  HorizontalAlignment="Stretch" AutomationProperties.Name="Default session visibility">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="onboarding:VisibilityOption">
+                                    <StackPanel Spacing="4" MaxWidth="540">
+                                        <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                                        <TextBlock Classes="kcapHint" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Classes="settingsEyebrow" Text="Recording rules" />
+                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                               Text="Leave the include lists empty to record everywhere. A session must match every include list that is set, and exclusions always win. Rules do not delete sessions already uploaded, and agents you launch explicitly still report theirs." />
+                </StackPanel>
+
+                <Border Classes="settingsSection">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="kcapLabel" Text="Repositories" />
+                            <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                       Text="One owner/repo per line. With an include list set, sessions outside a recognisable repository are skipped." />
+                        </StackPanel>
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="settingsFieldLabel" Text="Include" />
+                            <TextBox x:Name="AllowedReposInput" Classes="kcapField" Text="{Binding AllowedRepos, Mode=TwoWay}"
+                                     AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="All repositories"
+                                     AutomationProperties.Name="Include repositories" />
+                        </StackPanel>
+                        <StackPanel Spacing="6">
+                            <TextBlock Classes="settingsFieldLabel" Text="Exclude" />
+                            <TextBox x:Name="ExcludedReposInput" Classes="kcapField" Text="{Binding ExcludedRepos, Mode=TwoWay}"
+                                     AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="No exclusions"
+                                     AutomationProperties.Name="Exclude repositories" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Spacing="12">
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="kcapLabel" Text="Folders" />
+                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                   Text="One absolute path or ~/folder per line. A folder rule covers its subfolders." />
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="settingsFieldLabel" Text="Include" />
+                        <TextBox x:Name="AllowedPathsInput" Classes="kcapField" Text="{Binding AllowedPaths, Mode=TwoWay}"
+                                 AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="All folders"
+                                 AutomationProperties.Name="Include folders" />
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <TextBlock Classes="settingsFieldLabel" Text="Exclude" />
+                        <TextBox x:Name="ExcludedPathsInput" Classes="kcapField" Text="{Binding ExcludedPaths, Mode=TwoWay}"
+                                 AcceptsReturn="True" MinHeight="64" MaxHeight="160" TextWrapping="Wrap" PlaceholderText="No exclusions"
+                                 AutomationProperties.Name="Exclude folders" />
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="1" Classes="settingsActionBar">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16" MaxWidth="576" HorizontalAlignment="Left">
+                <Button x:Name="SaveCaptureButton" Classes="kcapChip" Content="Save changes"
+                        Command="{Binding SaveCommand}" />
+                <TextBlock x:Name="CaptureMessageText" Grid.Column="1" Classes="kcapHint" Text="{Binding Message}"
+                           TextWrapping="Wrap" VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

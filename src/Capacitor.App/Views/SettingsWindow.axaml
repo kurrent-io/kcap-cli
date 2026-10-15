@@ -20,16 +20,13 @@
                         <TextBlock Text="Daemon" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Spacing="24">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Classes="settingsPage">
                         <StackPanel Spacing="10">
                             <TextBlock x:Name="DaemonTitleText" Classes="kcapTitle" Text="Daemon" />
                             <TextBlock Classes="kcapSubtitle" Text="Manage this machine and how many agents it can run."
                                        TextWrapping="Wrap" />
-                            <Border x:Name="StatusChip" Padding="10,5" CornerRadius="999"
-                                    HorizontalAlignment="Left"
-                                    Background="{StaticResource KcapSurfaceRaisedBrush}"
-                                    BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                            <Border x:Name="StatusChip" Classes="settingsContextChip"
                                     ToolTip.Tip="{Binding StatusTip}">
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <TextBlock x:Name="StatusCaptionText" Text="Agents" FontSize="11" FontWeight="Medium"
@@ -64,7 +61,7 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Classes="settingsSection">
+                        <Border>
                             <StackPanel Spacing="12">
                                 <StackPanel Spacing="6">
                                     <TextBlock Classes="kcapLabel" Text="Agent capacity" />
@@ -108,10 +105,10 @@
                         <TextBlock Text="Notifications" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Spacing="24">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Classes="settingsPage">
                         <StackPanel Spacing="10">
-                            <TextBlock Classes="kcapTitle" Text="Notifications" LineHeight="22" />
+                            <TextBlock Classes="kcapTitle" Text="Notifications" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
                                        Text="Choose what brings you back when Capacitor is in the background." />
                         </StackPanel>
@@ -132,48 +129,46 @@
 
                         <StackPanel Spacing="10">
                             <TextBlock Classes="settingsEyebrow" Text="Notify me about" />
-                            <Border Padding="0">
-                                <StackPanel>
-                                    <Grid Classes="settingsRow" ColumnDefinitions="44,*" ColumnSpacing="16">
-                                        <StackPanel Grid.Column="1" Spacing="5">
+                            <StackPanel>
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                        <StackPanel Spacing="5">
                                             <TextBlock Classes="kcapLabel" Text="Permission requests" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                                        Text="When an agent needs approval to use a tool or take an action." />
                                         </StackPanel>
-                                        <ToggleSwitch x:Name="PermissionNotificationsToggle" Classes="kcapSwitch"
+                                        <ToggleSwitch x:Name="PermissionNotificationsToggle" Grid.Column="1" Classes="kcapSwitch"
                                                       IsChecked="{Binding NotifyOnPermissions, Mode=TwoWay}"
                                                       IsEnabled="{Binding CanManageNotifications}"
                                                       AutomationProperties.Name="Permission request notifications"
                                                       VerticalAlignment="Top" Margin="0,1,0,0" />
                                     </Grid>
                                     <Border Classes="settingsDivider" />
-                                    <Grid Classes="settingsRow" ColumnDefinitions="44,*" ColumnSpacing="16">
-                                        <StackPanel Grid.Column="1" Spacing="5">
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                        <StackPanel Spacing="5">
                                             <TextBlock Classes="kcapLabel" Text="Questions" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                                        Text="When an agent asks you for an answer." />
                                         </StackPanel>
-                                        <ToggleSwitch x:Name="QuestionNotificationsToggle" Classes="kcapSwitch"
+                                        <ToggleSwitch x:Name="QuestionNotificationsToggle" Grid.Column="1" Classes="kcapSwitch"
                                                       IsChecked="{Binding NotifyOnQuestions, Mode=TwoWay}"
                                                       IsEnabled="{Binding CanManageNotifications}"
                                                       AutomationProperties.Name="Question notifications"
                                                       VerticalAlignment="Top" Margin="0,1,0,0" />
                                     </Grid>
                                     <Border Classes="settingsDivider" />
-                                    <Grid Classes="settingsRow" ColumnDefinitions="44,*" ColumnSpacing="16">
-                                        <StackPanel Grid.Column="1" Spacing="5">
+                                    <Grid Classes="settingsRow" ColumnDefinitions="*,Auto" ColumnSpacing="24">
+                                        <StackPanel Spacing="5">
                                             <TextBlock Classes="kcapLabel" Text="Waiting for you" />
                                             <TextBlock Classes="kcapHint" TextWrapping="Wrap"
                                                        Text="When an agent finishes a turn and is waiting for you." />
                                         </StackPanel>
-                                        <ToggleSwitch x:Name="IdleNotificationsToggle" Classes="kcapSwitch"
+                                        <ToggleSwitch x:Name="IdleNotificationsToggle" Grid.Column="1" Classes="kcapSwitch"
                                                       IsChecked="{Binding NotifyOnIdle, Mode=TwoWay}"
                                                       IsEnabled="{Binding CanManageNotifications}"
                                                       AutomationProperties.Name="Waiting agent notifications"
                                                       VerticalAlignment="Top" Margin="0,1,0,0" />
                                     </Grid>
                                 </StackPanel>
-                            </Border>
                             <TextBlock Classes="kcapHint" Text="Changes save automatically. Your operating system must allow notifications."
                                        TextWrapping="Wrap" />
                         </StackPanel>
@@ -184,6 +179,29 @@
                                    IsVisible="{Binding NotificationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+            <TabItem x:Name="CaptureTab" Classes="settingsNav" AutomationProperties.Name="Capture and privacy">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <views:AppIcon Kind="Shield" Size="16" />
+                        <TextBlock Text="Capture &amp; privacy" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <Border IsEnabled="{Binding !IsBusy}">
+                    <views:CaptureSettingsView DataContext="{Binding Capture}" />
+                </Border>
+            </TabItem>
+            <TabItem x:Name="HarnessesTab" Classes="settingsNav" AutomationProperties.Name="Harnesses"
+                     IsVisible="{Binding Harnesses, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <views:AppIcon Kind="Terminal" Size="16" />
+                        <TextBlock Text="Harnesses" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <Border IsEnabled="{Binding !IsBusy}">
+                    <views:HarnessesSettingsView DataContext="{Binding Harnesses}" />
+                </Border>
             </TabItem>
         </TabControl>
     </Grid>

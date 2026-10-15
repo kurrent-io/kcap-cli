@@ -10,7 +10,11 @@ using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Setup;
+using NSubstitute;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -273,7 +277,75 @@ public class SettingsWindowSmokeTests {
         } finally { window.Close(); }
     });
 
-    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null) {
+    [Test]
+    public Task Capture_page_saves_edited_visibility_and_scope_through_the_view() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications);
+        var window = new SettingsWindow { DataContext = vm, Width = 760, Height = 520 };
+        try {
+            window.Show();
+            Click(window, window.FindControl<TabItem>("CaptureTab")!);
+            var view = window.GetVisualDescendants().OfType<CaptureSettingsView>().Single();
+            var visibility = view.FindControl<ComboBox>("VisibilityInput")!;
+            visibility.SelectedValue = "private";
+            var repos = view.FindControl<TextBox>("AllowedReposInput")!;
+            repos.Text = "team/project";
+            Settle(window);
+            await Assert.That(vm.Capture.Visibility).IsEqualTo("private");
+            await Assert.That(vm.Capture.AllowedRepos).IsEqualTo("team/project");
+            var save = view.FindControl<Button>("SaveCaptureButton")!;
+            save.BringIntoView();
+            Settle(window);
+            Click(window, save);
+            await WaitUntilAsync(() => !vm.Capture.Busy && vm.Capture.Message?.Contains("saved") == true);
+            var saved = new SettingsProfileStore(Config.Root, "work", "https://work.example").LoadProfile();
+            await Assert.That(saved.DefaultVisibility).IsEqualTo("private");
+            await Assert.That(saved.AllowedRepos).IsEquivalentTo(new[] { "team/project" });
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Harness_page_routes_connect_and_rescan_buttons_and_blocks_rename_during_setup() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        var cli = Substitute.For<IKcapCli>();
+        var completion = new TaskCompletionSource<ProcessResult>();
+        cli.PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>()).Returns(completion.Task);
+        var scans = 0;
+        var harnesses = new HarnessesSettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"), cli, _ => {
+            scans++;
+            return Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> {
+                [HarnessId.Codex] = new(true, false)
+            });
+        });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications, harnesses: harnesses);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Click(window, window.FindControl<TabItem>("HarnessesTab")!);
+            var view = window.GetVisualDescendants().OfType<HarnessesSettingsView>().Single();
+            Click(window, view.FindControl<Button>("RescanHarnessesButton")!);
+            await WaitUntilAsync(() => harnesses.Rows.Count == 1);
+            Settle(window);
+            var connect = view.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Content, "Connect"));
+            Click(window, connect);
+            await Assert.That(harnesses.Busy).IsTrue();
+            await Assert.That(vm.CanEdit).IsFalse();
+            await Assert.That(view.FindControl<Button>("RescanHarnessesButton")!.IsEffectivelyEnabled).IsFalse();
+            completion.SetResult(new ProcessResult(0, "", "", false));
+            await WaitUntilAsync(() => !harnesses.Busy);
+            await Assert.That(harnesses.Rows[0].Message!).Contains("Setup completed");
+            Click(window, view.FindControl<Button>("RescanHarnessesButton")!);
+            await WaitUntilAsync(() => scans == 2);
+        } finally { completion.TrySetResult(new ProcessResult(1, "", "canceled", false)); window.Close(); }
+    });
+
+    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null, HarnessesSettingsViewModel? harnesses = null) {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
@@ -281,7 +353,7 @@ public class SettingsWindowSmokeTests {
             service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
             (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
             (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask,
-            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access);
+            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access, harnesses: harnesses);
     }
 
     static async Task WaitUntilAsync(Func<bool> ready) {
