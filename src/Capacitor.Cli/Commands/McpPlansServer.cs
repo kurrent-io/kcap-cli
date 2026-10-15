@@ -186,7 +186,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var declaration = BuildDeclaration(args, cwd, repoRoot);
 
         using var response = await client.PostAsync(DocumentsUrl(baseUrl), ToJsonContent(declaration.Body));
-        if (response.IsSuccessStatusCode) new DeclaredDocumentLedger(config, time).Record(declaration.SessionId, declaration.Document);
+        if (response.IsSuccessStatusCode) new DeclaredDocumentLedger(config, time).Record(declaration.SessionId, declaration.Document, baseUrl);
 
         return await RelayAsync(id, response, baseUrl, body => AnnotateDeclaration(body, declaration));
     }

@@ -118,8 +118,7 @@
           {
             "type": "command",
             "command": "kcap hook --claude --plan-edit --no-update-check",
-            "timeout": 5,
-            "async": true
+            "timeout": 3
           }
         ]
       }

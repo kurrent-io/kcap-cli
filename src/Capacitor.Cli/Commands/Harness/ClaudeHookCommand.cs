@@ -11,7 +11,6 @@ using Capacitor.Cli.SessionStartMemory;
 using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
-using Capacitor.Cli.Core.WorkItems;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Plans;
 using Capacitor.Cli.PrDetection;
@@ -123,13 +122,11 @@ public sealed class ClaudeHookCommand(
         }
     }
 
-    /// <summary>The <c>timeout</c> <c>kcap/hooks/hooks.json</c> gives the async plan-edit entry.</summary>
-    static readonly TimeSpan PlanEditCeiling = TimeSpan.FromSeconds(5);
-
     /// <summary>
-    /// <c>kcap hook --claude --plan-edit</c>: an async PostToolUse on Claude's file writes. When the
+    /// <c>kcap hook --claude --plan-edit</c>: a synchronous PostToolUse on Claude's file writes. When the
     /// file is a document this session declared, declares it again, so the server's snapshot follows
-    /// the file instead of keeping the text it had when it was first declared.
+    /// the file instead of keeping the text it had when it was first declared. Synchronous so two
+    /// quick edits reach the server in order and the last one is not killed by a headless teardown.
     /// </summary>
     public async Task<int> HandlePlanEdit(TextReader stdin) {
         HttpClient? client = null;
@@ -149,13 +146,13 @@ public sealed class ClaudeHookCommand(
         try {
             var body = await stdin.ReadToEndAsync();
             if (ClaudePlanEdit.Parse(body) is not { } edit) return 0;
-            if (new DeclaredDocumentLedger(config, clock.Time).Find(edit.SessionId, edit.Path) is not { } document) return 0;
+            if (new DeclaredDocumentLedger(config, clock.Time).Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
 
-            var budget = clock.Budget(PlanEditCeiling);
+            var budget = clock.Budget(ToolHookCeiling);
             if (await ShouldSuppressCaptureAsync(edit.SessionId, body, "post-tool-use", profiles.Effective, budget)) return 0;
+            if (await clientWithin(budget.Remaining) is not { } client) return 0;
 
             var declaration = McpPlansServer.BuildDeclaration(document.ToArguments(edit.SessionId), document.Cwd, document.RepoRoot);
-            if (await clientWithin(budget.Remaining) is not { } client) return 0;
 
             using var content = new StringContent(declaration.Body.ToJsonString(), Encoding.UTF8, "application/json");
             using var _       = await client.PostOnceAsync(McpPlansServer.DocumentsUrl(Url), content, clock.Time, budget.Remaining);
@@ -1042,7 +1039,6 @@ public sealed class ClaudeHookCommand(
                 EvictPolicyState(sessionId);
                 new PlanReadNudgeLedger(config).Evict(sessionId.Replace("-", ""));
                 new TaskListNudgeLedger(config).Evict(sessionId.Replace("-", ""));
-                if (WorkContextIds.CanonicalSessionId(sessionId) is { } canonical) new DeclaredDocumentLedger(config, clock.Time).Evict(canonical);
             }
 
             // Ordering guard: if this session's backlog couldn't fully drain, spool the fresh

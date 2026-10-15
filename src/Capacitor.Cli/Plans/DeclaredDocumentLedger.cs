@@ -7,34 +7,41 @@ using Capacitor.Cli.Core.Policy;
 namespace Capacitor.Cli.Plans;
 
 /// <summary>The documents a session declared, by full local path, with the arguments that declared
-/// them, so an edit can declare the file again: the server holds only the snapshot it was sent. Best
-/// effort throughout: a lost entry costs one stale snapshot, never the tool call or the hook.</summary>
+/// them and the server that accepted them, so an edit can declare the file again: the server holds
+/// only the snapshot it was sent. Best effort throughout: a lost entry costs one stale snapshot,
+/// never the tool call or the hook.</summary>
 sealed class DeclaredDocumentLedger(ConfigRoot config, TimeProvider time) {
-    /// <summary>Session end evicts a Claude session's entries; a harness with no hook that does is
-    /// reaped by age instead.</summary>
+    /// <summary>How long a session keeps its entries after it last declared or edited one. Nothing
+    /// evicts them at session end, because a resumed Claude session keeps its id.</summary>
     internal static readonly TimeSpan Retention = TimeSpan.FromDays(30);
 
-    public void Record(string sessionId, DeclaredDocument document) {
+    public void Record(string sessionId, DeclaredDocument document, string serverUrl) {
         try {
             Reap();
             var entry = Entry(sessionId, document.Path);
             Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
-            File.WriteAllText(entry, document.ToJson().ToJsonString());
+            var json = document.ToJson();
+            json["server_url"] = serverUrl;
+            File.WriteAllText(entry, json.ToJsonString());
+            Touch(sessionId);
         } catch { }
     }
 
-    public DeclaredDocument? Find(string sessionId, string path) {
+    /// <summary>Null unless <paramref name="serverUrl"/> accepted the declaration: a document is never
+    /// sent to a server selected since.</summary>
+    public DeclaredDocument? Find(string sessionId, string path, string serverUrl) {
         try {
             var entry = Entry(sessionId, path);
-            return File.Exists(entry) ? DeclaredDocument.FromJson(JsonNode.Parse(File.ReadAllText(entry)) as JsonObject) : null;
+            if (!File.Exists(entry) || JsonNode.Parse(File.ReadAllText(entry)) is not JsonObject json) return null;
+            if (json["server_url"] is not JsonValue url || !url.TryGetValue<string>(out var accepted) || accepted != serverUrl) return null;
+            Touch(sessionId);
+            return DeclaredDocument.FromJson(json);
         } catch {
             return null;
         }
     }
 
-    public void Evict(string sessionId) {
-        try { Directory.Delete(SessionDir(sessionId), recursive: true); } catch { }
-    }
+    void Touch(string sessionId) => Directory.SetLastWriteTimeUtc(SessionDir(sessionId), time.GetUtcNow().UtcDateTime);
 
     void Reap() {
         var root = config.Path(DirName);
@@ -51,6 +58,12 @@ sealed class DeclaredDocumentLedger(ConfigRoot config, TimeProvider time) {
 
     string SessionDir(string sessionId) => config.Path(DirName, PolicySnapshotStore.Sanitize(sessionId));
 
-    string Entry(string sessionId, string path) =>
-        Path.Combine(SessionDir(sessionId), Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(path))))[..32]);
+    /// <summary>Case-folded where the default filesystem ignores case, so the path an edit names finds
+    /// the declaration however it was cased; on a case-sensitive volume a collision costs one extra
+    /// re-declaration of the declared file.</summary>
+    string Entry(string sessionId, string path) {
+        var full = Path.GetFullPath(path);
+        if (!OperatingSystem.IsLinux()) full = full.ToUpperInvariant();
+        return Path.Combine(SessionDir(sessionId), Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(full)))[..32]);
+    }
 }

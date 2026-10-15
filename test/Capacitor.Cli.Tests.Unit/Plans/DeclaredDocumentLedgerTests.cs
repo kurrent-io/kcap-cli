@@ -5,42 +5,78 @@ namespace Capacitor.Cli.Tests.Unit.Plans;
 public class DeclaredDocumentLedgerTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
+    const string Server = "https://kcap.example";
+
     static readonly DeclaredDocument Spec = new("/repo/docs/spec.md", "spec", "/repo/docs/design.md", "wi-1", "/repo", "/repo");
 
+    DeclaredDocumentLedger Ledger() => new(Config.Root, TimeProvider.System);
+
     [Test]
-    public async Task Finds_a_declared_document_per_session_until_the_session_is_evicted() {
-        var ledger = new DeclaredDocumentLedger(Config.Root, TimeProvider.System);
+    public async Task Finds_a_declared_document_per_session_and_path() {
+        var ledger = Ledger();
 
-        ledger.Record("s1", Spec);
+        ledger.Record("s1", Spec, Server);
 
-        await Assert.That(ledger.Find("s1", "/repo/docs/spec.md")).IsEqualTo(Spec);
-        await Assert.That(ledger.Find("s1", "/repo/docs/other.md")).IsNull();
-        await Assert.That(ledger.Find("s2", "/repo/docs/spec.md")).IsNull();
+        await Assert.That(ledger.Find("s1", "/repo/docs/spec.md", Server)).IsEqualTo(Spec);
+        await Assert.That(ledger.Find("s1", "/repo/docs/other.md", Server)).IsNull();
+        await Assert.That(ledger.Find("s2", "/repo/docs/spec.md", Server)).IsNull();
+    }
 
-        ledger.Evict("s1");
+    [Test]
+    public async Task Never_hands_a_declaration_to_a_server_that_did_not_accept_it() {
+        var ledger = Ledger();
 
-        await Assert.That(ledger.Find("s1", "/repo/docs/spec.md")).IsNull();
+        ledger.Record("s1", Spec, Server);
+
+        await Assert.That(ledger.Find("s1", Spec.Path, "https://other.example")).IsNull();
     }
 
     [Test]
     public async Task A_later_declaration_of_the_same_path_replaces_the_earlier_one() {
-        var ledger = new DeclaredDocumentLedger(Config.Root, TimeProvider.System);
+        var ledger = Ledger();
+        var replanned = Spec with { Kind = "plan", ArguesFrom = null, WorkItemId = null };
 
-        ledger.Record("s1", Spec);
-        ledger.Record("s1", Spec with { Kind = "plan", ArguesFrom = null, WorkItemId = null });
+        ledger.Record("s1", Spec, Server);
+        ledger.Record("s1", replanned, Server);
 
-        await Assert.That(ledger.Find("s1", "/repo/docs/spec.md")).IsEqualTo(Spec with { Kind = "plan", ArguesFrom = null, WorkItemId = null });
+        await Assert.That(ledger.Find("s1", Spec.Path, Server)).IsEqualTo(replanned);
     }
 
     [Test]
-    public async Task Recording_reaps_sessions_older_than_the_retention() {
-        var ledger = new DeclaredDocumentLedger(Config.Root, TimeProvider.System);
-        ledger.Record("old", Spec);
-        Directory.SetLastWriteTimeUtc(Config.Root.Path("declared-documents", "old"), DateTime.UtcNow - DeclaredDocumentLedger.Retention - TimeSpan.FromDays(1));
+    public async Task Finds_a_path_cased_differently_where_the_filesystem_ignores_case() {
+        var ledger = Ledger();
 
-        ledger.Record("new", Spec);
+        ledger.Record("s1", Spec, Server);
 
-        await Assert.That(ledger.Find("old", Spec.Path)).IsNull();
-        await Assert.That(ledger.Find("new", Spec.Path)).IsEqualTo(Spec);
+        var found = ledger.Find("s1", "/repo/docs/SPEC.md", Server);
+        if (OperatingSystem.IsLinux()) await Assert.That(found).IsNull();
+        else await Assert.That(found).IsEqualTo(Spec);
     }
+
+    [Test]
+    public async Task Recording_reaps_sessions_idle_longer_than_the_retention() {
+        var ledger = Ledger();
+        ledger.Record("old", Spec, Server);
+        Age("old");
+
+        ledger.Record("new", Spec, Server);
+
+        await Assert.That(ledger.Find("old", Spec.Path, Server)).IsNull();
+        await Assert.That(ledger.Find("new", Spec.Path, Server)).IsEqualTo(Spec);
+    }
+
+    [Test]
+    public async Task An_edit_keeps_a_long_session_from_being_reaped() {
+        var ledger = Ledger();
+        ledger.Record("long", Spec, Server);
+        Age("long");
+
+        await Assert.That(ledger.Find("long", Spec.Path, Server)).IsEqualTo(Spec);
+        ledger.Record("other", Spec, Server);
+
+        await Assert.That(ledger.Find("long", Spec.Path, Server)).IsEqualTo(Spec);
+    }
+
+    void Age(string sessionId) =>
+        Directory.SetLastWriteTimeUtc(Config.Root.Path("declared-documents", sessionId), DateTime.UtcNow - DeclaredDocumentLedger.Retention - TimeSpan.FromDays(1));
 }

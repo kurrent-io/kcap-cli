@@ -942,14 +942,13 @@ switch (command) {
         // Codex blocks on this hook's stdout, so its stamp waits until the hook has answered.
         if (hookVendor is not null && hookVendor != HarnessId.Codex.VendorId) new HookActivity(config, time).Stamp(hookVendor);
 
-        // These two block the agent's tool call, so they skip the spool drain below.
+        // These block the agent's tool call, so they skip the spool drain below.
         if (args.Contains("--claude") && args.Contains("--plan-read")) {
             return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));
         }
         if (args.Contains("--claude") && args.Contains("--task-list")) {
             return await Run<ClaudeHookCommand>().HandleTaskList(new StringReader(claudeHookBody!));
         }
-        // Async, but fires on every file write, so it leaves the spool drain to the catch-all hook.
         if (args.Contains("--claude") && args.Contains("--plan-edit")) {
             return await Run<ClaudeHookCommand>().HandlePlanEdit(new StringReader(claudeHookBody!));
         }

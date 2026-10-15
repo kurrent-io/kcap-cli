@@ -892,7 +892,7 @@ public class ClaudeHookCommandTests {
 
     /// <summary>A repo holding a spec the session declared as arguing from a design, recorded in the
     /// ledger the way the plans MCP server records it.</summary>
-    (string Sid, string Spec) DeclaredSpec() {
+    (string Sid, string Spec) DeclaredSpec(string serverUrl) {
         var root = Tmp.CreateDir("repo");
         root.CreateDir(".git");
         var spec = root.CreateFile(["docs", "spec.md"], "# Spec\n");
@@ -902,7 +902,7 @@ public class ClaudeHookCommandTests {
         var declared = McpPlansServer.BuildDeclaration(
             new JsonObject { ["session_id"] = canonical, ["kind"] = "spec", ["path"] = "docs/spec.md", ["argues_from"] = "docs/design.md", ["work_item_id"] = "wi-1" },
             root, root);
-        new DeclaredDocumentLedger(Config.Root, TimeProvider.System).Record(canonical, declared.Document);
+        new DeclaredDocumentLedger(Config.Root, TimeProvider.System).Record(canonical, declared.Document, serverUrl);
         return (sid, spec);
     }
 
@@ -912,7 +912,7 @@ public class ClaudeHookCommandTests {
     [Arguments("MultiEdit")]
     public async Task plan_edit_declares_a_declared_document_again_with_its_current_text(string tool) {
         using var fx = new Fixture(Config.Root);
-        var (sid, spec) = DeclaredSpec();
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
         File.WriteAllText(spec, "# Spec, revised\n");
 
         await fx.PlanEditAsync(PlanEditPayload(sid, tool, spec));
@@ -929,7 +929,7 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task plan_edit_leaves_a_file_the_session_never_declared_alone() {
         using var fx = new Fixture(Config.Root);
-        var (sid, _) = DeclaredSpec();
+        var (sid, _) = DeclaredSpec(fx.MemoryServerUrl);
         var other = Tmp.CreateFile(["repo", "docs", "notes.md"], "# Notes\n");
 
         await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", other));
@@ -941,7 +941,7 @@ public class ClaudeHookCommandTests {
     [Test]
     public async Task plan_edit_ignores_a_tool_that_does_not_write_the_file() {
         using var fx = new Fixture(Config.Root);
-        var (sid, spec) = DeclaredSpec();
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
 
         await fx.PlanEditAsync(PlanEditPayload(sid, "Read", spec));
 
@@ -949,13 +949,24 @@ public class ClaudeHookCommandTests {
     }
 
     [Test]
-    public async Task session_end_forgets_the_documents_the_session_declared() {
+    public async Task plan_edit_never_sends_a_document_to_a_server_that_did_not_accept_it() {
         using var fx = new Fixture(Config.Root);
-        var (sid, spec) = DeclaredSpec();
+        var (sid, spec) = DeclaredSpec("https://other.example");
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+
+        await Assert.That(DocumentPosts(fx)).IsEmpty();
+    }
+
+    [Test]
+    public async Task a_resumed_session_still_refreshes_what_it_declared_before_it_ended() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
 
         await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{sid}}","cwd":"/repo","reason":"exit"}""");
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
 
-        await Assert.That(new DeclaredDocumentLedger(Config.Root, TimeProvider.System).Find(sid.Replace("-", ""), spec)).IsNull();
+        await Assert.That(DocumentPosts(fx).Count).IsEqualTo(1);
     }
 
     static string TaskListPayload(string sid, string tool, JsonObject? input = null) =>
