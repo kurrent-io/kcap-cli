@@ -38,9 +38,11 @@ sealed class DaemonServiceCommands(
 
         return action switch {
             "install"   => await verbs.Install(rest, startNow: !noStart),
-            "uninstall" => Array.IndexOf(rest, "--under") is var at and >= 0
-                ? at + 1 < rest.Length ? await verbs.UninstallUnder(rest[at + 1]) : Usage()
-                : await verbs.Uninstall(),
+            "uninstall" => UnderArg(rest) switch {
+                null    => await verbs.Uninstall(),
+                ""      => Usage(),
+                var dir => await verbs.UninstallUnder(dir),
+            },
             "start"     => await verbs.Start(rest),
             "stop"      => await verbs.Stop(),
             "ensure"    => await verbs.Ensure(rest),
@@ -454,6 +456,17 @@ sealed class DaemonServiceCommands(
 
         bool Owned(string unit) =>
             manager.Status(unit).BinaryPath is { } binary && IsUnder(binary, dir, OperatingSystem.IsWindows());
+    }
+
+    /// <summary>
+    /// The folder <c>--under</c> names: null without the flag, empty when its value is missing,
+    /// blank or another flag.
+    /// </summary>
+    internal static string? UnderArg(string[] rest) {
+        var at = Array.IndexOf(rest, "--under");
+        if (at < 0) return null;
+        var value = at + 1 < rest.Length ? rest[at + 1] : "";
+        return string.IsNullOrWhiteSpace(value) || value.StartsWith("--", StringComparison.Ordinal) ? "" : value;
     }
 
     internal static bool IsUnder(string path, string dir, bool ignoreCase) {

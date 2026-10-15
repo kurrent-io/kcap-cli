@@ -89,6 +89,19 @@ public class DaemonCommandsServiceUninstallUnderTests {
         await Assert.That(manager.Uninstalled).IsEmpty();
     }
 
+    }
+
+    [Test]
+    [Arguments(new[] { "--json" }, null)]
+    [Arguments(new[] { "--under", "C:/apps/kcap" }, "C:/apps/kcap")]
+    [Arguments(new[] { "--under" }, "")]
+    [Arguments(new[] { "--under", "" }, "")]
+    [Arguments(new[] { "--under", "  " }, "")]
+    [Arguments(new[] { "--under", "--name", "foo" }, "")]
+    public async Task UnderArg_refuses_a_missing_blank_or_flag_value(string[] rest, string? expected) {
+        await Assert.That(DaemonServiceCommands.UnderArg(rest)).IsEqualTo(expected);
+    }
+
     [Test]
     [Arguments("/a/b/kcap-daemon", "/a/b", false, true)]
     [Arguments("/a/b/kcap-daemon", "/a/b/", false, true)]
