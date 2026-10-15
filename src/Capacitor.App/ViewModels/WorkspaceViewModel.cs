@@ -150,8 +150,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
-            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null) {
+            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
+            ComposerDrafts? drafts = null) {
         AgentId = agentId;
+        _drafts = drafts;
         _opener = opener;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
@@ -261,7 +263,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts);
             })
             .DisposeWith(_disposables);
 
@@ -316,6 +318,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     }
 
     static string TitleFor(AgentStatusDto? dto) => dto?.Title ?? RepoLabel.Leaf(dto?.RepoPath);
+
+    readonly ComposerDrafts? _drafts;
+
+    public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Local, origin, AgentId);
 
     /// Disposes this workspace's own daemon-cache projections, then tears down Chat (if built), the
     /// work-context pane, and Terminal last -- the caller that closes a workspace tab calls this once.

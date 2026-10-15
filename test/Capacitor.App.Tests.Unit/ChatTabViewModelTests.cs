@@ -184,12 +184,12 @@ public class ChatTabViewModelTests {
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
-                       Action<ToolCard>? openCard = null) {
+                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -1347,6 +1347,8 @@ public class ChatTabViewModelTests {
         public TaskCompletionSource<ChatSendOutcome>? Pending;
         public int Disposals;
         public bool CanAttachValue = true;
+        /// Off for a channel whose send has already gone out when the tab is torn down.
+        public bool HonoursCancellation = true;
         public List<(string Text, IReadOnlyList<string> Ids, CancellationToken Ct)> Sends { get; } = [];
         public override SendAvailability Availability => Pending is null ? SendAvailability.Ready : SendAvailability.Sending;
         public override bool CanAcceptText => Pending is null;
@@ -1357,7 +1359,7 @@ public class ChatTabViewModelTests {
             Sends.Add((text, attachmentIds, ct));
             Pending = new TaskCompletionSource<ChatSendOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
             this.RaisePropertyChanged(nameof(CanAcceptText));
-            return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, ct, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            return Pending.Task.ContinueWith(t => { Pending = null; this.RaisePropertyChanged(nameof(CanAcceptText)); return t.Result; }, HonoursCancellation ? ct : CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
         public override void Dispose() => Disposals++;
     }
@@ -1428,6 +1430,65 @@ public class ChatTabViewModelTests {
             await send;
             await Assert.That(h.Chat.ComposerText).IsEqualTo("");
             await h.TeardownAsync();
+        });
+    }
+
+    /// Pins that a draft outlives its tab, which navigation tears down, and that a sent one does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unsent_draft_survives_the_tab_being_rebuilt() {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput();
+            var first = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            first.Chat.ComposerText = "half a thought";
+            await first.TeardownAsync();
+
+            var second = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            await Assert.That(second.Chat.ComposerText).IsEqualTo("half a thought");
+            var send = second.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await second.TeardownAsync();
+
+            var third = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            await Assert.That(third.Chat.ComposerText).IsEqualTo("");
+            await third.TeardownAsync();
+        });
+    }
+
+    /// Pins a send that settles after its tab is gone: only a confirmed delivery clears the draft —
+    /// in the store and in the tab now showing it — and never over text typed since, in the old tab
+    /// or the one that replaced it.
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted, false, false, "")]
+    [Arguments(ChatSendOutcome.Rejected, false, false, "hello")]
+    [Arguments(ChatSendOutcome.Unconfirmed, false, false, "hello")]
+    [Arguments(ChatSendOutcome.Accepted, true, false, "hello again")]
+    [Arguments(ChatSendOutcome.Accepted, false, true, "hello there")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_send_settling_after_teardown_clears_only_its_own_delivered_draft(
+            ChatSendOutcome outcome, bool editedBeforeLeaving, bool editedInReplacement, string expected) {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput { HonoursCancellation = false };
+            var first = new Harness(TranscriptChat.Journal, input: input, drafts: drafts);
+            first.Chat.ComposerText = "hello";
+            var send = first.Chat.SendCommand.Execute().ToTask();
+            var pending = input.Pending!;
+            if (editedBeforeLeaving) first.Chat.ComposerText = "hello again";
+            await first.TeardownAsync();
+
+            var second = new Harness(TranscriptChat.Journal, input: new ScriptedInput(), drafts: drafts);
+            if (editedInReplacement) second.Chat.ComposerText = "hello there";
+            pending.SetResult(outcome);
+            await send;
+            await Assert.That(second.Chat.ComposerText).IsEqualTo(expected);
+            await second.TeardownAsync();
+
+            var third = new Harness(TranscriptChat.Journal, input: new ScriptedInput(), drafts: drafts);
+            await Assert.That(third.Chat.ComposerText).IsEqualTo(expected);
+            await third.TeardownAsync();
         });
     }
 

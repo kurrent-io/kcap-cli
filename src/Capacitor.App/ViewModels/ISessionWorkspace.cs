@@ -1,3 +1,4 @@
+using Capacitor.App.Services;
 using Capacitor.Cli.Core.PullRequests;
 
 namespace Capacitor.App.ViewModels;
@@ -9,4 +10,6 @@ public interface ISessionWorkspace {
     PullRequestContextViewModel? PullRequests { get; }
     void OpenPullRequest(PullRequestSubjectDto? subject = null);
     Task TeardownAsync();
+    /// Gives the composer's unsent draft to the same session's workspace on the other lane.
+    void HandDraftTo(AgentOrigin origin);
 }
