@@ -79,19 +79,58 @@ public class ComposerHistoryTests {
         await Assert.That(history.Older("")).IsEqualTo("third");
     }
 
-    /// The transcript echoes a sent prompt beside its own record, so the pair is one entry.
+    static ComposerHistory Seen(params string[] shown) {
+        var history = new ComposerHistory();
+        foreach (var text in shown) history.Observe(text);
+        return history;
+    }
+
+    static async Task AssertRecallOrder(ComposerHistory history, params string[] newestFirst) {
+        var current = "";
+        foreach (var expected in newestFirst) {
+            current = history.Older(current)!;
+            await Assert.That(current).IsEqualTo(expected);
+        }
+        await Assert.That(history.Older(current)).IsNull();
+    }
+
     [Test]
-    public async Task Observe_collapses_the_echo_of_a_sent_prompt() {
+    public async Task Observe_settles_the_echo_of_a_sent_prompt_and_skips_blanks() {
         var history = With("first");
         history.Observe("first");
         history.Observe("  ");
-        await Assert.That(history.Older("")).IsEqualTo("first");
-        await Assert.That(history.Older("first")).IsNull();
+        await AssertRecallOrder(history, "first");
+    }
+
+    /// The first transcript read can land after a send made while it was in flight.
+    [Test]
+    public async Task A_turn_the_transcript_shows_sorts_ahead_of_an_unechoed_send() {
+        var history = With("new");
+        history.Observe("old");
+        history.Observe("new");
+        await AssertRecallOrder(history, "new", "old");
+    }
+
+    [Test]
+    public async Task Another_turn_between_a_send_and_its_echo_leaves_one_entry_each() {
+        var history = With("mine");
+        history.Observe("theirs");
+        history.Observe("mine");
+        await AssertRecallOrder(history, "mine", "theirs");
+    }
+
+    /// A slash command never echoes as a user turn; a later send's echo settles it in place.
+    [Test]
+    public async Task A_send_that_never_echoes_keeps_its_place() {
+        var history = With("/compact", "hi");
+        history.Observe("hi");
+        history.Observe("later");
+        await AssertRecallOrder(history, "later", "hi", "/compact");
     }
 
     [Test]
     public async Task Observe_leaves_a_recall_in_progress_alone() {
-        var history = With("first", "second");
+        var history = Seen("first", "second");
         await Assert.That(history.Older("")).IsEqualTo("second");
         history.Observe("third");
         await Assert.That(history.Older("second")).IsEqualTo("first");
@@ -103,7 +142,7 @@ public class ComposerHistoryTests {
     /// oldest entry left.
     [Test]
     public async Task Observe_past_capacity_keeps_the_recall_cursor_in_step() {
-        var history = With(Enumerable.Range(0, ComposerHistory.Capacity).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray());
+        var history = Seen(Enumerable.Range(0, ComposerHistory.Capacity).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray());
         var current = "";
         for (var i = 0; i < ComposerHistory.Capacity; i++) current = history.Older(current)!;
         await Assert.That(current).IsEqualTo("0");
@@ -114,16 +153,19 @@ public class ComposerHistoryTests {
     }
 
     [Test]
-    public async Task Clear_forgets_every_entry() {
-        var history = With("first");
+    public async Task Clear_drops_the_shown_turns_and_keeps_unechoed_sends() {
+        var history = Seen("old");
+        history.Record("sent");
         history.Clear();
-        await Assert.That(history.Older("")).IsNull();
+        await AssertRecallOrder(history, "sent");
+        history.Observe("old");
+        await AssertRecallOrder(history, "sent", "old");
     }
 
     /// A replay under a recall leaves it navigable: ↑ reaches the replayed turns and ↓ the draft.
     [Test]
     public async Task Clear_during_a_recall_keeps_it_navigable() {
-        var history = With("first", "second");
+        var history = Seen("first", "second");
         await Assert.That(history.Older("")).IsEqualTo("second");
         history.Clear();
         history.Observe("first");

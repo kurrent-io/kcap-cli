@@ -7,6 +7,9 @@ public sealed class ComposerHistory {
     public const int Capacity = 100;
 
     readonly List<string> _entries = new();
+    // The newest entries: sends whose transcript echo has not arrived. The transcript has not
+    // shown them yet, so every turn it does show belongs ahead of them.
+    int _pending;
     // While recalling: -1 once the shown entry is evicted from the front, Count once a clear has
     // detached it from the entries, so the replayed turns all sit above it.
     int _cursor;
@@ -15,26 +18,35 @@ public sealed class ComposerHistory {
 
     /// A prompt this composer sent.
     public void Record(string text) {
-        Append(text);
+        if (_entries.Count == 0 || !string.Equals(_entries[^1], text, StringComparison.Ordinal)) {
+            _entries.Add(text);
+            _pending++;
+            TrimFront();
+        }
         EndNavigation();
     }
 
-    /// A user turn the transcript shows. A sent prompt's own echo lands next to its record and
-    /// collapses into it, and an arrival never interrupts a recall in progress.
+    /// A user turn the transcript shows. A send's echo settles that send where it stands, along
+    /// with any older send that will never echo; an arrival never interrupts a recall in progress.
     public void Observe(string text) {
         if (string.IsNullOrWhiteSpace(text)) return;
-        var pastNewest = _cursor == _entries.Count;
-        var evicted = Append(text);
-        if (_shown is null) return;
-        if (pastNewest) _cursor = _entries.Count;
-        else if (evicted) _cursor = Math.Max(_cursor - 1, -1);
+        var boundary = _entries.Count - _pending;
+        var echoed = _entries.FindIndex(boundary, _pending, e => string.Equals(e, text, StringComparison.Ordinal));
+        if (echoed >= 0) {
+            _pending = _entries.Count - echoed - 1;
+            return;
+        }
+        if (boundary > 0 && string.Equals(_entries[boundary - 1], text, StringComparison.Ordinal)) return;
+        _entries.Insert(boundary, text);
+        if (_shown is not null && boundary <= _cursor) _cursor++;
+        TrimFront();
     }
 
-    /// The transcript is being replayed from the start, so what it showed is about to arrive again.
-    /// A recall on screen stays one: ↓ still restores the draft, and ↑ reaches the replayed turns.
+    /// The transcript is being replayed from the start, so what it showed is about to arrive again;
+    /// sends it has not echoed stay. A recall on screen stays one: ↓ still restores the draft.
     public void Clear() {
-        _entries.Clear();
-        _cursor = 0;
+        _entries.RemoveRange(0, _entries.Count - _pending);
+        _cursor = _entries.Count;
     }
 
     /// The next older prompt, or null when there is none or `current` is a draft of the user's own.
@@ -66,12 +78,10 @@ public sealed class ComposerHistory {
         _cursor = _entries.Count;
     }
 
-    /// True when the oldest entry was dropped to make room.
-    bool Append(string text) {
-        if (_entries.Count > 0 && string.Equals(_entries[^1], text, StringComparison.Ordinal)) return false;
-        _entries.Add(text);
-        if (_entries.Count <= Capacity) return false;
+    void TrimFront() {
+        if (_entries.Count <= Capacity) return;
         _entries.RemoveAt(0);
-        return true;
+        _pending = Math.Min(_pending, _entries.Count);
+        if (_shown is not null) _cursor = Math.Max(_cursor - 1, -1);
     }
 }
