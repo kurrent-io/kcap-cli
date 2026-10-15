@@ -51,8 +51,9 @@ internal sealed class SessionStartMemoryOrchestrator(
 
             var result = await provider.GetAsync(request with { Budget = Remaining() });
             if (result.Disposition == SessionStartMemoryDisposition.RetryableFailure) {
-                await store.RetryAsync(lease, result.RetryAfter, Remaining(), request.CancellationToken);
-                return result.Fragment;
+                return await store.RetryAsync(lease, result.RetryAfter, Remaining(), request.CancellationToken)
+                    ? result.Fragment
+                    : null;
             }
             // Undeliverable-after-fetch: release the lease rather than spend it, so the next start of
             // this session retries instead of being permanently denied its one injection.
