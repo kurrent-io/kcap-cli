@@ -240,12 +240,13 @@ public class FlowsLaneTests {
     }
 
     [Test]
-    public async Task A_failing_scope_resolution_retries_while_memory_is_enabled() {
+    public async Task A_failing_scope_resolution_retries_while_memory_is_enabled_and_still_delivers_flows() {
         var composite = WithScope(new ThrowingScope(), (HttpStatusCode.OK, "[]"), (HttpStatusCode.NoContent, ""));
 
         var result = await composite.GetAsync(Req(memory: true, flows: true));
 
         await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
+        await Assert.That(result.Fragment!).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);
     }
 
     [Test]

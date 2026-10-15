@@ -33,9 +33,8 @@ internal sealed class SessionStartCompositeContextProvider(
             scope = await scopeResolver.ResolveAsync(request.Cwd, request.Budget, cts.Token);
         } catch (Exception ex) when (IsFailOpen(ex)) {
             diagnostic?.Invoke($"SessionStart scope resolution skipped: {ex.Message}");
-            if (flowsTask is not null) await flowsTask;
 
-            return SessionStartMemoryContextResult.Retry;
+            return Combine(SessionStartMemoryContextResult.Retry, null, ReportFlows(flowsTask is null ? null : await flowsTask));
         }
 
         // Started before any further await so the lanes share the budget in parallel.

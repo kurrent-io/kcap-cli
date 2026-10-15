@@ -52,6 +52,8 @@ internal sealed class SessionStartFlowsCatalogCache(string root) {
             }
             File.Move(temp, PathFor(baseUrl), overwrite: true);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // The listing superseded the entry even though it could not be stored.
+            Delete(baseUrl);
         } finally {
             try { if (temp is not null && File.Exists(temp)) File.Delete(temp); } catch { }
         }
