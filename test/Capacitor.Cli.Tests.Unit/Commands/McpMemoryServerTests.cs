@@ -181,6 +181,70 @@ public class McpMemoryServerTests {
     }
 
     [Test]
+    public async Task Rescope_body_for_repo_target_carries_only_repo_hash() {
+        var body = McpMemoryServer.BuildRescopeBody(Args("""{"id":"m1","repo_hash":"abc123"}"""));
+
+        await Assert.That(body.Select(p => p.Key).ToArray()).IsEquivalentTo(["repo_hash"]);
+        await Assert.That(body["repo_hash"]!.GetValue<string>()).IsEqualTo("abc123");
+    }
+
+    [Test]
+    public async Task Rescope_body_for_global_target_carries_only_global() {
+        var body = McpMemoryServer.BuildRescopeBody(Args("""{"id":"m1","global":true}"""));
+
+        await Assert.That(body.Select(p => p.Key).ToArray()).IsEquivalentTo(["global"]);
+        await Assert.That(body["global"]!.GetValue<bool>()).IsTrue();
+    }
+
+    [Test]
+    public async Task Rescope_body_drops_blank_audience_fields_beside_a_place_target() {
+        var body = McpMemoryServer.BuildRescopeBody(Args("""{"id":"m1","global":true,"audience":"","team":" ","audience_project":"","project":""}"""));
+
+        await Assert.That(body.Select(p => p.Key).ToArray()).IsEquivalentTo(["global"]);
+    }
+
+    [Test]
+    [Arguments("""{"id":"m1","global":true,"audience":"team","team":"eng"}""")]
+    [Arguments("""{"id":"m1","global":true,"team":"eng"}""")]
+    [Arguments("""{"id":"m1","repo_hash":"abc123","audience":"org"}""")]
+    [Arguments("""{"id":"m1","repo_hash":"abc123","audience_project":"capacitor"}""")]
+    public async Task Rescope_body_refuses_audience_fields_beside_repo_or_global(string json) {
+        await Assert.That(() => McpMemoryServer.BuildRescopeBody(Args(json)))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    [Arguments("""{"id":"m1","project":"capacitor","repo_hash":"abc123"}""")]
+    [Arguments("""{"id":"m1","project":"capacitor","global":true}""")]
+    [Arguments("""{"id":"m1","repo_hash":"abc123","global":true}""")]
+    public async Task Rescope_body_refuses_two_place_targets(string json) {
+        await Assert.That(() => McpMemoryServer.BuildRescopeBody(Args(json)))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Rescope_body_refuses_blank_repo_hash() {
+        await Assert.That(() => McpMemoryServer.BuildRescopeBody(Args("""{"id":"m1","repo_hash":"  "}""")))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Rescope_body_treats_global_false_as_no_target() {
+        var body = McpMemoryServer.BuildRescopeBody(Args("""{"id":"m1","audience":"org","global":false}"""));
+
+        await Assert.That(body["audience"]!.GetValue<string>()).IsEqualTo("org");
+        await Assert.That(body.ContainsKey("global")).IsFalse();
+    }
+
+    [Test]
+    public async Task Rescope_tool_schema_exposes_repo_hash_and_global() {
+        var rescope = McpMemoryServer.BuildToolsList().Single(t => t.Name == "rescope_memory");
+
+        await Assert.That(rescope.InputSchema.Properties.Keys).Contains("repo_hash");
+        await Assert.That(rescope.InputSchema.Properties.Keys).Contains("global");
+    }
+
+    [Test]
     public async Task Tools_list_has_six_tools() {
         var tools = McpMemoryServer.BuildToolsList();
 
