@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
@@ -31,6 +32,9 @@ public class ClaudeHookCommandTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
+
+    /// <summary>What a fresh session-start hook may spend before its safety reserve.</summary>
+    static readonly int SessionStartWorkMs = (int)(ClaudeHookCommand.SessionStartCeiling - HookBudget.Safety).TotalMilliseconds;
 
     /// <summary>A hook clock frozen <paramref name="elapsed"/> into its ceiling, so a near-exhausted
     /// budget can be asserted without sleeping into it. Only for the paths that give up on the
@@ -656,14 +660,10 @@ public class ClaudeHookCommandTests {
         // already carries.
         using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
-        fx.MemoryIndexDelay = TimeSpan.FromSeconds(10); // twice the asserted ceiling; teardown waits out this server delay
+        // Past the ceiling, so only the budget can end the wait; teardown waits out this server delay.
+        fx.MemoryIndexDelay = ClaudeHookCommand.SessionStartCeiling + TimeSpan.FromSeconds(3);
         fx.RespondJson = """{"top_clusters":[{"text":"seal secrets","category":"safety"}]}""";
 
-        // A fresh budget, exactly like this file's other hung-server tests
-        // (e.g. subagent_stop_against_hung_server_is_spooled_within_budget) — the full ~3.5s of
-        // session-start's usable budget (5s ceiling minus the 1.5s safety margin) is comfortably
-        // enough for watcher-start + repo enrichment + the fast, undelayed POST, but far short of
-        // the 10s memory-index delay above.
         var sid = Guid.NewGuid().ToString("N");
         var sw  = System.Diagnostics.Stopwatch.StartNew();
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -672,7 +672,7 @@ public class ClaudeHookCommandTests {
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5)); // did not wait out the 10s delay
+        await Assert.That(sw.Elapsed).IsLessThan(ClaudeHookCommand.SessionStartCeiling);
         await Assert.That(stdout).Contains("## Known patterns"); // lessons fragment still injected
         await Assert.That(stdout).DoesNotContain("Team memory"); // memory fragment never joined in time
     }
@@ -690,7 +690,7 @@ public class ClaudeHookCommandTests {
         var sid = Guid.NewGuid().ToString("N");
         var exit = await fx.HandleAsync(
             $$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}""",
-            elapsed: TimeSpan.FromSeconds(4));
+            elapsed: ClaudeHookCommand.SessionStartCeiling - HookBudget.Safety);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.MemoryIndexRequested).IsFalse();
@@ -1013,7 +1013,7 @@ public class ClaudeHookCommandTests {
         var posted     = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var postedBody = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
         await Assert.That(postedBody["next_work"]?.GetValue<string>()).IsEqualTo("v1");
-        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2500);
+        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(SessionStartWorkMs - 1000);
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("1. Review PR #42 — Priya is waiting");
@@ -1070,11 +1070,11 @@ public class ClaudeHookCommandTests {
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
             elapsed: TimeSpan.FromMilliseconds(500));
 
-        // 5s ceiling − 500ms elapsed − 1.5s hook safety = 3000ms remaining; less the 1000ms reserve.
+        // Ceiling − 500ms elapsed − hook safety, less the POST's 1000ms reserve.
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
         await Assert.That(body["next_work"]?.GetValue<string>()).IsEqualTo("v1");
-        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2000);
+        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(SessionStartWorkMs - 500 - 1000);
     }
 
     /// <summary>Below reserve + the server's default feed budget neither field is sent, so a server
@@ -1085,9 +1085,9 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
         fx.RegisterClaudeMcpServer("kcap-workitems");
 
-        // 3500 − 1001 = 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
+        // 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
-            elapsed: TimeSpan.FromMilliseconds(1001));
+            elapsed: TimeSpan.FromMilliseconds(SessionStartWorkMs - 2499));
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
@@ -2067,5 +2067,23 @@ public class ClaudeHookCommandTests {
 
     sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> impl) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct) => impl(r, ct);
+    }
+
+    /// <summary>Claude kills the hook at the manifest's timeout, so a longer ceiling would be cut off mid-write
+    /// and a shorter one would waste budget the session-start context needs.</summary>
+    [Test]
+    public async Task The_session_start_ceiling_is_the_manifest_timeout() {
+        var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(RepoRoot(), "kcap", "hooks", "hooks.json")))!;
+        var timeout  = manifest["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["timeout"]!.GetValue<int>();
+
+        await Assert.That(TimeSpan.FromSeconds(timeout)).IsEqualTo(ClaudeHookCommand.SessionStartCeiling);
+    }
+
+    static string RepoRoot([CallerFilePath] string here = "") {
+        var dir = Path.GetDirectoryName(here);
+        while (dir is not null && !File.Exists(Path.Combine(dir, "Capacitor.slnx")))
+            dir = Path.GetDirectoryName(dir);
+
+        return dir ?? throw new InvalidOperationException($"Could not locate repo root walking up from {here}");
     }
 }

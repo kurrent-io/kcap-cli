@@ -404,8 +404,8 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    public async Task Server_instructions_ask_for_loose_ends_and_next_work_at_completion() =>
-        await Assert.That(McpWorkItemsServer.ServerInstructions).EndsWith(NextWorkEmitter.CompletionInstruction);
+    public async Task Server_instructions_lead_with_the_completion_rule() =>
+        await Assert.That(McpWorkItemsServer.ServerInstructions).StartsWith(NextWorkEmitter.CompletionInstruction);
 
     // ── declared breakdown + relations ───────────────────────────────────────
 

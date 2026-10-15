@@ -139,7 +139,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
 
     // Server-level usage preamble (MCP `instructions`) — steers clients to check for prior art here
     // before assuming none, and to save durable learnings.
-    const string ServerInstructions =
+    internal const string ServerInstructions =
         "Use these tools for durable team knowledge — preferences, feedback, project facts, references. " +
         "Search memories before assuming there's no prior art on a task, and before saving a new one — they " +
         "hold learnings that aren't in the code.";

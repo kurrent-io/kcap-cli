@@ -240,7 +240,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _composerEdits++;
             Notice(null);
             this.RaiseAndSetIfChanged(ref _composerText, value);
+            _drafts?.Set(_origin, _agentId, value);
         }
+    }
+
+    readonly ComposerDrafts? _drafts;
+    readonly AgentOrigin _origin;
+    readonly string _agentId;
+
+    // Counted as an edit, so a send settling in this tab cannot clear text it did not type.
+    void OnStoredDraftChanged(string text) {
+        if (string.Equals(_composerText, text, StringComparison.Ordinal)) return;
+        _composerEdits++;
+        this.RaiseAndSetIfChanged(ref _composerText, text, nameof(ComposerText));
     }
 
     readonly ComposerHistory _history = new();
@@ -484,10 +496,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null)
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
-               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard) { }
+               runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
+               drafts: drafts) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
@@ -495,7 +508,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IPermissionService permissions, SessionRuns runs, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null) {
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
+        _drafts = drafts;
+        _origin = origin;
+        _agentId = agentId;
+        _composerText = drafts?.Get(origin, agentId) ?? "";
+        drafts?.Watch(origin, agentId, OnStoredDraftChanged).DisposeWith(_disposables);
         _planActivity = planActivity;
         _openCard = openCard;
         _input = input;
@@ -613,6 +631,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
+            var draftRevision = _drafts?.Revision(_origin, _agentId) ?? 0;
             var files = Tray.Snapshot();
             if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
             IReadOnlyList<string> ids = [];
@@ -657,7 +676,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 outcome = ChatSendOutcome.Unconfirmed;
             }
             finally { _sending = null; }
-            if (_lifetimeToken.IsCancellationRequested) return;
+            if (_lifetimeToken.IsCancellationRequested) {
+                // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
+                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
+                return;
+            }
             if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
             var waits = !queued.Acknowledged && outcome switch {
                 ChatSendOutcome.Accepted    => _openFeed is not null,

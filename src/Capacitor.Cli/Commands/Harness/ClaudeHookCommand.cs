@@ -48,9 +48,14 @@ public sealed class ClaudeHookCommand(
     /// not for kcap to spend.
     /// </summary>
     static TimeSpan Ceiling(string? command) => command switch {
-        "session-end" => TimeSpan.FromSeconds(15),
-        _             => TimeSpan.FromSeconds(5),
+        "session-end"   => TimeSpan.FromSeconds(15),
+        "session-start" => SessionStartCeiling,
+        _               => TimeSpan.FromSeconds(5),
     };
+
+    /// <summary>The session-start POST and the memory and flows fetches share what is left after
+    /// <see cref="HookBudget.Safety"/>; must match the session-start timeout in <c>kcap/hooks/hooks.json</c>.</summary>
+    internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(9);
 
     public Task<int> Handle(TextReader stdin, TextWriter? stdout = null) {
         var spool = new HookSpool(config, clock.Time);
@@ -1322,11 +1327,12 @@ public sealed class ClaudeHookCommand(
 
         // The memory subsystem is optional, and the whole fetch stays inside the fail-open boundary.
         try {
+            Action<string> diagnostic = message => Console.Error.WriteLine($"[kcap] {message}");
             var store    = SessionStartMemoryLeaseStore.Create(config, clock.Time);
-            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time);
+            var provider = SessionStartMemoryHookSupport.CompositeProvider(router, config, workdir, http.ForMemoryAsync, clock.Time, diagnostic: diagnostic);
 
             // Claude's guidelines arrive with the SessionStart response, so the composite runs memory and flows only.
-            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time).GetFragmentAsync(
+            return await new SessionStartMemoryOrchestrator(store, provider, clock.Time, diagnostic).GetFragmentAsync(
                 new SessionMemoryLifecycle(HarnessId.Claude, nativeSessionId, null,
                     IsTopLevel: true, ClassificationAuthoritative: true, reason,
                     CallbackMayRepeat: false),
@@ -1340,9 +1346,15 @@ public sealed class ClaudeHookCommand(
     static async Task<string?> AwaitMemoryFragmentAsync(Task<string?> task, HookBudget budget) {
         try {
             var remaining = budget.Remaining;
-            if (remaining <= TimeSpan.Zero) return task.IsCompletedSuccessfully ? task.Result : null;
-            return await task.WaitAsync(remaining, budget.Time);
-        } catch { return null; }
+            if (remaining > TimeSpan.Zero) return await task.WaitAsync(remaining, budget.Time);
+            if (task.IsCompletedSuccessfully) return task.Result;
+        } catch (TimeoutException) {
+        } catch {
+            return null;
+        }
+
+        await Console.Error.WriteLineAsync("[kcap] session-start memory and flows context dropped: no response within the hook budget");
+        return null;
     }
 
     ClaudePaths ClaudeLayoutFor(string? transcriptPath) =>

@@ -165,7 +165,7 @@ sealed class McpReviewServer(ConfigRoot config, ProfileContext profiles, TokenSt
     // Server-level usage preamble (MCP `instructions`) — a model-facing hint some clients add to the
     // system prompt. Same "reach for kcap before native git/GitHub/grep for why/history" framing as the
     // per-tool descriptions, at the server level (belt-and-suspenders behind the descriptions).
-    const string ServerInstructions =
+    internal const string ServerInstructions =
         "Use these tools when reviewing a PR or asking why code was written this way. Reach for them before " +
         "native git/GitHub/grep for why / history / prior-work questions — they surface the implementer's " +
         "reasoning from the recorded session transcript, which commits and diffs don't capture — while you " +
