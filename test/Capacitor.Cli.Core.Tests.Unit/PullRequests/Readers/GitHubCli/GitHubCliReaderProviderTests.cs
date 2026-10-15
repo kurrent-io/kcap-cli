@@ -178,6 +178,37 @@ public class GitHubCliReaderProviderTests {
     }
 
     [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Reset_starts_fresh_discovery_and_old_completions_cannot_replace_or_unshare_it(bool oldCompletesFirst) {
+        using var h = new GhHarness(Tmp); h.SignedIn("github.com");
+        await h.Provider.ProbeAsync(false, default);
+        var old = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "list"], old);
+        var beforeReset = h.Provider.DiscoverAsync(Repository, "feature", default);
+        h.Provider.ResetSession("session");
+        var current = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "list"], current);
+        var afterReset = h.Provider.DiscoverAsync(Repository, "feature", default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        var shared = afterReset;
+        if (oldCompletesFirst) {
+            old.SetResult(new(0, GhHarness.Fixture("pr-list.json"), "", false));
+            await beforeReset;
+            shared = h.Provider.DiscoverAsync(Repository, "feature", default);
+        }
+        current.SetResult(new(0, "[]", "", false));
+        await Assert.That(await afterReset).IsEmpty();
+        await Assert.That(await shared).IsEmpty();
+        if (!oldCompletesFirst) {
+            old.SetResult(new(0, GhHarness.Fixture("pr-list.json"), "", false));
+            await beforeReset;
+        }
+        await Assert.That(await h.Provider.DiscoverAsync(Repository, "feature", default)).IsEmpty();
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Concurrent_discoveries_share_a_single_spawn_and_reuse_for_ten_seconds_unless_reset() {
         var h = new GhHarness(Tmp); h.SignedIn("github.com");
         var pending = new TaskCompletionSource<ProcessResult>();

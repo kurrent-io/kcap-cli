@@ -12,7 +12,7 @@ public sealed partial class PullRequestContextViewModel {
     void RequestRefresh(bool manual = false) {
         if (_disposed || !_foreground || _session is not { } session) return;
         if (manual) { _source.ResetSession(session); _stopped = false; _refreshDiscovery = true; _refreshPage = true; _lastOverview = null; }
-        if (_stopped || _retryAt > _time.GetUtcNow().UtcDateTime || _listRetryAt > _time.GetUtcNow().UtcDateTime) return;
+        if (_stopped || ReadRetryAt > _time.GetUtcNow().UtcDateTime || _listRetryAt > _time.GetUtcNow().UtcDateTime) return;
         // A click waits out a short gap only; the poll keeps the longer one.
         if (_refreshing || _lastRefresh is { } last && _time.GetElapsedTime(last).TotalSeconds < (manual || _queuedRefresh ? 3 : 15)) {
             _queuedRefresh |= manual;
@@ -89,7 +89,7 @@ public sealed partial class PullRequestContextViewModel {
 
     void RequestOverview() {
         if (_disposed || !_foreground || _legacy || _stopped || _overviewPending || _session is not { } session || _selected is not { IsAvailable: true } choice
-            || _retryAt > _time.GetUtcNow().UtcDateTime || _lastOverview is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) return;
+            || ReadRetryAt > _time.GetUtcNow().UtcDateTime || _lastOverview is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) return;
         _overviewPending = true;
         _lastOverview = _time.GetTimestamp();
         Notify();
@@ -110,7 +110,7 @@ public sealed partial class PullRequestContextViewModel {
                     // a reload restarts at page one and would pull the rows they were reading away.
                     var onePage = CurrentSection is { Pages.Count: 1, Earlier.Count: 0 };
                     var stoppedChecks = _section == "checks" && CurrentSection is { Stopped: true };
-                    var reload = _refreshPage || checksLive || onePage || stoppedChecks;
+                    var reload = _refreshPage || _headRestartSection == SectionKey || checksLive || onePage || stoppedChecks;
                     if (_readerVisible && _section != "overview" && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
                     else if (headChanged) _sections.Remove("checks");
                     _refreshPage = false;
@@ -121,7 +121,7 @@ public sealed partial class PullRequestContextViewModel {
 
     void RequestPage(string? cursor, bool refresh = false, bool earlier = false) {
         if (_disposed || !CanReveal || _session is not { } session || _selected is not { } choice || _section == "overview"
-            || _retryAt > _time.GetUtcNow().UtcDateTime) return;
+            || ReadRetryAt > _time.GetUtcNow().UtcDateTime) return;
         var key = SectionKey;
         if (_pageRequests.Contains(key)) return;
         if (!refresh && CurrentSection is { Stopped: true }) return;
@@ -169,6 +169,7 @@ public sealed partial class PullRequestContextViewModel {
                     // Learn the new head from a fresh overview, whose apply reloads this section. Once
                     // only for that section: an overview still on the old head would bounce straight back here.
                     _headRestartSection = key;
+                    if (_sections.TryGetValue(key, out var state)) state.Stopped = true;
                     _lastOverview = null;
                     restartOverview = true;
                 } else if (read.Kind == PullRequestReadKind.Restart && read.Reason is not ("identity_changed" or "integration_changed")) {
@@ -202,7 +203,7 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
     void Fail<T>(PullRequestRead<T> read) where T : class {
-        RememberRetry(read.RetryAt);
+        RememberRetry(read);
         var reason = Reason(read);
         // Access loss invalidates peer reads too; a late page must not reopen protected content.
         if (read.Kind == PullRequestReadKind.Restart && read.Reason is "identity_changed" or "integration_changed" || read.Reason == "no_reader") { CancelReads(); ClearProtected(); }

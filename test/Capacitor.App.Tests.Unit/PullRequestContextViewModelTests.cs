@@ -513,6 +513,117 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    [Arguments("checks")]
+    [Arguments("threads")]
+    public Task A_head_restart_reloads_a_paginated_section_even_when_the_overview_head_is_unchanged(string section) => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await h.Vm.ShowSectionCommand.Execute(section);
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1 && !h.Vm.IsReading, what: "first page");
+        await h.Vm.LoadMoreCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 2 && !h.Vm.IsReading, what: "second page");
+        var replacement = new TaskCompletionSource();
+        h.Source.PageGate = replacement;
+        h.Source.RestartNextPage = "head_changed";
+        try {
+            await h.Vm.LoadMoreCommand.Execute();
+            await WaitUntilAsync(() => h.Source.Pages == 4, what: "replacement page one requested");
+            await Assert.That(h.Vm.Rows.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.HasMore).IsFalse();
+            replacement.SetResult();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "replacement applied");
+            await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+            await Assert.That(h.Vm.HasMore).IsTrue();
+            await Assert.That(h.Vm.PageNote).IsEmpty();
+        } finally { replacement.TrySetResult(); await h.Dispose(); }
+    });
+
+    [Test]
+    public Task A_head_restart_still_reloads_its_section_after_the_reader_switches_tabs() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await h.Vm.ShowSectionCommand.Execute("threads");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1 && !h.Vm.IsReading, what: "first page");
+        await h.Vm.LoadMoreCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 2 && !h.Vm.IsReading, what: "second page");
+        var overview = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => overview.Task);
+        h.Source.RestartNextPage = "head_changed";
+        try {
+            await h.Vm.LoadMoreCommand.Execute();
+            await WaitUntilAsync(() => h.Source.Overviews == 2, what: "recovery overview pending");
+            await h.Vm.ShowSectionCommand.Execute("conversation");
+            overview.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "overview settled on another tab");
+            await h.Vm.ShowSectionCommand.Execute("threads");
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "return to threads");
+            await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+            await Assert.That(h.Vm.HasMore).IsTrue();
+        } finally { overview.TrySetResult(h.Source.Overview(h.Vm.Selected!.Subject)); await h.Dispose(); }
+    });
+
+    [Test]
+    [Arguments("rate_limited", false)]
+    [Arguments("budget_exhausted", false)]
+    [Arguments("rate_limited", true)]
+    public Task Switching_PRs_preserves_host_cooldowns_without_blocking_another_host(string reason, bool anotherHost) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        if (anotherHost) h.Source.Links[0] = h.Source.Links[0] with { Host = "ghe.example", Url = "https://ghe.example/example/repo/pull/1" };
+        h.Push(); await h.Show();
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, Reason: reason, RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(1))));
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Source.Overviews == 2 && !h.Vm.IsReading, what: "rate limit received");
+        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 1);
+        if (anotherHost) {
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "independent host loaded");
+        } else {
+            await Assert.That(h.Source.Overviews).IsEqualTo(2);
+            await Assert.That(h.Vm.Notice).Contains("cooldown");
+            h.Time.Advance(TimeSpan.FromSeconds(60)); Dispatcher.UIThread.RunJobs();
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "cooldown expired");
+        }
+        await Assert.That(h.Source.Overviews).IsEqualTo(3);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_failed_renewal_cannot_restart_grace_after_access_has_expired() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Source.Overviews == 2, what: "renewal started");
+        h.Time.Advance(TimeSpan.FromSeconds(20)); Dispatcher.UIThread.RunJobs();
+        h.Source.Failure = "transient";
+        renewal.SetResult(new(PullRequestReadKind.TransportFailure, Subject: h.Vm.Selected!.Subject, AccessFailure: "transient", Reason: "timeout"));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "renewal timed out");
+        await Assert.That(h.Vm.CanDisplay).IsTrue();
+        h.Time.Advance(TimeSpan.FromSeconds(285)); Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "original grace expired");
+        await Assert.That(h.Vm.CanDisplay).IsFalse();
+        await Assert.That(h.Vm.Description).IsNull();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_list_refresh_alone_does_not_delay_the_stale_snapshot_indicator() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        var list = new TaskCompletionSource();
+        h.Source.ListGate = list;
+        h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Source.Overviews == 2 && h.Source.Lists == 2, what: "renewal and list pending");
+        renewal.SetResult(h.Source.Overview(h.Vm.Selected!.Subject) with { AccessValidForSeconds = 10 });
+        await WaitUntilAsync(() => h.Vm.CanReveal, what: "short access lease renewed");
+        h.Time.Advance(TimeSpan.FromSeconds(10)); Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => h.Vm.HasStaleOverview, what: "list does not renew access");
+        await Assert.That(h.Vm.Description).IsEqualTo("Private description");
+        list.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list settled");
+        await h.Dispose();
+    });
+
+    [Test]
     public Task Switching_to_another_PR_clears_retry_backoff_and_notice_from_the_previous_PR() => RunOnUiAsync(async () => {
         var h = new Harness();
         var retry = h.Time.GetUtcNow().UtcDateTime.AddMinutes(2);

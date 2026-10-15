@@ -40,7 +40,7 @@ public sealed partial class PullRequestContextViewModel {
             if (!CanDisplay) return IsSelectionLoading ? "" : "Refresh access to open PR content.";
             if (CurrentSection is not { } state) {
                 if (IsSectionLoading) return "";
-                if ((!CanReveal || _retryAt > _time.GetUtcNow().UtcDateTime) && _staleReason is { Length: > 0 } reason) return reason;
+                if ((!CanReveal || ReadRetryAt > _time.GetUtcNow().UtcDateTime) && _staleReason is { Length: > 0 } reason) return reason;
                 if (CanReveal) return "This section has not loaded yet.";
                 return "";
             }

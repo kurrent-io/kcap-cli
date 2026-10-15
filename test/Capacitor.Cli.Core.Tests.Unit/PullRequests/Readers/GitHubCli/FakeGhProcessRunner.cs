@@ -11,7 +11,10 @@ internal sealed class FakeGhProcessRunner : IProcessRunner {
         _replies.RemoveAll(reply => reply.Prefix.SequenceEqual(prefix));
         _replies.Add((prefix, () => Task.FromResult(new ProcessResult(exitCode, stdout, stderr, timedOut)), null));
     }
-    public void WhenPending(string[] prefix, TaskCompletionSource<ProcessResult> source) => _replies.Add((prefix, () => source.Task, null));
+    public void WhenPending(string[] prefix, TaskCompletionSource<ProcessResult> source) {
+        _replies.RemoveAll(reply => reply.Prefix.SequenceEqual(prefix));
+        _replies.Add((prefix, () => source.Task, null));
+    }
     /// <summary>Like a KillTree run: on cancellation the call ends only once <paramref name="onCancel"/> completes, standing in for the child's exit.</summary>
     public void WhenPending(string[] prefix, TaskCompletionSource<ProcessResult> source, Task onCancel) => _replies.Add((prefix, () => source.Task, onCancel));
     /// <summary>Matches when every needle appears somewhere in the argument list; register the more specific rule first.</summary>
