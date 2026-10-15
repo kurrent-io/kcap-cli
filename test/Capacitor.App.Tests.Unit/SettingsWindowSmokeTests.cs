@@ -26,6 +26,48 @@ public class SettingsWindowSmokeTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     [Test]
+    public Task Sidebar_supports_mouse_keyboard_and_small_window_navigation() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Settle(window);
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            var daemon = window.FindControl<TabItem>("DaemonTab")!;
+            var profiles = window.FindControl<TabItem>("ProfilesTab")!;
+            var alerts = window.FindControl<TabItem>("NotificationsTab")!;
+            await Assert.That(window.CanResize).IsTrue();
+            await Assert.That(profiles.IsEffectivelyVisible).IsFalse();
+            var daemonPosition = daemon.TranslatePoint(default, window)!.Value;
+            var alertsPosition = alerts.TranslatePoint(default, window)!.Value;
+            await Assert.That(alertsPosition.X).IsEqualTo(daemonPosition.X);
+            await Assert.That(alertsPosition.Y).IsGreaterThan(daemonPosition.Y);
+
+            Click(window, alerts);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(alerts);
+            await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyVisible).IsTrue();
+            alerts.Focus(NavigationMethod.Tab);
+            window.KeyPressQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            Settle(window);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(daemon);
+
+            window.Width = window.MinWidth;
+            window.Height = window.MinHeight;
+            Settle(window);
+            Click(window, alerts);
+            var toggle = window.FindControl<ToggleSwitch>("IdleNotificationsToggle")!;
+            var bottom = toggle.TranslatePoint(new Point(toggle.Bounds.Width, toggle.Bounds.Height), window)!.Value;
+            await Assert.That(bottom.X).IsLessThan(window.ClientSize.Width);
+            await Assert.That(bottom.Y).IsLessThan(window.ClientSize.Height);
+        } finally { window.Close(); }
+    });
+
+    [Test]
     public Task Window_binds_edits_status_and_command_gates() => AvaloniaSession.RunOnUiAsync(async () => {
         ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
             ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
@@ -70,8 +112,8 @@ public class SettingsWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(rename.IsEffectivelyEnabled).IsTrue();
             await Assert.That(window.Title).IsEqualTo("kcap — Settings");
-            await Assert.That(window.Bounds.Width).IsEqualTo(600d);
-            await Assert.That(window.Bounds.Height).IsEqualTo(580d);
+            await Assert.That(window.Bounds.Width).IsEqualTo(860d);
+            await Assert.That(window.Bounds.Height).IsEqualTo(640d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);
             tabs.SelectedIndex = 3; // Daemon, Profiles and Accounts (hidden — no view-models here), Notifications
             Dispatcher.UIThread.RunJobs();
