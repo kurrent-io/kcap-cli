@@ -321,18 +321,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     readonly ComposerDrafts? _drafts;
 
-    // Chat is built on the first dto, so a draft can arrive or leave before there is a tab to hold it.
-    public string HandOffDraft() {
-        if (Chat is { } chat) return chat.HandOffDraft();
-        var text = _drafts?.Get(AgentOrigin.Local, AgentId) ?? "";
-        _drafts?.Set(AgentOrigin.Local, AgentId, "");
-        return text;
-    }
-
-    public void AdoptDraft(string text) {
-        if (Chat is { } chat) chat.ComposerText = text;
-        else _drafts?.Set(AgentOrigin.Local, AgentId, text);
-    }
+    public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Local, origin, AgentId);
 
     /// Disposes this workspace's own daemon-cache projections, then tears down Chat (if built), the
     /// work-context pane, and Terminal last -- the caller that closes a workspace tab calls this once.

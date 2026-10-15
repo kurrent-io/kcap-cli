@@ -26,6 +26,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
+    readonly ComposerDrafts? _drafts;
     readonly SerialDisposable _lease = new();
     readonly IUrlOpener _opener;
     // Never disposed, so a row revision landing after teardown cannot throw; the chat and its
@@ -202,6 +203,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
             ComposerDrafts? drafts = null) {
+        _drafts = drafts;
         _row = row;
         _opener = opener;
         _access = access;
@@ -385,9 +387,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     static void Log(string note) => Console.Error.WriteLine($"kcap: remote chat: {note}");
 
-    public string HandOffDraft() => Chat.HandOffDraft();
-
-    public void AdoptDraft(string text) => Chat.ComposerText = text;
+    public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Remote, origin, AgentId);
 
     public async Task TeardownAsync() {
         _disposables.Dispose();

@@ -1457,8 +1457,9 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Pins a send that settles after its tab is gone: only a confirmed delivery clears the stored
-    /// draft, and never over text typed since — in the old tab or in the one that replaced it.
+    /// Pins a send that settles after its tab is gone: only a confirmed delivery clears the draft —
+    /// in the store and in the tab now showing it — and never over text typed since, in the old tab
+    /// or the one that replaced it.
     [Test]
     [Arguments(ChatSendOutcome.Accepted, false, false, "")]
     [Arguments(ChatSendOutcome.Rejected, false, false, "hello")]
@@ -1480,10 +1481,10 @@ public class ChatTabViewModelTests {
 
             var second = new Harness(TranscriptChat.Journal, input: new ScriptedInput(), drafts: drafts);
             if (editedInReplacement) second.Chat.ComposerText = "hello there";
-            await second.TeardownAsync();
-
             pending.SetResult(outcome);
             await send;
+            await Assert.That(second.Chat.ComposerText).IsEqualTo(expected);
+            await second.TeardownAsync();
 
             var third = new Harness(TranscriptChat.Journal, input: new ScriptedInput(), drafts: drafts);
             await Assert.That(third.Chat.ComposerText).IsEqualTo(expected);

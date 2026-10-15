@@ -248,11 +248,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly AgentOrigin _origin;
     readonly string _agentId;
 
-    /// The unsent draft, for the same session's workspace on the other lane; this tab's stored copy is dropped.
-    public string HandOffDraft() {
-        var text = ComposerText;
-        _drafts?.Set(_origin, _agentId, "");
-        return text;
+    // Counted as an edit, so a send settling in this tab cannot clear text it did not type.
+    void OnStoredDraftChanged(string text) {
+        if (string.Equals(_composerText, text, StringComparison.Ordinal)) return;
+        _composerEdits++;
+        this.RaiseAndSetIfChanged(ref _composerText, text, nameof(ComposerText));
     }
 
     readonly ComposerHistory _history = new();
@@ -505,6 +505,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _origin = origin;
         _agentId = agentId;
         _composerText = drafts?.Get(origin, agentId) ?? "";
+        drafts?.Watch(origin, agentId, OnStoredDraftChanged).DisposeWith(_disposables);
         _planActivity = planActivity;
         _openCard = openCard;
         _input = input;
@@ -667,7 +668,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             finally { _sending = null; }
             if (_lifetimeToken.IsCancellationRequested) {
                 // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
-                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearIfUnchanged(_origin, _agentId, draftRevision);
+                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
                 return;
             }
             if (outcome != ChatSendOutcome.Rejected) _history.Record(snapshot);
