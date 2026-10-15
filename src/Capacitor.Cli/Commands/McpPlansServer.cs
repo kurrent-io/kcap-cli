@@ -182,11 +182,20 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         }
     }
 
+    /// <summary>Longer than a Claude plan-edit hook can hold the document, which is its 3 s timeout.</summary>
+    static readonly TimeSpan DeclareLockWait = TimeSpan.FromSeconds(5);
+
     async Task<string> DeclareAsync(JsonNode id, HttpClient client, string baseUrl, JsonObject? args, string cwd, string? repoRoot) {
-        var declaration = BuildDeclaration(args, cwd, repoRoot);
+        var ledger   = new DeclaredDocumentLedger(config, time);
+        var resolved = BuildDeclaration(args, cwd, repoRoot);
+
+        // Under the lock an edit refresh cannot interleave, so the text read and the arguments
+        // recorded are the last the server gets. Declaring without it beats failing the call.
+        using var gate    = await ledger.LockAsync(resolved.SessionId, resolved.Document.Path, DeclareLockWait);
+        var declaration   = gate is null ? resolved : BuildDeclaration(args, cwd, repoRoot);
 
         using var response = await client.PostAsync(DocumentsUrl(baseUrl), ToJsonContent(declaration.Body));
-        if (response.IsSuccessStatusCode) new DeclaredDocumentLedger(config, time).Record(declaration.SessionId, declaration.Document, baseUrl);
+        if (response.IsSuccessStatusCode) ledger.Record(declaration.SessionId, declaration.Document, baseUrl);
 
         return await RelayAsync(id, response, baseUrl, body => AnnotateDeclaration(body, declaration));
     }

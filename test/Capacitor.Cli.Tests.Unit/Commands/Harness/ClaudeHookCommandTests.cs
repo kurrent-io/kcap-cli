@@ -965,6 +965,26 @@ public class ClaudeHookCommandTests {
     }
 
     [Test]
+    public async Task plan_edit_replays_the_declaration_recorded_while_it_waited() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+        var canonical = sid.Replace("-", "");
+        var ledger = new DeclaredDocumentLedger(Config.Root, TimeProvider.System);
+        var held = await ledger.LockAsync(canonical, spec, TimeSpan.Zero);
+
+        var refresh = fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+        await Task.Delay(200);
+        ledger.Record(canonical, ledger.Find(canonical, spec, fx.MemoryServerUrl)! with { Kind = "plan", ArguesFrom = null, WorkItemId = "wi-2" }, fx.MemoryServerUrl);
+        held!.Dispose();
+        await refresh;
+
+        var posted = DocumentPosts(fx).Single();
+        await Assert.That(posted["kind"]!.GetValue<string>()).IsEqualTo("plan");
+        await Assert.That(posted["work_item_id"]!.GetValue<string>()).IsEqualTo("wi-2");
+        await Assert.That(posted.AsObject().ContainsKey("argues_from")).IsFalse();
+    }
+
+    [Test]
     public async Task plan_edit_never_sends_a_document_to_a_server_that_did_not_accept_it() {
         using var fx = new Fixture(Config.Root);
         var (sid, spec) = DeclaredSpec("https://other.example");

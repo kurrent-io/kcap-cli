@@ -147,7 +147,7 @@ public sealed class ClaudeHookCommand(
             var body = await stdin.ReadToEndAsync();
             if (ClaudePlanEdit.Parse(body) is not { } edit) return 0;
             var ledger = new DeclaredDocumentLedger(config, clock.Time);
-            if (ledger.Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is null) return 0;
 
             var budget = clock.Budget(ToolHookCeiling);
             if (await ShouldSuppressCaptureAsync(edit.SessionId, body, "post-tool-use", profiles.Effective, budget)) return 0;
@@ -155,6 +155,8 @@ public sealed class ClaudeHookCommand(
 
             using var gate = await ledger.LockAsync(edit.SessionId, edit.Path, budget.Remaining);
             if (gate is null) return 0;
+            // Read again under the lock: a declaration that held it may have changed the arguments.
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
 
             var declaration = McpPlansServer.BuildDeclaration(document.ToArguments(edit.SessionId), document.Cwd, document.RepoRoot);
 
