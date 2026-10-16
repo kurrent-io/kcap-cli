@@ -668,6 +668,160 @@ public class SignInStepViewModelTests {
         await Assert.That(log).Contains("No workspace created.");
     }
 
+    const string InviteRequestUrl = "https://site.example/get-started#request";
+
+    /// Scripts a create run whose provision POSTs answer from <paramref name="replies"/> in order
+    /// (the last repeats), recording the code each carried; the run commits only on a created workspace.
+    static List<string?> GateProvisioning(Harness h, params (HttpStatusCode Status, string Body)[] replies) {
+        var sent = new List<string?>();
+        h.Connect.Choice = ConnectChoice.Discover;
+        h.Signup.Respond = (request, _) => {
+            if (request.RequestUri!.AbsolutePath == "/api/signup/availability") return (HttpStatusCode.OK, """{"available":true}""");
+
+            var body = System.Text.Json.Nodes.JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!;
+            sent.Add(body["code"]?.GetValue<string>());
+
+            return replies[Math.Min(sent.Count, replies.Length) - 1];
+        };
+        h.Operation = async (_, ct) => {
+            var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
+
+            return offer.Status == ProvisionOfferStatus.Created
+                ? Committed(AuthProvider.WorkOS)
+                : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
+        };
+
+        return sent;
+    }
+
+    static async Task ConfirmCreateAsync(Harness h) {
+        await ChooseCreateAsync(h);
+        await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
+        h.Vm.OrgName = "Acme";
+        await h.Vm.SubmitCreateFormCommand.Execute().ToTask();
+        await WaitUntil(() => h.Vm.ConfirmVisible, "the create confirmation");
+        await h.Vm.ConfirmCreateCommand.Execute().ToTask();
+    }
+
+    static readonly (HttpStatusCode, string) InviteRequired =
+        (HttpStatusCode.Forbidden, $$"""{"reason":"invite_required","requestUrl":"{{InviteRequestUrl}}"}""");
+
+    /// A gated workspace asks for a code on its own page, says why a refused one was refused, and
+    /// keeps that code in the box to correct.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_invite_gated_create_asks_for_a_code_and_provisions_with_it() {
+        var (first, retry, opened, satisfied, sent) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var codes = GateProvisioning(h,
+                InviteRequired,
+                (HttpStatusCode.BadRequest, """{"reason":"invalid_code"}"""),
+                (HttpStatusCode.OK, """{"slug":"acme","state":"active","workosOrgId":"org_1","url":"https://acme.kcap.ai"}"""));
+
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            var emptySubmittable = CanExecute(h.Vm.SubmitInviteCodeCommand);
+            var firstAsk = (h.Vm.Phase, h.Vm.Title, h.Vm.Lede, h.Vm.InviteRequestUrl, h.Vm.InviteCodeError, emptySubmittable,
+                ProvisioningShown: h.Vm.ProvisioningVisible);
+            await h.Vm.OpenInviteRequestUrlCommand.Execute().ToTask();
+            h.Vm.InviteCode = "ab12";
+            await h.Vm.SubmitInviteCodeCommand.Execute().ToTask();
+
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible && h.Vm.InviteCodeError is not null, "the second ask");
+            var secondAsk = (h.Vm.InviteCodeError, h.Vm.InviteCode);
+            h.Vm.InviteCode = "CD34";
+            await h.Vm.SubmitInviteCodeCommand.Execute().ToTask();
+
+            await exec;
+
+            return (firstAsk, secondAsk, h.Opener.Opened.ToList(), h.Vm.Satisfied, codes);
+        });
+
+        await Assert.That(first.Phase).IsEqualTo(SignInPhase.InviteCode);
+        await Assert.That(first.Title).IsEqualTo("Enter your invite code");
+        await Assert.That(first.Lede).IsEqualTo("Capacitor is invite-only right now.");
+        await Assert.That(first.InviteRequestUrl).IsEqualTo(InviteRequestUrl);
+        await Assert.That(first.InviteCodeError).IsNull();
+        await Assert.That(first.emptySubmittable).IsFalse();
+        await Assert.That(first.ProvisioningShown).IsFalse();
+        await Assert.That(opened).IsEquivalentTo([InviteRequestUrl]);
+        await Assert.That(retry).IsEqualTo(("That invite code isn't valid.", "ab12"));
+        await Assert.That(sent).IsEquivalentTo([null, "ab12", "CD34"]);
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Cancelling_the_invite_code_fails_the_run_naming_where_to_request_one() {
+        var (status, detail, sent) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var codes = GateProvisioning(h, InviteRequired);
+
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
+            await exec;
+
+            return (h.Vm.Status, h.Vm.StatusDetail, codes);
+        });
+
+        await Assert.That(status).IsEqualTo("Sign-in failed.");
+        await Assert.That(detail).IsEqualTo($"Capacitor is invite-only right now. Request an invite at {InviteRequestUrl}.");
+        await Assert.That(sent).IsEquivalentTo([(string?)null]);
+    }
+
+    /// The request URL is server-supplied and the opener launches whatever it is handed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_request_url_that_is_not_a_web_url_is_never_offered_or_opened() {
+        var (shown, opened, detail) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            GateProvisioning(h, (HttpStatusCode.Forbidden, """{"reason":"invite_required","requestUrl":"file:///Applications/Calculator.app"}"""));
+
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            var url = h.Vm.InviteRequestUrl;
+            await h.Vm.OpenInviteRequestUrlCommand.Execute().ToTask();
+            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
+            await exec;
+
+            return (url, h.Opener.Opened.ToList(), h.Vm.StatusDetail);
+        });
+
+        await Assert.That(shown).IsNull();
+        await Assert.That(opened).IsEmpty();
+        await Assert.That(detail).IsEqualTo("Capacitor is invite-only right now.");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Leaving_while_the_invite_prompt_is_parked_releases_it_and_cancels() {
+        var (canLeave, promptVisible, provisioning, status, code) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            GateProvisioning(h, InviteRequired);
+
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            h.Vm.InviteCode = "AB12";
+
+            var allowed = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
+            await exec;
+
+            return (allowed, h.Vm.InviteCodePromptVisible, h.Vm.ProvisioningVisible, h.Vm.Status, h.Vm.InviteCode);
+        });
+
+        await Assert.That(canLeave).IsTrue();
+        await Assert.That(promptVisible).IsFalse();
+        await Assert.That(provisioning).IsFalse();
+        await Assert.That(status).IsEqualTo("Sign-in cancelled.");
+        await Assert.That(code).IsEmpty();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task An_empty_create_prompt_cannot_be_submitted_at_all() {
@@ -974,6 +1128,48 @@ public class SignInStepViewModelTests {
         await Assert.That(urlBox!.Classes.Contains("frField")).IsTrue();
         await Assert.That(urlBoxShown).IsFalse(); // behind "I have a workspace URL"
         await Assert.That(statusShown).IsFalse(); // the ready line only restates the button
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pane_renders_the_invite_code_prompt_on_its_own() {
+        var (box, submit, link, provisioning) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            GateProvisioning(h, InviteRequired);
+            var vm = new OnboardingViewModel([new WelcomeStepViewModel(), h.Vm]);
+            await vm.PendingEnterForTesting;
+
+            var window = new MainWindow { Onboarding = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            await vm.NextCommand.Execute().ToTask(); // Welcome -> Sign in
+            var exec = h.SignIn();
+            await ConfirmCreateAsync(h);
+            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
+            Dispatcher.UIThread.RunJobs();
+
+            T? Named<T>(string name) where T : Control =>
+                window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
+
+            var shown = (
+                Named<TextBox>("InviteCodeBox")?.IsEffectivelyVisible,
+                Named<Button>("SubmitInviteCodeButton")?.IsEffectivelyVisible,
+                Named<Button>("InviteRequestUrlButton")?.Content as string,
+                Named<TextBlock>("ProvisioningText")?.IsEffectivelyVisible);
+
+            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
+            await exec;
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return shown;
+        });
+
+        await Assert.That(box).IsTrue();
+        await Assert.That(submit).IsTrue();
+        await Assert.That(link).IsEqualTo(InviteRequestUrl);
+        await Assert.That(provisioning).IsFalse();
     }
 
     [Test]

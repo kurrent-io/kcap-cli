@@ -46,9 +46,9 @@
                                     <StackPanel Spacing="2">
                                         <TextBlock Text="{Binding FileName}" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                         <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <TextBlock Text="{Binding Kind}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                            <Border IsVisible="{Binding HasStateChip}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="4" Padding="5,0">
-                                                <TextBlock Text="{Binding StateChip}" FontSize="10.5" Foreground="{StaticResource KcapWarningBrush}" />
+                                            <TextBlock Text="{Binding KindLabel}" FontSize="11" Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
+                                            <Border IsVisible="{Binding HasStateChip}" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="999" Padding="7,1" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding StateChip}" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource KcapWarningBrush}" />
                                             </Border>
                                         </StackPanel>
                                     </StackPanel>
@@ -67,7 +67,7 @@
                     </DataTemplate>
                 </ContentControl.ContentTemplate>
             </ContentControl>
-            <TextBlock Text="Select a document to read it." FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
+            <TextBlock Text="{Binding EmptyReaderNote}" FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        IsVisible="{Binding Reader, Converter={x:Static ObjectConverters.IsNull}}" />
         </Panel>

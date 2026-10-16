@@ -19,7 +19,7 @@ public sealed partial class PullRequestContextViewModel {
     /// which runs only once that overview can be shown.
     public bool IsSelectionLoading => IsReading && !CanDisplay && _selected is { IsAvailable: true };
     public bool ShowsLoading => IsSelectionLoading || IsSectionLoading;
-    public string DescriptionNote => IsSelectionLoading ? "" : !CanDisplayReader ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
+    public string DescriptionNote => IsSelectionLoading ? "" : !CanDisplay ? "Refresh access to open PR content." : _overview?.Description is null ? "Description unavailable." : _overview.Description.Length == 0 ? "No description." : "";
     public bool IsOverview => _section == "overview";
     public bool IsThreads => _section == "threads";
     public bool IsThreadComments => _section == "thread_comments";
@@ -28,14 +28,22 @@ public sealed partial class PullRequestContextViewModel {
     public bool ShowsLinkGitHub => _notice.StartsWith("Link GitHub", StringComparison.Ordinal);
     public bool ShowReaderContent => CanDisplayReader;
     readonly ObservableCollection<PullRequestRow> _visibleRows = [];
+    readonly ObservableCollection<PullRequestRow> _reviewerRows = [];
+    readonly ObservableCollection<PullRequestRow> _checkRows = [];
+    readonly ObservableCollection<PullRequestRow> _discussionRows = [];
     public IReadOnlyList<PullRequestRow> Rows => _visibleRows;
     public bool HasMore => CanReveal && CurrentSection is { Stopped: false, Next: not null };
     public bool CanReloadEarlier => CanReveal && CurrentSection is { Stopped: false, Evicted: not null };
     public string PageNote {
         get {
             if (_section == "overview") return "";
-            if (!CanDisplayReader) return IsSelectionLoading ? "" : "Refresh access to open PR content.";
-            if (CurrentSection is not { } state) return _pageRequests.Contains(SectionKey) ? "" : "This section has not loaded yet.";
+            if (!CanDisplay) return IsSelectionLoading ? "" : "Refresh access to open PR content.";
+            if (CurrentSection is not { } state) {
+                if (IsSectionLoading) return "";
+                if ((!CanReveal || ReadRetryAt > _time.GetUtcNow().UtcDateTime) && _staleReason is { Length: > 0 } reason) return reason;
+                if (CanReveal) return "This section has not loaded yet.";
+                return "";
+            }
             if (state.Error is { } error) return error;
             if (state.Coverage != "complete") return "Limited snapshot: an ordered subset. More may be available on GitHub.";
             return "";
@@ -54,24 +62,24 @@ public sealed partial class PullRequestContextViewModel {
     }
     public bool HasEmptyNote => EmptyNote.Length > 0;
     /// A first load only: a reload keeps the rows it is replacing on screen.
-    public bool IsSectionLoading => _section != "overview" && CanDisplayReader && CurrentSection is null && _pageRequests.Contains(SectionKey);
+    public bool IsSectionLoading => _section != "overview" && CanDisplay && CurrentSection is null && (_pageRequests.Contains(SectionKey) || _overviewPending);
     public string LoadingNote => "Loading " + (IsSelectionLoading ? "pull request" : _section switch {
         "checks" => "checks", "reviewers" => "reviewers", "reviews" => "reviews", "threads" => "threads", "thread_comments" => "replies", _ => "comments"
     }) + "…";
     public string SnapshotLabel => CanDisplayReader && CurrentSection?.Completed is { } at
         ? "Updated " + at.ToLocalTime().ToString("HH:mm:ss", CultureInfo.CurrentCulture) : "";
     /// The footer names one thing, the time; which commit the checks ran on rides its hover.
-    public string FreshnessDetail => !IsOverview && CanDisplayReader && CurrentSection?.Head is { Length: >= 7 } head
+    public string FreshnessDetail => HasStaleOverview && _staleReason is { Length: > 0 } reason ? reason
+        : IsChecks && CanDisplayReader && CurrentSection?.Head is { Length: >= 7 } head
         ? "Checks ran on commit " + head[..7] : "When GitHub last sent what this tab shows";
 
-    static readonly string[] NotifiedProperties = [
-        nameof(Notice), nameof(IsReading), nameof(HasChoice), nameof(HasPullRequest), nameof(HasListed), nameof(IsLegacy), nameof(CanOpenReader), nameof(Section), nameof(CanReveal), nameof(CanDisplay),
-        nameof(Title), nameof(Branches), nameof(HasBranches), nameof(EmptyNote), nameof(HasEmptyNote), nameof(IsSectionLoading), nameof(LoadingNote), nameof(ShowsRefreshing), nameof(FetchedLabel), nameof(AccessLabel),
-        nameof(Description), nameof(DescriptionTruncated), nameof(DescriptionNote), nameof(IsOverview), nameof(IsThreads), nameof(IsThreadComments), nameof(IncludeResolved), nameof(IsSelectionLoading), nameof(ShowsLoading),
-        nameof(HasNotice), nameof(ShowsSignIn), nameof(ShowsLinkGitHub), nameof(ShowReaderContent), nameof(Rows), nameof(HasMore),
-        nameof(CanReloadEarlier), nameof(PageNote), nameof(SnapshotLabel), nameof(FreshnessDetail),
-        nameof(ReaderNote), nameof(HasReaderNote), nameof(ShowsInstallTool), nameof(InstallToolLabel),
-    ];
+    readonly Dictionary<string, object?> _notified = new(StringComparer.Ordinal);
+
+    void NotifyValue<T>(T value, [System.Runtime.CompilerServices.CallerArgumentExpression(nameof(value))] string property = "") {
+        if (_notified.TryGetValue(property, out var previous) && EqualityComparer<T>.Default.Equals((T)previous!, value)) return;
+        _notified[property] = value;
+        this.RaisePropertyChanged(property);
+    }
 
     void Notify() {
         if (!IsReading) _userRefresh = false;
@@ -79,19 +87,69 @@ public sealed partial class PullRequestContextViewModel {
             : _selected?.Subject is { } subject ? _readers.NoteFor(subject.Provider, subject.Host)
             : _primaryRepo?.Invoke() is { } repository ? _readers.NoteFor(repository.Provider, repository.Host) : null;
         var rows = CanDisplayReader ? CurrentSection?.Pages.SelectMany(page => page.Rows).ToArray() ?? [] : [];
-        ReconcileRows(rows);
+        ReconcileRows(_visibleRows, rows);
+        if (!CanDisplayReader) {
+            if (_reviewerRows.Count > 0) _reviewerRows.Clear();
+            if (_checkRows.Count > 0) _checkRows.Clear();
+            if (_discussionRows.Count > 0) _discussionRows.Clear();
+        } else if (IsReviewers) ReconcileRows(_reviewerRows, rows);
+        else if (IsChecks) ReconcileRows(_checkRows, rows);
+        else if (IsDiscussion) ReconcileRows(_discussionRows, rows);
         if (!_disposed && _hasPullRequest.Value != HasPullRequest) _hasPullRequest.OnNext(HasPullRequest);
-        foreach (var property in NotifiedProperties) this.RaisePropertyChanged(property);
+        NotifyValue(Notice);
+        NotifyValue(IsReading);
+        NotifyValue(HasChoice);
+        NotifyValue(HasPullRequest);
+        NotifyValue(HasListed);
+        NotifyValue(IsLegacy);
+        NotifyValue(CanOpenReader);
+        NotifyValue(Section);
+        NotifyValue(CanReveal);
+        NotifyValue(CanDisplay);
+        NotifyValue(CanNavigate);
+        NotifyValue(Title);
+        NotifyValue(Branches);
+        NotifyValue(HasBranches);
+        NotifyValue(EmptyNote);
+        NotifyValue(HasEmptyNote);
+        NotifyValue(IsSectionLoading);
+        NotifyValue(LoadingNote);
+        NotifyValue(ShowsRefreshing);
+        NotifyValue(FetchedLabel);
+        NotifyValue(AccessLabel);
+        NotifyValue(Description);
+        NotifyValue(DescriptionTruncated);
+        NotifyValue(DescriptionNote);
+        NotifyValue(IsOverview);
+        NotifyValue(IsThreads);
+        NotifyValue(IsThreadComments);
+        NotifyValue(IncludeResolved);
+        NotifyValue(IsSelectionLoading);
+        NotifyValue(ShowsLoading);
+        NotifyValue(HasNotice);
+        NotifyValue(ShowsSignIn);
+        NotifyValue(ShowsLinkGitHub);
+        NotifyValue(ShowReaderContent);
+        NotifyValue(HasMore);
+        NotifyValue(CanReloadEarlier);
+        NotifyValue(PageNote);
+        NotifyValue(SnapshotLabel);
+        NotifyValue(FreshnessDetail);
+        NotifyValue(ReaderNote);
+        NotifyValue(HasReaderNote);
+        NotifyValue(ShowsInstallTool);
+        NotifyValue(InstallToolLabel);
         NotifyPresentation();
+        ScheduleTick();
     }
 
     /// Edits the visible list in place rather than replacing it: a row's control holds state its
     /// data does not — which sections a reader opened, a loaded image, the scroll extent it
     /// contributes — and replacing the list would discard that state on every page load or refresh.
-    void ReconcileRows(PullRequestRow[] rows) {
-        for (var i = 0; i < rows.Length && i < _visibleRows.Count; i++) if (_visibleRows[i] != rows[i]) _visibleRows[i] = rows[i];
-        while (_visibleRows.Count > rows.Length) _visibleRows.RemoveAt(_visibleRows.Count - 1);
-        for (var i = _visibleRows.Count; i < rows.Length; i++) _visibleRows.Add(rows[i]);
+    static void ReconcileRows(ObservableCollection<PullRequestRow> target, PullRequestRow[] rows) {
+        for (var i = 0; i < rows.Length && i < target.Count; i++) if (target[i] != rows[i]) target[i] = rows[i];
+        while (target.Count > rows.Length) target.RemoveAt(target.Count - 1);
+        for (var i = target.Count; i < rows.Length; i++) target.Add(rows[i]);
     }
     static string Reason<T>(PullRequestRead<T> read) where T : class => read.Kind switch {
         PullRequestReadKind.SignedOut => "Sign in to see pull requests.",
@@ -101,7 +159,10 @@ public sealed partial class PullRequestContextViewModel {
             var tool when read.Reason == "oversized" => $"This pull request is too large to read through {tool}.",
             var tool => $"{tool} returned a response the app could not read. Update {tool} and refresh.",
         },
-        PullRequestReadKind.Ready or PullRequestReadKind.Stale => "Refreshing access before opening new content…",
+        PullRequestReadKind.Ready or PullRequestReadKind.Stale => read.Reason switch {
+            "rate_limited" or "budget_exhausted" => "GitHub reads are paused temporarily. Retry after the cooldown.",
+            _ => "Showing an earlier snapshot while GitHub is unavailable."
+        },
         _ => read.Reason switch {
             "github_not_linked" => "Link GitHub in your account settings to read this pull request.",
             "github_access_denied" => "Your linked GitHub account cannot read this repository.",

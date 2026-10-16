@@ -90,73 +90,6 @@ public class WorkspaceViewSmokeTests {
         return ring;
     }
 
-    /// Pins that every x:Name the view's code-behind and the suite reach for resolves before any
-    /// dto arrives — the Terminal tab button and pane included, which are collapsed in this state
-    /// and must still be in the tree for the code-behind to find. The chat surface's own names are
-    /// resolved through its name scope, which holds whether or not it has been measured.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task WorkspaceView_resolves_all_named_controls() {
-        await RunOnUiAsync(async () => {
-            var (view, vm, _, _) = Build();
-            var window = new Window { Content = view };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var names = new[] {
-                "WorkspaceTitle", "WorkspaceSubtitle", "ChatTabButton",
-                "TerminalTabButton", "StopButton", "SurfaceSwitch", "TerminalHost", "TerminalBanners",
-                "DetachButton", "ReattachButton", "SessionEndedNote", "ChatHost", "WorkContextHost",
-            };
-            foreach (var name in names)
-                await Assert.That(Find<Control>(window, name)).IsNotNull().Because($"{name} should resolve");
-            await Assert.That(ToolTip.GetTip(Find<TextBlock>(window, "WorkspaceTitle")!))
-                .IsEqualTo(vm.Title);
-
-            var chatHost = Find<ChatTabView>(window, "ChatHost")!;
-            foreach (var name in new[] { "ChatItems", "ChatPhaseNote", "ComposerInput", "SendButton" })
-                await Assert.That(chatHost.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
-
-            var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-            foreach (var name in new[] {
-                "RefreshButton", "StaleDot", "StatePill", "WorkContextKey", "WorkContextTitle", "OverviewText", "PartOfLine", "PartsToggle", "PartsList",
-                "BlockedByBlock", "CycleNoteText", "PhaseNoteText", "SignInButton", "RetryButton",
-                "PullRequestSection", "PullRequestHeader", "PullRequestNumberMeta", "PullRequestCard", "LinkCards", "PullRequestToggle", "PullRequestEmptyText", "IssueSection",
-                "PlanSection", "PlanToggle", "PlanHeaderText", "PlanCounts", "PlanBody", "PlanDocumentList", "PlanTaskList", "PlanInProgressBody", "PlanInProgressList",
-                "SubagentsSection", "SubagentsToggle", "SubagentList", "RunningSubagentsBody", "RunningSubagentList",
-                "WhoSection", "WhoToggle", "ContributorStack", "ContributorList", "WhoCountText", "RequesterRow", "RequesterName", "SessionToggle", "SessionFacts", "SessionIdButton", "OpenWorkItemButton", "PaneScroll",
-            })
-                await Assert.That(pane.FindControl<Control>(name)).IsNotNull().Because($"{name} should resolve");
-            await Assert.That(pane.FindControl<ScrollViewer>("PaneScroll")!.HorizontalScrollBarVisibility)
-                .IsEqualTo(Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled);
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-            await vm.TeardownAsync();
-        });
-    }
-
-    /// The pane takes its fixed 320 and the terminal the rest, so the PTY size the terminal
-    /// reports is the real center-pane width.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_is_320_wide_and_the_terminal_takes_the_remainder() {
-        await RunOnUiAsync(async () => {
-            var (window, vm, _, _) = await ShowPtyAsync();
-
-            try {
-                var pane = Find<WorkContextView>(window, "WorkContextHost")!;
-                var terminal = Find<TerminalControl>(window, "TerminalHost")!;
-                await Assert.That(pane.Bounds.Width).IsEqualTo(320);
-                await Assert.That(terminal.Bounds.Width).IsEqualTo(window.Bounds.Width - 320);
-            } finally {
-                window.Close();
-                Dispatcher.UIThread.RunJobs();
-                await vm.TeardownAsync();
-            }
-        });
-    }
-
     /// Run-and-observe: drives ONE workspace through both has_terminal values for the same agent
     /// id. Chat is the default surface either way; the Chat/Terminal switch and the Terminal pane
     /// follow the PTY gate, and nothing stands in their place.
@@ -671,6 +604,15 @@ public class WorkspaceViewSmokeTests {
             await vm.Artefacts.SelectCommand.Execute(vm.Artefacts.Documents[0]);
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
+            var docPath = Find<TextBlock>(window, "DocumentPath")!;
+            var docKind = Find<TextBlock>(window, "DocumentKind")!;
+            var docMeta = Find<TextBlock>(window, "DocumentMeta")!;
+            await Assert.That(docPath.Text).IsEqualTo("docs/x-design.md");
+            await Assert.That(docKind.Text).IsEqualTo("Design");
+            await Assert.That(docKind.TranslatePoint(default, window)!.Value.X)
+                .IsGreaterThan(docPath.TranslatePoint(default, window)!.Value.X);
+            await Assert.That(docMeta.TranslatePoint(default, window)!.Value.Y)
+                .IsEqualTo(docPath.TranslatePoint(default, window)!.Value.Y).Within(2.0);
             await Assert.That(Find<ScrollViewer>(window, "DocumentScroll")!.IsEffectivelyVisible).IsTrue();
             await Assert.That(Find<Border>(window, "DocumentNotice")!.IsEffectivelyVisible).IsFalse();
 

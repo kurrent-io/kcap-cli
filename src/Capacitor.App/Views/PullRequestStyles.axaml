@@ -1,4 +1,5 @@
-<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views">
     <Styles.Resources>
         <ControlTheme x:Key="PullRequestTabTheme" TargetType="TabStripItem">
             <Setter Property="Background" Value="Transparent" />
@@ -134,11 +135,9 @@
     </Style>
     <Style Selector="StackPanel.prSectionState.shown"><Setter Property="IsVisible" Value="True" /></Style>
     <Style Selector="StackPanel.prSectionState > TextBlock"><Setter Property="HorizontalAlignment" Value="Center" /></Style>
-    <Style Selector="Path.prStateGlyph">
-        <Setter Property="Width" Value="22" /><Setter Property="Height" Value="22" /><Setter Property="Stretch" Value="Uniform" />
+    <Style Selector="views|AppIcon.prStateGlyph">
         <Setter Property="HorizontalAlignment" Value="Center" />
-        <Setter Property="Stroke" Value="{StaticResource KcapFaintBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
-        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
     </Style>
     <!-- A quiet text action on a content edge: its padding is hit area, not indent. -->
     <Style Selector="Button.kcapQuiet.prFlushLeft"><Setter Property="Margin" Value="-8,0,0,0" /></Style>
@@ -153,21 +152,18 @@
         <Setter Property="Padding" Value="12" />
         <Setter Property="Margin" Value="0,0,0,12" />
     </Style>
-    <Style Selector="Path.prExternal">
-        <Setter Property="Width" Value="13" /><Setter Property="Height" Value="13" /><Setter Property="Stretch" Value="Uniform" />
-        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
-        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
+    <Style Selector="views|AppIcon.prExternal">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="Data" Value="M9,2 H14 V7 M14,2 L7,9 M6,3 H3 Q2,3 2,4 V13 Q2,14 3,14 H12 Q13,14 13,13 V10" />
+        <Setter Property="Kind" Value="ExternalLink" />
     </Style>
     <!-- Beside a label: centred on the line box the icon lands a pixel under the glyphs' visual centre. -->
-    <Style Selector="Path.prExternal.prAfterLabel">
+    <Style Selector="views|AppIcon.prExternal.prAfterLabel">
         <Setter Property="RenderTransform" Value="translateY(-1px)" />
     </Style>
-    <Style Selector="Path.prChevron">
-        <Setter Property="Width" Value="10" /><Setter Property="Height" Value="10" />
-        <Setter Property="Stroke" Value="{StaticResource KcapMutedBrush}" /><Setter Property="StrokeThickness" Value="1.4" />
-        <Setter Property="StrokeLineCap" Value="Round" /><Setter Property="StrokeJoin" Value="Round" />
-        <Setter Property="VerticalAlignment" Value="Center" /><Setter Property="Data" Value="M3,1 L7,5 L3,9" />
+    <Style Selector="views|AppIcon.prChevron">
+        <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Kind" Value="ChevronRight" />
     </Style>
 </Styles>

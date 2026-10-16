@@ -32,15 +32,17 @@ public static class HostedHarnessCatalog {
         { "antigravity", "rpc" },
         { "pi",          "rpc" },
         { "mistral-vibe", "pty" },
+        { "grok",        "acp" },
+        { "muse",        "rpc" },
     };
 
     /// The vendors with an EXPLICIT family above — what the guard test reads, since Build's
     /// fallback makes an unmapped vendor indistinguishable from a mapped "rpc" one.
     internal static IReadOnlyCollection<string> MappedVendors => TransportFamilies.Keys;
 
-    /// Harnesses kcap records but no daemon hosts: listed only when a daemon advertises one, since
-    /// the server refuses their launch and an older daemon's silence must not offer them.
-    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe" };
+    /// Harnesses listed only when a daemon advertises one: no daemon hosts Mistral Vibe, and one too
+    /// old to host Grok or Muse Code says nothing about it, so a daemon's silence must not offer them.
+    static readonly HashSet<string> RecordingOnly = new(StringComparer.OrdinalIgnoreCase) { "mistral-vibe", "grok", "muse" };
 
     public static IReadOnlyList<HarnessOption> Build(string[]? supportedVendors) {
         // null = an older daemon that never sent the field: unknown, not empty.
@@ -176,6 +178,9 @@ public static class HostedHarnessCatalog {
         ["antigravity"] = ("An", "#F4B860"),
         ["pi"]          = ("π", "#A994FF"),
         ["mistral-vibe"] = ("Mv", "#FA520F"),
+        ["muse-assistant"] = ("MA", "#2F6FE0"),
+        ["grok"]        = ("Gk", "#F5F5F5"),
+        ["muse"]         = ("Mu", "#4B93FF"),
     };
 
     /// Glyph + tint for a vendor token; an unmapped token gets its first letter in neutral grey

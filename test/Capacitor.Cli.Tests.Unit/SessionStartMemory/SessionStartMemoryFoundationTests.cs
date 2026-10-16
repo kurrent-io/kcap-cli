@@ -166,6 +166,28 @@ public class SessionStartMemoryFoundationTests {
     }
 
     [Test]
+    public async Task A_retry_delivers_its_fragment_and_leaves_the_lease_open() {
+        using var root = new TempDir();
+        var time = Stopped();
+        var results = new Queue<SessionStartMemoryContextResult>([
+            new(SessionStartMemoryDisposition.RetryableFailure, "FLOWS"),
+            new(SessionStartMemoryDisposition.Ready, "MEMORY")
+        ]);
+        var orchestrator = On(root, new DelegatingProvider(results.Dequeue), time);
+        var lifecycle = new SessionMemoryLifecycle(HarnessId.Claude, "session-1", null, true, true,
+            SessionLifecycleReason.New, CallbackMayRepeat: false);
+        var request = new SessionStartMemoryContextRequest(
+            "https://example.test", "/repo", false, TimeSpan.FromSeconds(5), CancellationToken.None);
+
+        var first = await orchestrator.GetFragmentAsync(lifecycle, request);
+        time.Advance(TimeSpan.FromDays(1));
+        var second = await orchestrator.GetFragmentAsync(lifecycle with { Reason = SessionLifecycleReason.Resume }, request);
+
+        await Assert.That(first).IsEqualTo("FLOWS");
+        await Assert.That(second).IsEqualTo("MEMORY");
+    }
+
+    [Test]
     public async Task Typed_emitter_adds_marker_groups_and_never_accepts_bodies() {
         var entries = new[] {
             new SessionStartMemoryEntry("1", "org-rule", "org", "fact", "feedback"),

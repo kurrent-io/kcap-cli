@@ -2,7 +2,6 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Security.Cryptography;
 using Avalonia.Collections;
-using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Plans;
@@ -15,26 +14,17 @@ namespace Capacitor.App.ViewModels;
 /// id, its root, its cancellation and its pending read, a result applies only for the current lease,
 /// and every lease transition happens on the UI thread.
 public sealed class ArtefactsTabViewModel : ReactiveObject {
-    sealed class ReadLease(string sessionId, string? root) {
-        public string SessionId { get; } = sessionId;
-        public string? Root { get; } = root;
-        public CancellationTokenSource Cts { get; } = new();
-        public Task? Pending;
-        public bool RefreshPending;
-        public bool Settled;
-        public bool IsReading => Pending is { IsCompleted: false };
-    }
-
     readonly IPlanArtifactSource? _source;
+    readonly SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead> _reads;
+    sealed record DriftRead(DriftState State);
+    readonly SingleFlightReader<(DocumentRow Row, string? Root), DriftRead> _driftReads;
     readonly PlanActivity _activity;
     readonly TimeProvider _time;
     const long MaxHashedBytes = 4 * 1024 * 1024;
 
     readonly Func<string, Stream?> _openWorkingCopy;
     readonly AvaloniaList<DocumentRow> _documents = [];
-    readonly List<ReadLease> _outstanding = [];
     readonly ITimer _settle;
-    ReadLease? _current;
     bool _tornDown;
     string? _pendingPath;
 
@@ -42,8 +32,14 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// The last applied read was not a Ready one, so the pane's poll retries it even with the tab hidden.
     internal bool LastReadFailed { get; private set; }
     public bool HasAny => _documents.Count > 0;
-    public string SummaryText => _documents.Count == 1 ? "1 document" : $"{_documents.Count} documents";
+    /// True while a session lease is open and has not yet applied a result — distinct from a settled empty list.
+    public bool IsLoading => _reads.IsLoading;
+    /// Right-pane prompt when nothing is open: loading, settled empty, or pick a row.
+    public string EmptyReaderNote => IsLoading ? "Loading documents…"
+        : HasAny ? "Select a document to read it."
+        : "No documents yet.";
 
+    (string Path, string? Hash, DriftState State)? _lastDrift;
     DocumentRow? _selected;
     public DocumentRow? Selected { get => _selected; private set => this.RaiseAndSetIfChanged(ref _selected, value); }
 
@@ -60,14 +56,29 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public event Action? OpenRequested;
 
     /// Test-only seam: the current lease's read, or the last one started.
-    internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
+    internal Task? PendingReadForTesting => _reads.PendingReadForTesting;
+    internal Task? PendingDriftForTesting => _driftReads.PendingReadForTesting;
 
     public ArtefactsTabViewModel(IPlanArtifactSource? source, PlanActivity activity, TimeProvider time, Func<string, Stream?>? openWorkingCopy = null,
             IUrlOpener? opener = null) {
         _source = source;
+        _reads = new SingleFlightReader<(string SessionId, string? Root), PlanArtifactsRead>(
+            (state, ct) => _source!.ReadAsync(state.SessionId, ct),
+            ex => {
+                Console.Error.WriteLine($"kcap: artefacts tab: {ex.Message}");
+                return PlanArtifactsRead.Of(SessionPlansReadKind.Unreachable);
+            },
+            Apply,
+            "artefacts tab",
+            onSettled: RaiseLoading);
         _activity = activity;
         _time = time;
         _openWorkingCopy = openWorkingCopy ?? OpenFile;
+        _driftReads = new SingleFlightReader<(DocumentRow Row, string? Root), DriftRead>(
+            (state, ct) => Task.Run(() => new DriftRead(Drift(state.Row, state.Root)), ct),
+            _ => new DriftRead(DriftState.Unknown),
+            ApplyDrift,
+            "document drift");
         SelectCommand = ReactiveCommand.Create<DocumentRow>(Select);
         OpenLinkCommand = ReactiveCommand.Create<string>(url => { if (opener is not null) LinkPolicy.Open(opener, url); });
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
@@ -76,20 +87,24 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     public void SwitchSession(string? sessionId, string? root) {
         if (_tornDown || _source is null) return;
-        var old = _current;
-        _current = string.IsNullOrEmpty(sessionId) ? null : new ReadLease(sessionId, root);
-        old?.Cts.Cancel();
         _pendingPath = null;
         LastReadFailed = false;
-        Clear();
-        if (_current is not null) StartRead(_current);
+        if (string.IsNullOrEmpty(sessionId)) {
+            _reads.ClearCurrent(() => {
+                RaiseLoading();
+                Clear();
+            });
+        } else {
+            _reads.Switch((sessionId, root), () => {
+                RaiseLoading();
+                Clear();
+            });
+        }
     }
 
     /// Reads now, or queues one follow-up behind the read in flight.
     public void Refresh() {
-        if (_tornDown || _current is not { } lease) return;
-        if (lease.IsReading) lease.RefreshPending = true;
-        else StartRead(lease);
+        if (!_tornDown) _reads.Refresh();
     }
 
     public void RequestOpen() => OpenRequested?.Invoke();
@@ -99,7 +114,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     public bool OpenDocument(string path) {
         var row = Find(path);
         if (row is null) {
-            if (_current is { Settled: false }) _pendingPath = path;
+            if (_reads.HasCurrent && !_reads.IsCurrentSettled) _pendingPath = path;
             else return false;
             if (!HasAny) return false;
             RequestOpen();
@@ -114,13 +129,22 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         _documents.FirstOrDefault(d => DocumentPaths.Exact(d.Path, path)) ?? _documents.FirstOrDefault(d => d.MatchesPath(path));
 
     void Select(DocumentRow row) {
+        if (_tornDown) return;
         foreach (var document in _documents) document.IsSelected = ReferenceEquals(document, row);
         Selected = row;
-        Reader = DocumentReaderViewModel.For(row, Drift(row), _time.GetUtcNow());
+        var drift = _lastDrift is { } last && last.Path == row.Path && last.Hash == row.ContentHash
+            ? last.State : DriftState.Unknown;
+        Reader = DocumentReaderViewModel.For(row, drift, _time.GetUtcNow());
+        var root = _reads.CurrentState.Root;
+        var current = _driftReads.CurrentState;
+        if (_driftReads.HasCurrent && current.Root == root && current.Row.Path == row.Path
+            && current.Row.ContentHash == row.ContentHash && current.Row.Source == row.Source)
+            _driftReads.Refresh();
+        else _driftReads.Switch((row, root));
     }
 
-    DriftState Drift(DocumentRow row) {
-        if (_current?.Root is not { Length: > 0 } root || row.Source != "declared") return DriftState.Unknown;
+    DriftState Drift(DocumentRow row, string? root) {
+        if (root is not { Length: > 0 } || row.Source != "declared") return DriftState.Unknown;
         var relative = row.Path.Replace('\\', '/');
         if (relative.Length == 0 || relative.StartsWith('/') || System.IO.Path.IsPathRooted(relative)
             || (relative.Length >= 2 && char.IsAsciiLetter(relative[0]) && relative[1] == ':')
@@ -136,44 +160,17 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         } catch (Exception) { return DriftState.Unknown; }
     }
 
+    void ApplyDrift(DriftRead read) {
+        // Coalesced reads can own an older row; notices follow the current reader metadata.
+        if (Selected is not { } row) return;
+        _lastDrift = (row.Path, row.ContentHash, read.State);
+        Reader?.UpdateDrift(row, read.State);
+    }
+
     void OnPlanWritten() {
         if (_tornDown) return;
         Refresh();
         _settle.Change(PlanSectionViewModel.SettleDelay, Timeout.InfiniteTimeSpan);
-    }
-
-    void StartRead(ReadLease lease) {
-        lease.RefreshPending = false;
-        lease.Pending = RunReadAsync(lease);
-        _outstanding.Add(lease);
-    }
-
-    async Task RunReadAsync(ReadLease lease) {
-        PlanArtifactsRead? read = null;
-        try {
-            read = await _source!.ReadAsync(lease.SessionId, lease.Cts.Token).ConfigureAwait(false);
-        } catch (OperationCanceledException) {
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: artefacts tab: {ex.Message}");
-            read = PlanArtifactsRead.Of(SessionPlansReadKind.Unreachable);
-        }
-        try {
-            await Dispatcher.UIThread.InvokeAsync(() => Settle(lease, read));
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: artefacts tab: {ex.Message}");
-        }
-    }
-
-    void Settle(ReadLease lease, PlanArtifactsRead? read) {
-        _outstanding.Remove(lease);
-        var current = ReferenceEquals(lease, _current) && !_tornDown;
-        if (!current) { lease.Cts.Dispose(); return; }
-        try {
-            if (read is not null) Apply(read);
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: artefacts tab: {ex.Message}");
-        }
-        if (lease.RefreshPending) StartRead(lease);
     }
 
     /// Only an unreachable read is worth a retry on the poll: a signed-out or unavailable answer is
@@ -181,7 +178,6 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
     /// per workspace per tick for nothing.
     void Apply(PlanArtifactsRead read) {
         LastReadFailed = read.Kind == SessionPlansReadKind.Unreachable;
-        if (_current is { } lease) lease.Settled = true;
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
                 Show(read.Body?.Artifacts ?? []);
@@ -218,7 +214,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
         var reopened = openPath is null ? null : _documents.FirstOrDefault(d => d.Path == openPath);
         if (reopened is not null) Select(reopened);
-        else { Selected = null; Reader = null; }
+        else { ClearSelection(); }
 
         var pending = _pendingPath;
         _pendingPath = null;
@@ -228,9 +224,15 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         }
     }
 
-    void Clear() {
+    void ClearSelection() {
+        _driftReads.ClearCurrent();
+        _lastDrift = null;
         Selected = null;
         Reader = null;
+    }
+
+    void Clear() {
+        ClearSelection();
         if (_documents.Count == 0) return;
         _documents.Clear();
         RaiseShape();
@@ -238,7 +240,12 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
 
     void RaiseShape() {
         this.RaisePropertyChanged(nameof(HasAny));
-        this.RaisePropertyChanged(nameof(SummaryText));
+        this.RaisePropertyChanged(nameof(EmptyReaderNote));
+    }
+
+    void RaiseLoading() {
+        this.RaisePropertyChanged(nameof(IsLoading));
+        this.RaisePropertyChanged(nameof(EmptyReaderNote));
     }
 
     /// Shared-read so an agent still writing the file on Windows is not refused.
@@ -252,13 +259,7 @@ public sealed class ArtefactsTabViewModel : ReactiveObject {
         _settle.Dispose();
         SelectCommand.Dispose();
         OpenLinkCommand.Dispose();
-        var leases = _outstanding.ToArray();
-        foreach (var lease in leases) lease.Cts.Cancel();
-        _current = null;
-        foreach (var lease in leases)
-            if (lease.Pending is { } pending) {
-                try { await pending; } catch (Exception) { }
-            }
-        foreach (var lease in leases) lease.Cts.Dispose();
+        await _reads.TeardownAsync();
+        await _driftReads.TeardownAsync(waitForPending: false);
     }
 }

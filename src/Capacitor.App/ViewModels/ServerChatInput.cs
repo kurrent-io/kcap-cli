@@ -43,7 +43,7 @@ internal sealed class ServerChatInput : ChatInput {
         _disposed || _session?.Ended == true ? SendAvailability.Ended
         : _laneState != ServerLaneState.Connected || _access != SessionAccessState.Established ? SendAvailability.Connecting
         : _sending ? SendAvailability.Sending
-        : _session?.Status == "Running" ? SendAvailability.Ready
+        : _session?.Status is "Running" or "Idle" ? SendAvailability.Ready
         : SendAvailability.Connecting;
 
     public override bool CanAcceptText => Availability == SendAvailability.Ready;

@@ -893,6 +893,29 @@ static partial class ProcessHelpers {
         }
     }
 
+    /// <summary>Agents whose process can sit between a kcap process and the harness it serves.</summary>
+    static readonly string[] NestableAgents = ["grok", "claude", "codex", "gemini", "copilot", "cursor-agent", "kiro", "opencode", "pi", "mistral-vibe", "agy", "antigravity"];
+
+    /// <summary>The nearest coding agent on the ppid chain from <paramref name="startPid"/>, or null when
+    /// none is found within <paramref name="maxHops"/> or the chain cannot be read.</summary>
+    internal static CodingAgentAncestor? NearestCodingAgent(
+            int                                                 startPid,
+            Func<int, (int ppid, IReadOnlyList<string> names)?> lookup,
+            int                                                 maxHops = 16
+        ) {
+        var pid = startPid;
+        for (var hop = 0; hop < maxHops && pid > 1; hop++) {
+            if (lookup(pid) is not { } info) return null;
+            if (NestableAgents.FirstOrDefault(vendor => info.names.Any(name => MatchesAgentName(name, vendor))) is { } found) return new(found, pid);
+            pid = info.ppid;
+        }
+        return null;
+    }
+
+    /// <summary>The nearest coding agent above this process, or null.</summary>
+    internal static CodingAgentAncestor? NearestCodingAgent() =>
+        GetParentPid() is { } parent ? NearestCodingAgent(parent, GetProcessInfo) : null;
+
     /// <summary>
     /// True when <paramref name="comm"/> names the coding-agent executable for
     /// <paramref name="vendor"/>. Matches the basename exactly (optionally plus a
@@ -907,6 +930,11 @@ static partial class ProcessHelpers {
 
         var slash    = comm.LastIndexOfAny(['/', '\\']);
         var basename = slash >= 0 ? comm[(slash + 1)..] : comm;
+
+        // A versioned binary is matched by its prefix before the clean-stem gate, which its dots fail.
+        if (VersionedBinaryPrefixOf(vendor) is { } prefix && basename.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
 
         // Reduce the basename to a clean stem: the whole name if it has no dot, or the part before a
         // single trailing extension (".exe"). Anything else (multiple dots, a space) is not a clean
@@ -936,6 +964,14 @@ static partial class ProcessHelpers {
     static string[] ProcessNamesOf(string vendor) => vendor switch {
         "mistral-vibe" => ["vibe", "Vibe CLI"],
         _              => [vendor],
+    };
+
+    /// <summary>The prefix of a vendor's versioned binary. Muse's <c>muse</c> is a launcher script that
+    /// execs <c>muse-bin-&lt;version&gt;</c>, so the durable process never reads as <c>muse</c>; its
+    /// comm is the same name truncated to 15 or 16 characters.</summary>
+    static string? VersionedBinaryPrefixOf(string vendor) => vendor switch {
+        "muse" => "muse-bin-",
+        _      => null,
     };
 
     /// <summary>

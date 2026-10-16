@@ -15,6 +15,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     public static readonly ClaudeChatRules Instance = new();
 
     const string StoppedTaskMessage = "Successfully stopped task";
+    const string HandbackPointer = "This agent's report was delivered to you as a message";
 
     ClaudeChatRules() { }
 
@@ -23,7 +24,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
         if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
-            || IsTaskNotification(slug, raw)) return null;
+            || IsTaskNotification(slug, raw)
+            || PeerMessage(slug, raw.Text) is not null) return null;
 
         var text = raw.Text ?? "";
         if (BashCommand(text) is { } command) return "!" + command;
@@ -37,7 +39,12 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain) || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)) return null;
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
+        // A peer message delivered while the session is idle is a meta record, and it is the
+        // only record of that message.
+        if (envelope.Kind == AcpEventKind.UserMessage && PeerMessage(slug, envelope.Text) is { } peer)
+            return peer.Body.Length == 0 ? null : envelope with { Kind = AcpEventKind.SystemNote, Text = peer.Body, ToolKind = peer.Kind };
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)) return null;
 
         switch (envelope.Kind) {
             case AcpEventKind.UserMessage: {
@@ -117,6 +124,50 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) == "task-notification"
         || (raw.Text ?? "").AsSpan().TrimStart().StartsWith("<task-notification>");
 
+    const string PeerOpen = "<agent-message from=\"";
+    const string PeerClose = "</agent-message>";
+    const string PeerLead = "Another Claude session sent a message";
+    const string HandbackMark = "[Subagent hand-back]";
+    const string HandbackLead = "The report follows:\n";
+
+    /// The body of a message another agent of this session sent, and which kind it is; null for
+    /// anything else. The server's events carry no origin_kind, so without one the wrapper is
+    /// matched instead: it opens the text, after the one lead line Claude Code puts in front of an
+    /// idle delivery. Any other origin keeps a prompt that quotes the wrapper the user's own.
+    static (string Body, string Kind)? PeerMessage(Struct? slug, string? text) {
+        var origin = SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind);
+        if (text is null || origin is not (null or "peer")) return null;
+        var span = text.AsSpan().TrimStart();
+        if (span.StartsWith(PeerLead, StringComparison.Ordinal) && span.IndexOf('\n') is var lead and >= 0)
+            span = span[(lead + 1)..];
+        if (!span.StartsWith(PeerOpen, StringComparison.Ordinal))
+            return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
+        var bodyStart = span.IndexOf('\n');
+        if (bodyStart < 0) return origin == "peer" ? (text.Trim(), ChatDisplayKind.AgentMessage) : null;
+        span = span[(bodyStart + 1)..];
+        // Text after the close is Claude Code's guidance to the model. A stored record can end
+        // before the close.
+        var close = span.LastIndexOf(PeerClose, StringComparison.Ordinal);
+        if (close >= 0) span = span[..close];
+        if (!span.StartsWith(HandbackMark, StringComparison.Ordinal))
+            return (span.Trim().ToString(), ChatDisplayKind.AgentMessage);
+        var report = span.IndexOf(HandbackLead, StringComparison.Ordinal);
+        return report < 0
+            ? (span.Trim().ToString(), ChatDisplayKind.AgentReport)
+            : (Outdent(span[(report + HandbackLead.Length)..]), ChatDisplayKind.AgentReport);
+    }
+
+    /// Claude Code indents every line of a hand-back by two spaces; left in, they would end up in
+    /// every line of a code block in the report.
+    static string Outdent(ReadOnlySpan<char> report) {
+        var built = new StringBuilder(report.Length);
+        foreach (var line in report.EnumerateLines()) {
+            var cut = line.StartsWith("  ") ? line[2..] : line.TrimStart(' ');
+            built.Append(cut).Append('\n');
+        }
+        return built.ToString().Trim();
+    }
+
     static Struct? ToolUseResult(Struct? slug) =>
         slug is not null && slug.Fields.TryGetValue(ClaudeCodeExtension.ToolUseResult, out var v) && v.KindCase == Value.KindOneofCase.StructValue
             ? v.StructValue : null;
@@ -166,6 +217,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         var raw     = envelope.Text ?? "";
         var summary = Tag(TaskSummary(), raw) ?? "";
         var body    = Tag(TaskResult(), raw) ?? "";
+        // An agent that handed its report back says so in the result instead of repeating it.
+        if (body.StartsWith(HandbackPointer, StringComparison.Ordinal)) body = "";
         var parts   = new List<string>(2);
         if (summary.Length > 0) parts.Add($"**{summary}**");
         if (body.Length > 0) parts.Add(body);
@@ -229,10 +282,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     /// The queue matches the daemon's attachment trailer. The chat shows the command that was typed.
     static string WithoutAttachmentTrailer(string command) {
-        var split = command.LastIndexOf("\n\n", StringComparison.Ordinal);
-        if (split <= 0) return command;
-        if (!command.AsSpan(split + 2).StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal)) return command;
-        var typed = command[..split].TrimEnd();
+        var typed = AttachmentTrailer.Strip(command);
         return typed.Length == 0 ? command : typed;
     }
 

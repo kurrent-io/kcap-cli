@@ -95,13 +95,29 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         remote.Daemons
             .Subscribe(d => { lock (_lock) _daemons = d; Recompute(); })
             .DisposeWith(_subscriptions);
-        local.Status
-            .Select(s => s.State == AttachState.Connected).DistinctUntilChanged()
-            .Subscribe(c => { lock (_lock) _localConnected = c; Recompute(); })
-            .DisposeWith(_subscriptions);
+        // Subscribed before Status so a replayed snapshot's connected flag is overridden when
+        // Status is currently Unreachable; on a live Connected event, Snapshots arrives ahead of
+        // Status (DaemonClientService.Apply) and marks _localConnected before Recompute runs, so
+        // remote twin rows do not flash while _localServerUrl is set and _localConnected is false.
         local.Snapshots
-            .Select(s => s.Daemon.ServerUrl).DistinctUntilChanged()
-            .Subscribe(u => { lock (_lock) _localServerUrl = u; Recompute(); })
+            .Subscribe(s => {
+                lock (_lock) {
+                    if (_localServerUrl == s.Daemon.ServerUrl && _localConnected) return;
+                    _localServerUrl = s.Daemon.ServerUrl;
+                    _localConnected = true;
+                }
+                Recompute();
+            })
+            .DisposeWith(_subscriptions);
+        local.Status
+            .Select(s => s.State == AttachState.Connected)
+            .Subscribe(c => {
+                lock (_lock) {
+                    if (_localConnected == c) return;
+                    _localConnected = c;
+                }
+                Recompute();
+            })
             .DisposeWith(_subscriptions);
     }
 
@@ -159,9 +175,16 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         public int GetHashCode(IReadOnlyDictionary<string, string> obj) => obj.Count;
     }
 
-    RepoIdentity RepoFor(string? repoPath) => repoPath is { Length: > 0 } path
-        ? _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)))
-        : new RepoIdentity("path:", "No repository");
+    static readonly RepoIdentity NoRepositoryIdentity = new("path:", "No repository");
+    readonly Dictionary<string, RepoIdentity> _repoByPath = new(StringComparer.Ordinal);
+
+    RepoIdentity RepoFor(string? repoPath) {
+        if (repoPath is not { Length: > 0 } path) return NoRepositoryIdentity;
+        if (_repoByPath.TryGetValue(path, out var cached)) return cached;
+        var resolved = _repoIdentity.ForLocalRoot(PlatformPaths.Normalize(_resolveLocalRepoRoot(path)));
+        _repoByPath[path] = resolved;
+        return resolved;
+    }
 
     AgentRow ProjectLocal(AgentStatusDto dto) => AgentRow.FromLocal(dto, RepoFor(dto.RepoPath));
 
@@ -196,7 +219,11 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 : FrozenSet<string>.Empty;
 
             var remote = _remoteAgents
-                .Where(a => a.Status is "Starting" or "Running")
+                // The server registry uses lowercase `idle` for a live agent waiting between
+                // turns; local daemon snapshots call that same live state `Running`.
+                .Where(a => a.Status.Equals("Starting", StringComparison.OrdinalIgnoreCase)
+                    || a.Status.Equals("Running", StringComparison.OrdinalIgnoreCase)
+                    || a.Status.Equals("Idle", StringComparison.OrdinalIgnoreCase))
                 .Where(a => !(_localConnected && OnTwin(a)))
                 .ToList();
             // The counterpart set is the TWIN's own rows, never every remote row: proving this

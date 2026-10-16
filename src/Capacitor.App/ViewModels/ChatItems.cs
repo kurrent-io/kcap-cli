@@ -1,3 +1,4 @@
+using Lucide.Avalonia;
 using System.ComponentModel;
 using System.Reactive;
 using Avalonia.Collections;
@@ -17,14 +18,64 @@ public sealed class AssistantTextItem(string text) : ChatItemViewModel {
     public string Text { get; } = text;
 }
 
-/// The model's reasoning, shown as plain text in the assistant column.
-public sealed class AssistantThinkingItem(string text) : ChatItemViewModel {
-    public string Text { get; } = text;
+/// The model's reasoning, rendered as collapsible muted Markdown in the assistant column.
+public sealed class AssistantThinkingItem : ChatItemViewModel {
+    public const string ThinkingLabel = "Thinking";
+
+    readonly string? _peek;
+    bool _isExpanded = true;
+
+    public AssistantThinkingItem(string text) {
+        Text = text;
+        _peek = PeekFirstLine(text);
+        ToggleCommand = ReactiveCommand.Create(Toggle);
+    }
+
+    public string Text { get; }
+
+    public bool IsExpanded {
+        get => _isExpanded;
+        private set {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HeaderLabel));
+        }
+    }
+
+    public string HeaderLabel =>
+        _isExpanded || string.IsNullOrEmpty(_peek) ? ThinkingLabel : $"{ThinkingLabel} · {_peek}";
+
+    public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
+
+    public void Toggle() => IsExpanded = !IsExpanded;
+
+    static string? PeekFirstLine(string text) {
+        foreach (var raw in text.AsSpan().EnumerateLines()) {
+            var line = raw.Trim().TrimStart("#>-* ").Trim();
+            // A fence marker is not a preview: ``` becomes empty, ```python becomes the language.
+            if (line.IsEmpty || line.StartsWith("```")) continue;
+            var cleaned = line.ToString()
+                .Replace("`", "", StringComparison.Ordinal)
+                .Replace("**", "", StringComparison.Ordinal)
+                .Trim();
+            if (cleaned.Length == 0) continue;
+            return TextElision.End(cleaned, 56);
+        }
+        return null;
+    }
 }
 
-/// System-attributed text — a finished background task, a reconnect note — never anyone's speech.
-public sealed class SystemNoteItem(string text) : ChatItemViewModel {
+/// System-attributed text — a finished background task, a reconnect note, another agent's message
+/// — never the user's speech.
+public sealed class SystemNoteItem(string text, string label = SystemNoteItem.NoteLabel) : ChatItemViewModel {
+    public const string NoteLabel = "Note";
+    public const string AgentReportLabel = "Subagent report";
+    public const string AgentMessageLabel = "Agent message";
+
     public string Text { get; } = text;
+    public string Label { get; } = label;
+    public LucideIconKind IconKind => ToolCategoryIcons.ForFixedLabel(Label) ?? ToolCategoryIcons.NoteIcon;
 }
 
 /// A bang command the user ran, and the output record that follows it. The output arrives later,
@@ -56,8 +107,8 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     public string Name { get; } = name;
     public string Detail { get; } = detail;
     public ToolCategory Category { get; } = category;
-    /// The verb phrase a kcap or foreign MCP row opens with ("Attached work item"); null for a
-    /// built-in tool, whose row is the detail alone.
+    /// The verb phrase a row opens with; null when a built-in call carries its own prose
+    /// description or is a question, whose row is the detail alone.
     public string? Label { get; } = label;
     public bool HasLabel => !string.IsNullOrEmpty(Label);
     public ToolCardKind CardKind { get; } = cardKind;
@@ -187,11 +238,16 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public string KindChip =>
         _calls.Count == 1 ? ToolSummary.ChipLabel(_calls[0].Category) : "";
 
-    public string HeaderIconData {
+    public LucideIconKind? HeaderIconKind {
         get {
             if (_calls.Count == 1) return ToolCategoryIcons.ForCategory(_calls[0].Category);
             var firstSettled = _calls.FirstOrDefault(c => c.IsSettled);
-            return firstSettled is null ? "" : ToolCategoryIcons.ForCategory(firstSettled.Category);
+            if (firstSettled is null) return null;
+            // Match the categories named by Summary; live rows are shown separately.
+            var category = _calls.Any(c => c.IsSettled && c.Category != firstSettled.Category)
+                ? ToolCategory.Other
+                : firstSettled.Category;
+            return ToolCategoryIcons.ForCategory(category);
         }
     }
 
@@ -239,7 +295,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     void RefreshLoneChrome() {
         this.RaisePropertyChanged(nameof(ShowsKindChip));
         this.RaisePropertyChanged(nameof(KindChip));
-        this.RaisePropertyChanged(nameof(HeaderIconData));
+        this.RaisePropertyChanged(nameof(HeaderIconKind));
     }
 
     void OnCallChanged(object? sender, PropertyChangedEventArgs e) {
@@ -271,7 +327,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
         HasFailure = failed;
         HasSummary = settled.Count > 0;
         this.RaisePropertyChanged(nameof(ShowsSummaryHeader));
-        this.RaisePropertyChanged(nameof(HeaderIconData));
+        this.RaisePropertyChanged(nameof(HeaderIconKind));
         NotifyVisible();
     }
 

@@ -2,7 +2,7 @@
 
 **File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, transcript normalization at `src/Capacitor.Models.Transcripts/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
 
-**Harness layout:** vendor-specific code lives under `Harness/`. Vendors: Antigravity, Claude, Codex, Copilot, Cursor, Gemini, Kiro, OpenCode, Pi.
+**Harness layout:** vendor-specific code lives under `Harness/`. Vendors: Antigravity, Claude, Codex, Copilot, Cursor, Gemini, Grok, Kiro, MistralVibe, Muse, OpenCode, Pi.
 
 - `src/Capacitor.Models.Transcripts/Harness/<Vendor>/` — transcript projections to canonical events, the one place a vendor's transcript format is read.
 - `src/Capacitor.Cli.Core/Harness/<Vendor>/` — paths, hook parsers/installers, CLI runners, chat display rules.
@@ -96,8 +96,10 @@ running notes file that every PR edits.
 - **Desktop-app green / orange / yellow are status only.** `KcapSuccess*` is shipped, settled,
   passing; `KcapWarning*` is blocked, stale, needs-you. Identity must not share them: a work-item
   key, vendor chip, "this session" mark, or title in success green reads as done, and a Claude chip
-  in warning orange reads as attention. Location uses purple (in-flight, you-are-here); selection
-  uses info blue; labels and keys use text/muted/surface tokens.
+  in warning orange reads as attention. `KcapPurple*` is in-flight execution (a running session or
+  an in-progress task and its count); selection and open items (the selected rail session or selected
+  master-list row) use `KcapInfo*` / `KcapSelectionBrush`; labels and keys use text/muted/surface
+  tokens.
 - **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
   in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
   `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
@@ -143,6 +145,7 @@ dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj
 - Spawning the real `kcap` binary goes through Helpers' `KcapProcess`, which requires a `DaemonStore` and pins it for the child. The assembly-wide `KCAP_DAEMONS_DIR` pin is a path that cannot be created, so a hand-rolled spawn dies with a bare ENOTDIR `IOException` instead of quietly resolving the developer's own daemons directory.
 - Capture console output with `ConsoleOutput.StartCapture()` / `StartErrorCapture()`, never a hand-rolled `Console.SetOut`/`SetError` save-restore — TUnit0055 is an error. Console is process-global, so every caller needs bare `[NotInParallel]`; a group key is not enough.
 - Never assert that an environment variable is *absent* from a built `ProcessStartInfo`: its environment is seeded from the current process, and the repo's own `.envrc` exports several. Assert what the code under test contributed, by comparing against the inherited value.
+- Do not write tests for test-only fakes/mocks, dedicated test files for one-line wrappers/constants already exercised by their callers, or headless XAML smoke tests that only assert `x:Name` lookups, static typography/margin values, or Avalonia layout math. Keep `*SmokeTests` to real view interactions (focus, keyboard/pointer routing, flyouts, accessibility peers) and keep data-projection permutations in ViewModel unit tests.
 
 **Parallelism:** bare `[NotInParallel]` is exclusive against the whole assembly and its tests run last, one at a time; keyed `[NotInParallel("k")]` excludes only tests carrying `k`.
 
@@ -165,9 +168,16 @@ A single suite still runs directly as an executable, which is the faster loop wh
 dotnet run --project test/Capacitor.Cli.Core.Tests.Unit/Capacitor.Cli.Core.Tests.Unit.csproj
 ```
 
-Every suite, the daemon one included, runs green at full parallelism — no flag needed, and CI runs
-each assembly at that same width. A test that needs exclusion carries the constraint itself; a
-narrower width would only narrow the race window, not close it.
+CI caps concurrency at three assemblies with four tests each on Linux/macOS, and two assemblies
+with two tests each on Windows. To reproduce CI locally on Linux/macOS, pass
+`--max-parallel-test-modules 3` and `-- --maximum-parallel-tests 4`; on Windows, pass
+`--max-parallel-test-modules 2` and `-- --maximum-parallel-tests 2`.
+Tests touching shared state still need their own exclusion;
+the concurrency cap only limits resource contention.
+
+The installed Codex schema certification is opt-in: set `KCAP_CODEX_SCHEMA_CHECK=1` to compare
+your local Codex version with the vendored pin. `KCAP_CODEX_SCHEMA_PIN_UPDATE=1` regenerates
+the pin after an intended, vetted upgrade, without needing the check flag.
 
 ## Publishing
 
@@ -240,14 +250,34 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 
 **Desktop app UI** lives under `src/Capacitor.App/`. Palette and control classes are in `App.axaml`.
 
+- Icons: use Lucide through `Views/AppIcon.cs`, with named `LucideIconKind` mappings.
+  Reuse `ToolCategoryIcons` for system/chat headings. No custom UI icon paths, copied SVG
+  geometry, text/emoji stand-ins, or additional icon families. Existing vendor/product
+  branding, native control glyphs, and activity dots are exceptions. Size and semantic
+  conventions are in `src/Capacitor.App/AGENTS.md`.
 - Status tokens: `KcapSuccess*` (green) and `KcapWarning*` (orange/yellow) only on badges, pills, and
   glyphs that mean outcome or attention. Never on keys, titles, vendor/model chips, or "you are here".
-- Location / in-flight: `KcapPurple*`. Selection / open session: `KcapInfo*`. Everything else:
-  `KcapTextBrush`, `KcapMutedBrush`, surface brushes.
+- In-flight vs. selection: `KcapPurple*` is active execution (running session indicator, `InProgress`
+  plan task dot and count); `KcapInfo*` / `KcapSelectionBrush` is selection and open state (selected
+  rail session, selected list row). Everything else uses `KcapTextBrush`, `KcapMutedBrush`,
+  `KcapFaintBrush`, and surface brushes.
 - Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
   `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
   Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
   Kcap class restyles it.
+- Hierarchy and chrome: chat tool rows and inline `ToolCard`s lead with a human verb in
+  `KcapTextBrush` and trailing target/path/detail in `KcapMutedBrush` (only rows with their own prose
+  description or question text omit the verb label). Inline cards inside `Border.toolGroup` sit flush
+  without a nested card border or fill. Do not repeat a document's kind pill or filename across the
+  sidebar, master list, and reader header when the surrounding section or markdown heading already
+  names it.
+- Avalonia layout and animation: match class selectors to every control type that carries the class
+  (`SelectableTextBlock.toolLine, TextBlock.toolLine`); set `UseLayoutRounding="False"` on concentric
+  geometric indicators of mixed odd/even sizes (e.g. a `5×5` dot inside a `12×12` ring); use
+  `AppIcon.Size` for UI icons and `MaxWidth`/`MaxHeight` on `Stretch="Uniform"` branding paths;
+  and gate continuous animations (`PulseClock.IsActive`) on live
+  session activity (`IsActive`), never on static task state alone.
+- Reactive and UI-thread discipline: filter `SourceCache.Connect()` streams *before* `.ObserveOn(RxSchedulers.MainThreadScheduler)` so irrelevant cache revisions do not schedule UI-thread work across every open workspace; use `SingleFlightReader<TState, TResult>` for session-keyed single-flight server reads rather than hand-rolling another `ReadLease` state machine; cache template parts (`ScrollViewer`, `TextPresenter`) on `TemplateApplied` instead of walking `GetVisualDescendants()` on keystrokes or layout ticks; and do not run uncached git/disk/hash I/O inside recompute loops or on the UI thread.
 
 ## Dos and donts
 

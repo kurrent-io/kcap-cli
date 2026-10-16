@@ -40,7 +40,7 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
     /// available even when the evaluation below cannot run at all.</summary>
     sealed record SeamFields(
         string? ToolName, string? CallId, string? Cwd, string? AgentId, JsonElement? ToolInput, string InputHash,
-        string? TranscriptPath);
+        string? TranscriptPath, string? PermissionMode);
 
     /// <summary>Test-only: throws from inside the evaluation region, so the arm that must still
     /// spend an already-consumed ask is driven by a real exception. That region's own dependencies
@@ -209,7 +209,8 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
             Str(body, "agent_id")?.Replace("-", ""),
             toolInput,
             PolicyInputHash.Compute(toolName, toolInput),
-            Str(body, "transcript_path"));
+            Str(body, "transcript_path"),
+            Str(body, "permission_mode"));
     }
 
     /// <summary>An empty snapshot means the session is ungoverned, not "pass-through": no output,
@@ -231,14 +232,13 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
     /// names a subagent, not the hosted run whose staging the server would search.
     /// </summary>
     async Task<PolicyJudgeResult?> ConsultJudgeAsync(SeamContext ctx, SeamFields f, TimeSpan budget) {
-        if (judge is null || ctx.Eval.Outcome != PolicyOutcome.None || ctx.Mode != EvaluationMode.Full
-         || !ctx.Snapshot.JudgeEnabled)
+        if (judge is null || ctx.Eval.Outcome != PolicyOutcome.None || !ctx.Snapshot.JudgeEnabled || !InJudgeLane(ctx, f))
             return null;
 
         try {
             var started      = time.GetTimestamp();
             var declarations = ClaudeJudgeDeclarationReader.Read(f.TranscriptPath, ctx.CallId, f.Cwd,
-                config.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(ctx.SessionId)}.json"));
+                ClaudeJudgeDeclarationReader.StatePath(config, ctx.SessionId));
             var action       = PolicyWire.ToWire(ctx.Action);
             var inline       = new HookSpool(config, time).IsPolicySnapshotDelivered(ctx.SessionId, ctx.Snapshot.Id)
                 ? null
@@ -252,6 +252,13 @@ internal sealed class ClaudePolicySeam(ConfigRoot config, TimeProvider time, Pol
             return PolicyJudgeResult.PassThrough(PolicyJudgeResult.Error);
         }
     }
+
+    /// <summary>A rendered session's PreToolUse runs tighten-only and never consults: its prompt
+    /// reaches the daemon bridge, which does.</summary>
+    static bool InJudgeLane(SeamContext ctx, SeamFields f) =>
+        ctx.Mode == EvaluationMode.Full
+     && !ClaudeJudgeLane.IsHumanInteraction(f.ToolName)
+     && (ctx.Seam != PolicySeams.ClaudePreToolUse || ClaudeJudgeLane.PromptsAtPreToolUse(f.PermissionMode));
 
     static string ReasonFor(SeamContext ctx, PolicyJudgeResult? judged) =>
         judged is { Outcome: not PolicyOutcome.None }

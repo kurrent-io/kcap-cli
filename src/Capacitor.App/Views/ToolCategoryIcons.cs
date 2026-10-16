@@ -1,46 +1,42 @@
 using Capacitor.App.ViewModels;
+using Lucide.Avalonia;
 
 namespace Capacitor.App.Views;
 
-/// Stroke PathData (24×24) for chat kind headers. Material-like at category grain — same
-/// vocabulary as the web's GetToolIcon, not per vendor tool name. Strings only: Geometry is
-/// an AvaloniaObject with thread affinity (see VendorIcons).
+/// Semantic category mappings shared by chat headers and pending prompts.
 public static class ToolCategoryIcons {
-    public static string ForCategory(ToolCategory category) => category switch {
-        ToolCategory.Read      => "M6,3 H15 L19,7 V21 H6 Z M15,3 V7 H19",
-        ToolCategory.Edit      => "M4,20 H8 L18.5,9.5 14.5,5.5 4,16 Z M13,7 L17,11",
-        ToolCategory.Command   => "M3,5 H21 V17 H3 Z M8,20 H16 M12,17 V20",
-        ToolCategory.Search    => "M10,4 A6,6 0 1 1 10,16 A6,6 0 1 1 10,4 M15,15 L20,20",
-        ToolCategory.WebSearch => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M3,12 H21 M12,3 C8,8 8,16 12,21 C16,16 16,8 12,3",
-        ToolCategory.Fetch     => "M12,3 A9,9 0 1 0 12,21 A9,9 0 1 0 12,3 M3,12 H21",
-        ToolCategory.Skill     => "M12,4 L13.2,9 H18.5 L14.3,12 L15.8,17.5 12,14.5 8.2,17.5 9.7,12 5.5,9 H10.8 Z",
-        // Briefcase — "Task" chip; a two-head GroupWork stroke reads as a cut face at 12px.
-        ToolCategory.Agent     => "M9,8 V6.5 A3,3 0 0 1 15,6.5 V8 H18 V19 H6 V8 Z M11,8 V7 A1,1 0 0 1 13,7 V8",
-        ToolCategory.Plan      => "M6,6 H18 M6,11 H18 M6,16 H14 M5,5 H7 V7 H5 Z M5,10 H7 V12 H5 Z M5,15 H7 V17 H5 Z",
-        ToolCategory.Question  => "M7,7 H17 V15 H13 L10,19 V15 H7 Z M12,10 V11 M12,14 H12.01",
-        // Artefact: a framed page with a header rule and two text lines.
-        ToolCategory.Artefact  => "M5,4 H19 V20 H5 Z M5,8 H19 M8,12 H16 M8,15 H13",
-        // Work: a ticket with a key line.
-        ToolCategory.Work      => "M4,6 H20 V18 H4 Z M4,10 H20 M8,14 H12",
-        // Memory: a bookmark.
-        ToolCategory.Memory    => "M7,3 H17 V21 L12,17 L7,21 Z",
-        // Recall: a clock face with a reverse arrow.
-        ToolCategory.Session   => "M12,7 V12 L15,14 M4,12 A8,8 0 1 0 6.5,6.3 M4,4 V8 H8",
-        // Flow: a centre box joined to two end stubs.
-        ToolCategory.Flow      => "M4,12 H9 M15,12 H20 M9,9 H15 V15 H9 Z M2,10 H4 V14 H2 Z M20,10 H22 V14 H20 Z",
-        // Extension / puzzle — Other, generic MCP and unknown tools; distinct from Edit and Agent at 12px.
-        _                      => "M8,4 H16 V8 H20 V12 H16 V16 H8 V12 H12 V8 H8 V4 Z",
+    public static LucideIconKind ForCategory(ToolCategory category) => category switch {
+        ToolCategory.Read      => LucideIconKind.FileSearch,
+        ToolCategory.Edit      => LucideIconKind.Pencil,
+        ToolCategory.Command   => LucideIconKind.Terminal,
+        ToolCategory.Search    => LucideIconKind.Search,
+        ToolCategory.WebSearch => LucideIconKind.Globe,
+        ToolCategory.Fetch     => LucideIconKind.Link,
+        ToolCategory.Skill     => LucideIconKind.BookOpen,
+        ToolCategory.Agent     => LucideIconKind.Bot,
+        ToolCategory.Plan      => LucideIconKind.ListTodo,
+        ToolCategory.Question  => LucideIconKind.MessageCircleQuestionMark,
+        ToolCategory.Artefact  => LucideIconKind.FileText,
+        ToolCategory.Work      => LucideIconKind.Ticket,
+        ToolCategory.Memory    => LucideIconKind.Brain,
+        ToolCategory.Session   => LucideIconKind.RotateCcwClock,
+        ToolCategory.Flow      => LucideIconKind.Workflow,
+        _                      => LucideIconKind.Wrench,
     };
 
-    public static string ForFixedLabel(string label) => label switch {
-        "Note"       => "M6,3 H15 L19,7 V21 H6 Z M15,3 V7 H19 M8,12 H16 M8,16 H14",
-        "Permission" => "M7,10 V8 A5,5 0 0 1 17,8 V10 H19 V21 H5 V10 Z M12,14 V17",
+    public static LucideIconKind? ForFixedLabel(string label) => label switch {
+        "Note"       => NoteIcon,
+        "Permission" => PermissionIcon,
         "Question"   => ForCategory(ToolCategory.Question),
-        _            => "",
+        AssistantThinkingItem.ThinkingLabel => ThinkingIcon,
+        SystemNoteItem.AgentReportLabel or SystemNoteItem.AgentMessageLabel => AgentMessageIcon,
+        _            => null,
     };
 
-    public static string CommandIcon => ForCategory(ToolCategory.Command);
-    public static string NoteIcon => ForFixedLabel("Note");
-    public static string PermissionIcon => ForFixedLabel("Permission");
-    public static string QuestionIcon => ForFixedLabel("Question");
+    public static LucideIconKind CommandIcon => ForCategory(ToolCategory.Command);
+    public static LucideIconKind NoteIcon => LucideIconKind.StickyNote;
+    public static LucideIconKind PermissionIcon => LucideIconKind.ShieldQuestionMark;
+    public static LucideIconKind QuestionIcon => ForCategory(ToolCategory.Question);
+    public static LucideIconKind AgentMessageIcon => LucideIconKind.BotMessageSquare;
+    public static LucideIconKind ThinkingIcon => LucideIconKind.Sparkles;
 }

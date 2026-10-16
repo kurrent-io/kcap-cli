@@ -47,9 +47,9 @@ class SkillsCommand(
     internal static IReadOnlyList<SkillsTarget> Targets(LegacySkillsRoots legacy) => [
         new("agents", AgentsPaths.RepoSkillsRelativePath, null,
             [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
-             HarnessId.Antigravity],
+             HarnessId.Antigravity, HarnessId.Muse],
             [HarnessId.Codex, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode, HarnessId.Pi,
-             HarnessId.Antigravity]) { LegacyRoot = legacy.Agents },
+             HarnessId.Antigravity, HarnessId.Muse]) { LegacyRoot = legacy.Agents },
         new("claude", ClaudePaths.RepoSkillsRelativePath, "claude",
             [HarnessId.Claude],
             [HarnessId.Claude, HarnessId.Copilot, HarnessId.Cursor, HarnessId.OpenCode])

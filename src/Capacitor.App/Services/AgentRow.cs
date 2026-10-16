@@ -38,12 +38,21 @@ public sealed record AgentRow(
         var repo = RepoIdentityResolver.ForRemote(dto.RepoOwner, dto.RepoName, dto.RepoPath, daemonKey);
         return new(
             Key: $"remote:{dto.AgentId}", Origin: AgentOrigin.Remote, Id: dto.AgentId, SessionId: dto.SessionId,
-            Kind: "agent", Vendor: dto.Vendor ?? "", Status: dto.Status, CreatedAt: dto.RegisteredAt,
+            Kind: "agent", Vendor: dto.Vendor ?? "", Status: CanonicalRemoteStatus(dto.Status), CreatedAt: dto.RegisteredAt,
             RepoPath: dto.RepoPath, Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}");
     }
+
+    static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {
+        "starting" => "Starting",
+        "running" => "Running",
+        "idle" => "Idle",
+        "completed" => "Completed",
+        "failed" => "Failed",
+        _ => status,
+    };
 
     /// A launch the local daemon is still starting: no session, no worktree yet, and it opens as
     /// a local workspace because the daemon will publish it as one.

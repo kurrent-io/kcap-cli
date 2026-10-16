@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.Onboarding.HarnessesPaneView"
              x:DataType="vm:HarnessesStepViewModel">
     <StackPanel Spacing="14">
@@ -38,13 +39,36 @@
                 <TextBlock x:Name="HarnessesMessageText" Classes="frError" Text="kcap isn't available on this machine, so there is nothing to turn on from here."
                            IsVisible="{Binding !CliAvailable}" />
 
+                <StackPanel Spacing="14" IsVisible="{Binding IsDetecting}">
+                    <StackPanel Orientation="Horizontal" Spacing="14">
+                        <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource FrAccentWashBrush}">
+                            <Panel Classes="frSpinner">
+                                <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding IsDetecting}"
+                                               Foreground="{StaticResource FrAccentBrush}" />
+                            </Panel>
+                        </Border>
+                        <StackPanel VerticalAlignment="Center" Spacing="2">
+                            <TextBlock Classes="frLabel" FontSize="15" Text="Looking for harnesses" />
+                            <TextBlock Classes="frBody" FontSize="13">
+                                <Run Text="on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}" /><Run Text=" — usually a moment" />
+                            </TextBlock>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Spacing="6">
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
+                                Background="{StaticResource FrSkeletonBrush}" Classes="pulsing" />
+                        <Border Height="44" CornerRadius="4" BorderThickness="1" BorderBrush="{StaticResource FrPanelBorderBrush}"
+                                Background="{StaticResource FrSkeletonBrush}" Classes="pulsing" />
+                    </StackPanel>
+                </StackPanel>
+
                 <TextBlock Classes="frBody" IsVisible="{Binding NoneFound}">
                     <Run Text="No harnesses were found on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}"
                         Foreground="{StaticResource KcapTextBrush}" /><Run Text=". Install a harness, then reopen setup from Help and support." />
                 </TextBlock>
 
                 <!-- The table: one row per detected harness, record and tools in fixed cells. -->
-                <StackPanel IsVisible="{Binding !NoneFound}">
+                <StackPanel IsVisible="{Binding ShowsTable}">
                     <Border Classes="frRowRule" Padding="0,0,0,8">
                         <Grid ColumnDefinitions="*,68,68">
                             <TextBlock Classes="frMicro">
@@ -67,8 +91,10 @@
                                                        Text="{Binding SignalLine}" />
                                             <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                                 <TextBlock Classes="frSignal" Text="installing…" IsVisible="{Binding Installing}" />
-                                                <TextBlock Classes="frSignal" Text="✓ turned on" Foreground="{StaticResource KcapSuccessBrush}"
-                                                           IsVisible="{Binding Succeeded}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding Succeeded}">
+                                                    <icons:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
+                                                    <TextBlock Classes="frSignal" Text="turned on" Foreground="{StaticResource KcapSuccessBrush}" />
+                                                </StackPanel>
                                                 <Button x:Name="HarnessRetryButton" Classes="frSecondary frCompact" Content="Retry"
                                                         Command="{Binding RetryCommand}" IsVisible="{Binding Failed}" />
                                             </StackPanel>
@@ -120,8 +146,7 @@
                 </TextBlock>
                 <Border Classes="frResolved" IsVisible="{Binding PathResolved}">
                     <StackPanel Orientation="Horizontal" Spacing="9">
-                        <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
-                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                        <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
                         <TextBlock Classes="frDetail" Foreground="{StaticResource FrMutedBrush}">
                             <Run Text="Your login shell on " /><Run Text="{Binding MachineName}" FontFamily="{StaticResource FrMonoFont}" /><Run Text=" can now find " /><Run Text="kcap" FontFamily="{StaticResource FrMonoFont}" /><Run Text=". Capture will record." />
                         </TextBlock>

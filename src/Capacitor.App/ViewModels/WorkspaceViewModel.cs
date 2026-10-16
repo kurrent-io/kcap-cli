@@ -74,7 +74,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     }
     bool _showsPullRequestTab;
     public bool ShowsPullRequestTab {
-        get => _showsPullRequestTab;
+        get => _showsPullRequestTab || IsPullRequestActive;
         private set {
             this.RaiseAndSetIfChanged(ref _showsPullRequestTab, value);
             this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
@@ -91,6 +91,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(ShowsChat));
             this.RaisePropertyChanged(nameof(IsTerminalActive));
             this.RaisePropertyChanged(nameof(IsPullRequestActive));
+            this.RaisePropertyChanged(nameof(ShowsPullRequestTab));
+            this.RaisePropertyChanged(nameof(ShowsSurfaceSwitch));
             this.RaisePropertyChanged(nameof(ShowsTerminalBanners));
             this.RaisePropertyChanged(nameof(IsArtefactsActive));
             Artefacts.IsShown = IsArtefactsActive;
@@ -111,6 +113,13 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowPullRequestCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowArtefactsCommand { get; }
+
+    public void OpenPullRequest(PullRequestSubjectDto? subject = null) {
+        if (PullRequests is null) return;
+        if (subject is not null) PullRequests.SelectSubject(subject);
+        ActiveTab = WorkspaceTab.PullRequest;
+        if (!PullRequests.IsReading) PullRequests.Refresh();
+    }
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = WorkspaceTab.Artefacts; }
 
@@ -141,15 +150,17 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IUrlOpener opener, IPermissionService permissions, IWorkContextSource workContext, ILocalControlOps ops,
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
-            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null) {
+            IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
+            ComposerDrafts? drafts = null) {
         AgentId = agentId;
+        _drafts = drafts;
         _opener = opener;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Filter(dto => dto.Id == agentId)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Scan(new AgentPresence(null, false), Accumulate)
             .Replay(1)
             .RefCount();
@@ -160,22 +171,23 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
         _disposables.Add(Disposable.Create(() => Artefacts.OpenRequested -= ShowArtefacts));
-        Artefacts.WhenAnyValue(a => a.HasAny).Subscribe(has => {
-            ShowsArtefactsTab = has;
-            if (!has && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
-        }).DisposeWith(_disposables);
+        // Keep the tab while a visible session's read is in flight; do not force it on for a
+        // session that has never shown documents (that would flash the strip then hide it).
+        Artefacts.WhenAnyValue(a => a.HasAny, a => a.IsLoading, (has, loading) => has || (loading && ShowsArtefactsTab))
+            .Subscribe(show => {
+                ShowsArtefactsTab = show;
+                if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
+            }).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
-        WorkContext.Plan.OpenDocument = path => {
-            if (!Artefacts.OpenDocument(path) && Artefacts.HasAny) Artefacts.RequestOpen();
-        };
-        Artefacts.WhenAnyValue(a => a.Selected).Subscribe(selected => WorkContext.Plan.MarkOpen(selected?.Path)).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
         WorkContext.PullRequests = PullRequests;
-        PullRequests?.HasPullRequestChanges.Subscribe(has => {
-            ShowsPullRequestTab = has;
-            if (!has && IsPullRequestActive) ActiveTab = WorkspaceTab.Chat;
-        }).DisposeWith(_disposables);
+        if (PullRequests is { } context)
+            context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
+                .Subscribe(state => {
+                    ShowsPullRequestTab = state.has;
+                    if (!state.has && IsPullRequestActive && state.listed) ActiveTab = WorkspaceTab.Chat;
+                }).DisposeWith(_disposables);
         daemon.Status.Select(status => status.State).DistinctUntilChanged().Skip(1)
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
@@ -204,8 +216,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         var pendingRow = directory is null
             ? Observable.Return<AgentRow?>(null)
             : directory.Rows.Connect()
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Filter(row => row.Id == agentId && row.Origin == AgentOrigin.Pending)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .QueryWhenChanged(query => query.Items.FirstOrDefault())
                 .StartWith((AgentRow?)null);
         var header = presence.StartWith(new AgentPresence(null, false))
@@ -251,7 +263,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard);
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts);
             })
             .DisposeWith(_disposables);
 
@@ -306,6 +318,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     }
 
     static string TitleFor(AgentStatusDto? dto) => dto?.Title ?? RepoLabel.Leaf(dto?.RepoPath);
+
+    readonly ComposerDrafts? _drafts;
+
+    public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Local, origin, AgentId);
 
     /// Disposes this workspace's own daemon-cache projections, then tears down Chat (if built), the
     /// work-context pane, and Terminal last -- the caller that closes a workspace tab calls this once.

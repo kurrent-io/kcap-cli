@@ -585,6 +585,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
         // nothing fails visibly when they are omitted, which is exactly why they are stamped here
         // rather than left to the runtime.
         psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
+        HostedLaunchMarkers.Apply(psi.Environment, ctx);
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 

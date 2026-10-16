@@ -4,7 +4,6 @@ using Avalonia;
 using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
-using Avalonia.Controls.Shapes;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -69,44 +68,6 @@ public class WorkContextViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Vm.TeardownAsync();
         }
-    }
-
-    /// The pane's two ways into the tab: a clickable document row and the summary row.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Document_rows_are_buttons_and_the_summary_row_shows_once_the_tab_has_something() {
-        await RunOnUiAsync(async () => {
-            await using var host = new Host();
-            host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "design", Path = "docs/x-design.md" }]));
-            host.Artefacts.Enqueue(new PlanArtifactsRead(SessionPlansReadKind.Ready, new PlanArtifactsResponseDto {
-                Artifacts = [new PlanArtifactDto {
-                    ArtifactId = "a", Kind = "design", Title = "x", Source = "declared", SessionId = SessionA, Path = "docs/x-design.md",
-                    Content = "# x", ContentState = "ok", IsComplete = true, IsConfirmed = true, ContentHash = "h", Version = 1,
-                    DiscoveredAt = DateTimeOffset.UnixEpoch, Confidence = "high", Reason = "declared", IsPrimary = true,
-                }],
-            }));
-            var opens = 0;
-            host.Vm.Artefacts!.OpenRequested += () => opens++;
-            await host.ShowAsync(KeyOnlyRead());
-
-            await Assert.That(host.Find<Button>("ArtefactsSummaryRow").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<TextBlock>("ArtefactsSummaryText").Text).IsEqualTo("1 document");
-            await host.Vm.OpenArtefactsCommand.Execute();
-            await Assert.That(opens).IsEqualTo(1);
-
-            await host.Vm.Plan.ToggleCommand.Execute();
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            var rowButton = host.Window.GetVisualDescendants().OfType<Button>().Single(b => b.DataContext is PlanDocumentRow);
-            await Assert.That(rowButton.Classes.Contains("copyValue")).IsTrue();
-
-            host.Vm.Plan.MarkOpen("docs/x-design.md");
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            var name = rowButton.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("docName"));
-            var purple = (ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!;
-            await Assert.That(((ISolidColorBrush)name.Foreground!).Color).IsEqualTo(purple.Color);
-        });
     }
 
     [Test]
@@ -260,7 +221,7 @@ public class WorkContextViewSmokeTests {
         within.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("avatar")).ToArray();
 
     static int VisibleChevrons(Control within) =>
-        within.GetVisualDescendants().OfType<Avalonia.Controls.Shapes.Path>().Count(p => p.Classes.Contains("chevron") && p.IsEffectivelyVisible);
+        within.GetVisualDescendants().OfType<AppIcon>().Count(p => p.Classes.Contains("chevron") && p.IsEffectivelyVisible);
 
     static AutomationPeer Peer(Control control) => ControlAutomationPeer.CreatePeerForElement(control);
 
@@ -470,12 +431,12 @@ public class WorkContextViewSmokeTests {
             var purple = host.Window.FindResource("KcapPurpleBrush");
             var green = host.Window.FindResource("KcapSuccessBrush");
             var marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Here");
-            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, purple) || ReferenceEquals(e.Fill, purple))).IsTrue();
-            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, green) || ReferenceEquals(e.Fill, green))).IsFalse();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Foreground, purple))).IsTrue();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Foreground, green))).IsFalse();
 
             marks = MarksBeside(host.Find<ItemsControl>("PartsList"), "Done");
-            await Assert.That(marks.Any(e => ReferenceEquals(e.Fill, green))).IsTrue();
-            await Assert.That(marks.Any(e => ReferenceEquals(e.Stroke, purple) || ReferenceEquals(e.Fill, purple))).IsFalse();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Foreground, green))).IsTrue();
+            await Assert.That(marks.Any(e => ReferenceEquals(e.Foreground, purple))).IsFalse();
         });
     }
 
@@ -494,9 +455,9 @@ public class WorkContextViewSmokeTests {
         });
     }
 
-    static Ellipse[] MarksBeside(ItemsControl list, string title) {
+    static AppIcon[] MarksBeside(ItemsControl list, string title) {
         var row = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == title).Parent as StackPanel;
-        return row!.Children.OfType<Panel>().First().Children.OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToArray();
+        return row!.Children.OfType<Panel>().First().Children.OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToArray();
     }
 
     static WorkContextRead CrowdedWhoRead() {
@@ -579,7 +540,7 @@ public class WorkContextViewSmokeTests {
     static List<string> VisibleTexts(Visual root) =>
         root.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
 
-    /// The title covers both kinds, and only a shell row is led by the `$` glyph — in the folded
+    /// The title covers both kinds, and only a shell row is led by the terminal icon — in the folded
     /// running list and in the opened full list alike, since both use one item template.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -608,7 +569,7 @@ public class WorkContextViewSmokeTests {
         });
 
         static int VisibleGlyphs(ItemsControl list) =>
-            list.GetVisualDescendants().OfType<TextBlock>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
+            list.GetVisualDescendants().OfType<AppIcon>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
     }
 
     /// Driven through the Claude projection: a command with no description is named by its own
@@ -754,10 +715,10 @@ public class WorkContextViewSmokeTests {
             var numbers = summary.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text ?? "").ToList();
             await Assert.That(numbers).IsEquivalentTo(new[] { "1", "2" }, CollectionOrdering.Matching);
 
-            var marks = summary.GetVisualDescendants().OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToList();
+            var marks = summary.GetVisualDescendants().OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToList();
             var warning = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapWarningBrush")!).Color;
             var danger = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapDangerBrush")!).Color;
-            await Assert.That(marks.Select(e => ((ISolidColorBrush)(e.Fill ?? e.Stroke)!).Color))
+            await Assert.That(marks.Select(e => ((ISolidColorBrush)e.Foreground!).Color))
                 .IsEquivalentTo(new[] { warning, danger }, CollectionOrdering.Matching);
             await Assert.That(summary.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
         });
@@ -945,11 +906,11 @@ public class WorkContextViewSmokeTests {
             await Assert.That(VisibleTexts(counts)).IsEquivalentTo(new[] { "2", "1", "2" }, CollectionOrdering.Matching);
 
             var faint = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapFaintBrush")!).Color;
-            var warning = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapWarningBrush")!).Color;
+            var purple = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapPurpleBrush")!).Color;
             var success = ((ISolidColorBrush)Avalonia.Application.Current!.FindResource("KcapSuccessBrush")!).Color;
-            var marks = counts.GetVisualDescendants().OfType<Ellipse>().Where(e => e.IsEffectivelyVisible).ToList();
-            await Assert.That(marks.Select(e => ((ISolidColorBrush)(e.Fill ?? e.Stroke)!).Color))
-                .IsEquivalentTo(new[] { faint, warning, success }, CollectionOrdering.Matching);
+            var marks = counts.GetVisualDescendants().OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToList();
+            await Assert.That(marks.Select(e => ((ISolidColorBrush)e.Foreground!).Color))
+                .IsEquivalentTo(new[] { faint, purple, success }, CollectionOrdering.Matching);
 
             await Assert.That(host.Find<Border>("PlanBody").IsEffectivelyVisible).IsFalse();
             await Assert.That(host.Find<ItemsControl>("PlanInProgressList").IsEffectivelyVisible).IsTrue();
@@ -959,7 +920,8 @@ public class WorkContextViewSmokeTests {
             await Assert.That(texts).DoesNotContain("Read the route");
             await Assert.That(texts).DoesNotContain("Pin the order");
             await Assert.That(texts).DoesNotContain("plan-widget-design.md");
-            await Assert.That(section.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
+            await Assert.That(counts.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(1);
+            await Assert.That(section.GetVisualDescendants().OfType<Border>().Count(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsEqualTo(2);
 
             await host.Vm.Plan.ToggleCommand.Execute();
             Dispatcher.UIThread.RunJobs();
@@ -982,7 +944,7 @@ public class WorkContextViewSmokeTests {
     /// while the session runs.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_plan_section_lists_documents_and_tasks_by_status_between_the_pull_request_and_the_subagents() {
+    public async Task The_plan_section_lists_tasks_by_status_between_the_pull_request_and_the_subagents() {
         await RunOnUiAsync(async () => {
             await using var host = new Host();
             host.Plans.Enqueue(PlanRead(
@@ -1003,8 +965,7 @@ public class WorkContextViewSmokeTests {
             await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsTrue();
             await Assert.That(host.Find<ItemsControl>("PlanCounts").IsEffectivelyVisible).IsFalse();
             var texts = section.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
-            await Assert.That(texts).Contains("spec");
-            await Assert.That(texts).Contains("plan-widget-design.md");
+            await Assert.That(texts).DoesNotContain("plan-widget-design.md");
             await Assert.That(texts).Contains("Read the route");
             await Assert.That(texts).Contains("Draw the rows");
             await Assert.That(texts).Contains("glyphs first");
@@ -1038,7 +999,7 @@ public class WorkContextViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_plan_section_is_hidden_without_a_plan_and_counts_nothing_for_documents_alone() {
+    public async Task The_plan_section_is_hidden_without_tasks_even_when_documents_are_declared() {
         await RunOnUiAsync(async () => {
             await using (var none = new Host()) {
                 await none.ShowAsync(KeyOnlyRead());
@@ -1049,17 +1010,7 @@ public class WorkContextViewSmokeTests {
             host.Plans.Enqueue(PlanRead([new PlanDocumentDto { DocumentKey = "k1", Kind = "plan", Path = "PLAN.md" }]));
             await host.ShowAsync(KeyOnlyRead());
 
-            await Assert.That(host.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<ItemsControl>("PlanCounts").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<Border>("PlanInProgressBody").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<ItemsControl>("PlanDocumentList").IsEffectivelyVisible).IsFalse();
-
-            await host.Vm.Plan.ToggleCommand.Execute();
-            Dispatcher.UIThread.RunJobs();
-            host.Window.UpdateLayout();
-            await Assert.That(host.Find<TextBlock>("PlanHeaderText").IsEffectivelyVisible).IsFalse();
-            await Assert.That(host.Find<ItemsControl>("PlanDocumentList").IsEffectivelyVisible).IsTrue();
-            await Assert.That(host.Find<ItemsControl>("PlanTaskList").IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Find<StackPanel>("PlanSection").IsEffectivelyVisible).IsFalse();
         });
     }
 }

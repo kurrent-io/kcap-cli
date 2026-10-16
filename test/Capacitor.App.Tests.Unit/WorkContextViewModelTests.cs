@@ -76,6 +76,25 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task A_checkout_branch_switch_is_read_on_the_poll_and_manual_refresh() => RunOnUiAsync(async () => {
+        using var tmp = new TempDir();
+        var root = tmp.CreateDir("checkout");
+        tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/first\n");
+        var h = new Harness();
+        try {
+            await h.PushAsync(Dto() with { WorktreePath = root, Branch = "reported" });
+            await WaitUntilAsync(() => h.Vm.Branch == "first", what: "live checkout branch");
+            tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/second\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Vm.Branch == "second", what: "branch switch on poll");
+            tmp.CreateFile(["checkout", ".git", "HEAD"], "ref: refs/heads/third\n");
+            await h.Vm.RefreshCommand.Execute();
+            await WaitUntilAsync(() => h.Vm.Branch == "third", what: "branch switch on refresh");
+        } finally { await h.Vm.TeardownAsync(); }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Facts_derive_from_the_dto_and_the_id_reads_resolving_until_reported() {
         await RunOnUiAsync(async () => {
             var h = new Harness();

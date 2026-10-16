@@ -167,7 +167,7 @@ public class AppStartupTests {
             Dispatcher.UIThread.RunJobs(); // ReactiveWindow<T>'s Loaded->Activator.Activate() wiring
 
             var vm = (MainWindowViewModel)window.DataContext!;
-            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Worktrees.Sum(w => w.Sessions.Count)));
+            var result = (vm.ServerLaneTip, vm.Rail?.Repos.Sum(r => r.Sessions.Count));
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -300,8 +300,7 @@ public class AppStartupTests {
     /// Cancel/titlebar close uses (wired here exactly like App.ShowLifecyclePromptDialogAsync
     /// does, since that wiring — not the window itself — is what owns the fallback). The overall
     /// dispatch is bounded (WaitAsync) so a SizeToContent+Wrap headless hang fails this test
-    /// instead of hanging CI; LifecyclePromptWindow
-    /// deliberately uses a fixed Width/Height instead, see its .axaml.
+    /// instead of hanging CI.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task WireDialogCancellation_resolves_false_and_closes_the_dialog() {

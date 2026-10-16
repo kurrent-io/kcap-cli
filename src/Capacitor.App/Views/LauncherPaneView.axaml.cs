@@ -1,3 +1,4 @@
+using Lucide.Avalonia;
 using System.Globalization;
 using System.Reactive.Linq;
 using System.Windows.Input;
@@ -175,8 +176,8 @@ public partial class LauncherPaneView : UserControl {
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
 
-        var check = new TextBlock {
-            Text = "✓", FontSize = 13, IsVisible = option.Selected,
+        var check = new AppIcon {
+            Kind = LucideIconKind.Check, Size = 14, IsVisible = option.Selected,
             Foreground = Brush("KcapInfoBrush"), Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
@@ -387,9 +388,8 @@ public partial class LauncherPaneView : UserControl {
             VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
         var underline = new Border { Height = 1, Background = border };
-        var magnifier = new Avalonia.Controls.Shapes.Path {
-            Data = Geometry.Parse("M13.5,13.5 L10.4,10.4 M11.5,6.75 A4.75,4.75 0 1 1 2,6.75 A4.75,4.75 0 1 1 11.5,6.75"),
-            Stroke = muted, StrokeThickness = 1.7, Width = 16, Height = 16,
+        var magnifier = new AppIcon {
+            Kind = LucideIconKind.Search, Size = 16, Foreground = muted,
             Margin = new Thickness(14, 0, 6, 0), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
         var rows = new StackPanel { Spacing = 2, Margin = new Thickness(10, 8, 10, 10) };

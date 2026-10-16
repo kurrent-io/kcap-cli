@@ -12,28 +12,30 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// Follow-tail sticks to the bottom until the reader leaves it: a scroll change that lands above
-/// the bottom is followed unless a gesture of the reader's own — pointer, wheel, key or scrollbar
-/// inside the list — landed in the same layout pass, and any change that lands on the bottom
-/// re-arms it.
-/// The decision cannot be read from the change's deltas: the virtualizing panel reports the extent
-/// as an estimate, and a realized row changing height makes it drop its anchor and re-place every
-/// row from the average size, after which the presenter clamps or anchor-shifts the offset by
-/// arbitrary amounts that look exactly like a reader scrolling up.
+/// Follow-tail follows layout changes until the reader scrolls away, and resumes when they
+/// return to the bottom. Gestures distinguish deliberate scrolling from layout adjustments.
 public partial class ChatTabView : UserControl {
     const double BottomTolerance = 2;
+    const double WheelStep = 50;
+    const double SmoothHalfLifeSeconds = 0.032;
 
     ScrollViewer? _scroll;
+    TextPresenter? _composerPresenter;
     AttachmentDropPaste? _attachments;
     bool _followTail = true;
     /// Armed by a gesture inside the list and released once the dispatcher queue drains past
     /// layout, so it covers exactly the scroll changes that gesture produced — an expansion click
     /// or a wheel notch — and not the appends that land later.
     bool _readerGesture;
-    /// The bubble the reader just toggled, kept at its viewport Y across the layout pass that
-    /// changes its height. VirtualizingStackPanel otherwise drops its anchor and re-places every
-    /// row from the average size, which jumps the reader off that bubble.
+    int _listInputVersion;
+    bool _thumbDragging;
+    double? _thumbFraction;
+    double _smoothRemaining;
+    bool _smoothFrameQueued;
+    TimeSpan _lastSmoothFrame;
+    /// Keep the toggled header at its viewport Y while the group's height settles.
     object? _anchorItem;
+    Button? _anchorSummary;
     double _anchorY;
     bool _restoringAnchor;
     int _anchorPasses;
@@ -49,16 +51,25 @@ public partial class ChatTabView : UserControl {
         ChatItems.AddHandler(PointerPressedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerWheelChangedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ChatItems.AddHandler(PointerWheelChangedEvent, OnChatWheelChanged, RoutingStrategies.Tunnel);
         ChatItems.AddHandler(KeyDownEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         // Bubble-only events: a tunnel registration for these never fires.
         ChatItems.AddHandler(ScrollGestureEvent, OnReaderGesture, RoutingStrategies.Bubble, handledEventsToo: true);
         ChatItems.AddHandler(Thumb.DragDeltaEvent, OnReaderGesture, RoutingStrategies.Bubble, handledEventsToo: true);
+        ChatItems.AddHandler(Thumb.DragStartedEvent, OnChatThumbDrag, RoutingStrategies.Bubble, handledEventsToo: true);
+        ChatItems.AddHandler(Thumb.DragDeltaEvent, OnChatThumbDrag, RoutingStrategies.Bubble, handledEventsToo: true);
+        ChatItems.AddHandler(Thumb.DragCompletedEvent, OnChatThumbDrag, RoutingStrategies.Bubble, handledEventsToo: true);
+        ComposerInput.TemplateApplied += (_, e) =>
+            _composerPresenter = e.NameScope.Find<TextPresenter>("PART_TextPresenter");
         // The ScrollViewer is the list template's; it exists only once the list is first measured,
         // which for a surface built before its first layout is later than the first rows.
         ChatItems.TemplateApplied += (_, _) => {
             var next = ChatItems.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault();
             if (ReferenceEquals(next, _scroll)) return;
             DropToggleAnchor();
+            CancelSmoothScroll();
+            _thumbDragging = false;
+            _thumbFraction = null;
             if (_scroll is not null) _scroll.ScrollChanged -= OnScrollChanged;
             _scroll = next;
             if (_scroll is not null) _scroll.ScrollChanged += OnScrollChanged;
@@ -76,17 +87,42 @@ public partial class ChatTabView : UserControl {
             () => (DataContext as ChatTabViewModel)?.Attachments, TimeProvider.System);
     }
 
+    /// The window reuses this view for every session it opens, so the reading position belongs to
+    /// the session it was showing: the next one starts at the tail.
+    protected override void OnDataContextChanged(EventArgs e) {
+        DropToggleAnchor();
+        CancelSmoothScroll();
+        _thumbDragging = false;
+        _thumbFraction = null;
+        _readerGesture = false;
+        _followTail = true;
+        base.OnDataContextChanged(e);
+    }
+
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
         DropToggleAnchor();
+        CancelSmoothScroll();
+        _thumbDragging = false;
+        _thumbFraction = null;
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
     }
 
+    internal int ListInputVersion => _listInputVersion;
+    internal bool IsSmoothScrolling => _smoothFrameQueued || Math.Abs(_smoothRemaining) > 0.5;
+    internal bool CanPreserveReadingPosition => !_followTail && _anchorItem is null && _thumbFraction is null;
+
     void OnReaderGesture(object? sender, RoutedEventArgs e) {
+        _listInputVersion++;
         // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
         // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
-        if (OriginatesFromTextBox(e)) return;
+        if (OriginatesFromTextBox(e)) {
+            CancelSmoothScroll();
+            return;
+        }
+        if (e.RoutedEvent == PointerWheelChangedEvent || e.RoutedEvent == ScrollGestureEvent || e is KeyEventArgs) _thumbFraction = null;
+        if (e.RoutedEvent == ScrollGestureEvent || e.RoutedEvent == PointerPressedEvent || e is KeyEventArgs) CancelSmoothScroll();
         // A press, or Enter or Space, inside a pending card is answering it — an option, Next, a step
         // chip — and the card then changes its own height in this layout pass. Read as the reader
         // scrolling up, that would stop following exactly when the next question lands below the
@@ -96,6 +132,110 @@ public partial class ChatTabView : UserControl {
         if (_readerGesture) return;
         _readerGesture = true;
         Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+    }
+
+    void OnChatWheelChanged(object? sender, PointerWheelEventArgs e) {
+        if (e.Handled || e.KeyModifiers != KeyModifiers.None || OriginatesFromTextBox(e)) return;
+        EnsureChatScroll();
+        if (_scroll is null || DefersToInnerScroll(e)) return;
+        var delta = -e.Delta.Y * WheelStep;
+        if (Math.Abs(delta) < 0.01) return;
+        e.Handled = true;
+        StartSmoothScroll(delta);
+    }
+
+    void StartSmoothScroll(double delta) {
+        if (_scroll is null) return;
+        if (Math.Sign(delta) != Math.Sign(_smoothRemaining)) _smoothRemaining = 0;
+        _smoothRemaining += delta;
+        StepSmoothScroll(0.28);
+        QueueSmoothFrame();
+    }
+
+    void QueueSmoothFrame() {
+        if (_smoothFrameQueued || Math.Abs(_smoothRemaining) <= 0.5) return;
+        if (TopLevel.GetTopLevel(this) is not { } top) {
+            StepSmoothScroll(1);
+            return;
+        }
+        _smoothFrameQueued = true;
+        top.RequestAnimationFrame(OnSmoothScrollFrame);
+    }
+
+    void OnSmoothScrollFrame(TimeSpan timestamp) {
+        _smoothFrameQueued = false;
+        if (_scroll is null || Math.Abs(_smoothRemaining) <= 0.5) {
+            _smoothRemaining = 0;
+            _lastSmoothFrame = default;
+            return;
+        }
+        var dt = _lastSmoothFrame == default ? 1.0 / 120.0 : Math.Clamp((timestamp - _lastSmoothFrame).TotalSeconds, 1.0 / 240.0, 0.05);
+        _lastSmoothFrame = timestamp;
+        var fraction = Math.Abs(_smoothRemaining) < 1.5 ? 1.0 : 1.0 - Math.Pow(0.5, dt / SmoothHalfLifeSeconds);
+        StepSmoothScroll(fraction);
+        if (Math.Abs(_smoothRemaining) > 0.5) QueueSmoothFrame();
+        else _lastSmoothFrame = default;
+    }
+
+    void StepSmoothScroll(double fraction) {
+        if (_scroll is null) return;
+        var step = fraction >= 1.0 ? _smoothRemaining : _smoothRemaining * fraction;
+        _smoothRemaining -= step;
+        if (Math.Abs(_smoothRemaining) <= 0.5) {
+            step += _smoothRemaining;
+            _smoothRemaining = 0;
+        }
+        var max = Math.Max(0, _scroll.Extent.Height - _scroll.Viewport.Height);
+        var next = Math.Clamp(_scroll.Offset.Y + step, 0, max);
+        var moved = next - _scroll.Offset.Y;
+        if (Math.Abs(moved) < 0.01 && Math.Sign(step) == Math.Sign(_smoothRemaining)) {
+            _smoothRemaining = 0;
+            _lastSmoothFrame = default;
+        }
+        var wasGesture = _readerGesture;
+        _readerGesture = true;
+        _scroll.Offset = new Vector(_scroll.Offset.X, next);
+        if (!wasGesture) Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+    }
+
+    void CancelSmoothScroll() {
+        _smoothRemaining = 0;
+        _lastSmoothFrame = default;
+    }
+
+    // A markdown row hosts a ScrollViewer whose scrolling is disabled. Only an inner viewer
+    // that can still move in this direction owns the notch.
+    bool DefersToInnerScroll(PointerWheelEventArgs e) {
+        if (e.Source is not Visual visual) return false;
+        foreach (var inner in visual.GetSelfAndVisualAncestors().OfType<ScrollViewer>()) {
+            if (ReferenceEquals(inner, _scroll)) return false;
+            if (inner.VerticalScrollBarVisibility == ScrollBarVisibility.Disabled) continue;
+            var range = inner.Extent.Height - inner.Viewport.Height;
+            if (range <= 1) continue;
+            var towardStart = e.Delta.Y > 0;
+            if (towardStart ? inner.Offset.Y <= 0.5 : inner.Offset.Y >= range - 0.5) continue;
+            return true;
+        }
+        return false;
+    }
+
+    void OnChatThumbDrag(object? sender, RoutedEventArgs e) {
+        if (_scroll is null || e.Source is not Thumb thumb
+            || !ReferenceEquals(thumb.FindAncestorOfType<ScrollBar>()?.TemplatedParent, _scroll)) return;
+        if (e.RoutedEvent == Thumb.DragCompletedEvent) {
+            _thumbDragging = false;
+            Dispatcher.UIThread.Post(() => {
+                if (!_thumbDragging) _thumbFraction = null;
+            }, DispatcherPriority.Background);
+            return;
+        }
+        if (e.RoutedEvent == Thumb.DragStartedEvent) {
+            _thumbDragging = true;
+            CancelSmoothScroll();
+            DropToggleAnchor();
+        }
+        var range = _scroll.Extent.Height - _scroll.Viewport.Height;
+        if (range > 0) _thumbFraction = Math.Clamp(_scroll.Offset.Y / range, 0, 1);
     }
 
     async void OnCopyLinkClick(object? sender, RoutedEventArgs e) {
@@ -115,6 +255,7 @@ public partial class ChatTabView : UserControl {
     // ahead of it) can still take its anchor here.
     void OnToolSummaryClick(object? sender, RoutedEventArgs e) {
         _followTail = false;
+        CancelSmoothScroll();
         if (_anchorItem is null) CaptureToggleAnchor(sender);
         ArmToggleRestore();
     }
@@ -124,6 +265,7 @@ public partial class ChatTabView : UserControl {
         if (_scroll is null || ToolSummaryOf(source) is not { } summary) return;
         if (summary.TranslatePoint(new Point(0, 0), _scroll) is not { } point) return;
         _anchorItem = summary.DataContext;
+        _anchorSummary = summary;
         _anchorY = point.Y;
     }
 
@@ -168,7 +310,7 @@ public partial class ChatTabView : UserControl {
         }
         var delta = after.Y - _anchorY;
         if (Math.Abs(delta) < 0.5) {
-            FinishIfExhausted();
+            DropToggleAnchor();
             return;
         }
         _restoringAnchor = true;
@@ -185,6 +327,7 @@ public partial class ChatTabView : UserControl {
     void DropToggleAnchor() {
         if (_scroll is not null) _scroll.LayoutUpdated -= OnAnchorLayout;
         _anchorItem = null;
+        _anchorSummary = null;
         _anchorPasses = 0;
         _anchorLaidOut = false;
     }
@@ -202,9 +345,13 @@ public partial class ChatTabView : UserControl {
         }
     }
 
-    Button? ToolSummaryFor(object item) =>
-        ChatItems.GetVisualDescendants().OfType<Button>()
-            .FirstOrDefault(b => b.Classes.Contains("toolSummary") && ReferenceEquals(b.DataContext, item));
+    Button? ToolSummaryFor(object item) {
+        if (_anchorSummary is { } cached && ReferenceEquals(cached.DataContext, item)
+            && cached.GetVisualAncestors().Any(ancestor => ReferenceEquals(ancestor, ChatItems))) return cached;
+        _anchorSummary = ChatItems.ContainerFromItem(item)?.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(button => button.Classes.Contains("toolSummary") && ReferenceEquals(button.DataContext, item));
+        return _anchorSummary;
+    }
 
     static Button? ToolSummaryOf(object? source) {
         if (source is Button button && button.Classes.Contains("toolSummary")) return button;
@@ -216,9 +363,25 @@ public partial class ChatTabView : UserControl {
     void OnScrollChanged(object? sender, ScrollChangedEventArgs e) {
         if (_restoringAnchor || _anchorItem is not null) return;
         if (sender is not ScrollViewer scroll) return;
+        // A dragged thumb owns its position even when discovering row heights changes the range.
+        if (_thumbFraction is { } fraction) {
+            var range = Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height);
+            var target = fraction * range;
+            _followTail = range - target <= BottomTolerance;
+            if (Math.Abs(scroll.Offset.Y - target) > 0.5) scroll.Offset = new Vector(scroll.Offset.X, target);
+            return;
+        }
         if (ListTextBoxOwnsFocus()) return;
+        if (IsSmoothScrolling && _smoothRemaining < -0.5) {
+            _followTail = false;
+            return;
+        }
         var atBottom = scroll.Offset.Y + scroll.Viewport.Height >= scroll.Extent.Height - BottomTolerance;
-        _followTail = _readerGesture ? atBottom : _followTail || atBottom;
+        // Returning to the estimated end can measure new rows and grow the extent in the
+        // same layout pass. That still counts as the reader returning to the bottom.
+        var reachedEstimatedEnd = e.OffsetDelta.Y > 0 && e.ExtentDelta.Y > 0
+            && ChatItems.ItemsPanelRoot is ChatVirtualizingPanel { MeasuredAtEstimatedEnd: true };
+        _followTail = _readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd;
         if (_followTail && !atBottom) scroll.ScrollToEnd();
     }
 
@@ -242,7 +405,7 @@ public partial class ChatTabView : UserControl {
     (int Line, int Lines) ComposerCaretLine() {
         var text = ComposerInput.Text ?? "";
         var caret = Math.Clamp(ComposerInput.CaretIndex, 0, text.Length);
-        var layout = ComposerInput.GetVisualDescendants().OfType<TextPresenter>().FirstOrDefault()?.TextLayout;
+        var layout = _composerPresenter?.TextLayout;
         if (layout is { TextLines.Count: > 0 })
             return (layout.GetLineIndexFromCharacterIndex(caret, false), layout.TextLines.Count);
         return (text.AsSpan(0, caret).Count('\n'), text.AsSpan().Count('\n') + 1);

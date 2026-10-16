@@ -160,6 +160,61 @@ public class ActivityViewModelTests {
         await Assert.That(ActivityViewModel.OutcomeLabelOf(raw)).IsEqualTo(expected);
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_throwing_first_read_settles_loading_and_lets_the_poll_retry() {
+        var (loadingBefore, loadedAfterThrow, emptyAfterThrow, readsAfterThrow, readsAfterRetry) = await AvaloniaSession.DispatchAsync(async () => {
+            var reader = new ScriptedReader();
+            reader.ThrowOnce = true;
+            reader.Set(new ConsentLogReadResult([], true));
+            var stat = new ScriptedStat { Key = "k0" };
+            var ticker = new FakeTicker();
+            var vm = new ActivityViewModel(reader.Read, stat.Get, ticker);
+            var loadingBefore = vm.IsLoading;
+
+            vm.OnTabVisibleChanged(true);
+            await vm.PendingRefreshForTesting!;
+            var loadedAfterThrow = vm.HasLoaded;
+            var emptyAfterThrow = vm.ShowsEmpty;
+            var readsAfterThrow = reader.ReadCalls;
+
+            ticker.Tick();
+            ticker.Tick();
+            await vm.PendingRefreshForTesting!;
+
+            return (loadingBefore, loadedAfterThrow, emptyAfterThrow, readsAfterThrow, reader.ReadCalls);
+        });
+
+        await Assert.That(loadingBefore).IsTrue();
+        await Assert.That(loadedAfterThrow).IsTrue();
+        await Assert.That(emptyAfterThrow).IsTrue();
+        await Assert.That(readsAfterThrow).IsEqualTo(1);
+        await Assert.That(readsAfterRetry).IsEqualTo(2);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Empty_copy_waits_for_the_first_read() {
+        var (loadingBefore, emptyBefore, loadingAfter, emptyAfter, showsEmpty) = await AvaloniaSession.DispatchAsync(async () => {
+            var reader = new ScriptedReader();
+            reader.Set(new ConsentLogReadResult([], true));
+            var vm = new ActivityViewModel(reader.Read, new ScriptedStat().Get, new FakeTicker());
+            var loadingBefore = vm.IsLoading;
+            var emptyBefore = vm.ShowsEmpty;
+
+            vm.OnTabVisibleChanged(true);
+            await vm.PendingRefreshForTesting!;
+
+            return (loadingBefore, emptyBefore, vm.IsLoading, vm.IsEmpty, vm.ShowsEmpty);
+        });
+
+        await Assert.That(loadingBefore).IsTrue();
+        await Assert.That(emptyBefore).IsFalse();
+        await Assert.That(loadingAfter).IsFalse();
+        await Assert.That(emptyAfter).IsTrue();
+        await Assert.That(showsEmpty).IsTrue();
+    }
+
     // ---- Complete replaces, including to empty ----
 
     [Test]

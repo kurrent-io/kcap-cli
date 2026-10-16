@@ -1,7 +1,6 @@
 using System.Reactive;
 using System.Reactive.Concurrency;
 using Avalonia.Collections;
-using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.Plans;
 using ReactiveUI.Reactive;
@@ -19,77 +18,74 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     /// write is read twice: at once, and again after this long.
     internal static readonly TimeSpan SettleDelay = TimeSpan.FromSeconds(2);
 
-    sealed class ReadLease(string sessionId) {
-        public string SessionId { get; } = sessionId;
-        public CancellationTokenSource Cts { get; } = new();
-        public Task? Pending;
-        public bool RefreshPending;
-        public bool IsReading => Pending is { IsCompleted: false };
-    }
-
     readonly IPlanSource? _source;
+    readonly SingleFlightReader<string, SessionPlansRead> _reader;
     readonly PlanActivity _activity;
     readonly AvaloniaList<PlanTaskRow> _tasks = [];
     readonly AvaloniaList<PlanTaskRow> _inProgress = [];
-    readonly AvaloniaList<PlanDocumentRow> _documents = [];
-    readonly List<ReadLease> _outstanding = [];
     readonly ITimer _settle;
     IReadOnlyList<PlanTaskCount> _counts = [];
-    ReadLease? _current;
     bool _tornDown;
 
     public IAvaloniaReadOnlyList<PlanTaskRow> Tasks => _tasks;
     /// What the collapsed section lists: the rows of Tasks that are in progress, in plan order.
     public IAvaloniaReadOnlyList<PlanTaskRow> InProgressTasks => _inProgress;
-    public IAvaloniaReadOnlyList<PlanDocumentRow> Documents => _documents;
 
-    public bool HasPlan       => HasTasks || HasDocuments;
+    public bool HasPlan       => HasTasks;
+    /// Keeps the section chrome while a session switch's first read is in flight.
+    public bool IsLoading => _reader.IsLoading;
+    public bool ShowsPlan => HasPlan || IsLoading;
     public bool HasTasks      => _tasks.Count > 0;
     public bool HasInProgress => _inProgress.Count > 0;
-    public bool HasDocuments  => _documents.Count > 0;
     public int DoneCount => _tasks.Count(task => task.IsSettled);
     /// What the expanded header says; collapsed, the header shows Counts.
     public string HeaderText => $"{DoneCount} of {_tasks.Count} done";
     /// Pending, in progress, done: one entry per state something is in, so the numbers add up
-    /// to the list. The instance changes only when a number does.
+    /// to the list.
     public IReadOnlyList<PlanTaskCount> Counts => _counts;
 
     bool _isExpanded;
     public bool IsExpanded { get => _isExpanded; private set => this.RaiseAndSetIfChanged(ref _isExpanded, value); }
     public ReactiveCommand<Unit, Unit> ToggleCommand { get; }
 
-    /// Whoever opens documents; the workspace points it at the Artefacts tab.
-    public Action<string>? OpenDocument { get; set; }
-    public ReactiveCommand<PlanDocumentRow, Unit> OpenDocumentCommand { get; }
-    string? _openPath;
-
     /// Test-only seam: the current lease's read, or the last one started.
-    internal Task? PendingReadForTesting => _current?.Pending ?? _outstanding.LastOrDefault()?.Pending;
+    internal Task? PendingReadForTesting => _reader.PendingReadForTesting;
 
     public PlanSectionViewModel(IPlanSource? source, PlanActivity activity, TimeProvider time) {
         _source = source;
+        _reader = new SingleFlightReader<string, SessionPlansRead>(
+            (id, ct) => _source!.ReadAsync(id, ct),
+            ex => {
+                Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
+                return SessionPlansRead.Of(SessionPlansReadKind.Unreachable);
+            },
+            Apply,
+            "plan section",
+            onSettled: RaiseLoading);
         _activity = activity;
         ToggleCommand = ReactiveCommand.Create(() => { IsExpanded = !IsExpanded; });
-        OpenDocumentCommand = ReactiveCommand.Create<PlanDocumentRow>(row => OpenDocument?.Invoke(row.Path));
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _activity.PlanWritten += OnPlanWritten;
         _activity.SessionOverChanged += OnSessionOverChanged;
     }
 
-    public void SwitchSession(string sessionId) {
+    public void SwitchSession(string? sessionId) {
         if (_tornDown || _source is null) return;
-        var old = _current;
-        _current = new ReadLease(sessionId);
-        old?.Cts.Cancel();
-        Clear();
-        StartRead(_current);
+        if (sessionId is null) {
+            _reader.ClearCurrent();
+            Clear();
+            RaiseLoading();
+            return;
+        }
+        _reader.Switch(sessionId, () => {
+            RaiseLoading();
+            Clear();
+        });
     }
 
     /// Reads now, or queues one follow-up behind the read in flight.
     public void Refresh() {
-        if (_tornDown || _current is not { } lease) return;
-        if (lease.IsReading) lease.RefreshPending = true;
-        else StartRead(lease);
+        if (!_tornDown) _reader.Refresh();
     }
 
     void OnPlanWritten() {
@@ -100,47 +96,12 @@ public sealed class PlanSectionViewModel : ReactiveObject {
 
     void OnSessionOverChanged() {
         foreach (var task in _tasks) task.Present(_activity.SessionOver);
-    }
-
-    void StartRead(ReadLease lease) {
-        lease.RefreshPending = false;
-        lease.Pending = RunReadAsync(lease);
-        _outstanding.Add(lease);
-    }
-
-    async Task RunReadAsync(ReadLease lease) {
-        SessionPlansRead? read = null;
-        try {
-            read = await _source!.ReadAsync(lease.SessionId, lease.Cts.Token).ConfigureAwait(false);
-        } catch (OperationCanceledException) {
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
-            read = SessionPlansRead.Of(SessionPlansReadKind.Unreachable);
-        }
-        try {
-            await Dispatcher.UIThread.InvokeAsync(() => Settle(lease, read));
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
-        }
-    }
-
-    void Settle(ReadLease lease, SessionPlansRead? read) {
-        _outstanding.Remove(lease);
-        var current = ReferenceEquals(lease, _current) && !_tornDown;
-        if (!current) { lease.Cts.Dispose(); return; }
-        try {
-            if (read is not null) Apply(read);
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: plan section: {ex.Message}");
-        }
-        if (lease.RefreshPending) StartRead(lease);
+        SyncCounts();
     }
 
     void Apply(SessionPlansRead read) {
         switch (read.Kind) {
             case SessionPlansReadKind.Ready:
-                // The server lists most recently touched first, which stands in for a continued
-                // session that has not written to its predecessor's plan yet.
                 Show(read.Plans.FirstOrDefault(plan => plan.IsCurrent) ?? (read.Plans.Count > 0 ? read.Plans[0] : null));
                 return;
             case SessionPlansReadKind.Unreachable:
@@ -151,12 +112,6 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         }
     }
 
-    /// Marks the row whose path matches; null clears the mark.
-    public void MarkOpen(string? path) {
-        _openPath = path;
-        foreach (var row in _documents) row.IsOpen = path is not null && DocumentPaths.Match(row.Path, path);
-    }
-
     void Show(SessionPlanDto? plan) {
         if (plan is null) { Clear(); return; }
 
@@ -164,15 +119,6 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         StableRows.Sync(_tasks, RowsFor(tasks));
         for (var i = 0; i < tasks.Count; i++) _tasks[i].Present(tasks[i], _activity.SessionOver);
 
-        var documents = plan.Documents
-            .OrderBy(document => KindRank(document.Kind))
-            .Select(document => new PlanDocumentRow(document.Kind, document.Path))
-            .ToList();
-        if (documents.Count != _documents.Count || documents.Where((row, i) => !row.Same(_documents[i])).Any()) {
-            _documents.Clear();
-            _documents.AddRange(documents);
-            MarkOpen(_openPath);
-        }
         RaiseShape();
     }
 
@@ -186,40 +132,41 @@ public sealed class PlanSectionViewModel : ReactiveObject {
     /// A task the server sent without an id is still one row per position.
     static string RowKey(PlanLedgerTaskDto task) => task.TaskId is { Length: > 0 } id ? id : $"#{task.Ordinal}";
 
-    static int KindRank(string kind) => kind switch {
-        "plan"   => 0,
-        "spec"   => 1,
-        "design" => 2,
-        _        => 3,
-    };
-
     void Clear() {
-        if (_tasks.Count == 0 && _documents.Count == 0) return;
+        if (_tasks.Count == 0) return;
         _tasks.Clear();
-        _documents.Clear();
         RaiseShape();
     }
 
     void RaiseShape() {
         StableRows.Sync(_inProgress, _tasks.Where(task => task.IsInProgress));
+        SyncCounts();
+        this.RaisePropertyChanged(nameof(HasPlan));
+        this.RaisePropertyChanged(nameof(ShowsPlan));
+        this.RaisePropertyChanged(nameof(HasTasks));
+        this.RaisePropertyChanged(nameof(HasInProgress));
+        this.RaisePropertyChanged(nameof(DoneCount));
+        this.RaisePropertyChanged(nameof(HeaderText));
+    }
+
+    void SyncCounts() {
         var counts = CountStates();
         if (!counts.SequenceEqual(_counts)) {
             _counts = counts;
             this.RaisePropertyChanged(nameof(Counts));
         }
-        this.RaisePropertyChanged(nameof(HasPlan));
-        this.RaisePropertyChanged(nameof(HasTasks));
-        this.RaisePropertyChanged(nameof(HasInProgress));
-        this.RaisePropertyChanged(nameof(HasDocuments));
-        this.RaisePropertyChanged(nameof(DoneCount));
-        this.RaisePropertyChanged(nameof(HeaderText));
+    }
+
+    void RaiseLoading() {
+        this.RaisePropertyChanged(nameof(IsLoading));
+        this.RaisePropertyChanged(nameof(ShowsPlan));
     }
 
     PlanTaskCount[] CountStates() {
         var done = DoneCount;
         PlanTaskCount[] states = [
             new(PlanTaskState.Pending, _tasks.Count - _inProgress.Count - done),
-            new(PlanTaskState.InProgress, _inProgress.Count),
+            new(PlanTaskState.InProgress, _inProgress.Count, _inProgress.Count > 0 && !_activity.SessionOver),
             new(PlanTaskState.Completed, done),
         ];
         return [.. states.Where(state => state.Count > 0)];
@@ -232,14 +179,6 @@ public sealed class PlanSectionViewModel : ReactiveObject {
         _activity.SessionOverChanged -= OnSessionOverChanged;
         _settle.Dispose();
         ToggleCommand.Dispose();
-        OpenDocumentCommand.Dispose();
-        var leases = _outstanding.ToArray();
-        foreach (var lease in leases) lease.Cts.Cancel();
-        _current = null;
-        foreach (var lease in leases)
-            if (lease.Pending is { } pending) {
-                try { await pending; } catch (Exception) { }
-            }
-        foreach (var lease in leases) lease.Cts.Dispose();
+        await _reader.TeardownAsync();
     }
 }

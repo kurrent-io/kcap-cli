@@ -14,16 +14,21 @@ using Capacitor.Cli.Core.Harness.Antigravity;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Harness.Titles;
 using Capacitor.Cli.Core.RepoEvidence;
 using Capacitor.Cli.Harness.Antigravity;
+using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
+using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.Harness.MistralVibe;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Titles;
 using Capacitor.Cli.PrDetection;
@@ -197,6 +202,40 @@ partial class WatchCommand(
         return tail.Trim().Length == 0 || IsCompleteJsonRecord(tail);
     }
 
+    static readonly UTF8Encoding Utf8NoPreamble = new(encoderShouldEmitUTF8Identifier: false);
+
+    /// <summary>
+    /// The file's text from its last <c>'\n'</c> on, or all of it when it has none: what
+    /// <see cref="IsFinalLineComplete"/> decides on, read without decoding the lines before it. A
+    /// UTF-16 or UTF-32 file is read whole, since its newline is not a lone <c>0x0A</c> byte.
+    /// </summary>
+    internal static async Task<string> ReadFinalLineSharedAsync(string path) {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length > 0 && stream.ReadByte() is 0xFE or 0xFF or 0x00) return await File.ReadAllTextSharedAsync(path);
+
+        var end   = stream.Length;
+        var start = end;
+
+        while (start > 0) {
+            var chunk = new byte[(int)Math.Min(64 * 1024, start)];
+            stream.Position = start - chunk.Length;
+            if (await ReadFullyAsync(stream, chunk, CancellationToken.None) != chunk.Length) break;
+
+            var newline = chunk.AsSpan().LastIndexOf((byte)'\n');
+            start -= chunk.Length;
+            if (newline >= 0) {
+                start += newline;
+                break;
+            }
+        }
+
+        var tail = new byte[end - start];
+        stream.Position = start;
+        var text = tail.AsSpan(0, await ReadFullyAsync(stream, tail, CancellationToken.None));
+
+        return Utf8NoPreamble.GetString(start == 0 && text.StartsWith(Encoding.UTF8.Preamble) ? text[3..] : text);
+    }
+
     /// <summary>
     /// Bounded wait (≤2s, 4×500ms) for the shutdown final drain: re-reads <paramref name="path"/>
     /// looking for <see cref="IsFinalLineComplete"/> before the watcher decides whether it's safe to
@@ -210,7 +249,7 @@ partial class WatchCommand(
             string path, TimeProvider time, int attempts = 4, int delayMs = 500) {
         for (var i = 0; i < attempts; i++) {
             try {
-                if (IsFinalLineComplete(await File.ReadAllTextSharedAsync(path))) return true;
+                if (IsFinalLineComplete(await ReadFinalLineSharedAsync(path))) return true;
             } catch {
                 // Transient read failure (e.g. concurrent write) — try again on the next iteration.
             }
@@ -317,6 +356,9 @@ partial class WatchCommand(
         }
 
         using var cts = new CancellationTokenSource();
+
+        if (vendor == "claude" && agentId is null)
+            _ = Task.Run(() => ClaudeJudgeWarmup.RunAsync(config, sessionId, transcriptPath, cwd, time, cts.Token));
 
         var shutdownRequestedAt = 0L;
         using var shutdownStamp = cts.Token.Register(() => Interlocked.CompareExchange(ref shutdownRequestedAt, time.GetTimestamp(), 0));
@@ -596,6 +638,7 @@ partial class WatchCommand(
         // declaration above). Thin wrapper over the directly-testable GatedDrainNewLinesAsync (see
         // its doc — RunWatch itself can't be driven without a live SignalR reconnect).
         var vibeSubagents = new List<MistralVibeSubagent>();
+        var grokSubagents = new GrokSubagentTracker();
 
         Task<IReadOnlyList<string>> DrainNewLinesGatedAsync(bool isFinalDrainLocal, CancellationToken drainCt) {
             // Vibe replaces journal segments as it publishes, so a refresh can race a file away;
@@ -794,6 +837,8 @@ partial class WatchCommand(
         // process that knows they exist, so its teardown must stop them.
         var spawnedChildWatcherKeys = new HashSet<string>(StringComparer.Ordinal);
 
+        var museChildren = new MuseChildWatchers();
+
         try {
             while (!cts.Token.IsCancellationRequested) {
                 // Task 9: touch every iteration — including no-content drains and
@@ -893,6 +938,11 @@ partial class WatchCommand(
                     await ScanAntigravitySubagentLinks(sessionId, drained, state.PostedSubagentLinks, cts.Token);
                 } else if (agentId is null && vendor == "mistral-vibe") {
                     await ScanMistralVibeSubagents(sessionId, transcriptPath, vibeSubagents, seenSubagents, spawnedChildWatcherKeys, cts.Token);
+                } else if (agentId is null && vendor == "grok") {
+                    await ScanGrokSubagents(sessionId, transcriptPath, drained, grokSubagents, spawnedChildWatcherKeys, cts.Token);
+                } else if (agentId is null && vendor == "muse") {
+                    await ScanMuseSubagents(sessionId, transcriptPath, seenSubagents, museChildren, spawnedChildWatcherKeys, cts.Token);
+                    await StopFinishedMuseChildren(sessionId, transcriptPath, drained, museChildren);
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -1028,7 +1078,7 @@ partial class WatchCommand(
             // instead of silently dropping it.
             await SpoolUndeliveredTranscriptTailAsync(
                 transcriptSpool, transcriptPath, sessionId, agentId, vendor, state.LinesProcessed, state.Commits, CancellationToken.None,
-                ShutdownTailRedactionDeadline - time.GetElapsedTime(shutdownStarted));
+                ShutdownTailRedactionDeadline - time.GetElapsedTime(shutdownStarted), state.LineOffsets);
 
             // One last subagent-link scan on the way out — the parent may have emitted an
             // INVOKE_SUBAGENT step after the main loop's last tick but before exit, and this is
@@ -1217,6 +1267,184 @@ partial class WatchCommand(
             spawnedChildKeys.Add(key);
 
             Log(time, $"Mistral Vibe subagent {agentId} registered + child watcher spawned");
+        }
+    }
+
+    /// <summary>
+    /// Grok fires no hook for a subagent: it runs as a sibling session the parent's transcript names when
+    /// it is spawned and when it finishes. A spawned child is registered (<c>subagent-start</c>,
+    /// fail-closed) and streamed by a child watcher once its transcript exists, retried each tick until
+    /// then; a finished one is drained and stopped.
+    /// </summary>
+    async Task ScanGrokSubagents(
+            string                sessionId,
+            string                transcriptPath,
+            IReadOnlyList<string> drained,
+            GrokSubagentTracker   tracker,
+            ICollection<string>   spawnedChildKeys,
+            CancellationToken     ct
+        ) {
+        if (tracker.Seeded) tracker.Observe(GrokSubagents.Read(drained));
+        else {
+            try { tracker.Seed(GrokSubagents.Read(File.ReadLinesShared(transcriptPath))); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { tracker.Observe(GrokSubagents.Read(drained)); }
+        }
+
+        foreach (var (child, type) in tracker.AwaitingStart()) {
+            if (ct.IsCancellationRequested) return;
+
+            var transcript = GrokSubagents.ChildTranscript(transcriptPath, child);
+            if (!File.Exists(transcript)) continue;
+
+            var agentId = GrokSubagents.AgentId(child);
+            if (!await PostSubagentStartAsync(sessionId, agentId, type ?? "subagent", transcript, ct)) continue;
+
+            tracker.Started(child);
+            Log(time, $"Grok subagent {agentId} ({type}) registered");
+        }
+
+        // Every tick, not only at registration: a child watcher that failed to spawn or exited early is
+        // restarted, and a failed launch leaves the parent watcher running.
+        foreach (var (child, _) in tracker.Active()) {
+            if (ct.IsCancellationRequested) return;
+
+            var agentId = GrokSubagents.AgentId(child);
+            var key     = $"{sessionId}-{agentId}";
+            try {
+                await watchers.EnsureWatcherRunning(key: key, transcriptPath: GrokSubagents.ChildTranscript(transcriptPath, child),
+                    agentId: agentId, sessionIdOverride: sessionId, vendor: "grok");
+                spawnedChildKeys.Add(key);
+            } catch (Exception ex) when (ex is not OperationCanceledException) {
+                Log(time, $"Grok subagent {agentId} child watcher failed to start: {ex.Message}");
+            }
+        }
+
+        foreach (var (child, type) in tracker.AwaitingStop()) {
+            if (ct.IsCancellationRequested) return;
+
+            if (await new GrokSubagentTeardown(profiles, http, watchers, time).FinishAsync(sessionId, transcriptPath, child, type))
+                tracker.Stopped(child);
+        }
+    }
+
+    /// <summary>
+    /// A Muse child writes its own <c>subagent/&lt;id&gt;/session.jsonl</c> beside the parent's log; the
+    /// scan is the authority on which children exist. A child the parent log has not announced yet is
+    /// held back for <see cref="MuseChildWatchers.AnnouncementGraceScans"/> scans, so its label is not
+    /// frozen as the placeholder when the announcement is merely flushed late.
+    /// </summary>
+    async Task ScanMuseSubagents(
+            string              sessionId,
+            string              transcriptPath,
+            HashSet<string>     seen,
+            MuseChildWatchers   children,
+            ICollection<string> spawnedChildKeys,
+            CancellationToken   ct
+        ) {
+        IReadOnlyList<string> childLogs;
+        try {
+            childLogs = MuseSubagentDiscovery.EnumerateChildLogs(transcriptPath);
+        } catch {
+            return; // discovery is best-effort — never break the main drain loop
+        }
+
+        if (childLogs.Count == 0) return;
+
+        IReadOnlyDictionary<string, MuseChildLabel>? labels = null;
+
+        foreach (var childLog in childLogs) {
+            if (ct.IsCancellationRequested) return;
+            if (seen.Contains(childLog)) continue;
+
+            var childSessionId = Path.GetFileName(Path.GetDirectoryName(childLog)!);
+            if (!Guid.TryParse(childSessionId, out var childGuid)) continue;
+
+            labels ??= MuseSubagentDiscovery.ResolveChildLabels(transcriptPath);
+            if (children.ShouldHold(childLog, announced: labels.ContainsKey(childGuid.ToString("D")))) continue;
+
+            var label = MuseSubagentDiscovery.LabelFor(childSessionId, labels);
+            var key   = $"{sessionId}-{label.AgentId}";
+            var now   = time.GetUtcNow();
+
+            if (!children.ShouldAttemptSpawn(key, now)) continue;
+
+            // Fail-closed: register before streaming; a refused registration is retried next tick.
+            if (!children.IsRegistered(key)) {
+                if (!await PostSubagentStartAsync(sessionId, label.AgentId, label.AgentType, childLog, ct)) continue;
+
+                children.Registered(key);
+            }
+
+            await watchers.EnsureWatcherRunning(key: key, transcriptPath: childLog, agentId: label.AgentId,
+                sessionIdOverride: sessionId, vendor: "muse");
+
+            // EnsureWatcherRunning returns normally when it could not start one.
+            if (!watchers.IsWatcherAlive(key)) {
+                var delay = children.SpawnFailed(key, now);
+                Log(time, $"Muse subagent {label.AgentId} child watcher did not start; retrying in {delay.TotalSeconds:0}s");
+                continue;
+            }
+
+            seen.Add(childLog);
+            spawnedChildKeys.Add(key);
+            children.Spawned(key, childLog, time.GetUtcNow());
+
+            Log(time, $"Muse subagent {label.AgentId} ({label.AgentType}) registered + child watcher spawned");
+        }
+    }
+
+    /// <summary>
+    /// Stops the child watcher of a Muse worker once the parent log reports its <c>result_ready</c>, and
+    /// restarts one whose log grows afterwards. The stop is a SIGTERM, so the child runs its final drain
+    /// first. Reminder children have no such record and run until the parent ends. The full-log read
+    /// happens only while a result may be unhandled.
+    /// </summary>
+    async Task StopFinishedMuseChildren(
+            string                sessionId,
+            string                transcriptPath,
+            IReadOnlyList<string> drained,
+            MuseChildWatchers     children
+        ) {
+        if (drained.Any(l => l.Contains("subagent.control.result_ready", StringComparison.Ordinal))) children.RecheckPending = true;
+
+        try {
+            var reengagedAt = time.GetUtcNow();
+
+            foreach (var key in children.Reengaged(File.GetLastWriteTimeUtc, reengagedAt)) {
+                var started = false;
+
+                try {
+                    await watchers.EnsureWatcherRunning(key: key, transcriptPath: children.LogOf(key),
+                        agentId: key[(sessionId.Length + 1)..], sessionIdOverride: sessionId, vendor: "muse");
+                    started = watchers.IsWatcherAlive(key);
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
+                    Log(time, $"Muse subagent {key} child watcher restart failed: {ex.Message}");
+                }
+
+                if (started) {
+                    children.SpawnSucceeded(key);
+                    Log(time, $"Muse subagent {key} resumed; child watcher restarted");
+                } else {
+                    var delay = children.RestartFailed(key, reengagedAt);
+                    Log(time, $"Muse subagent {key} child watcher did not restart; retrying in {delay.TotalSeconds:0}s");
+                }
+            }
+
+            if (!children.RecheckPending) return;
+
+            var ready = MuseSubagentDiscovery.ResolveResultReadyCounts(transcriptPath)
+                .ToDictionary(kv => $"{sessionId}-{Guid.Parse(kv.Key):N}", kv => kv.Value, StringComparer.Ordinal);
+
+            var stops = children.SelectStops(ready, time.GetUtcNow());
+            if (stops.Count == 0) return;
+
+            // Read before the kill: a write after the child's final drain then still advances it.
+            foreach (var key in stops) children.RecordLogMtime(key, File.GetLastWriteTimeUtc(children.LogOf(key)));
+
+            var stopped = await children.Stop(watchers, stops, ready);
+            Log(time, $"Stopped {stopped} of {stops.Count} finished Muse child watcher(s)");
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // best-effort — the parent's teardown still stops every spawned child
         }
     }
 
@@ -1488,7 +1716,7 @@ partial class WatchCommand(
     /// Used to reject unexpected --vendor input before interpolating into the URL
     /// path (defence-in-depth against path traversal even though the CLI runs locally).
     /// </summary>
-    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe" };
+    static readonly HashSet<string> KnownVendors = new(StringComparer.Ordinal) { "claude", "codex", "copilot", "gemini", "kiro", "pi", "opencode", "antigravity", "cursor", "mistral-vibe", "grok", "muse" };
 
     /// <summary>
     /// Total time budget for the parent-exit session-end POST. Covers /auth/config
@@ -1684,7 +1912,7 @@ partial class WatchCommand(
     /// <see cref="WatchState.ThresholdReached"/>). Pure so it's unit-testable; see
     /// <see cref="RunWatch"/>'s call site.
     /// </summary>
-    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe";
+    internal static bool SkipsThresholdBuffering(string vendor) => vendor is "antigravity" or "cursor" or "mistral-vibe" or "grok" or "muse";
 
     /// <summary>
     /// the idle clock <see cref="ShouldEndOnIdle"/> measures against for
@@ -1897,6 +2125,18 @@ partial class WatchCommand(
         // child watchers), so the parent exit is the only place that finalizes them. Same
         // shape as the Gemini teardown; runs BEFORE the session-end POST so SubagentCompleted
         // lands ahead of SessionEnded. No-op when none were spawned.
+        if (vendor == "grok") {
+            try {
+                var finalized = await TimeBudget.RunCappedAsync(
+                    () => new GrokSubagentTeardown(profiles, http, watchers, time).DrainAsync(sessionId, transcriptPath),
+                    GrokSubagentTeardown.DrainCap, time);
+
+                if (!finalized) Log(time, "Parent-exit Grok subagent teardown cap elapsed; unfinalized subagents recover via: kcap import --grok");
+            } catch (Exception ex) {
+                Log(time, $"Parent-exit Grok subagent teardown failed: {ex.Message}");
+            }
+        }
+
         if (vendor == "opencode") {
             // DrainAsync is self-bounding (per-step caps + a shared cleanup deadline + a hard
             // overall ceiling), so it needs no outer time cap here — wrapping it in one risked
@@ -2082,7 +2322,8 @@ partial class WatchCommand(
                     isFinalDrain ? IncompleteFinalLinePolicy.ConsumeIfComplete : IncompleteFinalLinePolicy.Hold,
                     ct, captureRawBytes: vendor == "cursor",
                     rawBytesReadFrom: cursorBoundedReadFrom,
-                    newRangeByteOffset: vendor == "cursor" ? cursorGuardOldOffset : null);
+                    newRangeByteOffset: vendor == "cursor" ? cursorGuardOldOffset : null,
+                    lineOffsets: state.LineOffsets);
             }
 
             // commit the cadence counter now that the guarded
@@ -2640,15 +2881,16 @@ partial class WatchCommand(
 
     /// <summary>Spool only records beyond the acknowledged source frontier.</summary>
     internal async Task<TranscriptSpool.AppendResult?> SpoolUndeliveredTranscriptTailAsync(
-            TranscriptSpool   transcriptSpool,
-            string            transcriptPath,
-            string            sessionId,
-            string?           agentId,
-            string            vendor,
-            int               linesProcessed,
-            CommitObservation commits,
-            CancellationToken ct,
-            TimeSpan?         redactionLimit = null
+            TranscriptSpool      transcriptSpool,
+            string               transcriptPath,
+            string               sessionId,
+            string?              agentId,
+            string               vendor,
+            int                  linesProcessed,
+            CommitObservation    commits,
+            CancellationToken    ct,
+            TimeSpan?            redactionLimit = null,
+            TranscriptLineIndex? lineOffsets    = null
         ) {
         if (!File.Exists(transcriptPath)) return null;
 
@@ -2665,7 +2907,7 @@ partial class WatchCommand(
             await using var stream = new FileStream(
                 transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             tail = await ReadNewCompleteLinesAsync(
-                stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct);
+                stream, linesProcessed, IncompleteFinalLinePolicy.ConsumeIfComplete, ct, lineOffsets: lineOffsets);
         } catch (IOException ex) {
             Log(time, $"Shutdown-tail spool: failed to read transcript for {sessionId}: {ex.Message}");
 
@@ -2740,6 +2982,7 @@ partial class WatchCommand(
             "pi"       => TryExtractPiAssistantText(line),
             "opencode" => TryExtractOpenCodeText(line, "assistant"),
             "antigravity" => TryExtractAntigravityText(line, "assistant"),
+            "grok"     => TryExtractGrokText(line, "agent_message_chunk"),
             _          => TryExtractClaudeAssistantText(line)
         };
 
@@ -2874,6 +3117,9 @@ partial class WatchCommand(
                 };
             }
 
+            if (vendor == "grok") return TryExtractGrokText(line, "user_message_chunk") is not null
+                                      || TryExtractGrokText(line, "agent_message_chunk") is not null;
+
             return root.Str("type") is "user" or "assistant";
         } catch {
             return false;
@@ -2888,8 +3134,24 @@ partial class WatchCommand(
             "pi"       => TryExtractPiUserText(line),
             "opencode" => TryExtractOpenCodeText(line, "user"),
             "antigravity" => TryExtractAntigravityText(line, "user"),
+            "grok"     => TryExtractGrokText(line, "user_message_chunk"),
             _          => TryExtractClaudeUserText(line, time)
         };
+
+    // Grok's updates.jsonl lines are ACP session/update notifications, each text run whole.
+    static string? TryExtractGrokText(string line, string sessionUpdate) {
+        try {
+            using var doc  = JsonDocument.Parse(line);
+            var       root = doc.RootElement;
+
+            if (root.Str("method") != "session/update") return null;
+            if (root.Obj("params")?.Obj("update") is not { } update || update.Str("sessionUpdate") != sessionUpdate) return null;
+
+            return update.Obj("content")?.Str("text")?.Trim() is { Length: > 0 } text ? text : null;
+        } catch {
+            return null;
+        }
+    }
 
     // ── OpenCode extractors ───────────────────────────────────────────
     //
@@ -4298,6 +4560,11 @@ partial class WatchCommand(
     /// lands exactly on a line boundary (true by construction for the Cursor watcher's own
     /// <c>CursorByteOffset</c> — see <see cref="ByteOffsetForAckedLines"/>).
     /// </param>
+    /// <param name="lineOffsets">
+    /// Ignored when <paramref name="captureRawBytes"/> is true. Otherwise lets the read start at
+    /// <paramref name="linesProcessed"/>'s byte offset rather than byte 0, and learns the offsets of
+    /// the lines it reads; the result is the same as without it.
+    /// </param>
     internal static async Task<NewTranscriptLines> ReadNewCompleteLinesAsync(
             FileStream                stream,
             int                       linesProcessed,
@@ -4305,7 +4572,8 @@ partial class WatchCommand(
             CancellationToken         ct,
             bool                      captureRawBytes    = false,
             long                      rawBytesReadFrom   = 0,
-            long?                     newRangeByteOffset = null) {
+            long?                     newRangeByteOffset = null,
+            TranscriptLineIndex?      lineOffsets        = null) {
         var length = stream.Length;
 
         bool endsWithNewline;
@@ -4388,7 +4656,19 @@ partial class WatchCommand(
                 }
             }
         } else {
-            using var reader = new StreamReader(new LengthLimitedReadStream(stream, length), leaveOpen: true);
+            var startOffset = 0L;
+            if (lineOffsets is not null) {
+                (lineIndex, startOffset) = await lineOffsets.StartAsync(stream, length, linesProcessed, ct);
+                stream.Position          = startOffset;
+            }
+
+            // Mid-file there is no byte-order mark to detect, and a line that happens to begin with
+            // the UTF-8 one must keep it, as it does when decoded from byte 0.
+            using var reader = startOffset == 0
+                ? new StreamReader(new LengthLimitedReadStream(stream, length, lineOffsets), leaveOpen: true)
+                : new StreamReader(new LengthLimitedReadStream(stream, length - startOffset, lineOffsets),
+                    Utf8NoPreamble, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+
             while (await reader.ReadLineAsync(ct) is { } line) {
                 if (lineIndex >= linesProcessed && !string.IsNullOrWhiteSpace(line)) {
                     newLines.Add(line);
@@ -4397,6 +4677,8 @@ partial class WatchCommand(
 
                 lineIndex++;
             }
+
+            if (lineOffsets is not null) await lineOffsets.FinishAsync(stream, ct);
         }
 
         // `length` is the exact byte boundary this read was capped at
@@ -4484,7 +4766,7 @@ partial class WatchCommand(
 
     /// <summary>Read-only view of <c>inner</c> that reports EOF after <c>limit</c> bytes, so a
     /// StreamReader over it can't read past a length sampled before a concurrent append.</summary>
-    internal sealed class LengthLimitedReadStream(Stream inner, long limit) : Stream {
+    internal sealed class LengthLimitedReadStream(Stream inner, long limit, TranscriptLineIndex? observer = null) : Stream {
         long _consumed;
 
         public override int Read(byte[] buffer, int offset, int count) {
@@ -4492,6 +4774,7 @@ partial class WatchCommand(
             if (allowed <= 0) return 0;
             var n = inner.Read(buffer, offset, allowed);
             _consumed += n;
+            observer?.Observe(buffer.AsSpan(offset, n));
             return n;
         }
 
@@ -4500,6 +4783,7 @@ partial class WatchCommand(
             if (allowed <= 0) return 0;
             var n = await inner.ReadAsync(buffer[..allowed], ct);
             _consumed += n;
+            observer?.Observe(buffer.Span[..n]);
             return n;
         }
 

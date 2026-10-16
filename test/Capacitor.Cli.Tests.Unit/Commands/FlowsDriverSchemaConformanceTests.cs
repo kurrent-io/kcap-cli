@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Mcp;
@@ -232,8 +233,6 @@ public class FlowsDriverSchemaConformanceTests {
         bool                            BareInstall = false,
         bool                            JsonProjected = true);
 
-    /// <summary>Every environment variable any kcap path resolver consults. Kept together so a new
-    /// override cannot be added without this list being the obvious place to add it.</summary>
     /// <summary>Deterministic native-binary path injected into every installer arm. Registration
     /// writes the resolved binary as the command (default: Environment.ProcessPath) — under the
     /// test host that default would be the test-runner executable, so the suite injects its own
@@ -339,6 +338,10 @@ public class FlowsDriverSchemaConformanceTests {
             env => env.Harnesses.Of<MistralVibeHarness>().Paths.ConfigToml, FromVibeToml,
             JsonProjected: false),
 
+        new("Muse Code", "--muse",
+            env => MuseHooksInstaller.Install(env.Harnesses.Of<MuseHarness>().Paths.SettingsJson),
+            env => env.Harnesses.Of<MuseHarness>().Paths.SettingsJson, Json("Muse Code", "mcp_servers")),
+
         // Codex installs unconditionally rather than through the `--if-installed` refresh branch, so
         // it takes the bare-install path and needs a planted plugin root. Flagged here rather than
         // hidden, because it is the one arm whose invocation differs.
@@ -352,12 +355,8 @@ public class FlowsDriverSchemaConformanceTests {
     /// server subset, the shape, or drops flows entirely — which is exactly the drift this suite
     /// claims to catch.</summary>
     static async Task<Projection> InstallAndRead(Arm arm) {
-        // EVERY known path override, cleared for EVERY arm — deliberately not a per-arm list. If any
-        // one is missed, the opt-in, the installer and the extractor all resolve OUTSIDE the fake
-        // home: the test then reads and rewrites the developer's real harness config, and can pass
-        // against a pre-existing entry. The names are easy to get individually wrong (GeminiPaths
-        // reads GEMINI_CLI_HOME, not GEMINI_HOME; OpenCode falls back to XDG_CONFIG_HOME; CodexPaths
-        // gives ambient CODEX_HOME precedence), which is exactly why the list is not per-arm.
+        // Hermetic: TestHarnesses.Under builds every harness's paths with explicit null overrides, so
+        // ambient *_HOME / XDG_* variables cannot move an arm outside the fake home.
         using var home      = new TempHome();
         var env = TestEnv(home.Path, arm.BareInstall ? PlantFakePlugin() : null);
 
@@ -671,6 +670,7 @@ public class FlowsDriverSchemaConformanceTests {
         var covered = Arms.Select(a => a.Flag)
             .Append("--claude")   // bundled kcap/.mcp.json, covered by the static-config test
             .Append("--pi")       // no MCP config at all, covered by the bridge test
+            .Append("--grok")     // writes no MCP config: Grok loads Claude's, covered by the static-config test
             .ToHashSet(StringComparer.Ordinal);
 
         foreach (var flag in VendorSelection.KnownVendorFlags)

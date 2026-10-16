@@ -37,7 +37,8 @@ public static class AgentsSkillsInstaller {
         "plans",
         "guided-tour",
         "eval-watch",
-        "start-agents"
+        "start-agents",
+        "connect-capacitor"
     ];
 
     /// <summary>Skills this installer once shipped. Their <c>kcap-</c> folders are deleted on install and remove,

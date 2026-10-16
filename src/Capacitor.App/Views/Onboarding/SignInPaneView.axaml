@@ -3,6 +3,7 @@
              xmlns:auth="clr-namespace:Capacitor.Cli.Core.Auth;assembly=Capacitor.Cli.Core"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.Onboarding.SignInPaneView"
              x:DataType="vm:SignInStepViewModel">
     <StackPanel Spacing="16">
@@ -18,8 +19,7 @@
                 <StackPanel Spacing="4" IsVisible="{Binding Satisfied}">
                     <Border Classes="frResolved">
                         <StackPanel Orientation="Horizontal" Spacing="10">
-                            <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
-                                  Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                            <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
                             <StackPanel Spacing="2">
                                 <TextBlock x:Name="StartSignedInText" Classes="frLabel" Text="{Binding ConnectionStatus}" />
                                 <TextBlock Classes="frBody" Text="{Binding StatusDetail}"
@@ -32,8 +32,8 @@
                 <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
                     <StackPanel Orientation="Horizontal" Spacing="10">
                         <Panel Classes="frSpinner" IsVisible="{Binding Busy}">
-                            <Ellipse />
-                            <Path Classes.kcapSpinning="{Binding Busy}" />
+                            <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding Busy}"
+                                           Foreground="{StaticResource FrAccentBrush}" />
                         </Panel>
                         <TextBlock x:Name="SignInStatusText" Classes="frLabel" Text="{Binding Status}" TextWrapping="Wrap"
                                    VerticalAlignment="Center" Classes.failed="{Binding StatusIsError}">
@@ -108,19 +108,15 @@
                                     <TextBlock Classes="frLabel" Text="{Binding Label}" />
                                     <TextBlock Classes="frSignal" Text="{Binding Origin}" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
-                                <Path Grid.Column="1" Classes="frChoiceMark" VerticalAlignment="Center"
-                                      Width="14" Height="14" Stretch="Uniform"
-                                      Fill="{StaticResource FrAccentBrush}"
-                                      Data="M5.5 10.586 1.707 6.793A1 1 0 0 0 .293 8.207l4.5 4.5a1 1 0 0 0 1.414 0l11-11A1 1 0 0 0 15.793.293L5.5 10.586Z"
-                                      />
+                                <icons:AppIcon Kind="Check" Size="14" Grid.Column="1" Classes="frChoiceMark" VerticalAlignment="Center"
+                                               Foreground="{StaticResource FrAccentBrush}" />
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
                 <Border Classes="frResolved" IsVisible="{Binding Satisfied}">
                     <StackPanel Orientation="Horizontal" Spacing="10">
-                        <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
-                              Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" />
+                        <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" Foreground="{StaticResource KcapSuccessBrush}" />
                         <StackPanel Spacing="2">
                             <TextBlock x:Name="SignedInText" Classes="frLabel" Text="{Binding ConnectionStatus}" />
                             <TextBlock Classes="frBody" Text="{Binding StatusDetail}"
@@ -211,13 +207,39 @@
             </StackPanel>
         </Border>
 
+        <Border Classes="frCard" IsVisible="{Binding InviteCodePromptVisible}">
+            <StackPanel Spacing="16">
+                <StackPanel Spacing="8">
+                    <TextBlock Classes="frMicro" Text="INVITE CODE" />
+                    <TextBox x:Name="InviteCodeBox" Classes="frField" Width="160" HorizontalAlignment="Left"
+                             PlaceholderText="ABCD" FontFamily="{StaticResource FrMonoFont}"
+                             AutomationProperties.Name="Invite code"
+                             Text="{Binding InviteCode, Mode=TwoWay}" />
+                    <TextBlock x:Name="InviteCodeErrorText" Classes="frError" Text="{Binding InviteCodeError}"
+                               IsVisible="{Binding InviteCodeError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+                <StackPanel Spacing="4"
+                            IsVisible="{Binding InviteRequestUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Classes="frDetail" Text="Don't have one? Request an invite:" />
+                    <Button x:Name="InviteRequestUrlButton" Classes="frLink" HorizontalAlignment="Left"
+                            Content="{Binding InviteRequestUrl}" Command="{Binding OpenInviteRequestUrlCommand}" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Button x:Name="SubmitInviteCodeButton" Classes="frPrimary" Content="Continue"
+                            Command="{Binding SubmitInviteCodeCommand}" />
+                    <Button x:Name="CancelInviteCodeButton" Classes="frSecondary" Content="Cancel"
+                            Command="{Binding CancelInviteCodeCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <Border Classes="frCard" IsVisible="{Binding ProvisioningVisible}">
             <StackPanel Spacing="14">
                 <StackPanel Orientation="Horizontal" Spacing="14">
                     <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource FrAccentWashBrush}">
                         <Panel Classes="frSpinner">
-                            <Ellipse />
-                            <Path Classes.kcapSpinning="{Binding ProvisioningVisible}" />
+                            <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding ProvisioningVisible}"
+                                           Foreground="{StaticResource FrAccentBrush}" />
                         </Panel>
                     </Border>
                     <StackPanel VerticalAlignment="Center" Spacing="2">

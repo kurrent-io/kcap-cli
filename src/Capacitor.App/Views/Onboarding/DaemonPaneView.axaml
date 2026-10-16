@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
              xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.Onboarding.DaemonPaneView"
              x:DataType="vm:DaemonStepViewModel">
     <Border Classes="frCard">
@@ -20,11 +21,11 @@
                 <TextBlock Classes="frMicro" Text="BACKGROUND SERVICE" />
                 <StackPanel Orientation="Horizontal" Spacing="10">
                     <Panel Classes="frSpinner" IsVisible="{Binding Busy}">
-                        <Ellipse />
-                        <Path Classes.kcapSpinning="{Binding Busy}" />
+                        <icons:AppIcon Kind="LoaderCircle" Size="20" Classes.kcapSpinning="{Binding Busy}"
+                                       Foreground="{StaticResource FrAccentBrush}" />
                     </Panel>
-                    <Path Data="M20 6 9 17l-5-5" Stroke="{StaticResource KcapSuccessBrush}" StrokeThickness="2"
-                          Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Center" IsVisible="{Binding Satisfied}" />
+                    <icons:AppIcon Kind="Check" Size="14" VerticalAlignment="Center" IsVisible="{Binding Satisfied}"
+                                   Foreground="{StaticResource KcapSuccessBrush}" />
                     <TextBlock x:Name="DaemonMessageText" Classes="frLabel" FontWeight="Medium" Text="{Binding Message}"
                                TextWrapping="Wrap" VerticalAlignment="Center" MaxWidth="520"
                                IsVisible="{Binding Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

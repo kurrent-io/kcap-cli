@@ -20,10 +20,15 @@ public sealed partial class PullRequestContextViewModel {
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
     public bool IsDiscussion => _section is "reviews" or "threads" or "thread_comments" or "conversation";
-    public IReadOnlyList<PullRequestRow> ReviewerRows => IsReviewers ? Rows : [];
-    public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? Rows : [];
-    public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? Rows : [];
-    public string FreshnessLabel => IsOverview ? FetchedLabel : SnapshotLabel;
+    public IReadOnlyList<PullRequestRow> ReviewerRows => IsReviewers ? _reviewerRows : [];
+    public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? _checkRows : [];
+    public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? _discussionRows : [];
+    public string FreshnessLabel {
+        get {
+            var time = IsOverview || HasStaleOverview ? FetchedLabel : SnapshotLabel;
+            return HasStaleOverview ? "Earlier snapshot" + (time.Length > 0 ? " · " + time : "") : time;
+        }
+    }
     public bool HasStaleOverview => CanDisplay && (_grace || _overviewRead?.Kind == PullRequestReadKind.Stale);
     public string OverviewFreshnessLabel => HasStaleOverview ? "Earlier snapshot" + (FetchedLabel.Length > 0 ? " · " + FetchedLabel : "") : FetchedLabel;
 
@@ -58,7 +63,7 @@ public sealed partial class PullRequestContextViewModel {
             if (!CanDisplay) return new("");
             var checks = _sections.GetValueOrDefault("checks");
             if (checks is { Coverage: "complete", Stopped: false, Total.Kind: "exact", Completed: { } completed }
-                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < RowsFreshFor
+                && checks.Head == _overview?.HeadSha && (HasStaleOverview || _time.GetUtcNow().UtcDateTime - completed < RowsFreshFor)
                 && completed >= _overview?.Checks?.Availability.FetchedAt && checks.Pages.Sum(page => page.Rows.Length) == checks.Total.Value) {
                 var rows = checks.Pages.SelectMany(page => page.Rows).ToArray();
                 if (rows.Length == 0) return new("No checks reported", Detail: "No checks were reported for this commit.");
@@ -84,15 +89,30 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
-    static readonly string[] PresentationProperties = [
-        nameof(HasMultipleChoices), nameof(SectionEyebrow), nameof(SectionMeta), nameof(RepositoryLabel), nameof(NumberLabel), nameof(HasNumberLabel), nameof(ProviderLabel),
-        nameof(CanOpenSource), nameof(ShowsOpenSource), nameof(IsChecks), nameof(IsReviewers), nameof(IsReviewSection), nameof(IsDiscussion), nameof(FreshnessLabel),
-        nameof(HasStaleOverview), nameof(OverviewFreshnessLabel),
-        nameof(SelectedTabIndex), nameof(SelectedReviewTabIndex), nameof(LifecycleStatus), nameof(ReviewStatus), nameof(ChecksStatus),
-        nameof(ReviewerRows), nameof(CheckRows), nameof(DiscussionRows),
-    ];
-
     void NotifyPresentation() {
-        foreach (var property in PresentationProperties) this.RaisePropertyChanged(property);
+        NotifyValue(HasMultipleChoices);
+        NotifyValue(SectionEyebrow);
+        NotifyValue(SectionMeta);
+        NotifyValue(RepositoryLabel);
+        NotifyValue(NumberLabel);
+        NotifyValue(HasNumberLabel);
+        NotifyValue(ProviderLabel);
+        NotifyValue(CanOpenSource);
+        NotifyValue(ShowsOpenSource);
+        NotifyValue(IsChecks);
+        NotifyValue(IsReviewers);
+        NotifyValue(IsReviewSection);
+        NotifyValue(IsDiscussion);
+        NotifyValue(FreshnessLabel);
+        NotifyValue(HasStaleOverview);
+        NotifyValue(OverviewFreshnessLabel);
+        NotifyValue(SelectedTabIndex);
+        NotifyValue(SelectedReviewTabIndex);
+        NotifyValue(LifecycleStatus);
+        NotifyValue(ReviewStatus);
+        NotifyValue(ChecksStatus);
+        NotifyValue(!ReferenceEquals(ReviewerRows, _reviewerRows), nameof(ReviewerRows));
+        NotifyValue(!ReferenceEquals(CheckRows, _checkRows), nameof(CheckRows));
+        NotifyValue(!ReferenceEquals(DiscussionRows, _discussionRows), nameof(DiscussionRows));
     }
 }

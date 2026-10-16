@@ -298,7 +298,10 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     // count ceiling, whether a cited session is one this caller may cite — are left to it and
     // surface as coded 4xx bodies through HandleToolCallAsync, rather than being restated here
     // where they would drift.
-    internal static JsonObject BuildPublishBody(JsonObject? args, string html) {
+    internal static JsonObject BuildPublishBody(JsonObject? args, string html)
+        => BuildPublishBody(args, html, Environment.GetEnvironmentVariable);
+
+    internal static JsonObject BuildPublishBody(JsonObject? args, string html, Func<string, string?> getEnv) {
         var body = new JsonObject {
             ["title"] = McpToolArguments.RequireString(args, "title"),
             ["html"]  = html
@@ -315,7 +318,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         // with the session that produced it, and an agent that has to remember to say so mostly
         // won't. An explicit session_ids wins when the caller means a different set.
         if (ReadSessions(args) is { } sessions) body["sources"] = sessions;
-        else if (ArgParsing.ResolveSessionIdFromEnv() is { Length: > 0 } ambient)
+        else if (McpSessionId.TryResolveWithin(null, HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId) is { Length: > 0 } ambient)
             body["sources"] = new JsonArray((JsonNode?)JsonValue.Create(ambient));
 
         return body;

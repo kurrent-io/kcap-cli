@@ -145,59 +145,27 @@ public class AppMutationLaneWiringTests {
     }
 
     [Test]
-    public async Task Attention_surface_uses_human_copy_not_the_wire_token() {
+    [Arguments("internal_error", "failed")]
+    [Arguments("consent_seed_unwritable", "storage")]
+    [Arguments("stale_txn_marker", "repair")]
+    [Arguments("running_without_daemon_pid", "repair")]
+    [Arguments("daemon_running_outside_service", "repair")]
+    public async Task Attention_surfaces_use_human_copy_not_the_wire_token(string token, string kind) {
         var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.Failed(1, "internal_error", RecoverySurface.Attention));
+        MutationOutcome outcome = kind switch {
+            "failed" => new MutationOutcome.Failed(1, token, RecoverySurface.Attention),
+            "storage" => new MutationOutcome.Refused(token, RecoverySurface.Storage),
+            _ => new MutationOutcome.AttentionRepair(token),
+        };
 
         await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("internal_error")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("internal_error");
-        await Assert.That(surface.Prompts).IsEmpty();
-        await Assert.That(surface.StatusMessages).IsEmpty();
-    }
-
-    [Test]
-    public async Task Storage_surface_uses_human_copy_not_the_wire_token() {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.Refused("consent_seed_unwritable", RecoverySurface.Storage));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("consent_seed_unwritable")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("consent_seed_unwritable");
-    }
-
-    [Test]
-    public async Task AttentionRepair_uses_human_copy_for_stale_txn_marker() {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.AttentionRepair("stale_txn_marker"));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
-
-        await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
-        await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor("stale_txn_marker")!);
-        await Assert.That(surface.AttentionMessages[0]).DoesNotContain("stale_txn_marker");
-    }
-
-    [Test]
-    [Arguments("running_without_daemon_pid")]
-    [Arguments("daemon_running_outside_service")]
-    public async Task AttentionRepair_uses_human_copy_for_service_ownership_tokens(string token) {
-        var surface = new FakeLifecycleSurface();
-        var envelope = Envelope(new MutationOutcome.AttentionRepair(token));
-
-        await AppUnderTest.PresentOutcomeAsync(
-            surface, envelope, NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
+            surface, Envelope(outcome), NeverRunMutation, FixedTerminalPath("/usr/bin"), () => null, CancellationToken.None);
 
         await Assert.That(surface.AttentionMessages.Count).IsEqualTo(1);
         await Assert.That(surface.AttentionMessages[0]).IsEqualTo(AppUnderTest.AttentionCopyFor(token)!);
         await Assert.That(surface.AttentionMessages[0]).DoesNotContain(token);
+        await Assert.That(surface.Prompts).IsEmpty();
+        await Assert.That(surface.StatusMessages).IsEmpty();
     }
 
     [Test]

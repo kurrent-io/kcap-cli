@@ -1,12 +1,22 @@
 using System.Globalization;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.PullRequests.Readers;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
-internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullRequestSource {
+internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullRequestSource, IPullRequestReaders {
+    public readonly List<(string Session, PullRequestRepository? Repository, string? Branch)> Descriptions = [];
+    public void DescribeSession(string sessionId, PullRequestRepository? repository, string? branch) => Descriptions.Add((sessionId, repository, branch));
+    public PullRequestReaderNote? NoteFor(string provider, string host) => null;
+    public string? PrLink(string? url, PullRequestSubjectDto subject) => PullRequestWire.PrLink(url, subject);
     public PullRequestLinkDto[] Links = [Link(1), Link(2)];
+    public int AccessSeconds = 30;
     public int Lists;
+    public TaskCompletionSource? ListGate;
+    public int Resets;
+    public string? ListFailure;
+    public readonly Queue<PullRequestRead<PullRequestLinkListDto>> ListResponses = new();
     public int Overviews;
     public int Pages;
     public int TotalPages = 3;
@@ -28,10 +38,13 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
     public readonly List<CancellationToken> OverviewTokens = [];
     public PullRequestCapabilityKind Capability = PullRequestCapabilityKind.Supported;
     public Task<PullRequestCapability> DiscoverAsync(bool refresh, CancellationToken ct) => Task.FromResult(new PullRequestCapability(Capability, 1));
-    public void ResetSession(string sessionId) { }
-    public Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
+    public void ResetSession(string sessionId) { Resets++; }
+    public async Task<PullRequestRead<PullRequestLinkListDto>> ListAsync(string sessionId, CancellationToken ct) {
         Lists++;
-        return Task.FromResult(new PullRequestRead<PullRequestLinkListDto>(PullRequestReadKind.Ready, new() { Items = Links }));
+        if (ListGate is { } gate) await gate.Task.WaitAsync(ct);
+        if (ListResponses.TryDequeue(out var response)) return response;
+        if (ListFailure is { } reason) return new(PullRequestReadKind.SubjectUnavailable, Reason: reason);
+        return new(PullRequestReadKind.Ready, new() { Items = Links });
     }
     public Task<PullRequestRead<PullRequestLinkListDto>> LegacyLinksAsync(string sessionId, CancellationToken ct) => ListAsync(sessionId, ct);
     public Task<PullRequestRead<PullRequestOverviewDto>> OverviewAsync(string sessionId, PullRequestSubjectDto subject, CancellationToken ct) {
@@ -44,7 +57,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
         new() { Title = title ?? TitleFor?.Invoke(subject) ?? OverviewTitle, Description = "Private description", HeadSha = HeadSha,
             Lifecycle = Lifecycles.GetValueOrDefault(subject.Number, "open"),
             Checks = new() { Availability = new() { Status = "ready", FetchedAt = time.GetUtcNow().UtcDateTime }, Rollup = RollupFor?.Invoke(subject) ?? "success" } },
-        subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
+        subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: AccessSeconds, RequestStarted: time.GetTimestamp());
     public Task<PullRequestRead<PullRequestPageDto<T>>> PageAsync<T>(string sessionId, PullRequestSubjectDto subject, string section,
         string? cursor, string? resolved, string? threadId, CancellationToken ct) where T : class {
         Pages++;
@@ -67,7 +80,7 @@ internal sealed class FakePullRequestSource(FakeTimeProvider time) : IPullReques
             SnapshotId = new string('a', 64), SnapshotStartedAt = time.GetUtcNow().UtcDateTime, SnapshotCompletedAt = time.GetUtcNow().UtcDateTime,
             Coverage = "complete", HeadSha = section == "checks" ? HeadSha : null, Total = new() { Kind = "exact", Value = TotalPages },
             ExcludedByFilter = new() { Kind = "exact", Value = 0 }, Items = EmptyPages ? [] : [(T)item], PageCursor = page.ToString("x64", CultureInfo.InvariantCulture), NextCursor = next, HasMore = next is not null
-        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: 30, RequestStarted: time.GetTimestamp());
+        }, subject, time.GetUtcNow().UtcDateTime, AccessValidForSeconds: AccessSeconds, RequestStarted: time.GetTimestamp());
         return PageGate is { } gate ? gate.Task.ContinueWith(_ => read, TaskScheduler.Default) : Task.FromResult(read);
     }
     public static PullRequestLinkDto Link(int number) => new() { Provider = "github", Host = "github.com", RepoHash = "hash",

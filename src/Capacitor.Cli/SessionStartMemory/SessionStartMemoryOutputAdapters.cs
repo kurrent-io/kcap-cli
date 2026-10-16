@@ -11,7 +11,7 @@ internal static class SessionStartMemoryOutputAdapters {
     public static string Render(HarnessId harness, string? fragment, string? workItemsNudge = null) {
         fragment = MergeNudge(fragment, workItemsNudge);
         if (harness == HarnessId.Claude && fragment is null) return "";
-        if (harness is HarnessId.Kiro or HarnessId.Pi or HarnessId.OpenCode)
+        if (harness is HarnessId.Kiro or HarnessId.Pi or HarnessId.OpenCode or HarnessId.Muse)
             return fragment is null ? "" : fragment + "\n";
 
         object envelope = harness switch {

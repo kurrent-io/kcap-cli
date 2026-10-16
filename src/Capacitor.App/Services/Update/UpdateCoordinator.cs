@@ -15,8 +15,8 @@ public sealed class UpdateCoordinator {
     // Velopack's updater on Windows kills every process running from the install folder, and the
     // app's daemon runs from there.
     internal static string ReadyDisclosure(bool windows) => windows
-        ? "Restart Kurrent Capacitor to finish installing it. Installing stops the daemon, which ends any running agents."
-        : "Restart Kurrent Capacitor to finish installing it. Running agents keep running; the daemon restarts on its own once it is idle.";
+        ? "Restart Kurrent Capacitor to finish installing the update. Installing stops the daemon, which ends any running agents."
+        : "Restart Kurrent Capacitor to finish installing the update. Running agents keep running; the daemon restarts on its own once it is idle.";
 
     readonly IAppUpdater _updater;
     readonly ILifecycleSurface _surface;
@@ -157,7 +157,7 @@ public sealed class UpdateCoordinator {
 
             var prompt = new LifecyclePrompt(
                 LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
-                $"Kurrent Capacitor {candidate.Version} is ready. {ReadyDisclosure(OperatingSystem.IsWindows())}");
+                ReadyDisclosure(OperatingSystem.IsWindows()));
             var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
             ConsumeManual(manual);
             if (accepted) RequestRestart(candidate);

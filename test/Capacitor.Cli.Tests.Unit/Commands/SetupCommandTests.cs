@@ -8,6 +8,9 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Muse;
+using Capacitor.Cli.Core.Harness.Codex;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.PrDetection;
 using Spectre.Console;
 
@@ -1505,6 +1508,91 @@ public class SetupCommandTests {
 
     [Test]
     [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_wires_no_harness_and_keeps_sessions_private() {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-muse", "widgets", Config.Root);
+
+        // The image's Codex, on PATH: plain setup would detect it and write ~/.codex.
+        _ = TestBinaries.Searching(Bin, "codex");
+
+        // The same resolution Command(...) hands the wizard, so a CODEX_HOME in the developer's
+        // shell cannot make these assertions look at a different file than setup wrote.
+        var codex  = TestHarnesses.Under(Home, TestBinaries.Searching(Bin)).Of<CodexHarness>().Paths;
+        var skills = new AgentsPaths(Home).UserSkillsDir;
+
+        using var capture = ConsoleOutput.StartCapture();
+
+        var runner = FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import"));
+
+        var exit = await Command(runner, fixture.RepoDir).HandleAsync(["setup", "--server-url", server.Url!, "--muse-assistant"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(runner.Calls).IsEqualTo(0);
+
+        var saved = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(saved.Profiles[saved.ActiveName].DefaultVisibility).IsEqualTo("private");
+
+        await Assert.That(File.Exists(codex.ConfigToml)).IsFalse();
+        await Assert.That(File.Exists(codex.UserHooksJson)).IsFalse();
+        await Assert.That(Directory.Exists(skills)).IsFalse();
+
+        // Detected but never offered, so the later new-harness nudge must still be free to ask.
+        await Assert.That(new HarnessOfferStore(Config.Root, TimeProvider.System).Load().Entry(HarnessId.Codex)?.LastOffered).IsNull();
+
+        var output = capture.GetCapturedOutput();
+        await Assert.That(output).Contains(new Uri(server.Url!).Host);
+        await Assert.That(output).Contains("phog.kurrent.io");
+        await Assert.That(output).Contains("Always allow this site");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_honours_an_explicit_default_visibility() {
+        using var server = WireMockServer.Start();
+        StubAuthProviderNone(server);
+
+        await using var fixture = await HandleAsyncE2EFixture.CreateAsync("acme-muse-vis", "widgets", Config.Root);
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), fixture.RepoDir)
+            .HandleAsync(["setup", "--server-url", server.Url!, "--muse-assistant", "--default-visibility", "org_public"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var saved = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(saved.Profiles[saved.ActiveName].DefaultVisibility).IsEqualTo("org_public");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_without_a_tenant_is_refused() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(["setup", "--muse-assistant"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedError()).Contains("--muse-assistant");
+        await Assert.That(capture.GetCapturedError()).Contains("<tenant>");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task HandleAsync_MuseAssistant_reads_an_unreachable_server_as_not_yet_approved() {
+        using var capture = ConsoleOutput.StartCapture();
+
+        // A closed loopback port: the probe fails the way an unapproved host does on the VM.
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(["setup", "--server-url", "http://127.0.0.1:9", "--muse-assistant"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(capture.GetCapturedOutput()).Contains("not yet approved");
+        await Assert.That(capture.GetCapturedOutput()).Contains("run the same command again");
+    }
+
+    [Test]
+    [NotInParallel]
     public async Task HandleAsync_SchemeLessServerUrl_ReachesImportRunnerNormalizedWithHttpScheme() {
         using var server = WireMockServer.Start();
         StubAuthProviderNone(server);
@@ -1645,6 +1733,30 @@ public class SetupCommandTests {
 
         await Assert.That(workspace).IsNull();
         await Assert.That(error!).Contains("--org and --slug");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_carries_the_invite_code_through() {
+        var (workspace, error) = Parse("setup", "--org", "Acme", "--slug", "acme", "--invite-code", "  ABCD  ");
+
+        await Assert.That(error).IsNull();
+        await Assert.That(workspace!.InviteCode).IsEqualTo("ABCD");
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.InviteCode).IsNull();
+    }
+
+    // An invite code with nothing to create would otherwise be dropped in silence.
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_invite_code_with_no_workspace_to_create() {
+        var (workspace, error) = Parse("setup", "--invite-code", "ABCD");
+
+        await Assert.That(workspace).IsNull();
+        await Assert.That(error!).Contains("--org and --slug");
+    }
+
+    [Test]
+    public async Task ParseRequestedWorkspace_refuses_an_invite_code_with_no_value() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme", "--invite-code").Error!)
+            .Contains("--invite-code needs a value");
     }
 
     [Test]
@@ -1840,5 +1952,29 @@ public class SetupCommandTests {
 
         await Assert.That(workspace).IsNull();
         await Assert.That(error!).Contains("--github");
+    }
+
+    [Test]
+    public async Task InstallMuseHooks_reports_roots_it_could_not_write_without_failing_the_hooks() {
+        var muse     = new MusePaths(Home, null, Home.PathTo("data"));
+        var settings = Home.PathTo(".config", "muse", "settings.json");
+        Home.CreateFile(".config/kcap", "a file where kcap's config directory belongs");
+        var lines = new List<string>();
+
+        await Assert.That(SetupCommand.InstallMuseHooks(settings, Home, muse, lines.Add)).IsTrue();
+
+        await Assert.That(lines).HasSingleItem();
+        await Assert.That(lines[0]).Contains("Could not write");
+    }
+
+    [Test]
+    public async Task InstallMuseHooks_persists_the_roots_beside_a_partial_install_it_reports_as_failed() {
+        var muse     = new MusePaths(Home, null, Home.PathTo("data"));
+        var settings = Home.CreateFile(".config/muse/settings.json",
+            """{"schema_version":1,"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"kcap hook --muse --no-update-check","timeout":5}]}],"Stop":"nope"}}""");
+
+        await Assert.That(SetupCommand.InstallMuseHooks(settings, Home, muse, _ => { })).IsFalse();
+
+        await Assert.That(MuseHookRoots.Read(Home).DataHome).IsEqualTo(Home.PathTo("data"));
     }
 }

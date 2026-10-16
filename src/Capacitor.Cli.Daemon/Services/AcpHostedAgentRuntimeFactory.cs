@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -5,11 +6,13 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Cursor;
 using Capacitor.Cli.Daemon.Harness.Gemini;
+using Capacitor.Cli.Daemon.Harness.Grok;
 using Capacitor.Cli.Daemon.Harness.Kiro;
 using Capacitor.Cli.Daemon.Harness.OpenCode;
 using Microsoft.Extensions.Logging;
@@ -262,8 +265,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 admittedToolIds: descriptor.UnattendedInteractionPolicy
                                      == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove
                               && ctx.IsReviewFlow && reviewMcp is { Count: > 0 } && ctx.LaunchIdentity is { } id
-                    ? UnattendedToolAdmission.AdmittedFor(reviewMcp, id)
+                    ? descriptor.ToolAdmitter!.AdmittedFor(reviewMcp, id)
                     : null,
+                admissionMatcher: descriptor.ToolAdmitter?.IsAdmitted,
                 // Launch-time permission preset — resolved for NON-review-flow launches only (a review
                 // flow runs under its own containment posture, never a preset). A malformed token
                 // resolves to null (inert). The audit sink is fire-and-forget; ServerConnection swallows
@@ -282,7 +286,9 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 // slips past every path rule.
                 policyCwd: ctx.Worktree.Path,
                 policyJudge: policyJudge,
-                journal: ctx.Journal
+                journal: ctx.Journal,
+                sessionNewMeta: descriptor.SessionNewMeta,
+                turnUsageReader: descriptor.TurnUsageReader
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against
@@ -940,6 +946,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (!string.IsNullOrEmpty(ctx.ServerUrl))
             psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
+        HostedLaunchMarkers.Apply(psi.Environment, ctx);
+
         // The isolated home is what suppresses the operator's GLOBAL MCP servers — the flows server
         // among them, which would let a reviewer start nested review flows. Created here rather than
         // left to the vendor: it must exist, and be owner-only, before the child writes the first
@@ -948,6 +956,15 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         if (ctx.IsReviewFlow && descriptor.Harness is HarnessId.Kiro) {
             psi.Environment["KIRO_HOME"] = KiroReviewerHome.Create(
                 ReviewerStateDir(config), config.DaemonEpoch ?? "unpinned", ctx.AgentId);
+        }
+
+        // kcap's own Grok hook loads inside this child; the daemon already records the session from
+        // its ACP stream, so the hook stands down rather than recording it a second time.
+        if (descriptor.Harness is HarnessId.Grok) {
+            psi.Environment[GrokHookEnvironment.HostedVar] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+
+            if (ctx.IsReviewFlow)
+                foreach (var (key, value) in GrokReviewerLaunch.ReviewerEnvironment) psi.Environment[key] = value;
         }
 
         // OpenCode's launch controls are env-shaped rather than argv-shaped (`opencode acp` accepts
@@ -1150,6 +1167,15 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             return oc == OpenCodeReviewerDecision.Allowed
                 ? null
                 : OpenCodeReviewerCapability.DenialReason(oc, g.Installed, g.Affirmed);
+        }
+
+        if (descriptor.Harness is HarnessId.Grok) {
+            var g    = GateInputsFor(descriptor, config, config.GrokUnattendedReviewerEnabled, resolveVersion);
+            var grok = GrokReviewerCapability.Decide(g.Enabled, g.Installed, g.Affirmed);
+
+            return grok == GrokReviewerDecision.Allowed
+                ? null
+                : GrokReviewerCapability.DenialReason(grok, g.Installed, g.Affirmed);
         }
 
         if (!UsesMcpNameAllowlistArgv(descriptor)) return null;

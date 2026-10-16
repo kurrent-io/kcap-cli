@@ -21,7 +21,7 @@ sealed class McpHandoffServer(ConfigRoot config, ProfileContext profiles, TokenS
     const string CurrentSessionArgument = "current_session_id";
 
     internal const string NoCurrentSessionMessage =
-        "Error: no current session. Pass current_session_id with this session's id, or run continue_session inside the harness session that takes over (CLAUDE_CODE_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
+        "Error: no current session. Pass current_session_id with this session's id, or run continue_session inside the harness session that takes over (CLAUDE_CODE_SESSION_ID, GROK_SESSION_ID, KCAP_SESSION_ID or CODEX_THREAD_ID).";
 
     public async Task<int> RunAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;

@@ -100,4 +100,19 @@ public class KcapToolCatalogueTests {
     public async Task A_name_without_the_mcp_shape_has_no_foreign_label(string? name) {
         await Assert.That(KcapToolCatalogue.ForeignLabel(name)).IsNull();
     }
+
+    [Test]
+    [Arguments("select:mcp__plugin_kcap_kcap-workitems__declare_work_item,mcp__plugin_kcap_kcap-pages__publish_page,mcp__plugin_kcap_kcap-plans__set_plan_tasks",
+               "declare_work_item, publish_page, set_plan_tasks")]
+    [Arguments("select:mcp__github__search,mcp__linear__search",
+               "Github · search, Linear · search")]
+    [Arguments("declare_work_item publish_artefact set_plan_tasks",
+               "declare_work_item, publish_artefact, set_plan_tasks")]
+    [Arguments("create pull request",
+               "create pull request")]
+    public async Task Tool_search_queries_strip_select_and_mcp_server_prefixes(string query, string expected) {
+        await Assert.That(KcapToolCatalogue.IsToolSearch("ToolSearch")).IsTrue();
+        await Assert.That(KcapToolCatalogue.IsToolSearch("tool_search")).IsTrue();
+        await Assert.That(KcapToolCatalogue.FormatToolSearchQuery(query)).IsEqualTo(expected);
+    }
 }

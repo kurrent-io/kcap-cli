@@ -270,6 +270,10 @@ class WatchState {
     // range it last verified. Only ever set for vendor == "cursor".
     public long CursorByteOffset { get; set; }
 
+    // Where each line of the transcript starts, so a poll seeks to LinesProcessed. Every vendor's
+    // live drain but Cursor's uses it.
+    public TranscriptLineIndex LineOffsets { get; } = new();
+
     // poll counter driving the periodic full-prefix re-hash cadence
     // (WatchCommand.CursorFullPrefixVerifyEveryNPolls). Incremented once per poll for vendor ==
     // "cursor" only; a plain counter (not wall-clock time) so the cadence is exact regardless of

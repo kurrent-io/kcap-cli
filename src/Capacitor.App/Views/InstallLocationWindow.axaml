@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.InstallLocationWindow"
         Title="Kurrent Capacitor"
         Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
@@ -13,20 +14,13 @@
 
         <StackPanel Margin="36,52,36,28" Spacing="0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="14">
-                <Border Width="64" Height="64" CornerRadius="14" ClipToBounds="True"
-                        BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
-                    <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png" Stretch="UniformToFill" />
-                </Border>
-                <Path VerticalAlignment="Center" Width="56" Height="16" Stretch="None"
-                      Stroke="{StaticResource KcapPurpleBrush}" StrokeThickness="2"
-                      StrokeLineCap="Round" StrokeJoin="Round"
-                      Data="M2,8 L50,8 M44,2 L50,8 L44,14" />
-                <Grid Width="64" Height="64">
-                    <Path Stretch="None" Fill="{StaticResource KcapInfoBrush}" Opacity="0.55"
-                          Data="M4,14 C4,11.8 5.8,10 8,10 L24,10 L29,15 L56,15 C58.2,15 60,16.8 60,19 L60,50 C60,52.2 58.2,54 56,54 L8,54 C5.8,54 4,52.2 4,50 Z" />
-                    <Path Stretch="None" Fill="{StaticResource KcapInfoBrush}"
-                          Data="M4,23 C4,20.8 5.8,19 8,19 L56,19 C58.2,19 60,20.8 60,23 L60,50 C60,52.2 58.2,54 56,54 L8,54 C5.8,54 4,52.2 4,50 Z" />
-                </Grid>
+                <Panel Width="64" Height="64">
+                    <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                           RenderOptions.BitmapInterpolationMode="HighQuality" />
+                    <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+                </Panel>
+                <views:AppIcon Kind="ArrowRight" Size="24" VerticalAlignment="Center" Foreground="{StaticResource KcapPurpleBrush}" />
+                <views:AppIcon Kind="Folder" Size="64" Foreground="{StaticResource KcapInfoBrush}" />
             </StackPanel>
 
             <TextBlock x:Name="Heading" Margin="0,24,0,0" Text="Move to Applications"

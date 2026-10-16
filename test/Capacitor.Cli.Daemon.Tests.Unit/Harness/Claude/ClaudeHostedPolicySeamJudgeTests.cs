@@ -209,6 +209,23 @@ public class ClaudeHostedPolicySeamJudgeTests : IDisposable {
         await Assert.That(result).IsNull().Because("an undecided call nothing consulted records nothing");
     }
 
+    /// <summary>A rendered question or plan approval is the human's own answer, so the judge never
+    /// gives it for them; the card stays on the human lane.</summary>
+    [Test]
+    [Arguments("AskUserQuestion")]
+    [Arguments("ExitPlanMode")]
+    public async Task A_human_interaction_tool_never_consults_the_judge(string tool) {
+        Judge("allow");
+        var call = Call("unused") with {
+            ToolName = tool, ToolInput = JsonDocument.Parse("""{"plan":"do it"}""").RootElement.Clone(),
+        };
+
+        var result = await ClaudeHostedPolicySeam.EvaluateAsync(call, JudgeOn, TimeProvider.System, Gateway, Config.Root, Ample);
+
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        await Assert.That(result).IsNull();
+    }
+
     [Test]
     public async Task No_gateway_leaves_an_undecided_call_unrecorded() {
         var result = await ClaudeHostedPolicySeam.EvaluateAsync(Call("git push"), JudgeOn, TimeProvider.System);

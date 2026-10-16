@@ -14,7 +14,7 @@ static class ServiceEnvironment {
     /// <summary>Variables carried from the installing shell into the service unit. No credentials —
     /// the unit is a file on disk.
     ///
-    /// <para>Two of the nine vendor path overrides, deliberately: a captured path is frozen at install
+    /// <para>Two of the vendor path overrides, deliberately: a captured path is frozen at install
     /// time, so carrying one for a vendor the operator has not pinned bakes in a stale location. The
     /// rest stay uncaptured until someone asks.</para></summary>
     static readonly string[] Keys =

@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Core.Http;
@@ -92,8 +93,18 @@ if (InteractiveLifetime.IsInteractiveCommand(command) && detachedImport is null)
 // nested headless invocation.
 if (Environment.GetEnvironmentVariable("KCAP_SKIP") is "1"
  && command == "hook"
- && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe"))) {
+ && (args.Contains("--claude") || args.Contains("--cursor") || args.Contains("--copilot") || args.Contains("--gemini") || args.Contains("--kiro") || args.Contains("--pi") || args.Contains("--opencode") || args.Contains("--antigravity") || args.Contains("--mistral-vibe") || args.Contains("--grok") || args.Contains("--muse"))) {
     return 0;
+}
+
+// Another vendor's kcap hook run by Grok would record Grok's payload as that vendor's session.
+if (command == "hook" && !args.Contains("--grok") && GrokHookEnvironment.IsGrokHook(Environment.GetEnvironmentVariable)) {
+    string body;
+    try { body = await Console.In.ReadToEndAsync(); } catch { body = ""; }
+
+    if (GrokHookEnvironment.IsGrokPayload(body, Environment.GetEnvironmentVariable)) return 0;
+
+    Console.SetIn(new StringReader(body));
 }
 
 // Anchored here, before dispatch: every hook ceiling is relative to it, and anchoring inside a
@@ -106,8 +117,19 @@ var clock  = new HookClock(time);
 var isHook = command == "hook";
 
 // Resolved once here and passed onward; nothing downstream resolves a root for itself.
-var config  = ConfigRoot.FromEnvironment();
-var home    = UserHome.FromEnvironment();
+var home = UserHome.FromEnvironment();
+
+// Muse runs a hook with a cleared environment, so a hosted session's marker supplies the daemon's root and server.
+var museHook = MuseHookConnection.None;
+if (isHook && args.Contains("--muse")) {
+    string body;
+    try { body = await Console.In.ReadToEndAsync(); } catch { body = ""; }
+
+    Console.SetIn(new StringReader(body));
+    museHook = MuseHookConnection.Resolve(body, home, Environment.GetEnvironmentVariable);
+}
+
+var config  = museHook.ConfigRootOr(ConfigRoot.FromEnvironment);
 var workdir = WorkingDirectory.FromProcess();
 
 // git runs this after every commit on the machine, so it resolves no server, profile or update.
@@ -139,11 +161,18 @@ if (isRefreshHandoff) RefreshTokenHandoff.EnterDetached();
 // KCAP_DAEMONS_DIR is dead to the process from this line on.
 var daemonPaths = DaemonStore.FromEnvironment();
 
-var serverEnv = ProfileOverrides.FromEnvironment();
+var serverEnv = museHook.Apply(ProfileOverrides.FromEnvironment());
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000);
+var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
+
+if (museHook.MissingProfileWarning(profiles) is { } missingProfile) {
+    Console.Error.WriteLine(missingProfile);
+
+    return 0;
+}
+
 var baseUrl  = profiles.Resolution.ServerUrl;
 
 // An app-spawned CLI child must not emit CLI-labeled telemetry nor consume the one-time privacy
@@ -237,7 +266,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", RefreshTokenHandoff.Command];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
@@ -434,6 +463,8 @@ switch (command) {
         return await Run<AgentCommand>().HandleAsync(args, baseUrl);
     case "setup":
         return await Run<SetupCommand>().HandleAsync(args);
+    case "muse-assistant":
+        return await Run<MuseAssistantCommand>().HandleAsync(args);
     case "plugin":
         return await Run<PluginCommand>().HandleAsync(args);
     case "accounts":
@@ -911,9 +942,15 @@ switch (command) {
         // Codex blocks on this hook's stdout, so its stamp waits until the hook has answered.
         if (hookVendor is not null && hookVendor != HarnessId.Codex.VendorId) new HookActivity(config, time).Stamp(hookVendor);
 
-        // Blocks the agent's Read, so it skips the spool drain below.
+        // These block the agent's tool call, so they skip the spool drain below.
         if (args.Contains("--claude") && args.Contains("--plan-read")) {
             return await Run<ClaudeHookCommand>().HandlePlanRead(new StringReader(claudeHookBody!));
+        }
+        if (args.Contains("--claude") && args.Contains("--task-list")) {
+            return await Run<ClaudeHookCommand>().HandleTaskList(new StringReader(claudeHookBody!));
+        }
+        if (args.Contains("--claude") && args.Contains("--plan-edit")) {
+            return await Run<ClaudeHookCommand>().HandlePlanEdit(new StringReader(claudeHookBody!));
         }
         // Task 12: global, session-agnostic drain pass run early in EVERY non-Codex hook
         // invocation — centralizes the per-vendor AgentHookPoster.DrainSpoolsAsync calls Tasks 4-6
@@ -969,8 +1006,14 @@ switch (command) {
         if (args.Contains("--mistral-vibe")) {
             return await Run<MistralVibeHookCommand>().Handle(Console.In);
         }
+        if (args.Contains("--grok")) {
+            return await Run<GrokHookCommand>().Handle(Console.In);
+        }
+        if (args.Contains("--muse")) {
+            return await Run<MuseHookCommand>().Handle(Console.In);
+        }
         Console.Error.WriteLine("kcap hook requires a vendor flag (for example --claude)");
-        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe");
+        Console.Error.WriteLine("Supported vendors: --claude, --codex, --cursor, --copilot, --gemini, --kiro, --pi, --opencode, --antigravity, --mistral-vibe, --grok, --muse");
         return 1;
     }
     case "cursor":

@@ -90,9 +90,18 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
 
     static string Normalize(string text) => text.Replace("\r\n", "\n").Trim();
 
-    /// A bang command's receipt drops the space the composer may have put after the bang.
+    /// A bang command's receipt drops the space the composer may have put after the bang, and a
+    /// slash command's rejoins its name and trimmed arguments with a single space.
     static bool SamePrompt(string sent, string seen) =>
-        sent == seen || BangBody(sent) is { } a && BangBody(seen) is { } b && a == b;
+        sent == seen
+        || BangBody(sent) is { } a && BangBody(seen) is { } b && a == b
+        || SlashPrompt(sent) is { } c && SlashPrompt(seen) is { } d && c == d;
+
+    static string? SlashPrompt(string text) {
+        if (text.Length == 0 || text[0] != '/') return null;
+        var separator = text.AsSpan().IndexOfAny(' ', '\t', '\n');
+        return separator < 0 ? text : $"{text[..separator]} {text[(separator + 1)..].Trim()}";
+    }
 
     static string? BangBody(string text) {
         if (text.Length == 0 || text[0] != '!') return null;

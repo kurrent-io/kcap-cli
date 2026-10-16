@@ -135,29 +135,22 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         return 0;
     }
 
-    // Server-level usage preamble (MCP `instructions`) — steers agents to DECLARE a work item's
-    // structure (breakdown + relations, which the server never infers), not just attach to it.
+    // Claude Code keeps only the first 2,048 characters of an MCP server's instructions, so the
+    // completion rule leads: it is the one sentence no tool description repeats.
     internal const string ServerInstructions =
-        "Use these tools to attach the current session to its SDLC work item AND to declare that work " +
-        "item's structure. When you plan or discover that a work item breaks into parts, create the part " +
-        "items (declare_work_item with new_title) and declare the parent→parts breakdown " +
-        "(declare_work_breakdown); when one item must land before another, declare the dependency " +
-        "(declare_work_relation — 'blocks'/'blocked_by'). Breakdown and relations are DECLARED, never " +
-        "inferred: if you don't declare them the work item's topology stays empty. Declare only real " +
-        "structure you're confident of — every item must be visible to you, but parts and dependencies " +
-        "may cross repositories — and use the retract_* tools when it changes. Two items for the same " +
-        "work — a title-only item you created and the issue/PR-keyed item the server minted — are a " +
-        "duplicate: merge yours into the keyed one with merge_work_item. A wrong attach is undone with " +
-        "detach_work_item, never papered over with a breakdown. Work you leave unfinished goes in with " +
-        "declare_loose_end — one call per concrete item, and never a 'none'. When the user asks what to " +
-        "work on next, or you are about to propose new work, call get_next_work first and answer from it, " +
-        "citing its because-clauses; tracker queries and memory are context for that answer, not a " +
-        "substitute for it. When the user turns a presented next-work suggestion down, record it with " +
-        "dismiss_next_work; restore_next_work undoes it. When you finish a listed or declared loose end, close it " +
-        "with close_loose_end; reopen_loose_end undoes a mistaken close. Before working on a loose end in this session, " +
-        "call claim_loose_end and keep its claim_id. Claimed work stays open but is withheld from suggestions. " +
-        "Pass claim_id when closing completed work; release_loose_end gives unfinished work back without closing it. " +
-        "A claim refusal is not permission to dismiss, close, or launch a duplicate. " + NextWorkEmitter.CompletionInstruction;
+        NextWorkEmitter.CompletionInstruction + " " +
+        "Attach this session to its work item with declare_work_item. When work splits into parts, create " +
+        "them (declare_work_item with new_title) and declare the breakdown (declare_work_breakdown); when " +
+        "one item must land first, declare_work_relation ('blocks'/'blocked_by'). Structure is declared, " +
+        "never inferred, and bounded by what you can see, not by repository; retract_* undoes it. A " +
+        "title-only item duplicating an issue- or PR-keyed one: merge_work_item into the keyed one. A wrong " +
+        "attach: detach_work_item, never a breakdown. Work you leave unfinished: declare_loose_end. When the " +
+        "user asks what to work on next, or you are about to propose new work, call get_next_work first and " +
+        "answer from it, citing its because-clauses; trackers and memory are context, not a substitute. A " +
+        "declined suggestion: dismiss_next_work (restore_next_work undoes it). Before working on a loose end, " +
+        "claim_loose_end and keep its claim_id; pass it when you close it with close_loose_end " +
+        "(reopen_loose_end undoes a mistaken close), or hand the work back with release_loose_end. A claim " +
+        "refusal is not permission to dismiss, close, or launch a duplicate.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(

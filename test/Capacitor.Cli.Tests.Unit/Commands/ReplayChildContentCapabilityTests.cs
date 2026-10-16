@@ -3,7 +3,9 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Harness.MistralVibe;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Harness.Antigravity;
 using Capacitor.Cli.Harness.Claude;
@@ -12,7 +14,9 @@ using Capacitor.Cli.Harness.Copilot;
 using Capacitor.Cli.Harness.Cursor;
 using Capacitor.Cli.Harness.Gemini;
 using Capacitor.Cli.Harness.Kiro;
+using Capacitor.Cli.Harness.Grok;
 using Capacitor.Cli.Harness.MistralVibe;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
 using Capacitor.Cli.PrDetection;
@@ -40,13 +44,15 @@ public class ReplayChildContentCapabilityTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     /// <summary>
-    /// The three sources whose child-import pass is reachable when the root is already fully
+    /// The sources whose child-import pass is reachable when the root is already fully
     /// ingested — the shape that can add content to a session that already exists.
     /// </summary>
     [Test]
     [Arguments("cursor")]
     [Arguments("antigravity")]
     [Arguments("gemini")]
+    [Arguments("grok")]
+    [Arguments("muse")]
     public async Task sources_whose_replay_can_attach_child_content_declare_the_capability(string vendor) {
         await Assert.That(MakeSource(vendor).AttachesChildContentOnReplay).IsTrue();
     }
@@ -79,7 +85,7 @@ public class ReplayChildContentCapabilityTests {
     public async Task every_import_source_is_covered_by_this_table() {
         var declared = new[] {
             HarnessId.Cursor, HarnessId.Antigravity, HarnessId.Gemini, HarnessId.Claude, HarnessId.Codex,
-            HarnessId.Copilot, HarnessId.Kiro, HarnessId.Pi, HarnessId.OpenCode, HarnessId.MistralVibe,
+            HarnessId.Copilot, HarnessId.Kiro, HarnessId.Pi, HarnessId.OpenCode, HarnessId.MistralVibe, HarnessId.Grok, HarnessId.Muse,
         };
 
         var actual = typeof(IImportSource).Assembly.GetTypes()
@@ -110,6 +116,8 @@ public class ReplayChildContentCapabilityTests {
             "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger"), TimeProvider.System),
             "antigravity" => new AntigravityImportSource(new(new(scratch), ""), TimeProvider.System),
             "mistralvibe" => new MistralVibeImportSource(new MistralVibePaths(new UserHome(scratch), null), TimeProvider.System),
+            "grok"        => new GrokImportSource(new GrokPaths(new UserHome(scratch), null), TimeProvider.System),
+            "muse"        => new MuseImportSource(new MusePaths(new UserHome(scratch), null, null), new WatcherPaths(scratch), TimeProvider.System),
             _             => throw new ArgumentOutOfRangeException(nameof(vendor), vendor, "unclassified import source"),
         };
     }

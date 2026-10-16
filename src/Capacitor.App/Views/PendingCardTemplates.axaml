@@ -7,7 +7,7 @@
     <DataTemplate x:Key="PermissionCardTemplate" x:DataType="vm:PermissionCardViewModel">
         <Border Classes="chatPromptCard">
             <StackPanel Spacing="6">
-                <views:ChatKindHeader Label="Permission" IconData="{x:Static views:ToolCategoryIcons.PermissionIcon}" />
+                <views:ChatKindHeader Label="Permission" IconKind="{x:Static views:ToolCategoryIcons.PermissionIcon}" />
                 <TextBlock Text="{Binding ToolName}" FontSize="13" TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" />
                 <TextBlock Text="{Binding Detail}" FontSize="11.5" Foreground="{StaticResource KcapMutedBrush}"
                            TextTrimming="{x:Static views:ChatTrimming.MiddleEllipsis}" />
@@ -146,8 +146,8 @@
                             <Button Classes="step" Classes.current="{Binding IsCurrent}" Classes.answered="{Binding IsAnswered}"
                                     Command="{Binding GoCommand}" Margin="0,0,6,4">
                                 <StackPanel Orientation="Horizontal" Spacing="5">
-                                    <TextBlock Text="✓" FontSize="10.5" Foreground="{StaticResource KcapSuccessBrush}"
-                                               IsVisible="{Binding IsAnswered}" VerticalAlignment="Center" />
+                                    <views:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}"
+                                                   IsVisible="{Binding IsAnswered}" VerticalAlignment="Center" />
                                     <TextBlock Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="180" />
                                 </StackPanel>
                             </Button>
@@ -159,7 +159,7 @@
                         <DataTemplate x:DataType="vm:QuestionGroupViewModel">
                             <StackPanel Spacing="8">
                                 <views:ChatKindHeader Label="{Binding Header}"
-                                                        IconData="{x:Static views:ToolCategoryIcons.QuestionIcon}"
+                                                        IconKind="{x:Static views:ToolCategoryIcons.QuestionIcon}"
                                                         IsVisible="{Binding ShowsHeader}" />
                                 <TextBlock Classes="prompt" Text="{Binding Text}" />
                                 <ItemsControl ItemsSource="{Binding Options}">
@@ -279,7 +279,7 @@
                 </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
-                <views:ChatKindHeader Label="Question" IconData="{x:Static views:ToolCategoryIcons.QuestionIcon}" />
+                <views:ChatKindHeader Label="Question" IconKind="{x:Static views:ToolCategoryIcons.QuestionIcon}" />
                 <TextBlock Text="{Binding Prompt}" FontWeight="SemiBold" FontSize="15" LineHeight="21" TextWrapping="Wrap"
                            Foreground="{StaticResource KcapTextBrush}" />
                 <ItemsControl ItemsSource="{Binding Options}" IsVisible="{Binding IsMultiSelect}">

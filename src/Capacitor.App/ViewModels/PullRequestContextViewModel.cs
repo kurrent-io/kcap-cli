@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.PullRequests.Readers;
@@ -14,8 +15,11 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 public sealed partial class PullRequestContextViewModel : ReactiveObject {
+    static readonly TimeSpan SnapshotGrace = TimeSpan.FromMinutes(5);
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
+    readonly Func<string?, string?> _readBranch;
+    readonly bool _hasCustomBranchReader;
     readonly TimeProvider _time;
     readonly IUrlOpener _opener;
     readonly Action _openReader;
@@ -26,6 +30,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly List<CancellationTokenSource> _retired = [];
     readonly Dictionary<string, PullRequestSectionState> _sections = new(StringComparer.Ordinal);
     readonly Dictionary<PullRequestSubjectDto, Position> _positions = [];
+    readonly Dictionary<string, DateTime> _rateLimits = new(StringComparer.Ordinal);
     readonly HashSet<string> _pageRequests = new(StringComparer.Ordinal);
     readonly AvaloniaList<PullRequestChoice> _choices = [];
     readonly List<PullRequestLinkDto> _sessionItems = [];
@@ -41,14 +46,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     string? _branch;
     PullRequestChoice? _selected;
     bool _explicitSelection;
+    PullRequestSubjectDto? _requestedSubject;
     bool _updatingChoices;
     PullRequestOverviewDto? _overview;
     PullRequestRead<PullRequestOverviewDto>? _overviewRead;
     long _accessStarted;
     int _accessSeconds;
-    long _graceStarted;
-    string? _graceSection;
     bool _grace;
+    string? _staleReason;
     bool _hasDisplayed;
     bool _foreground;
     bool _readerVisible;
@@ -64,10 +69,11 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     long? _lastRefresh;
     long? _lastOverview;
     DateTime? _retryAt;
+    DateTime? _listRetryAt;
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
-    string _notice = "Waiting for the session to register…";
+    string _notice = WorkContextViewModel.WaitingNote;
     PullRequestReaderNote? _readerNote;
 
     public IAvaloniaReadOnlyList<PullRequestChoice> Choices => _choices;
@@ -91,10 +97,18 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool IsLegacy => _legacy;
     public string Section => _section;
     public double ScrollOffset { get; set; }
-    public bool CanReveal => _foreground && !_masked && Remaining > 0 && !_legacy;
-    public bool CanDisplay => _foreground && !_masked && (Remaining > 0 || _grace && _time.GetElapsedTime(_graceStarted) < TimeSpan.FromMinutes(5));
-    bool CanDisplayReader => _readerVisible && CanDisplay && (Remaining > 0 || _graceSection == SectionKey);
+    public bool CanReveal => _foreground && !_masked && !_grace && Remaining > 0 && !_legacy;
+    public bool CanDisplay => _foreground && !_masked && (Remaining > 0
+        || (_grace || RenewingSnapshot) && SnapshotDisplayRemaining > 0);
+    public bool CanNavigate => CanDisplay && !_legacy;
+    bool CanDisplayReader => _readerVisible && CanDisplay && (CanReveal || _section == "overview" || _sections.ContainsKey(SectionKey));
     double Remaining => Math.Max(0, _accessSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds);
+    bool RenewingSnapshot => _hasDisplayed && _accessSeconds > 0 && _overviewPending;
+    // Both in-flight renewal and failed-renewal grace end at the same access-based deadline.
+    double SnapshotDisplayRemaining => _accessSeconds + SnapshotGrace.TotalSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds;
+    DateTime? HostRateLimitRetryAt => _selected is { } choice && _rateLimits.TryGetValue(RateLimitKey(choice.Subject), out var rateLimit) ? rateLimit : null;
+    DateTime? ReadRetryAt => HostRateLimitRetryAt is { } rateLimit && (_retryAt is null || rateLimit > _retryAt) ? rateLimit : _retryAt;
+    static string RateLimitKey(PullRequestSubjectDto subject) => (subject.Provider + "|" + subject.Host).ToLowerInvariant();
     string SectionKey => _section == "thread_comments" ? _section + ":" + _thread : _section == "threads" ? _section + ":" + _resolved : _section;
     string _resolved = "unresolved";
     public bool IncludeResolved {
@@ -120,8 +134,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
-        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null) {
+        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null) {
         _source = source;
+        _readBranch = readBranch ?? GitRepository.CurrentBranch;
+        _hasCustomBranchReader = readBranch is not null;
         _time = time;
         _opener = opener;
         _openReader = openReader;
@@ -150,6 +166,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _subscriptions.Add(LoadMoreCommand); _subscriptions.Add(ReloadEarlierCommand); _subscriptions.Add(ExpandThreadCommand);
         _subscriptions.Add(OpenRowCommand); _subscriptions.Add(OpenGitHubCommand); _subscriptions.Add(OpenBodyLinkCommand);
         _subscriptions.Add(SignInCommand); _subscriptions.Add(LinkGitHubCommand);
+        _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         presence.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(dto => {
             if (_disposed || dto is null) return;
             _branch = dto.Branch;
@@ -158,6 +175,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
             CancelReads();
+            if (_session is not null) _requestedSubject = null;
             _session = id;
             _choices.Clear();
             _sessionItems.Clear();
@@ -167,7 +185,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _lifecycles.Clear();
             ClearProtected();
             _stopped = false;
+            _retryAt = null;
+            _listRetryAt = null;
+            _pollAfter = 30;
+            _queuedRefresh = false;
+            _refreshPage = false;
             _hasListed = false;
+            ApplyRequestedSubject();
             _lastRefresh = null;
             SetNotice("Loading pull requests…");
             RequestRefresh();
@@ -176,7 +200,28 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             if (_session is null || _disposed) return;
             CancelReads(); ClearProtected(); _source.ResetSession(_session); _stopped = false; _lastRefresh = null; RequestRefresh(manual: true);
         }).DisposeWith(_subscriptions);
-        _timer = time.CreateTimer(_ => Dispatcher.UIThread.Post(Tick), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    internal void ClearSession() {
+        if (_disposed) return;
+        CancelReads();
+        _session = null;
+        _requestedSubject = null;
+        _choices.Clear();
+        _sessionItems.Clear();
+        _selected = null;
+        _explicitSelection = false;
+        _positions.Clear();
+        _lifecycles.Clear();
+        _hasListed = true;
+        _queuedRefresh = false;
+        _userRefresh = false;
+        _stopped = false;
+        _retryAt = null;
+        _listRetryAt = null;
+        _lastRefresh = null;
+        ClearProtected();
+        SetNotice(WorkContextViewModel.WaitingNote);
     }
 
     public void SetForeground(bool foreground) {
@@ -186,11 +231,11 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _accessSeconds = 0;
         _masked = true;
         _grace = false;
-        _graceSection = null;
+        _staleReason = null;
         Notify();
         // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
         // already fresh; force only a genuine return, where a prior refresh could have gone stale.
-        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; RequestRefresh(); }
+        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; _lastOverview = null; RequestRefresh(); }
     }
     public void Reconnected() {
         if (_disposed) return;
@@ -219,13 +264,45 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public void SetReaderVisible(bool visible) {
         if (_readerVisible == visible) return;
         _readerVisible = visible;
-        if (!visible && _grace) _graceSection = null;
         Notify();
         if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
     }
+    public void SelectSubject(PullRequestSubjectDto subject) {
+        if (_disposed) return;
+        _requestedSubject = subject;
+        ApplyRequestedSubject();
+    }
+
+    void ApplyRequestedSubject() {
+        if (_session is null || _requestedSubject is not { } subject) return;
+        var choice = _choices.FirstOrDefault(item => item.Subject == subject);
+        if (choice is null) {
+            // A fresh list confirms availability; never fall back to a different PR while loading.
+            choice = new PullRequestChoice(new PullRequestLinkDto {
+                Provider = subject.Provider, Host = subject.Host, RepoHash = subject.RepoHash,
+                Owner = subject.Owner, RepoName = subject.RepoName, Number = subject.Number,
+            }, IsAvailable: false);
+            _choices.Add(choice);
+        }
+        _explicitSelection = true;
+        if (!_hasListed) {
+            // Pin the requested subject without cancelling the initial link discovery.
+            _selected = choice;
+            this.RaisePropertyChanged(nameof(Selected));
+            Notify();
+            return;
+        }
+        Select(choice, explicitSelection: true);
+    }
+
     void Select(PullRequestChoice? choice, bool explicitSelection = false) {
-        if (_disposed || choice?.Subject == _selected?.Subject) return;
+        if (_disposed) return;
         if (choice is not null && !_choices.Contains(choice)) return;
+        if (explicitSelection) {
+            _requestedSubject = choice?.Subject;
+            _explicitSelection = true;
+        }
+        if (choice?.Subject == _selected?.Subject) return;
         _explicitSelection = explicitSelection;
         if (_selected is not null) {
             if (_positions.Count >= 20 && !_positions.ContainsKey(_selected.Subject)) _positions.Remove(_positions.MinBy(x => x.Value.Touched).Key);
@@ -234,43 +311,84 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         CancelReads();
         _selected = choice;
         ClearProtected();
+        _retryAt = null;
         _section = "overview"; _thread = null; _resolved = "unresolved"; ScrollOffset = 0;
         if (choice is not null && _positions.TryGetValue(choice.Subject, out var position)) {
             _section = position.Section; _thread = position.Thread; _resolved = position.Resolved; ScrollOffset = position.Scroll;
         }
+        if (choice is not null) _notice = ReadRetryAt > _time.GetUtcNow().UtcDateTime
+            ? "GitHub reads are paused temporarily. Retry after the cooldown." : "";
         this.RaisePropertyChanged(nameof(Selected));
         Notify();
         RequestOverview();
     }
     void ShowSection(string section) {
-        if (!CanReveal || section is not ("overview" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
+        if (!CanNavigate || section is not ("overview" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
         _section = section;
         ScrollOffset = 0;
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section != "overview") LoadOrRefreshSection();
+        if (section == "overview") return;
+        if (CanReveal) LoadOrRefreshSection();
+        else if (CurrentSection is null && !(ReadRetryAt > _time.GetUtcNow().UtcDateTime)) { _lastOverview = null; RequestOverview(); }
     }
     /// A tab the poll skipped while it was hidden comes back stale; the summary stops trusting rows
     /// older than 30s, so rows kept past that would disagree with it.
     void LoadOrRefreshSection() {
         if (CurrentSection is not { } state) RequestPage(null);
-        else if (state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
+        else if (_headRestartSection == SectionKey || state.Completed is not { } at || _time.GetUtcNow().UtcDateTime - at >= RowsFreshFor) RequestPage(null, refresh: true);
     }
     internal static readonly TimeSpan RowsFreshFor = TimeSpan.FromSeconds(30);
-    void Tick() {
-        if (_disposed || !_foreground) return;
-        if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) EnterGrace();
-        if (_grace && _time.GetElapsedTime(_graceStarted) >= TimeSpan.FromMinutes(5)) { _masked = true; _grace = false; Notify(); }
-        if (_retryAt > _time.GetUtcNow().UtcDateTime || _stopped) return;
-        if (_queuedRefresh || _lastRefresh is null || _time.GetElapsedTime(_lastRefresh.Value).TotalSeconds >= Math.Max(30, _pollAfter)) RequestRefresh();
-        else if (Remaining <= 5 && !_legacy) RequestOverview();
+    void ScheduleTick() {
+        if (_disposed) return;
+        var next = double.PositiveInfinity;
+        if (_foreground && _session is not null) {
+            if (!_stopped && !_refreshing) {
+                var pollGap = _queuedRefresh ? 3 : Math.Max(30, _pollAfter);
+                next = _lastRefresh is { } last ? pollGap - _time.GetElapsedTime(last).TotalSeconds : 1;
+                if (HostRateLimitRetryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
+                    next = Math.Max(next, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+                if (_listRetryAt is { } listRetry && listRetry > _time.GetUtcNow().UtcDateTime)
+                    next = Math.Max(next, (listRetry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+            }
+            if (!_masked && _accessSeconds > 0)
+                next = Math.Min(next, _grace ? SnapshotDisplayRemaining : Remaining > 0 ? Remaining : RenewingSnapshot ? SnapshotDisplayRemaining : 0);
+            if (!_masked && !_grace && _accessSeconds > 0 && !_legacy && !_stopped && !_overviewPending && _selected is { IsAvailable: true }) {
+                var overviewGap = _lastOverview is { } last ? 15 - _time.GetElapsedTime(last).TotalSeconds : 0;
+                var overviewDue = Math.Max(Remaining - 5, overviewGap);
+                if (ReadRetryAt is { } retry) overviewDue = Math.Max(overviewDue, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
+                next = Math.Min(next, overviewDue);
+            }
+        }
+        _timer.Change(double.IsPositiveInfinity(next) ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(Math.Max(1, next)), Timeout.InfiniteTimeSpan);
     }
-    void EnterGrace() {
-        _accessSeconds = 0;
-        if (!_hasDisplayed || !_foreground || _masked) { _masked = true; Notify(); return; }
-        if (!_grace) { _grace = true; _graceStarted = _time.GetTimestamp(); _graceSection = _readerVisible ? SectionKey : null; }
-        SetNotice("Access could not be refreshed. Showing the last view temporarily; opening more content is paused.");
+
+    void Tick() {
+        if (_disposed) return;
+        TickCore();
+        ScheduleTick();
+    }
+
+    void TickCore() {
+        if (_disposed || !_foreground) return;
+        if (!_masked && _accessSeconds > 0 && SnapshotDisplayRemaining <= 0) {
+            _masked = true; _grace = false; _staleReason = null; Notify();
+        }
+        if (!_masked && !_grace && _accessSeconds > 0 && Remaining <= 5 && !_legacy && !_stopped && !_overviewPending
+            && !(ReadRetryAt > _time.GetUtcNow().UtcDateTime)) RequestOverview();
+        if (!(HostRateLimitRetryAt > _time.GetUtcNow().UtcDateTime) && !(_listRetryAt > _time.GetUtcNow().UtcDateTime) && !_stopped
+            && (_queuedRefresh || _lastRefresh is null || _time.GetElapsedTime(_lastRefresh.Value).TotalSeconds >= Math.Max(30, _pollAfter))) RequestRefresh();
+        if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) {
+            if (!RenewingSnapshot) EnterGrace();
+            else Notify();
+        }
+    }
+    void EnterGrace(string? reason = null) {
+        if (!_hasDisplayed || !_foreground || _masked || SnapshotDisplayRemaining <= 0) { _masked = true; Notify(); return; }
+        _grace = true;
+        if (reason is not null) _staleReason = reason;
+        SetNotice("");
     }
     bool AcceptAccess<T>(PullRequestRead<T> read) where T : class {
         if (!read.CanReveal(_time) || read.Subject != _selected?.Subject) return false;
@@ -278,14 +396,24 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _accessSeconds = read.AccessValidForSeconds;
         _masked = false;
         _grace = false;
+        _staleReason = read.Kind == PullRequestReadKind.Stale ? Reason(read) : null;
         _hasDisplayed = true;
-        _retryAt = read.RetryAt;
+        RememberRetry(read);
         _pollAfter = Math.Max(15, read.PollAfterSeconds);
         return true;
     }
+    void RememberRetry<T>(PullRequestRead<T> read) where T : class {
+        var retry = read.RetryAt;
+        if (_retryAt is null || _retryAt <= _time.GetUtcNow().UtcDateTime || retry > _retryAt) _retryAt = retry;
+        if (retry is not { } until || read.Reason is not ("rate_limited" or "budget_exhausted") || read.Subject is not { } subject) return;
+        foreach (var expired in _rateLimits.Where(pair => pair.Value <= _time.GetUtcNow().UtcDateTime).Select(pair => pair.Key).ToArray()) _rateLimits.Remove(expired);
+        var key = RateLimitKey(subject);
+        if (!_rateLimits.TryGetValue(key, out var previous) || until > previous) _rateLimits[key] = until;
+    }
     void ClearProtected() {
         _overview = null; _overviewRead = null; _sections.Clear(); _accessSeconds = 0;
-        _masked = true; _grace = false; _hasDisplayed = false; _graceSection = null;
+        _reviewerRows.Clear(); _checkRows.Clear(); _discussionRows.Clear();
+        _masked = true; _grace = false; _staleReason = null; _hasDisplayed = false;
         Notify();
     }
     void CancelReads() {
@@ -335,5 +463,6 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _cancel.Dispose(); foreach (var retired in _retired) retired.Dispose();
         _tasks.Clear(); _retired.Clear(); _positions.Clear(); _choices.Clear(); ClearProtected();
         _hasPullRequest.Dispose();
+        _notified.Clear();
     }
 }

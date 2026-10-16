@@ -112,6 +112,7 @@ public sealed class WizardTenantProvisioner(
         TimeProvider            time) : ITenantProvisioner {
     internal const int PollIntervalMs = 4000;
     internal const int MaxPolls       = 150; // ~10 minutes (server budget is 15)
+    internal const int MaxInviteCodeAttempts = 3;
 
     readonly TimeProvider _time = time;
 
@@ -121,6 +122,10 @@ public sealed class WizardTenantProvisioner(
     public Func<string, string?, CancellationToken, Task<string?>>?    PromptSlug    { get; set; }
     public Func<string, string, CancellationToken, Task<bool>>?        ConfirmCreate { get; set; }
     public Action<int, int>?                                           PollProgress  { get; set; }
+
+    /// Asks for the next invite code, given where to request one and why the last code was refused
+    /// (null on the first ask). Null or blank means the user gave up.
+    public Func<string?, string?, CancellationToken, Task<string?>>? PromptInviteCode { get; set; }
 
     /// Asks the signup service whether a slug is free, with the token the offer is running under.
     /// Set only while an offer runs, so a form can check its slug as the user types it.
@@ -171,24 +176,49 @@ public sealed class WizardTenantProvisioner(
 
         telemetry.Funnel.WorkspaceRequested();
 
-        var outcome = await client.ProvisionAsync(
-            baseUrl, await tokens.GetAsync(ct), orgName, slug, WorkspaceTier.Free, telemetry.Join.Current, ct);
+        string? code       = null;
+        string? requestUrl = null;
+        var     wrongCodes = 0;
 
-        switch (outcome.StatusCode) {
-            case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
-                telemetry.Funnel.WorkspaceProvisioned();
+        while (true) {
+            var outcome = await client.ProvisionAsync(
+                baseUrl, await tokens.GetAsync(ct), orgName, slug, WorkspaceTier.Free, telemetry.Join.Current, code, ct);
 
-                return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
-            case 202 or 200:
-                return await PollAsync(tokens, slug, orgName, origin, ct);
-            case 400:
-                return Failed(Reason400(outcome.Body?.Reason), outcome.Body?.Reason ?? "invalid_request");
-            case 409:
-                return Failed(Reason409(outcome.Body?.Reason, slug), outcome.Body?.Reason ?? "conflict");
-            case 0:
-                return Failed("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
-            default:
-                return Failed($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
+            switch (outcome.StatusCode) {
+                case 200 when outcome.Body?.WorkosOrgId is { Length: > 0 } orgId:
+                    telemetry.Funnel.WorkspaceProvisioned();
+
+                    return ProvisionOffer.Created(new ProvisionedTenant(orgId, slug, orgName, outcome.Body.Url ?? origin));
+                case 202 or 200:
+                    return await PollAsync(tokens, slug, orgName, origin, ct);
+                case 403 when outcome.Body?.Reason == "invite_required":
+                case 400 when outcome.Body?.Reason == "invalid_code":
+                case 409 when outcome.Body?.Reason == "code_exhausted": {
+                    var reason       = outcome.Body.Reason;
+                    requestUrl       = outcome.Body.RequestUrl is { Length: > 0 } fresh ? fresh : requestUrl;
+                    var codeRejected = code is not null || reason != "invite_required";
+
+                    // Three rejected codes end the offer; a 403 to a supplied code counts as one.
+                    if (codeRejected && ++wrongCodes >= MaxInviteCodeAttempts)
+                        return Failed(InviteRefusal(reason, requestUrl, codeRejected), reason);
+
+                    code = PromptInviteCode is null
+                        ? null
+                        : (await PromptInviteCode(requestUrl, codeRejected ? CodeComplaint(reason) : null, ct))?.Trim();
+
+                    if (string.IsNullOrEmpty(code)) return Failed(InviteRefusal(reason, requestUrl, codeRejected), reason);
+
+                    continue;
+                }
+                case 400:
+                    return Failed(Reason400(outcome.Body?.Reason), outcome.Body?.Reason ?? "invalid_request");
+                case 409:
+                    return Failed(Reason409(outcome.Body?.Reason, slug), outcome.Body?.Reason ?? "conflict");
+                case 0:
+                    return Failed("Couldn't reach the provisioning service. Check your connection and try again.", "unreachable");
+                default:
+                    return Failed($"Provisioning failed (HTTP {outcome.StatusCode}). Try again later.", $"http_{outcome.StatusCode}");
+            }
         }
     }
 
@@ -287,6 +317,18 @@ public sealed class WizardTenantProvisioner(
         telemetry.Funnel.WorkspaceFailed(reason);
 
         return ProvisionOffer.Failed;
+    }
+
+    static string CodeComplaint(string reason) => reason switch {
+        "invalid_code"   => "That invite code isn't valid.",
+        "code_exhausted" => "That invite code has been used up.",
+        _                => "That invite code wasn't accepted."
+    };
+
+    static string InviteRefusal(string reason, string? requestUrl, bool codeRejected) {
+        var why = codeRejected ? CodeComplaint(reason) : "Capacitor is invite-only right now.";
+
+        return LinkPolicy.IsOpenable(requestUrl) ? $"{why} Request an invite at {requestUrl}." : why;
     }
 
     static string Reason400(string? reason) => reason switch {

@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "kcap hook --claude --no-update-check",
-            "timeout": 5
+            "timeout": 9
           }
         ]
       }
@@ -77,6 +77,47 @@
           {
             "type": "command",
             "command": "kcap hook --claude --plan-read --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "TaskCreate|TaskUpdate|TodoWrite|Agent|mcp__.*kcap-plans__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(*progress.md*)",
+            "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --plan-edit --no-update-check",
             "timeout": 3
           }
         ]

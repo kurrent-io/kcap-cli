@@ -232,6 +232,28 @@ public class AgentOrchestratorLocalAttachTests {
     }
 
     [Test]
+    public async Task Discovery_stops_when_agent_exits_before_writing_transcript() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var agent = new AgentInstance("exit-1", null, "", null, "/r", "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo("/r", "", "/r"), new CancellationTokenSource()) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow };
+        orch.RegisterAgentForTest(agent);
+
+        var run = orch.RunDiscoveryForTest(agent, _ => {
+            agent.ExitedCts.Cancel();
+            return ("sid-after-exit", "/late.jsonl");
+        });
+
+        await run;
+        await Assert.That(agent.SessionId).IsNull();
+        await Assert.That(agent.TranscriptPath).IsNull();
+        await Assert.That(server.Calls.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task RegisterAgentAsync_registers_public_agent_and_skips_private() {
         var server = new TripwireServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());

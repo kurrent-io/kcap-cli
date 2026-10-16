@@ -109,6 +109,7 @@ public static class JsonMcpConfigWriter {
     static JsonObject RenderEntry(KcapMcpServer s, McpConfigShape shape, string? cwd, string command) {
         var o = new JsonObject();
         if (shape.TypeValue is not null) o["type"] = shape.TypeValue;
+        if (shape.TransportValue is not null) o["transport"] = shape.TransportValue;
 
         if (shape.CommandAsArgvArray) {
             // Use the implicit string -> JsonValue conversion (cast to JsonNode?) rather
@@ -127,6 +128,7 @@ public static class JsonMcpConfigWriter {
 
         if (cwd is not null && s.NeedsProjectCwd) o["cwd"] = cwd;
         if (shape.Enable == EnableStyle.EnabledTrue) o["enabled"] = true;
+        if (shape.ModeValue is not null) o["mode"] = shape.ModeValue;
 
         // Only where the harness has a per-server trust knob; flows, memory and pages keep prompting.
         if (s.AutoApprove && shape.Trust == TrustStyle.TrustBool) o["trust"] = true;   // Gemini

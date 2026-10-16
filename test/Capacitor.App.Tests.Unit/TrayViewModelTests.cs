@@ -278,7 +278,9 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task SummaryFrom_counts_live_remote_rows_and_tracks_lane_connection() {
+    [Arguments("Running")]
+    [Arguments("Idle")]
+    public async Task SummaryFrom_counts_live_remote_rows_and_tracks_lane_connection(string status) {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var local = new FakeDaemonClientService();
             var remoteAgents = new FakeRemoteAgents();
@@ -295,7 +297,7 @@ public class TrayViewModelTests {
             await Assert.That(seen!.Value.LaneConnected).IsFalse();
 
             remoteAgents.Cache.AddOrUpdate(new AgentInstanceDto {
-                AgentId = "r1", Status = "Running", DaemonName = "other-mac", OwnerUserId = "u1",
+                AgentId = "r1", Status = status, DaemonName = "other-mac", OwnerUserId = "u1",
                 Vendor = "claude", RepoOwner = "o", RepoName = "r",
             });
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));

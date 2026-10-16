@@ -1,10 +1,12 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Services;
 
@@ -63,6 +65,11 @@ public sealed class StatusCommand(
         foreach (var h in harnesses.Where(h => h.Signals.IsWired))
             await Console.Out.WriteLineAsync(
                 $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
+
+        if (harnesses.FirstOrDefault(h => h.Id == HarnessId.Muse) is { } muse
+            && MuseHooksDetailLine(harnesses.Of<MuseHarness>().Paths.SettingsJson,
+                   detected: harnesses.Detected(HarnessId.Muse), wired: muse.Signals.IsWired) is { } museGap)
+            await Console.Out.WriteLineAsync($"           {museGap}");
 
         if (new GitHookInstaller(home).IsInstalled() && GitHookWarning(GitHookInstaller.InstalledGitVersion()) is { } gitWarning)
             await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
@@ -407,6 +414,38 @@ public sealed class StatusCommand(
             : id is HarnessId.Codex
                 ? $"{label}: no hook event yet. Start a new {label} session and accept its prompt to trust the kcap hooks"
                 : $"{label}: no hook event yet. Start a new {label} session";
+
+    /// <summary>Muse has one hook group per lifecycle event, so a hand-edited settings.json can leave
+    /// the harness wired with some events missing. Null when every event is present.</summary>
+    internal static string? MuseHookGapLine(IReadOnlySet<string> installedEvents) {
+        var missing = MuseHooksParser.MuseHookEvents.Where(e => !installedEvents.Contains(e)).ToList();
+
+        return missing.Count == 0
+            ? null
+            : $"{HarnessRegistry.LabelOf(HarnessId.Muse)}: hooks missing for {string.Join(", ", missing)}. Run `kcap plugin install --muse`";
+    }
+
+    /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
+    /// claim every event is missing, and re-running the install cannot fix it. It is reported for an
+    /// installed but unwired Muse too, since an unparseable file is what keeps it from reading as wired;
+    /// missing hooks are reported only once wired, where the not-configured line does not already.</summary>
+    internal static string? MuseHooksDetailLine(string settingsPath, bool detected, bool wired) {
+        if (!detected && !wired) return null;
+
+        var label = HarnessRegistry.LabelOf(HarnessId.Muse);
+
+        try {
+            if (!File.Exists(settingsPath)) return null;
+
+            return JsonNode.Parse(File.ReadAllTextShared(settingsPath)) is JsonObject root
+                ? wired ? MuseHookGapLine(MuseHooksParser.InstalledEvents(root)) : null
+                : $"{label}: {settingsPath} is not a JSON object, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+        } catch (JsonException) {
+            return $"{label}: {settingsPath} is not valid JSON, so its hooks cannot be read. Fix it, then run `kcap plugin install --muse`";
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return $"{label}: {settingsPath} could not be read, so its hooks were not checked";
+        }
+    }
 
     static string Ago(TimeSpan elapsed) => elapsed switch {
         { TotalMinutes: < 1 } => "just now",

@@ -8,6 +8,7 @@ using Capacitor.Cli.Core.Harness.Copilot;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 
@@ -30,7 +31,13 @@ namespace Capacitor.Cli;
 static class McpServerNudgeAvailability {
     /// <param name="serverName">The registration name, e.g. <c>kcap-plans</c>.</param>
     /// <param name="codexConfigPath">Overrides the Codex <c>config.toml</c> path (test seam); null uses the default.</param>
-    public static bool IsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string serverName, string? codexConfigPath = null) {
+    /// <param name="audience">The session asking; null is an interactive session.</param>
+    public static bool IsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string serverName,
+                                       string? codexConfigPath = null, SessionStartAudience? audience = null) {
+        // The on-disk config is machine-wide. A flow participant is launched with only its flow's
+        // servers (a strict MCP config, disabled inheritance or an isolated home), so it has none of these.
+        if (audience?.IsFlowParticipant is true) return false;
+
         try {
             return harness switch {
                 // Claude loads the plugin's bundled .mcp.json, so the server is available exactly when
@@ -46,6 +53,7 @@ static class McpServerNudgeAvailability {
                 HarnessId.OpenCode    => JsonBlockHasServer(harnesses.Of<OpenCodeHarness>().Paths.McpConfigJson, "mcp", serverName),
                 HarnessId.Antigravity => JsonBlockHasServer(harnesses.Of<AntigravityHarness>().Paths.McpConfigJson, "mcpServers", serverName),
                 HarnessId.Pi          => PiHas(harnesses, PiToken(serverName)),
+                HarnessId.Muse        => JsonBlockHasServer(harnesses.Of<MuseHarness>().Paths.SettingsJson, "mcp_servers", serverName),
                 _ => false
             };
         } catch {

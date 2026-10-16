@@ -13,11 +13,6 @@ public class StreamingRunnerTests {
         }
     }
 
-    static bool IsAlive(int pid) {
-        try { return !Process.GetProcessById(pid).HasExited; }
-        catch (ArgumentException) { return false; }
-    }
-
     [Test]
     [NotInParallel("StreamingProcessRunner")]
     public async Task RunStreamingAsync_tags_interleaved_lines_with_the_right_stream_kind() {
@@ -82,61 +77,32 @@ public class StreamingRunnerTests {
     }
 
     [Test]
+    [Arguments(CancelMode.KillTree)]
+    [Arguments(CancelMode.AbandonWait)]
     [NotInParallel("StreamingProcessRunner")]
-    public async Task RunStreamingAsync_ct_cancel_kills_the_tree_and_leaves_no_orphan() {
+    public async Task RunStreamingAsync_cancellation_kills_the_tree_regardless_of_cancel_mode(CancelMode cancelMode) {
         Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
 
         using var tmp = new TempDir();
         var runner = new ProcessRunner(TimeProvider.System);
         var startedMarker = tmp.PathTo("marker");
         using var cts = new CancellationTokenSource();
-        int grandchildPid = -1;
+        // Publish only after echo closes the file; existence alone can otherwise expose an empty PID.
+        var runTask = runner.RunStreamingAsync(
+            "/bin/sh", ["-c", $"sleep 30 & echo $! > '{startedMarker}.tmp'; mv '{startedMarker}.tmp' '{startedMarker}'; wait"],
+            new RunOptions(CancelMode: cancelMode), _ => { }, cts.Token);
         try {
-            var runTask = runner.RunStreamingAsync(
-                "/bin/sh", ["-c", $"sleep 30 & echo $! > {startedMarker}; wait"],
-                new RunOptions(), _ => { }, cts.Token);
-
-            await WaitUntilAsync(() => File.Exists(startedMarker), TimeSpan.FromSeconds(5), "the grandchild to start and record its PID");
-            grandchildPid = int.Parse((await File.ReadAllTextAsync(startedMarker)).Trim(), CultureInfo.InvariantCulture);
+            await WaitUntilAsync(() => File.Exists(startedMarker), TimeSpan.FromSeconds(5), "the grandchild to record its PID");
+            var grandchildPid = int.Parse((await File.ReadAllTextAsync(startedMarker)).Trim(), CultureInfo.InvariantCulture);
+            var identity = PidIdentity.Capture(grandchildPid);
             cts.Cancel();
 
             await Assert.ThrowsAsync<OperationCanceledException>(() => runTask);
-            await WaitUntilAsync(() => !IsAlive(grandchildPid), TimeSpan.FromSeconds(5), "the grandchild to die with the cancelled tree");
+            await PidIdentity.WaitUntilGoneAsync(grandchildPid, identity, TimeSpan.FromSeconds(5));
         } finally {
-            if (grandchildPid > 0) {
-                try { Process.GetProcessById(grandchildPid).Kill(); }
-                catch (ArgumentException) { /* already gone */ }
-            }
-        }
-    }
-
-    [Test]
-    [NotInParallel("StreamingProcessRunner")]
-    public async Task RunStreamingAsync_ct_cancel_ignores_AbandonWait_CancelMode_and_still_kills_the_tree() {
-        Skip.When(OperatingSystem.IsWindows(), "execs a POSIX binary");
-
-        using var tmp = new TempDir();
-        var runner = new ProcessRunner(TimeProvider.System);
-        var startedMarker = tmp.PathTo("marker");
-        using var cts = new CancellationTokenSource();
-        int grandchildPid = -1;
-        try {
-            // AbandonWait would let RunAsync's child survive — streaming must still kill it.
-            var runTask = runner.RunStreamingAsync(
-                "/bin/sh", ["-c", $"sleep 30 & echo $! > {startedMarker}; wait"],
-                new RunOptions(CancelMode: CancelMode.AbandonWait), _ => { }, cts.Token);
-
-            await WaitUntilAsync(() => File.Exists(startedMarker), TimeSpan.FromSeconds(5), "the grandchild to start and record its PID");
-            grandchildPid = int.Parse((await File.ReadAllTextAsync(startedMarker)).Trim(), CultureInfo.InvariantCulture);
+            // Also reap on assertion/readiness failure, before the fixture directory disappears.
             cts.Cancel();
-
-            await Assert.ThrowsAsync<OperationCanceledException>(() => runTask);
-            await WaitUntilAsync(() => !IsAlive(grandchildPid), TimeSpan.FromSeconds(5), "the grandchild to die despite AbandonWait");
-        } finally {
-            if (grandchildPid > 0) {
-                try { Process.GetProcessById(grandchildPid).Kill(); }
-                catch (ArgumentException) { /* already gone */ }
-            }
+            try { await runTask; } catch (OperationCanceledException) { }
         }
     }
 

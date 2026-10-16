@@ -94,7 +94,9 @@ public class PullRequestContextViewModelRegistryTests {
         await Assert.That(h.Vm.ReaderNote).IsEqualTo("GitHub CLI is not signed in. Run gh auth login to read pull requests here.");
         await Assert.That(h.Vm.ShowsInstallTool).IsFalse();
         h.Provider.Status = PullRequestReaderStatusKind.Ready;
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "rechecked and reading");
         await Assert.That(h.Vm.HasReaderNote).IsFalse();
@@ -132,7 +134,9 @@ public class PullRequestContextViewModelRegistryTests {
         var h = new Harness("github.com", Primary);
         h.Push(); await h.Show();
         h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.InvalidProtocol, Subject: subject, Reason: reason, AccessFailure: "invalid")));
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => h.Vm.Notice == notice, what: "tool-named notice");
         await h.Dispose();
@@ -143,9 +147,12 @@ public class PullRequestContextViewModelRegistryTests {
         var h = new Harness("github.com", Primary);
         h.Push(); await h.Show();
         h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.TransportFailure, Subject: subject, Reason: "timeout", AccessFailure: "transient")));
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
-        await WaitUntilAsync(() => h.Vm.Notice == "Couldn't read this pull request through GitHub CLI. Refresh to try again.", what: "tool-named notice");
+        await WaitUntilAsync(() => h.Vm.FreshnessDetail == "Couldn't read this pull request through GitHub CLI. Refresh to try again.", what: "tool-named freshness detail");
+        await Assert.That(h.Vm.HasNotice).IsFalse();
         await h.Dispose();
     });
 
@@ -165,7 +172,9 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Vm.ShowSectionCommand.Execute("checks");
         await Assert.That(h.Vm.IsReading).IsTrue();
         h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Restart, Subject: subject, Reason: "integration_changed")));
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.CanReveal, what: "integration restart clears protected state");
         h.Provider.PendingPage.SetResult(new PullRequestRead<PullRequestPageDto<PullRequestCheckDto>>(PullRequestReadKind.Ready,
@@ -187,7 +196,9 @@ public class PullRequestContextViewModelRegistryTests {
         await h.Vm.ShowSectionCommand.Execute("checks");
         await Assert.That(h.Vm.IsReading).IsTrue();
         h.Provider.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(PullRequestReadKind.Unavailable, Subject: subject, Reason: "no_reader", AccessFailure: "invalid")));
-        h.Time.Advance(TimeSpan.FromSeconds(16));
+        // Cross the manual-refresh gap without also starting the 15-second automatic poll.
+        h.Time.Advance(TimeSpan.FromSeconds(3));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.CanReveal, what: "no-reader failure clears protected state");
         await Assert.That(h.Vm.Notice).IsEqualTo("No reader is available for this pull request's host.");

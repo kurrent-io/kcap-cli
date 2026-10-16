@@ -68,6 +68,8 @@ sealed class GeminiHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -336,9 +338,9 @@ sealed class GeminiHookCommand(
         // again here (double-subtraction was a real defect in the Copilot adapter).
         var memoryTask = StartMemoryIndexTask(sessionId,
             scopeRoot: cwd is not null ? GitRepository.FindRoot(cwd) ?? cwd : null,
-            disabled: activeProfile?.DisableMemoryIndex is true,
+            disabled: activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance,
             guidelinesDisabled: activeProfile?.DisableSessionGuidelines is true,
-            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Gemini, harnesses),
+            flowsDisabled: SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Gemini, harnesses, audience: audience),
             source: source,
             budget: budget.Remaining);
 
@@ -356,9 +358,9 @@ sealed class GeminiHookCommand(
         // parses hook stdout unconditionally, with the exit code only setting its own `success` flag.
         var fragment = await SessionStartMemoryHookSupport.AwaitBounded(memoryTask, budget);
         var workItemsNudge = HarnessNudgeEmitter.Combine(
-            SessionNudges.Resolve(HarnessId.Gemini, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow())),
-            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time),
-            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true, config, HarnessId.Gemini, harnesses));
+            SessionNudges.Resolve(HarnessId.Gemini, sessionId, activeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience),
+            HarnessNudgeEmitter.ResolveFragmentForHook(activeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time),
+            FirstRunNoticeEmitter.Resolve(activeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Gemini, harnesses));
         result.Write(RenderSessionStartPayload(fragment, workItemsNudge));
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return outcome == HookPostOutcome.Failed ? 1 : 0;

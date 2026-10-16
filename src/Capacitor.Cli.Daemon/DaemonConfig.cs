@@ -367,6 +367,10 @@ public class DaemonConfig {
     /// </summary>
     public bool OpenCodeUnattendedReviewerEnabled { get; set; } = true;
 
+    /// <summary>Whether this daemon may run Grok Build as an unattended review-flow reviewer. Default
+    /// true; <c>KCAP_GROK_UNATTENDED_REVIEWER=0</c> disables. See <c>GrokReviewerCapability</c>.</summary>
+    public bool GrokUnattendedReviewerEnabled { get; set; } = true;
+
     /// <summary>
     /// One absolute budget, in seconds, for an OpenCode reviewer launch: spawn through the first prompt
     /// completing. On expiry the child is terminated, its isolated config dir removed, and the launch
@@ -416,6 +420,20 @@ public class DaemonConfig {
     /// Vibe is a recording-only harness — the daemon never launches it — so this exists only to give
     /// <c>kcap config</c> a slot for the binary path; it is not read by any launcher.</summary>
     public string MistralVibePath { get; set; } = Core.Harness.MistralVibe.MistralVibeHarness.CliBinary;
+
+    /// <summary>Path or bare command for Grok Build. Overridable via <c>KCAP_GROK_PATH</c>.</summary>
+    public string GrokPath { get; set; } = Core.Harness.Grok.GrokHarness.CliBinary;
+
+    /// <summary>Path or bare command for the Muse Code CLI. Overridable via <c>KCAP_MUSE_PATH</c>.</summary>
+    public string MusePath { get; set; } = Core.Harness.Muse.MuseHarness.CliBinary;
+
+    /// <summary>Daemon-wide default model for Muse; null keeps Muse's own default. Overridable via
+    /// <c>KCAP_MUSE_MODEL</c>.</summary>
+    public string? MuseModel { get; set; }
+
+    /// <summary>Whether THIS daemon may run Muse as an unattended review-flow reviewer. Default TRUE;
+    /// <c>KCAP_MUSE_UNATTENDED_REVIEWER=0</c> opts out, as for every gated reviewer.</summary>
+    public bool MuseUnattendedReviewerEnabled { get; set; } = true;
 
     /// <summary>
     /// Opt-in, off-by-default ACP wire/content debug logging (<c>KCAP_ACP_DEBUG_FRAMES</c>). When

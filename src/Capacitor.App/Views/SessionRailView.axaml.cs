@@ -1,7 +1,15 @@
+using System.ComponentModel;
+using System.Reactive.Linq;
+using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
+using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
@@ -30,5 +38,50 @@ public partial class SessionRailView : UserControl {
         _about = new AboutWindow { DataContext = DataContext };
         _about.Closed += (_, _) => _about = null;
         _about.Show(owner);
+    }
+
+    void OnPullRequestClick(object? sender, RoutedEventArgs e) {
+        if (sender is not Button { DataContext: RailSessionViewModel vm } anchor
+            || !vm.HasMultiplePullRequests || vm.PullRequest is not { } summary) return;
+
+        var rows = new StackPanel { Spacing = 2, Margin = new Thickness(6) };
+        var flyout = new Flyout {
+            Placement = PlacementMode.BottomEdgeAlignedRight, VerticalOffset = 6,
+            Content = new ScrollViewer { Content = rows, MaxHeight = 400, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled },
+        };
+        flyout.FlyoutPresenterClasses.Add("kcapPanel");
+        foreach (var item in summary.MenuItems) {
+            var body = new StackPanel { Spacing = 3 };
+            body.Children.Add(new TextBlock {
+                Text = item.Label, FontSize = 13.5, TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = (IBrush)this.FindResource("KcapTextBrush")!,
+            });
+            body.Children.Add(new TextBlock {
+                Text = item.Detail, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = (IBrush)this.FindResource("KcapMutedBrush")!,
+            });
+            var option = new Button {
+                Content = body, DataContext = item, MinWidth = 240, MaxWidth = 360, Padding = new Thickness(10, 8),
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            };
+            option.Classes.Add("kcapGhost");
+            AutomationProperties.SetName(option, $"Open {item.Detail}: {item.Label}");
+            ToolTip.SetTip(option, $"{item.Label}\n{item.Detail}");
+            option.Click += (_, _) => {
+                flyout.Hide();
+                vm.OpenPullRequestChoiceCommand.Execute(item).Subscribe();
+            };
+            rows.Children.Add(option);
+        }
+        // Close when the access-aware summary changes, including expiry or removal.
+        PropertyChangedEventHandler changed = (_, args) => {
+            if (args.PropertyName == nameof(RailSessionViewModel.PullRequest)) flyout.Hide();
+        };
+        vm.PropertyChanged += changed;
+        flyout.Closed += (_, _) => vm.PropertyChanged -= changed;
+        flyout.Opened += (_, _) => rows.Children.OfType<Button>().FirstOrDefault()?.Focus();
+        FlyoutBase.SetAttachedFlyout(anchor, flyout);
+        flyout.ShowAt(anchor);
+        e.Handled = true;
     }
 }

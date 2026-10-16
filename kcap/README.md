@@ -54,7 +54,7 @@ Search, save, and update durable team memories — preferences, feedback, projec
 | `get_memory` | Fetch a memory's full content by id or slug |
 | `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide) |
 | `update_memory` | Update an existing memory's description/content/kind |
-| `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) |
+| `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) or move its home to a project, repo or the org |
 | `archive_memory` | Soft-delete a memory |
 
 Repo- and machine-aware: it resolves the cwd to a repo hash and the local persisted machine id at startup to scope saves and bias search results.
@@ -204,6 +204,9 @@ kcap/
       SKILL.md
     guided-tour/
       SKILL.md           — /kcap:guided-tour onboarding tour
+  muse-assistant/
+    capacitor-recording/
+      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-capacitor)
 ```
 
 The two MCP files exist because Claude requires top-level `mcpServers` (camelCase) while Codex accepts only `mcp_servers` (snake_case) or a bare server map — the schemas don't overlap. Keep them in sync when adding or removing servers.

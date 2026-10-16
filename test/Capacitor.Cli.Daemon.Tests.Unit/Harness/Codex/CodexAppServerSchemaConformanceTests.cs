@@ -10,12 +10,14 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Codex;
 /// <summary>
 /// Guards the <c>codex app-server</c> protocol shapes the runtime depends on
 /// (<see cref="CodexAppServerSchemaSubset"/>) against upstream drift — a changed shape fails here
-/// rather than silently at launch. The binary-gated arm auto-skips when <c>codex</c> is absent, never
-/// passing silently; regenerate the pin after an intended bump with
+/// rather than silently at launch. The installed-binary arm is opt-in with
+/// <c>KCAP_CODEX_SCHEMA_CHECK=1</c>, so an unrelated local vendor upgrade cannot change unit-test
+/// results. It skips when <c>codex</c> is absent; regenerate the pin after an intended bump with
 /// <c>KCAP_CODEX_SCHEMA_PIN_UPDATE=1</c>. Behavioural conformance (the isolation / sandbox probes)
 /// lives with the live smoke, not here.
 /// </summary>
 public class CodexAppServerSchemaConformanceTests {
+    const string SchemaCheckEnvVar = "KCAP_CODEX_SCHEMA_CHECK";
     const string PinUpdateEnvVar = "KCAP_CODEX_SCHEMA_PIN_UPDATE";
     static readonly TimeSpan ProcessGuard = TimeSpan.FromSeconds(30);
 
@@ -65,10 +67,13 @@ public class CodexAppServerSchemaConformanceTests {
         await Assert.That(diff!).Contains("TurnStartParams");
     }
 
-    // ── Binary-gated arm: the installed codex schema still matches the pin ──────────────────────
+    // ── Opt-in installed-binary arm: the installed codex schema still matches the pin ──────────────────────
 
     [Test]
     public async Task Installed_codex_schema_matches_the_vendored_pin() {
+        Skip.When(Environment.GetEnvironmentVariable(SchemaCheckEnvVar) != "1"
+               && Environment.GetEnvironmentVariable(PinUpdateEnvVar) != "1",
+            $"Set {SchemaCheckEnvVar}=1 to certify the installed Codex schema against the pin; this checks a local vendor installation.");
         var (found, version) = await TryResolveCodexVersionAsync();
         Skip.When(!found,
             "codex not resolvable on PATH — the schema-drift check needs a local codex install (shared CI has none).");

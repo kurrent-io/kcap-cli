@@ -20,11 +20,29 @@ public class HostedHarnessCatalogTests {
         await Assert.That(options.All(o => o.Available)).IsTrue();
     }
 
+    /// <summary>A daemon too old to host Grok advertises nothing for it, so silence must not offer it.</summary>
+    [Test]
+    public async Task Grok_is_listed_only_when_a_daemon_advertises_it() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("grok");
+        await Assert.That(HostedHarnessCatalog.Build(["grok"]).Single(o => o.Vendor == "grok").Available).IsTrue();
+    }
+
     [Test]
     public async Task A_recording_only_harness_is_listed_only_when_advertised() {
         await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
         await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("mistral-vibe");
         await Assert.That(HostedHarnessCatalog.Build(["mistral-vibe"]).Single(o => o.Vendor == "mistral-vibe").Available).IsTrue();
+    }
+
+    /// <summary>A daemon too old to host Muse Code advertises nothing for it, so silence must not offer it.</summary>
+    [Test]
+    public async Task Muse_is_listed_only_when_a_daemon_advertises_it() {
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse");
+        await Assert.That(HostedHarnessCatalog.Build(["claude"]).Select(o => o.Vendor)).DoesNotContain("muse");
+
+        var advertised = HostedHarnessCatalog.Build(["muse"]).Single(o => o.Vendor == "muse");
+        await Assert.That(advertised.Available).IsTrue();
+        await Assert.That(advertised.TransportFamily).IsEqualTo("rpc");
     }
 
     [Test]
@@ -122,6 +140,14 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.TileFor("zed").Glyph).IsEqualTo("Z");
     }
 
+    /// <summary>Grok's tint is its own off-white, the one the server's session chip uses, not the
+    /// neutral tint vendors without a brand colour share.</summary>
+    [Test]
+    public async Task Grok_has_its_own_tint() {
+        await Assert.That(HostedHarnessCatalog.TileFor("grok").Color).IsEqualTo("#F5F5F5");
+        await Assert.That(HostedHarnessCatalog.TileFor("grok").Color).IsNotEqualTo(HostedHarnessCatalog.TileFor("codex").Color);
+    }
+
     [Test]
     public async Task Model_label_prefers_the_curated_name_and_falls_back_to_the_slug() {
         await Assert.That(HostedHarnessCatalog.ModelLabelFor("claude", "claude-fable-5")).IsEqualTo("Claude Fable 5");
@@ -189,5 +215,11 @@ public class HostedHarnessCatalogTests {
         await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("Codex")).IsTrue();
         await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("claude")).IsFalse();
         await Assert.That(HostedHarnessCatalog.SupportsCodexPosture("cursor")).IsFalse();
+    }
+
+    [Test]
+    public async Task Muse_assistant_has_the_muse_blue_monogram_but_is_never_offered_to_launch() {
+        await Assert.That(HostedHarnessCatalog.TileFor("muse-assistant")).IsEqualTo(("MA", "#2F6FE0"));
+        await Assert.That(HostedHarnessCatalog.Build(null).Select(o => o.Vendor)).DoesNotContain("muse-assistant");
     }
 }
