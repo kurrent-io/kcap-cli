@@ -1214,7 +1214,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _signInRequired.OnNext(outcome.Unauthorized);
             if (outcome.Unauthorized)
                 StartError = null;
-            else if (SameLaunchTarget(draft.RepoPath, draft.Machine) && outcome.Error is { } error)
+            else if (SameLaunchTarget(draft.RepoPath, draft.Machine, draft.Remote) && outcome.Error is { } error)
                 StartError = FriendlyLaunchFailure(error);
             return;
         }
@@ -1295,7 +1295,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             return false;
         }
         if (bufferedReason is not null)
-            ApplyLaunchFailure(agentId, hadAttachments, bufferedReason, repoPath, machine);
+            ApplyLaunchFailure(agentId, hadAttachments, bufferedReason, repoPath, machine, lane);
         return bufferedReason is null;
     }
 
@@ -1352,7 +1352,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _pendingLaunches.Remove(agentId);
         }
         if (pending is null) return;
-        ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason, pending.RepoPath, pending.Machine);
+        ApplyLaunchFailure(
+            agentId, pending.HadAttachments, failure.Reason, pending.RepoPath, pending.Machine, pending.Lane);
         _directory?.RemovePlaceholder(agentId);
         _launchFailed?.Invoke(agentId);
     }
@@ -1361,12 +1362,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// back when the composer is still exactly as this launch left it and still aimed at the same
     /// target — otherwise it says to re-attach, because restoring would overwrite what is there.
     void ApplyLaunchFailure(
-            string agentId, bool hadAttachments, string reason, string repoPath, string machine) {
+            string agentId, bool hadAttachments, string reason, string repoPath, string machine,
+            AgentOrigin lane) {
         var friendly = FriendlyLaunchFailure(reason);
         // A text-only refusal names the folder+machine that was launched. Files that were not
-        // handed back still need the re-attach line on whatever target is selected now.
+        // handed back still need the re-attach line on whatever target is selected now — the
+        // bytes left with the failed launch and the user must re-stage them for the next send.
         if (!hadAttachments) {
-            if (SameLaunchTarget(repoPath, machine)) StartError = friendly;
+            if (SameLaunchTarget(repoPath, machine, lane == AgentOrigin.Remote)) StartError = friendly;
             return;
         }
 
@@ -1386,14 +1389,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         StartError = friendly + " — re-attach the files to send them again";
     }
 
-    bool SameLaunchTarget(string repoPath, string machine) =>
+    /// Local and remote can share a daemon name and path; RemoteMachineSelected separates them.
+    bool SameLaunchTarget(string repoPath, string machine, bool remote) =>
         PathComparer.Equals(SelectedRepoPath, repoPath)
-        && string.Equals(SelectedMachine, machine, StringComparison.Ordinal);
+        && string.Equals(SelectedMachine, machine, StringComparison.Ordinal)
+        && RemoteMachineSelected == remote;
 
     bool IsRestorable(RetainedDraft retained) =>
         retained.ClearedGoal && _goalEdits == retained.GoalEditsAfterClear
         && retained.ClearedTray && Tray.Generation == retained.TrayGenerationAfterClear
         && retained.Draft.Machine == SelectedMachine
+        && retained.Draft.Remote == RemoteMachineSelected
         && retained.Draft.RepoPath == SelectedRepoPath
         && retained.Draft.Vendor == SelectedVendor;
 
