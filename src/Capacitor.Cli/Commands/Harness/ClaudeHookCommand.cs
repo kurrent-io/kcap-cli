@@ -900,15 +900,15 @@ public sealed class ClaudeHookCommand(
 
             // The feed budget comes from the same snapshot the POST is bounded by, so it can never
             // promise the server more time than the POST will wait.
-            var postBody = body;
+            var postBody         = body;
+            var nextWorkWithheld = false;
             if (capabilityNode is not null) {
                 try {
                     if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(remaining) is { } feedBudgetMs) {
                         capabilityNode["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
                         capabilityNode["next_work_budget_ms"] = feedBudgetMs;
-                    } else if (!nextWorkDisabled) {
-                        await Console.Error.WriteLineAsync(
-                            $"[kcap] session-start next-work list not requested: {remaining.TotalMilliseconds:F0}ms left of the hook budget");
+                    } else {
+                        nextWorkWithheld = !nextWorkDisabled;
                     }
                     postBody = capabilityNode.ToJsonString();
                 } catch {
@@ -925,6 +925,10 @@ public sealed class ClaudeHookCommand(
                     resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, clock.Time, remaining, CancellationToken.None);
                 }
             } catch { resp = null; }
+
+            // Written after the POST, so a stalled stderr can neither spend the POST's time nor cost the body its capabilities.
+            if (nextWorkWithheld)
+                TryWriteDiagnostic($"session-start next-work list not requested: {remaining.TotalMilliseconds:F0}ms left of the hook budget");
 
             if (resp is null || !resp.IsSuccessStatusCode) {
                 var code      = resp is null ? 0 : (int)resp.StatusCode;
@@ -1017,7 +1021,7 @@ public sealed class ClaudeHookCommand(
                         new(harnessNudge, Name: "harness nudge"),
                         new(firstRunNotice, Name: "first-run notice"),
                         new(memoryFragment, Rank: 3, Trimmable: true, Name: "memory and flows"),
-                    ], message => Console.Error.WriteLine($"[kcap] {message}"));
+                    ], TryWriteDiagnostic);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }
@@ -1249,6 +1253,11 @@ public sealed class ClaudeHookCommand(
             // Best effort — a policy hiccup never fails the hook.
             return null;
         }
+    }
+
+    /// <summary>A diagnostic that fails to write is dropped: it must never cost the session its context.</summary>
+    static void TryWriteDiagnostic(string message) {
+        try { Console.Error.WriteLine($"[kcap] {message}"); } catch { /* stderr unavailable */ }
     }
 
     /// <summary>
