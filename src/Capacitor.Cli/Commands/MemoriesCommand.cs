@@ -124,7 +124,9 @@ class MemoriesCommand(
 
             string? outcome;
             try {
-                outcome = audience == "org" && await ExistingOrgMemoryAsync(client, baseUrl, c.Slug!, global || project is not null ? null : repoHash, machineId) is { } existing
+                // A project home is left to the save's own check: a fetched row does not say which project it is homed at.
+                outcome = audience == "org" && project is null
+                       && await ExistingOrgMemoryAsync(client, baseUrl, c.Slug!, global ? null : repoHash, machineId) is { } existing
                     ? await UpdateExistingAsync(client, baseUrl, existing, c, flags.ContainsKey("--update"))
                     : await SaveAsync(client, baseUrl, body, c, flags.ContainsKey("--update"));
             } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) {
@@ -176,9 +178,10 @@ class MemoriesCommand(
         return put.IsSuccessStatusCode ? "updated" : $"failed (HTTP {(int)put.StatusCode}) {await put.Content.ReadAsStringAsync()}";
     }
 
-    /// <summary>The id of an org memory already holding <paramref name="slug"/> at this place. A save to org that the caller may
-    /// not make directly is recorded as their own memory awaiting approval, so the save's own slug check never sees the org
-    /// copy an earlier, approved import made, and a re-run would queue it a second time.</summary>
+    /// <summary>The id of an org memory already holding <paramref name="slug"/> at this repository, or org-wide when
+    /// <paramref name="repoHash"/> is null. A save to org that the caller may not make directly is recorded as their own
+    /// memory awaiting approval, so the save's own slug check never sees the org copy an earlier, approved import made, and
+    /// a re-run would queue it a second time.</summary>
     internal static async Task<string?> ExistingOrgMemoryAsync(HttpClient client, string baseUrl, string slug, string? repoHash, string? machineId) {
         var query = new List<string>();
         if (repoHash is not null) query.Add($"repo={Uri.EscapeDataString(repoHash)}");
