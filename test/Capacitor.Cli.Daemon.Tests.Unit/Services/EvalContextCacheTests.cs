@@ -51,7 +51,7 @@ public class EvalContextCacheTests : IDisposable {
         _stub.Route("POST", "evals/v4", 200, "{}");
 
         var config     = new DaemonConfig { Name = "t", ServerUrl = _stub.Url, ConfigRoot = Config.Root, Profiles = Resolutions.At(_stub.Url, Config.Root) };
-        var connection = new ServerConnection(config, AuthFixtures.NewTokenStore(Config.Root), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        var connection = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var cache      = new EvalContextCache(_time);
         _ = new EvalRunner(connection, cache, TestHarnesses.Under(Home, TestBinaries.None), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
             NullLogger<EvalRunner>.Instance, _time, Fence) { TempRoot = RunRoot };

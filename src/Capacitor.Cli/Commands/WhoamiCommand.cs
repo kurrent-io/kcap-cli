@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Commands;
 
@@ -43,6 +44,24 @@ public sealed class WhoamiCommand(
 
     public async Task<int> HandleAsync() {
         var baseUrl = profiles.Resolution.ServerUrl!;
+
+        // Before discovery, which answers with a stored token's provider while the server is down
+        // and would have the probe below send that token here.
+        switch (profiles.Resolution.Endpoint) {
+            case LocalEndpointClass.Local:
+                await Console.Out.WriteLineAsync("Provider: None (local installation)");
+                await Console.Out.WriteLineAsync($"Server:   {baseUrl}");
+
+                return 0;
+            case LocalEndpointClass.Retired:
+                Console.Error.WriteLine($"{baseUrl} belonged to a removed local installation.");
+
+                return 1;
+            case LocalEndpointClass.Undetermined(var reason):
+                Console.Error.WriteLine($"Cannot tell whether {baseUrl} is the local installation: {reason}.");
+
+                return 1;
+        }
 
         var provider = await discovery.DiscoverAsync(baseUrl, config, profiles, tokens);
 

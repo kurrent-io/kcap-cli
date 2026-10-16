@@ -29,8 +29,9 @@ public class StatusAuthResolutionTests {
             ServerUrl      = issuedBy,
         });
 
-    Task<StatusCommand.AuthSnapshot> ResolveAsync(MachineAuth? machine = null, StatusCommand.ServerReach? server = null) =>
-        StatusCommand.ResolveAuthAsync(Tokens, machine ?? MachineAuth.None, Profile, server ?? Reached);
+    Task<StatusCommand.AuthSnapshot> ResolveAsync(
+            MachineAuth? machine = null, StatusCommand.ServerReach? server = null, bool sendsNoBearer = false) =>
+        StatusCommand.ResolveAuthAsync(Tokens, machine ?? MachineAuth.None, Profile, server ?? Reached, sendsNoBearer);
 
     // A server announcing no auth provider is usable as it stands, which is the first thing the
     // credential lane checks — so neither an empty token store nor a machine credential changes it.
@@ -45,6 +46,18 @@ public class StatusAuthResolutionTests {
     public async Task No_auth_outranks_a_machine_credential() {
         var auth = await ResolveAsync(
             new MachineAuth("client-id", "client-secret", null), Reached with { Provider = AuthProvider.None });
+
+        await Assert.That(auth.State).IsEqualTo(StatusAuthState.NotRequired);
+    }
+
+    /// <summary>Through an outage the provider is the last one cached, and a token left behind by a
+    /// cloud setup is still bound to this URL's server: neither may make status read or refresh it.</summary>
+    [Test]
+    public async Task A_local_installation_needs_no_credential_whatever_the_cache_and_the_store_say() {
+        await SaveTokenAsync(Server, TimeSpan.FromHours(1));
+
+        var auth = await ResolveAsync(
+            server: new StatusCommand.ServerReach(Server, false, null, AuthProvider.WorkOS), sendsNoBearer: true);
 
         await Assert.That(auth.State).IsEqualTo(StatusAuthState.NotRequired);
     }

@@ -24,7 +24,7 @@ public class AcpServerConnectionTests {
     /// </summary>
     sealed class TestServerConnection() : ServerConnection(
         new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
     , TimeProvider.System) {

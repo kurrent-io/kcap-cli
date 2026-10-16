@@ -795,7 +795,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _pidRecordRoot = recordRoot;
         _attachmentStore = new AttachmentStore(recordRoot);
         _attachmentFetcher = new AttachmentFetcher(
-            httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
+            httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
@@ -5343,6 +5343,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
+        // A local installation is sent no bearer, so a token left in the store is never refreshed.
+        if (_config.Profiles.Resolution.SendsNoBearer) return;
+
         var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval, _time);
 
         while (await _tokenRefresh.WaitForNextTickAsync(ct)) {

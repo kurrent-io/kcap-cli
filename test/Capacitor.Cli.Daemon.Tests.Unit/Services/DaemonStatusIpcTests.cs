@@ -112,7 +112,7 @@ public class DaemonStatusIpcTests {
         var notifier         = new DaemonStatusNotifier();
         var tokens           = AuthFixtures.NewTokenStore(Config.Root);
         var connection       = new ServerConnection(
-            config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
             TimeProvider.System, notifier);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);
@@ -167,7 +167,7 @@ public class DaemonStatusIpcTests {
         var notifier   = new DaemonStatusNotifier();
         var tokens     = AuthFixtures.NewTokenStore(Config.Root);
         var connection = new ServerConnection(
-            config, tokens, NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+            config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
             TimeProvider.System, notifier);
         var worktreeManager  = new WorktreeManager(config, NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var repoMatcher      = new RepoMatcher(config, NullLogger<RepoMatcher>.Instance, TimeProvider.System);

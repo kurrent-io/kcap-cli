@@ -92,18 +92,20 @@ public partial class App : Application {
     /// same reason that one is — what draws from it outlives any single window.
     ServiceProvider? _serverHttp;
 
-    ICapacitorHttpClient? ServerHttp(ProfileContext? profiles) {
+    ServiceProvider? ServerLane(ProfileContext? profiles) {
         if (profiles?.Resolution.ServerUrl is not { Length: > 0 } url) return null;
 
-        _serverHttp ??= new ServiceCollection()
+        return _serverHttp ??= new ServiceCollection()
             .AddSingleton(_config)
             .AddSingleton(profiles)
             .AddSingleton(new CapacitorServer(url, _config, profiles))
             .AddCapacitorHttp(_serverEnv, _machineEnv)
             .BuildValidated();
-
-        return _serverHttp.GetRequiredService<ICapacitorHttpClient>();
     }
+
+    ICapacitorHttpClient? ServerHttp(ProfileContext? profiles) => ServerLane(profiles)?.GetRequiredService<ICapacitorHttpClient>();
+
+    ICredentialSource? ServerCredentials(ProfileContext? profiles) => ServerLane(profiles)?.GetRequiredService<ICredentialSource>();
 
     // And its one read of KCAP_APP_PTY_DUMP: a file every terminal feed frame is appended to as
     // received, for seeing what the emulator was given.
@@ -517,7 +519,7 @@ public partial class App : Application {
         // Built here rather than with the other server clients below because a remote stop goes
         // over the hub: the lane must exist before the service that calls it. Start() still runs
         // down there, with the rest of the server graph.
-        var serverLane = new ServerConnectionService(profiles, _foreignHttp.GetRequiredService<TokenStore>(), _time);
+        var serverLane = new ServerConnectionService(profiles, ServerCredentials(profiles), _time);
         var actions = new AgentActionService(
             ops, notifier, opener, service.Snapshots, _shutdown.Token, ConfirmForceStopAsync,
             fallbackServerUrl: profiles?.Resolution.ServerUrl, lane: serverLane);
@@ -610,11 +612,10 @@ public partial class App : Application {
 
         // The signed-in user's own id (JwtClaims sub claim), read fresh per call — never cached,
         // since a re-auth or profile switch must be reflected on the very next read.
+        var credentials = ServerCredentials(profiles);
         Func<CancellationToken, Task<string?>> viewerId = async ct => {
-            if (profiles is null) return null;
-            var resolution = await _foreignHttp.GetRequiredService<TokenStore>().GetValidTokensForServerAsync(
-                profiles.Name, profiles.Resolution.ServerUrl!, ct).ConfigureAwait(false);
-            var token = resolution.Tokens?.AccessToken;
+            if (credentials is null) return null;
+            var token = (await credentials.ResolveAsync(ct).ConfigureAwait(false)).Bearer;
             return token is null ? null : JwtClaims.TryGetString(token, "sub");
         };
 

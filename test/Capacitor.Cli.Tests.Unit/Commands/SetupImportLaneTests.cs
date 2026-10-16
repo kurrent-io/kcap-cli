@@ -528,7 +528,7 @@ public class SetupImportLaneTests {
     public async Task The_import_context_names_the_server_this_run_resolved() {
         var beforeSetup = new ProfileContext(new(null, "default", null, null), new ProfileConfig());
 
-        var forImport = SetupCommand.ImportContext(beforeSetup, "https://tenant.kcap.ai");
+        var forImport = SetupCommand.ImportContext(beforeSetup, "https://tenant.kcap.ai", NoLocalInstallation.Endpoints);
 
         await Assert.That(forImport.Resolution.ServerUrl).IsEqualTo("https://tenant.kcap.ai");
     }
@@ -540,7 +540,7 @@ public class SetupImportLaneTests {
         var profile     = new Profile { ServerUrl = "https://stale.kcap.ai", DefaultVisibility = "org_public" };
         var beforeSetup = new ProfileContext(new("https://stale.kcap.ai", "work", profile, null), new ProfileConfig());
 
-        var forImport = SetupCommand.ImportContext(beforeSetup, "https://tenant.kcap.ai");
+        var forImport = SetupCommand.ImportContext(beforeSetup, "https://tenant.kcap.ai", NoLocalInstallation.Endpoints);
 
         await Assert.That(forImport.Resolution.ProfileName).IsEqualTo("work");
         await Assert.That(forImport.Resolution.Profile).IsSameReferenceAs(profile);

@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Commands;
@@ -14,11 +15,13 @@ namespace Capacitor.Cli.Commands;
 /// authenticates against the wrong server, or against none at all. The profile name and config root
 /// stay the process's, so the token lookup targets the active profile rather than one derived from
 /// the server just chosen.</para>
+///
+/// <para>The registry is read per call: setup can create the installation it then chooses.</para>
 /// </summary>
 public sealed class ChosenServerHttp(
-        ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine) {
+        ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine, LocalRoot localRoot) {
     public ServiceProvider For(string serverUrl, ProfileContext? chosen = null) {
-        var context = chosen ?? new ProfileContext(profiles.Resolution with { ServerUrl = serverUrl }, profiles.Snapshot);
+        var context = chosen ?? new ProfileContext(profiles.Resolution.Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), profiles.Snapshot);
 
         return new ServiceCollection()
             .AddSingleton(config)

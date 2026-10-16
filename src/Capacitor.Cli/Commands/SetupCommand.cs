@@ -18,6 +18,7 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
@@ -548,7 +549,7 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv) {
+        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv, LocalRoot localRoot) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
@@ -2103,8 +2104,8 @@ sealed class SetupCommand(
     /// for a server — on a first run it names none at all, and the one this run chose is not persisted
     /// until after this leg returns.
     /// </summary>
-    internal static ProfileContext ImportContext(ProfileContext profiles, string serverUrl) =>
-        new(profiles.Resolution with { ServerUrl = serverUrl }, profiles.Snapshot);
+    internal static ProfileContext ImportContext(ProfileContext profiles, string serverUrl, LocalEndpoints local) =>
+        new(profiles.Resolution.Retargeted(serverUrl, local), profiles.Snapshot);
 
     /// <summary>Creates the first-run flow, opens the browser on it, and polls it as itself, returning
     /// the Agents decision for Step 4 to apply. <b>Nothing is configured here</b> — what crosses is
@@ -2160,7 +2161,7 @@ sealed class SetupCommand(
                     Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
                 importing = new SetupImportLane(
-                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time,
+                    config, ImportContext(profiles, serverUrl, LocalEndpoints.Read(localRoot)), home, flowHttp, harnesses, router, time,
                     spawner, serverUrl, profileName, defaultVisibility, workdir.Path, paths, accounts: accounts);
 
                 using var progress = new SpectreFirstRunFlowProgress(time);

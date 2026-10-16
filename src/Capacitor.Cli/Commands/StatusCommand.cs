@@ -38,7 +38,7 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync($"           {IgnoredRepoProfileLine(ignored)}");
 
         // Auth
-        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.SendsNoBearer);
         await Console.Out.WriteLineAsync($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
 
         // Hooks
@@ -91,7 +91,7 @@ public sealed class StatusCommand(
     async Task<int> WriteJsonAsync(string[] args, string? baseUrl) {
         var (current, advisory, bundled) = await ResolveVersionAsync(args);
         var server = await ProbeServerAsync(http, baseUrl, config, time);
-        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.SendsNoBearer);
 
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
@@ -197,8 +197,10 @@ public sealed class StatusCommand(
     /// with irrelevant remediation.
     /// </summary>
     internal static async Task<AuthSnapshot> ResolveAuthAsync(
-            TokenStore tokens, MachineAuth machine, string profile, ServerReach server) {
-        if (server.Provider == AuthProvider.None) return new AuthSnapshot(StatusAuthState.NotRequired);
+            TokenStore tokens, MachineAuth machine, string profile, ServerReach server, bool sendsNoBearer) {
+        // Ahead of the provider: through an outage that is the last one cached, and a token left in
+        // the store must not be refreshed for a server it is never sent to.
+        if (sendsNoBearer || server.Provider == AuthProvider.None) return new AuthSnapshot(StatusAuthState.NotRequired);
 
         // Diversion is deliberately raised by EITHER variable, so that a half-configured runner is
         // diagnosed rather than sent to `kcap login` it cannot run. Only both halves authenticate,

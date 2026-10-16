@@ -16,7 +16,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// so one event cannot hold back every event queued behind it.
 /// </summary>
 internal sealed partial class AgentRunEventQueue(
-        DaemonConfig config, TokenStore tokens, TimeProvider time, ILogger logger, HttpClient http)
+        DaemonConfig config, ICredentialSource credentials, TimeProvider time, ILogger logger, HttpClient http)
     : IDisposable {
     /// <summary>About five minutes of backoff: long enough to ride out a server restart.</summary>
     internal const int MaxRetryableResponses = 15;
@@ -101,14 +101,14 @@ internal sealed partial class AgentRunEventQueue(
     }
 
     async Task<HttpResponseMessage> PostAsync(string agentId, string payload, CancellationToken ct) {
-        var resolution = await tokens.GetValidTokensForServerAsync(config.Profiles.Name, config.ServerUrl, ct);
+        var credential = await credentials.ResolveAsync(ct);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{config.ServerUrl.TrimEnd('/')}/api/agent-runs/{agentId}/events") {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
         };
 
-        if (resolution.Tokens?.AccessToken is { } accessToken)
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (credential.Bearer is { } bearer)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
 
         return await http.SendAsync(request, ct);
     }

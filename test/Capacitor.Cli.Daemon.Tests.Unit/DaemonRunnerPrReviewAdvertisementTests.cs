@@ -47,7 +47,7 @@ public class DaemonRunnerPrReviewAdvertisementTests {
     [Test]
     public async Task Acp_runtimes_do_not_host_a_pr_review() {
         var connection = new ServerConnection(
-            LauncherCfg(), UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+            LauncherCfg(), new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         IHostedAgentRuntimeFactory cursor = new AcpHostedAgentRuntimeFactory(
