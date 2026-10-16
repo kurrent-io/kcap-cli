@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Harness;
 
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Plans;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -120,6 +121,52 @@ public sealed class ClaudeHookCommand(
 
             await (stdout ?? Console.Out).WriteLineAsync(ClaudePlanRead.RenderHookOutput(nudge));
             ledger.Record(read.SessionId, read.Path);
+            return 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// <c>kcap hook --claude --plan-edit</c>: a synchronous PostToolUse on Claude's file writes. When the
+    /// file is a document this session declared, declares it again, so the server's snapshot follows
+    /// the file instead of keeping the text it had when it was first declared. Synchronous so a
+    /// headless teardown cannot kill the last refresh.
+    /// </summary>
+    public async Task<int> HandlePlanEdit(TextReader stdin) {
+        HttpClient? client = null;
+        try {
+            return await HandlePlanEditCore(stdin, async cap => {
+                if (!HookHttp.IsPostable(Url)) return null;
+                var created = await BoundedAuth.CreateClientWithinAsync(
+                    () => http.ForHookAsync(), cap, clock.Time, () => RefreshTokenHandoff.Spawn(config, profiles.Name, starter));
+                return client = created?.Client;
+            });
+        } finally {
+            client?.Dispose();
+        }
+    }
+
+    internal async Task<int> HandlePlanEditCore(TextReader stdin, Func<TimeSpan, Task<HttpClient?>> clientWithin) {
+        try {
+            var body = await stdin.ReadToEndAsync();
+            if (ClaudePlanEdit.Parse(body) is not { } edit) return 0;
+            var ledger = new DeclaredDocumentLedger(config, clock.Time);
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is null) return 0;
+
+            var budget = clock.Budget(ToolHookCeiling);
+            if (await ShouldSuppressCaptureAsync(edit.SessionId, body, "post-tool-use", profiles.Effective, budget)) return 0;
+            if (await clientWithin(budget.Remaining) is not { } client) return 0;
+
+            using var gate = await ledger.LockAsync(edit.SessionId, edit.Path, budget.Remaining);
+            if (gate is null) return 0;
+            // Read again under the lock: a declaration that held it may have changed the arguments.
+            if (ledger.Find(edit.SessionId, edit.Path, Url) is not { } document) return 0;
+
+            var declaration = McpPlansServer.BuildDeclaration(document.ToArguments(edit.SessionId), document.Cwd, document.RepoRoot);
+
+            using var content = new StringContent(declaration.Body.ToJsonString(), Encoding.UTF8, "application/json");
+            using var _       = await client.PostOnceAsync(McpPlansServer.DocumentsUrl(Url), content, clock.Time, budget.Remaining);
             return 0;
         } catch {
             return 0;
