@@ -163,7 +163,7 @@ class MemoriesCommand(
             // unrelated personal memory that --update must not overwrite.
             var held  = result["memory"]?["audience"]?.GetValue<string>();
             var asked = body["audience"]?.GetValue<string>();
-            if (update && held is not null && held != asked) return $"exists as a {held} memory, skipped (--update overwrites only an existing {asked} memory)";
+            if (update && held != asked) return $"exists as {(held is null ? "a memory of unknown audience" : $"a {held} memory")}, skipped (--update overwrites only an existing {asked} memory)";
 
             return memoryId is null && update
                 ? "failed (the server's conflict answer named no memory)"
