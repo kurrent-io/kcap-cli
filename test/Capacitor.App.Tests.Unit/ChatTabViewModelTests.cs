@@ -2525,6 +2525,35 @@ public class ChatTabViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_dialog_stays_answered_when_a_pending_card_hides_and_reveals_it() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+            var agent = Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog };
+            try {
+                await h.PushAsync(agent);
+                await h.Chat.TerminalMenuChoices[0].Choose.Execute().ToTask();
+
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                await WaitUntilAsync(() => h.Chat.HasPendingCards && !h.Chat.ShowsTerminalMenu, what: "the dialog hidden");
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards && h.Chat.ShowsTerminalMenu, what: "the dialog revealed");
+
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Writes).IsEquivalentTo(new[] { "\r" }, CollectionOrdering.Matching);
+
+                await h.PushAsync(agent with { TerminalDialog = null });
+                await h.PushAsync(agent);
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await Assert.That(input.Writes).IsEquivalentTo(new[] { "\r", "\x1b[B\r" }, CollectionOrdering.Matching);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     /// A usage-limit menu is itself a select dialog, so the screen can report both. The dialog's
     /// cursor moving under an answered question must not offer the question's choices again.
     [Test]

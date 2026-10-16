@@ -214,17 +214,15 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         var (state, count) = ProjectAggregate(status, snap, remote);
         var baseState = state; // the connection/agent-count verdict, before either upgrade below
 
-        // Pending consent, a pending local permission/question, a pending server-lane
-        // permission/question, or a remote session needing attention asserts Attention only
-        // while its own lane is up (local: Connected; server: LaneConnected) — the owner has
-        // something waiting. Judged against baseState (not state) so a later independent upgrade
-        // can never make this fire retroactively; connection-trouble rows above already left
-        // baseState non-Idle/Running and keep precedence for free, and the running-count badge
-        // (count) keeps the agent count regardless.
+        // Only a live lane can assert pending attention. Connection trouble keeps precedence,
+        // and the badge always counts running agents.
         var usageLimits = status.State == AttachState.Connected && snap is not null
             ? snap.Agents.Count(a => a.Status == "Running" && UsageLimitNoticeDto.IsQuestion(a.UsageLimit))
             : 0;
-        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0 || usageLimits > 0))
+        var terminalDialogs = status.State == AttachState.Connected && snap is not null
+            ? snap.Agents.Count(a => a.Status == "Running" && a.TerminalDialog is not null && !UsageLimitNoticeDto.IsQuestion(a.UsageLimit))
+            : 0;
+        var pendingAttention = ((status.State == AttachState.Connected && (pendingConsent > 0 || pendingSummary.LocalCount > 0 || usageLimits > 0 || terminalDialogs > 0))
             || (remote.LaneConnected && (pendingSummary.ServerCount > 0 || remote.SessionsNeedingAttention > 0)))
             && baseState is TrayState.Idle or TrayState.Running;
         if (pendingAttention) state = TrayState.Attention;
@@ -243,7 +241,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return new TrayMenuModel(
             state, count,
             HeaderText(daemonName, status, snap, state, count, pendingAttention, pendingConsent,
-                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention, usageLimits),
+                lifecycleAttentionActive ? lifecycleAttention : null, pendingSummary, remote.SessionsNeedingAttention, usageLimits, terminalDialogs),
             BuildEntries(status, snap, stopsInFlight, remote), BuildPause(status, pauseState), pendingConsent);
     }
 
@@ -318,7 +316,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     static string HeaderText(
             string daemonName, AttachStatus status, DaemonStatusDto? snap, TrayState state, int count,
             bool pendingAttention, int pendingConsent, string? lifecycleAttentionText, PendingSummary pendingSummary,
-            int remoteSessionsNeedingAttention, int usageLimits) {
+            int remoteSessionsNeedingAttention, int usageLimits, int terminalDialogs) {
         if (state == TrayState.Attention && status.State == AttachState.Unreachable && status.Reason == IncompatibleReason)
             return SkewMessage; // no daemon-name prefix
 
@@ -329,7 +327,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         // lane) — "not running" stays true of THIS machine, so the header says so instead of
         // claiming a local connection that isn't there.
         var body = pendingAttention
-            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention, usageLimits)
+            ? PendingBody(pendingSummary, pendingConsent, remoteSessionsNeedingAttention, usageLimits, terminalDialogs)
             : state switch {
                 TrayState.Stopped    => "not running",
                 TrayState.Connecting => "connecting…",
@@ -343,9 +341,10 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return $"{daemonName}: {body}";
     }
 
-    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention, int usageLimits) {
-        var parts = new List<string>(5);
+    static string PendingBody(PendingSummary summary, int consent, int remoteSessionsNeedingAttention, int usageLimits, int terminalDialogs) {
+        var parts = new List<string>(6);
         if (usageLimits > 0) parts.Add($"{usageLimits} usage limit{(usageLimits == 1 ? "" : "s")}");
+        if (terminalDialogs > 0) parts.Add($"{terminalDialogs} terminal dialog{(terminalDialogs == 1 ? "" : "s")} waiting");
         if (summary.Questions > 0) parts.Add($"{summary.Questions} question{(summary.Questions == 1 ? "" : "s")} waiting");
         if (summary.Permissions > 0) parts.Add($"{summary.Permissions} permission request{(summary.Permissions == 1 ? "" : "s")} waiting");
         if (consent > 0) parts.Add($"{consent} launch{(consent == 1 ? "" : "es")} awaiting approval");

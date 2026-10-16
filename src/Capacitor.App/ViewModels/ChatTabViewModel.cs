@@ -846,13 +846,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var question = UsageLimitNoticeDto.IsQuestion(limit);
         var shown = !question && dialog is not null && !HasPendingCards;
         if (Equals(_usageLimit, limit) && Equals(_terminalDialog, dialog) && _terminalDialogShown == shown) return;
-        // An answer redraws the screen before the menu leaves it: arrow keys move the dialog's cursor,
-        // and a usage-limit menu can carry a dialog of its own that moves too. Either way it is still
-        // the menu already answered, and a second click would land on whatever comes next.
+        // Cursor redraws and pending cards hiding the dialog do not make a new menu. Keep an
+        // answered menu closed until the underlying menu changes or leaves the screen.
         var sameMenu = question
             ? Equals(_usageLimit, limit)
-            : shown && _terminalDialogShown && _terminalDialog is { } previous
-                && previous.Heading == dialog!.Heading && previous.Options.SequenceEqual(dialog.Options);
+            : dialog is not null && _terminalDialog is { } previous
+                && previous.Heading == dialog.Heading && previous.Options.SequenceEqual(dialog.Options);
         _usageLimit = limit;
         _terminalDialog = dialog;
         _terminalDialogShown = shown;

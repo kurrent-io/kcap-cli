@@ -195,6 +195,43 @@ public class TrayViewModelTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(1, false, "Running", TrayState.Attention, "1 terminal dialog waiting")]
+    [Arguments(2, false, "Running", TrayState.Attention, "2 terminal dialogs waiting")]
+    [Arguments(1, true, "Running", TrayState.Attention, "1 usage limit")]
+    [Arguments(1, false, "Completed", TrayState.Idle, "connected — no agents")]
+    public async Task A_terminal_dialog_updates_tray_attention(
+            int count, bool usageLimit, string agentStatus, TrayState expectedState, string expectedBody) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService());
+            var dialog = new TerminalDialogDto("Pick a server", "", ["Use", "Skip"], 0, "");
+            var limit = usageLimit
+                ? new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "Session limit reached", "What do you want to do?", [new(1, "Wait")])
+                : null;
+            var agents = Enumerable.Range(0, count).Select(i => new AgentStatusDto(
+                $"a{i}", "agent", "claude", "/repo", agentStatus, null, null, null, DateTime.UtcNow, null, null,
+                UsageLimit: limit, TerminalDialog: dialog)).ToList();
+            var active = agentStatus == "Running" ? count : 0;
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            service.SnapshotsSubject.OnNext(Snap(active: active, agents: agents));
+
+            await Assert.That(vm.MenuModel.State).IsEqualTo(expectedState);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo($"daemon-a: {expectedBody}");
+            await Assert.That(vm.MenuModel.RunningCount).IsEqualTo(active);
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(TrayState.Stopped);
+            await Assert.That(vm.MenuModel.Header).IsEqualTo("daemon-a: not running");
+
+            service.SnapshotsSubject.OnNext(Snap(active: active,
+                agents: agents.Select(a => a with { TerminalDialog = null, UsageLimit = null }).ToList()));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+            await Assert.That(vm.MenuModel.State).IsEqualTo(active > 0 ? TrayState.Running : TrayState.Idle);
+        });
+    }
+
     // ---- remote lane aggregation ----
 
     [Test]
