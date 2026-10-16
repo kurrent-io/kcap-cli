@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Plans;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -408,12 +409,12 @@ public class McpPlansServerTests {
     }
 
     // Resolutions.None: these tests exercise routing, not profile selection.
-    McpPlansServer Server() =>
+    McpPlansServer Server(TimeSpan? declareLockWait = null) =>
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root), new FixedCapacitorHttpClient(), NoTelemetry.Startup,
-            new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System);
+            new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System) { DeclareLockWait = declareLockWait ?? TimeSpan.FromSeconds(5) };
 
     async Task<(ScriptedHandler Handler, string Response)> DispatchAsync(
-            string toolName, string argsJson, ScriptedHandler? handler = null, string? cwd = null, string? repoRoot = null) {
+            string toolName, string argsJson, ScriptedHandler? handler = null, string? cwd = null, string? repoRoot = null, McpPlansServer? server = null) {
         handler ??= new ScriptedHandler();
         using var client = new HttpClient(handler);
 
@@ -421,7 +422,7 @@ public class McpPlansServerTests {
             ["params"] = new JsonObject { ["name"] = toolName, ["arguments"] = JsonNode.Parse(argsJson) }
         };
 
-        var response = await Server().HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", cwd ?? Tmp.Path, repoRoot);
+        var response = await (server ?? Server()).HandleToolCallAsync(JsonValue.Create(1)!, request, client, "http://x", cwd ?? Tmp.Path, repoRoot);
 
         return (handler, response);
     }
@@ -450,6 +451,19 @@ public class McpPlansServerTests {
         await Assert.That(result["snapshot_attached"]!.GetValue<bool>()).IsTrue();
         await Assert.That(result["content_bytes"]!.GetValue<long>()).IsEqualTo(7L);
         await Assert.That(result["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
+    }
+
+    [Test]
+    public async Task Dispatch_declare_asks_for_a_retry_rather_than_post_while_an_edit_refresh_holds_the_document() {
+        var (root, doc) = SeedRepo("# Plan\n");
+        using var held = await new DeclaredDocumentLedger(Config.Root, TimeProvider.System).LockAsync("s1", doc, TimeSpan.Zero);
+
+        var (h, response) = await DispatchAsync("declare_plan_document", """{"session_id":"s1","kind":"plan","path":"docs/plan.md"}""",
+            cwd: root, repoRoot: root, server: Server(declareLockWait: TimeSpan.FromMilliseconds(100)));
+
+        await Assert.That(h.Calls).IsEmpty();
+        await Assert.That(IsError(response)).IsTrue();
+        await Assert.That(ResultText(response)).Contains("call declare_plan_document again");
     }
 
     [Test]
