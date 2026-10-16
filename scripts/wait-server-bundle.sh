@@ -4,13 +4,13 @@
 # both appear well after this workflow starts. Checks the bytes against GitHub's digest when the
 # API reports one.
 # Usage: wait-server-bundle.sh <tag> <asset> <out-dir>
-# GH_TOKEN must read kurrent-io/kcap-server. SERVER_WAIT_TIMEOUT (seconds, default 5400) and
+# GH_TOKEN must read kurrent-io/kcap-server. SERVER_WAIT_TIMEOUT (seconds, default 3300, inside the hour a GitHub App token lasts) and
 # SERVER_WAIT_INTERVAL (seconds, default 60) tune the poll.
 set -euo pipefail
 usage="usage: wait-server-bundle.sh <tag> <asset> <out-dir>"
 tag="${1:?$usage}"; asset="${2:?$usage}"; out="${3:?$usage}"
 repo="${SERVER_REPO:-kurrent-io/kcap-server}"
-timeout="${SERVER_WAIT_TIMEOUT:-5400}"
+timeout="${SERVER_WAIT_TIMEOUT:-3300}"
 interval="${SERVER_WAIT_INTERVAL:-60}"
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/hash.sh

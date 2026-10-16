@@ -1230,18 +1230,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" "releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe" --clobber
 
+
   # The local-edition bundle is built unsigned by kcap-server's local-bundle workflow on the same tag
   # and attached to that tag's kcap-server release. A tarball cannot be stapled: the signed tree is
   # notarized as a zip, so each Mach-O's ticket is found online, and the manifest signature plus its
   # SHA-256 are what the CLI checks before it extracts anything.
+  # No job that holds a signing credential runs code from that release: signing only reads the
+  # binaries, the smoke test runs where no secret is, and the manifest is signed on a fresh runner.
+  local-manifest-key:
+    name: Check the local bundle manifest key
+    needs: [ci, verify-release-immutable]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the manifest signing key
+        env:
+          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
+        run: bash scripts/local-manifest-key.sh check src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
+
   local-bundle:
     name: Sign and notarize the local bundle (osx-arm64)
-    needs: [ci, verify-release-immutable]
+    needs: local-manifest-key
     runs-on: macos-latest
     timeout-minutes: 120
     env:
       RID: osx-arm64
-      MANIFEST_KEY: src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
     steps:
       - uses: actions/checkout@v7
 
@@ -1249,11 +1264,6 @@ jobs:
         id: version
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Check the manifest signing key
-        env:
-          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
-        run: bash scripts/local-manifest-key.sh check "$MANIFEST_KEY"
 
       # The cheap first line of the immutability rule; local-publish repeats it inside its
       # concurrency group against the actual bytes.
@@ -1286,19 +1296,17 @@ jobs:
           repositories: kcap-server
           permission-contents: read
 
-      - name: Download the unsigned bundle and the server's smoke test
+      - name: Download the unsigned bundle
         id: download
         shell: bash
         env:
           GH_TOKEN: ${{ steps.server-token.outputs.token }}
-          SERVER_WAIT_TIMEOUT: 2700
+          SERVER_WAIT_TIMEOUT: 3300
           SERVER_WAIT_INTERVAL: 30
         run: |
           set -euo pipefail
           NAME="kcap-local-${{ steps.version.outputs.VERSION }}-$RID"
           archive="$(bash scripts/wait-server-bundle.sh "$GITHUB_REF_NAME" "$NAME.tar.gz" "$RUNNER_TEMP/unsigned")"
-          gh api -H 'Accept: application/vnd.github.raw' \
-            "repos/kurrent-io/kcap-server/contents/scripts/smoke-local-bundle.sh?ref=$GITHUB_REF_NAME" > "$RUNNER_TEMP/smoke-local-bundle.sh"
           echo "NAME=$NAME" >> "$GITHUB_OUTPUT"
           echo "ARCHIVE=$archive" >> "$GITHUB_OUTPUT"
 
@@ -1323,10 +1331,6 @@ jobs:
           # Same root-level layout as the server's archive; no AppleDouble or xattr entries.
           COPYFILE_DISABLE=1 tar --no-xattrs -czf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C tree .
 
-      # Hardened runtime is enforced when the binary runs, not when it is signed.
-      - name: Smoke-start the signed archive
-        run: bash "$RUNNER_TEMP/smoke-local-bundle.sh" "out/${{ steps.download.outputs.NAME }}.tar.gz"
-
       - name: Notarize the signed tree
         shell: bash
         run: |
@@ -1342,7 +1346,7 @@ jobs:
           fi
 
       # Checks the archive about to be published, not the tree it came from.
-      - name: Verify the published archive is signed and notarized
+      - name: Verify the archive is signed and notarized
         shell: bash
         run: |
           set -euo pipefail
@@ -1354,27 +1358,52 @@ jobs:
           done
           exit 1
 
-      - name: Build and sign the manifest
-        env:
-          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          NAME="${{ steps.download.outputs.NAME }}"
-          bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" "$RID" "out/$NAME.tar.gz" "$MANIFEST_KEY" > "out/$NAME.json"
-          bash scripts/local-manifest-key.sh sign "$MANIFEST_KEY" "out/$NAME.json" "out/$NAME.json.sig"
-          cat "out/$NAME.json"
-
-      - name: Upload the signed bundle
+      - name: Upload the signed archive
         uses: actions/upload-artifact@v7
         with:
           name: local-bundle-osx-arm64
           path: out/
           if-no-files-found: error
 
+  # The hardened runtime is enforced when the binary runs, not when it is signed, so the smoke test
+  # runs the signed archive. Its runner holds only a read token for kcap-server.
+  local-smoke:
+    name: Smoke-start the signed local bundle (osx-arm64)
+    needs: local-bundle
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Get a token that reads kcap-server
+        id: server-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.KURRENT_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KURRENT_CI_APP_PRIVATE_KEY }}
+          owner: kurrent-io
+          repositories: kcap-server
+          permission-contents: read
+
+      - name: Fetch the server's smoke test for this tag
+        env:
+          GH_TOKEN: ${{ steps.server-token.outputs.token }}
+        run: >
+          gh api -H 'Accept: application/vnd.github.raw'
+          "repos/kurrent-io/kcap-server/contents/scripts/smoke-local-bundle.sh?ref=$GITHUB_REF_NAME"
+          > "$RUNNER_TEMP/smoke-local-bundle.sh"
+
+      - name: Download the signed archive
+        uses: actions/download-artifact@v8
+        with:
+          name: local-bundle-osx-arm64
+          path: local/
+
+      - name: Smoke-start the signed archive
+        shell: bash
+        run: bash "$RUNNER_TEMP/smoke-local-bundle.sh" local/kcap-local-*-osx-arm64.tar.gz
+
   local-publish:
     name: Publish the local bundle (osx-arm64)
-    needs: local-bundle
+    needs: [local-bundle, local-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -1386,6 +1415,7 @@ jobs:
       AWS_DEFAULT_REGION: auto
       R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
       DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
+      MANIFEST_KEY: src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
     steps:
       - uses: actions/checkout@v7
 
@@ -1394,21 +1424,22 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Download the signed bundle
+      - name: Download the signed archive
         uses: actions/download-artifact@v8
         with:
           name: local-bundle-osx-arm64
           path: local/
 
-      - name: Check the manifest against the archive and the embedded key
+      - name: Build and sign the manifest
+        env:
+          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
         shell: bash
         run: |
           set -euo pipefail
           NAME="kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64"
-          bash scripts/local-manifest-key.sh verify src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem "local/$NAME.json" "local/$NAME.json.sig"
-          source scripts/lib/hash.sh
-          [ "$(jq -r .sha256 "local/$NAME.json")" = "$(sha256_of "local/$NAME.tar.gz")" ] \
-            || { echo "::error::the manifest does not describe the archive beside it"; exit 1; }
+          bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" osx-arm64 "local/$NAME.tar.gz" "$MANIFEST_KEY" > "local/$NAME.json"
+          bash scripts/local-manifest-key.sh sign "$MANIFEST_KEY" "local/$NAME.json" "local/$NAME.json.sig"
+          cat "local/$NAME.json"
 
       - name: Upload the archive, signature and manifest
-        run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" osx-arm64
+        run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" osx-arm64 "$MANIFEST_KEY"

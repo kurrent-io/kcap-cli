@@ -22,40 +22,61 @@ chmod +x "$tmp/bin/aws"
 
 art="$tmp/art"; mkdir -p "$art"
 n=kcap-local-1.0.0-osx-arm64
-printf 'archive' > "$art/$n.tar.gz"; printf '{"v":1}\n' > "$art/$n.json"; printf 'sig' > "$art/$n.json.sig"
+openssl ecparam -name prime256v1 -genkey -noout 2>/dev/null | openssl pkey -out "$tmp/k.pem"
+openssl pkey -in "$tmp/k.pem" -pubout -out "$tmp/k.pub"
+sign() { LOCAL_BUNDLE_MANIFEST_KEY="$(cat "$tmp/k.pem")" bash "$here/local-manifest-key.sh" sign "$tmp/k.pub" "$1" "$2"; }
+printf 'archive' > "$art/$n.tar.gz"; printf '{"v":1}\n' > "$art/$n.json"; sign "$art/$n.json" "$art/$n.json.sig"
+B="$tmp/bucket/local/osx-arm64"
 
 fail=0
 run() { # <label> <want-rc>
   local rc
   set +e
   BUCKET="$tmp/bucket" PATH="$tmp/bin:$PATH" R2="--endpoint-url https://r2.test" DEST="s3://bucket/local/osx-arm64" \
-    bash "$sh" "$art" 1.0.0 osx-arm64 >"$tmp/out" 2>&1
+    bash "$sh" "$art" 1.0.0 osx-arm64 "$tmp/k.pub" >"$tmp/out" 2>&1
   rc=$?
   set -e
   if [ "$rc" != "$2" ]; then echo "FAIL: $1 -> rc=$rc (want $2): $(cat "$tmp/out")"; fail=1; fi
 }
-log() { cat "$tmp/bucket/.log" 2>/dev/null | tr '\n' ' '; }
+log() { cat "$tmp/bucket/.log" 2>/dev/null | sed 's|local/osx-arm64/||' | tr '\n' ' '; }
+fresh() { rm -rf "$tmp/bucket"; mkdir -p "$B"; }
 
-mkdir -p "$tmp/bucket"
+fresh
 run "first publication" 0
-[ "$(log)" = "local/osx-arm64/$n.tar.gz local/osx-arm64/$n.json.sig local/osx-arm64/$n.json " ] \
+[ "$(log)" = "$n.tar.gz $n.json.sig $n.json " ] \
   || { echo "FAIL: uploads the archive, then the signature, then the manifest: $(log)"; fail=1; }
 
 rm "$tmp/bucket/.log"
 run "a finished re-run uploads nothing" 0
 [ -z "$(log)" ] || { echo "FAIL: re-run uploaded $(log)"; fail=1; }
 
-printf '{"v":2}\n' > "$tmp/bucket/local/osx-arm64/$n.json"
+printf '{"v":2}\n' > "$B/$n.json"; rm -f "$tmp/bucket/.log"
 run "another build's manifest refuses" 1
 grep -q "already published from another build" "$tmp/out" || { echo "FAIL: refusal message: $(cat "$tmp/out")"; fail=1; }
 [ -z "$(log)" ] || { echo "FAIL: a refused run uploaded $(log)"; fail=1; }
 
-rm -rf "$tmp/bucket"; mkdir -p "$tmp/bucket/local/osx-arm64"
-printf 'orphan' > "$tmp/bucket/local/osx-arm64/$n.tar.gz"
-run "an archive no manifest vouches for is replaced" 0
-cmp -s "$tmp/bucket/local/osx-arm64/$n.tar.gz" "$art/$n.tar.gz" || { echo "FAIL: orphan archive kept"; fail=1; }
+fresh; cp "$art/$n.tar.gz" "$B/"
+run "an identical unpublished archive is kept" 0
+[ "$(log)" = "$n.json.sig $n.json " ] || { echo "FAIL: re-uploaded the archive: $(log)"; fail=1; }
 
-rm -rf "$tmp/bucket"; mkdir -p "$tmp/bucket"; touch "$tmp/bucket/.broken"
+fresh; printf 'other build' > "$B/$n.tar.gz"
+run "an archive with other bytes refuses" 1
+grep -q "already uploaded with other bytes" "$tmp/out" || { echo "FAIL: archive refusal: $(cat "$tmp/out")"; fail=1; }
+[ -z "$(log)" ] || { echo "FAIL: uploaded past a differing archive: $(log)"; fail=1; }
+
+fresh; cp "$art/$n.tar.gz" "$B/"; sign "$art/$n.json" "$B/$n.json.sig"
+cmp -s "$B/$n.json.sig" "$art/$n.json.sig" && { echo "FAIL: precondition: a second signature should differ"; fail=1; }
+run "a stored signature of this manifest is kept" 0
+[ "$(log)" = "$n.json " ] || { echo "FAIL: replaced a valid stored signature: $(log)"; fail=1; }
+bash "$here/local-manifest-key.sh" verify "$tmp/k.pub" "$B/$n.json" "$B/$n.json.sig" \
+  || { echo "FAIL: the published manifest and signature disagree"; fail=1; }
+
+fresh; printf '{"v":0}\n' > "$tmp/old.json"; sign "$tmp/old.json" "$B/$n.json.sig"
+run "a stored signature of another manifest refuses" 1
+grep -q "does not sign this manifest" "$tmp/out" || { echo "FAIL: signature refusal: $(cat "$tmp/out")"; fail=1; }
+[ "$(log)" = "$n.tar.gz " ] || { echo "FAIL: got past a foreign signature: $(log)"; fail=1; }
+
+fresh; touch "$tmp/bucket/.broken"
 run "an R2 failure is never read as unpublished" 1
 
 [ "$fail" -eq 0 ] && echo "ok" || exit 1

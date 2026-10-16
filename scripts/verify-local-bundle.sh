@@ -11,6 +11,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/macho.sh
 source "$here/lib/macho.sh"
 
+contained_symlinks "$dir"
 count=0; teams=""
 while IFS= read -r f; do
   codesign --verify --strict "$f"

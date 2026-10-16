@@ -11,8 +11,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/macho.sh
 source "$here/lib/macho.sh"
 
-[ -x "$dir/kcap-server" ] || { echo "$dir has no executable kcap-server" >&2; exit 1; }
-[ -x "$dir/postgres/bin/postgres" ] || { echo "$dir has no postgres/bin/postgres" >&2; exit 1; }
+for f in kcap-server postgres/bin/postgres; do
+  [ -f "$dir/$f" ] && [ ! -L "$dir/$f" ] && [ -x "$dir/$f" ] || { echo "$dir/$f is not an executable regular file" >&2; exit 1; }
+done
+contained_symlinks "$dir"
 
 others=()
 while IFS= read -r f; do
