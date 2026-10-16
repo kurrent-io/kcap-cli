@@ -51,12 +51,14 @@ class MemoriesCommand(
             return 1;
         }
 
+        // A project home still carries the checkout's hash when there is one: a server that does not know project homes
+        // reads a null hash as org-wide, and the hash keeps it at the repository instead.
         string? repoHash = null;
         string? placeDir = null;
-        if (project is null && !global) {
+        if (!global) {
             placeDir = PlaceDir(from, workdir.Path, claude);
             repoHash = placeDir is null ? null : await new CwdRepository(config, placeDir, router, time).GetHashAsync();
-            if (repoHash is null) {
+            if (repoHash is null && project is null) {
                 await Console.Error.WriteLineAsync(placeDir is null
                     ? $"{from} belongs to another Claude project — run from the checkout it was recorded in, or pass --project <slug> or --global."
                     : $"Cannot resolve a repository for {placeDir} — run from its checkout, or pass --project <slug> or --global.");
@@ -122,8 +124,10 @@ class MemoriesCommand(
 
             string? outcome;
             try {
-                outcome = await SaveAsync(client, baseUrl, body, c, flags.ContainsKey("--update"));
-            } catch (HttpRequestException ex) {
+                outcome = audience == "org" && await ExistingOrgMemoryAsync(client, baseUrl, c.Slug!, global || project is not null ? null : repoHash, machineId) is { } existing
+                    ? await UpdateExistingAsync(client, baseUrl, existing, c, flags.ContainsKey("--update"))
+                    : await SaveAsync(client, baseUrl, body, c, flags.ContainsKey("--update"));
+            } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) {
                 outcome = $"failed ({ex.Message})";
             }
 
@@ -151,15 +155,7 @@ class MemoriesCommand(
         var result   = JsonNode.Parse(text)?.AsObject();
         var memoryId = result?["memory"]?["memory_id"]?.GetValue<string>();
 
-        if (result?["slug_conflict"]?.GetValue<bool>() == true) {
-            if (!update) return "exists, skipped (pass --update to overwrite it)";
-
-            var changes = new JsonObject { ["description"] = c.Description, ["content"] = c.Content, ["kind"] = c.Kind };
-            using var put = await client.PutAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(memoryId!)}", Json(changes));
-            if (put.StatusCode == HttpStatusCode.Unauthorized) return null;
-
-            return put.IsSuccessStatusCode ? "updated" : $"failed (HTTP {(int)put.StatusCode}) {await put.Content.ReadAsStringAsync()}";
-        }
+        if (result?["slug_conflict"]?.GetValue<bool>() == true) return await UpdateExistingAsync(client, baseUrl, memoryId!, c, update);
 
         var line = new StringBuilder("created");
         if (result?["promotion_status"]?.GetValue<string>() == "pending_approval") line.Append(", org promotion pending approval");
@@ -167,6 +163,35 @@ class MemoriesCommand(
             line.Append($", near-duplicate of {dup["slug"]?.GetValue<string>()} ({dup["similarity"]?.GetValue<double>():0.00})");
 
         return line.ToString();
+    }
+
+    /// <summary>Overwrites an existing memory with the note when <paramref name="update"/> is set, otherwise reports it.</summary>
+    internal static async Task<string?> UpdateExistingAsync(HttpClient client, string baseUrl, string memoryId, MemoryImportCandidate c, bool update) {
+        if (!update) return "exists, skipped (pass --update to overwrite it)";
+
+        var changes = new JsonObject { ["description"] = c.Description, ["content"] = c.Content, ["kind"] = c.Kind };
+        using var put = await client.PutAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(memoryId)}", Json(changes));
+        if (put.StatusCode == HttpStatusCode.Unauthorized) return null;
+
+        return put.IsSuccessStatusCode ? "updated" : $"failed (HTTP {(int)put.StatusCode}) {await put.Content.ReadAsStringAsync()}";
+    }
+
+    /// <summary>The id of an org memory already holding <paramref name="slug"/> at this place. A save to org that the caller may
+    /// not make directly is recorded as their own memory awaiting approval, so the save's own slug check never sees the org
+    /// copy an earlier, approved import made, and a re-run would queue it a second time.</summary>
+    internal static async Task<string?> ExistingOrgMemoryAsync(HttpClient client, string baseUrl, string slug, string? repoHash, string? machineId) {
+        var query = new List<string>();
+        if (repoHash is not null) query.Add($"repo={Uri.EscapeDataString(repoHash)}");
+        if (machineId is not null) query.Add($"machine={Uri.EscapeDataString(machineId)}");
+
+        var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(slug)}{(query.Count == 0 ? "" : "?" + string.Join("&", query))}";
+        using var found = await client.GetAsync(url);
+        if (!found.IsSuccessStatusCode) return null;
+
+        var row = JsonNode.Parse(await found.Content.ReadAsStringAsync())?.AsObject();
+        return row?["audience"]?.GetValue<string>() == "org" && row["repo_hash"]?.GetValue<string>() == repoHash
+            ? row["memory_id"]?.GetValue<string>()
+            : null;
     }
 
     /// <summary>The directory whose repository the notes are homed at, or null when that cannot be told. A Claude project

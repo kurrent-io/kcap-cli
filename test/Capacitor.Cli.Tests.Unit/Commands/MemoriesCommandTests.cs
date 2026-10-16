@@ -73,6 +73,27 @@ public class MemoriesCommandTests {
     }
 
     [Test]
+    [Arguments("""{"memory_id":"m7","audience":"org","repo_hash":"r1"}""", "m7")]
+    [Arguments("""{"memory_id":"m7","audience":"user","repo_hash":"r1"}""", null)]
+    [Arguments("""{"memory_id":"m7","audience":"org","repo_hash":"r2"}""", null)]
+    public async Task An_org_memory_already_at_this_place_is_found_before_saving(string row, string? expected) {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/memories/utc-clock").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json").WithBody(row));
+        using var client = new HttpClient();
+
+        await Assert.That(await MemoriesCommand.ExistingOrgMemoryAsync(client, server.Url!, "utc-clock", "r1", null)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task A_slug_with_no_visible_memory_is_not_an_existing_one() {
+        using var server = WireMockServer.Start();
+        using var client = new HttpClient();
+
+        await Assert.That(await MemoriesCommand.ExistingOrgMemoryAsync(client, server.Url!, "utc-clock", "r1", null)).IsNull();
+    }
+
+    [Test]
     public async Task A_claude_project_folder_is_homed_only_at_the_checkout_it_was_recorded_in() {
         var claude  = new ClaudePaths(new UserHome(Tmp.PathTo("home")), null);
         var workdir = Tmp.PathTo("work", "acme-app");
