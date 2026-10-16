@@ -21,6 +21,9 @@ public class WindowsServiceStopTests {
         public string?                                       TaskXml;
         public bool                                          DefinitionUnreadable;
         public bool                                          ListingFails;
+        public bool                                          QueryFails;
+        public int                                           EndExit;
+        public bool                                          Running;
 
         public void TaskRunsTheDaemon() {
             Table[40]        = new(1, "conhost.exe");
@@ -36,7 +39,11 @@ public class WindowsServiceStopTests {
         public (int, string, string) Schtasks(string[] args) {
             Verbs.Add(args[0]);
             // Ending the task takes its console host and wrapper with it; the daemon outlives them.
-            if (args[0] == "/End") { Table.Remove(40); Table.Remove(50); }
+            if (args[0] == "/End") {
+                if (EndExit != 0) return (EndExit, "", "ERROR: Access is denied.");
+                Table.Remove(40); Table.Remove(50);
+                Running = false;
+            }
             if (args[0] == "/Delete") {
                 if (DeleteExit != 0) return (DeleteExit, "", "ERROR: Access is denied.");
                 TaskExists = false;
@@ -44,8 +51,9 @@ public class WindowsServiceStopTests {
             if (args[0] != "/Query") return (0, "", "");
             if (!args.Contains("/TN")) return ListingFails ? (1, "", "ERROR: Access is denied.") : (0, TaskExists ? "TaskName: \\kcap-daemon-laptop" : "", "");
             if (!TaskExists) return (1, "", "ERROR: The system cannot find the file specified.");
+            if (QueryFails) return (1, "", "ERROR: Access is denied.");
             if (args.Contains("/XML")) return DefinitionUnreadable ? (1, "", "ERROR: Access is denied.") : (0, TaskXml!, "");
-            return (0, "TaskName: \\kcap-daemon-laptop", "");
+            return (0, $"TaskName: \\kcap-daemon-laptop\nStatus: {(Running ? "Running" : "Ready")}", "");
         }
 
         public string? Kill(int pid) { Killed.Add(pid); return KillError; }
@@ -210,5 +218,49 @@ public class WindowsServiceStopTests {
         await Assert.That(ok).IsFalse();
         await Assert.That(error).Contains("Access is denied");
         await Assert.That(File.Exists(wrapper)).IsTrue();
+    }
+
+    /// <summary>A query that fails says nothing about the task; while a listing still shows it, nothing is
+    /// stopped or deleted.</summary>
+    [Test]
+    public async Task Uninstall_whose_task_query_fails_while_it_is_listed_is_refused() {
+        var host = new FakeHost { QueryFails = true };
+        host.TaskRunsTheDaemon();
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("Could not confirm");
+        await Assert.That(host.Verbs).DoesNotContain("/End");
+        await Assert.That(host.Verbs).DoesNotContain("/Delete");
+        await Assert.That(host.Killed).IsEmpty();
+    }
+
+    /// <summary>Deleting a task does not stop what it runs, so a running task that /End cannot stop keeps
+    /// its registration and wrapper.</summary>
+    [Test]
+    public async Task Uninstall_whose_running_task_cannot_be_ended_keeps_it() {
+        var host = new FakeHost { EndExit = 1, Running = true };
+        host.TaskRunsTheDaemon();
+        var wrapper = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
+        await File.WriteAllTextAsync(wrapper, "@echo off\r\n");
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("/End failed");
+        await Assert.That(host.Verbs).DoesNotContain("/Delete");
+        await Assert.That(File.Exists(wrapper)).IsTrue();
+    }
+
+    [Test]
+    public async Task Uninstall_of_a_stopped_task_goes_ahead_when_end_fails() {
+        var host = new FakeHost { EndExit = 1 };
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(error).IsNull();
+        await Assert.That(host.Verbs).Contains("/Delete");
     }
 }

@@ -137,17 +137,34 @@ sealed class WindowsScheduledTaskServiceManager(
     // same "removed means stopped" launchd and systemd give. A daemon that survives keeps the task and
     // wrapper, so it is still reported and a retry can stop it.
     public bool Uninstall(string serviceId, out string? error) {
-        // Resolved before anything is stopped: a same-named task kcap did not write is left running.
+        // Resolved before anything is stopped: a same-named task kcap did not write is left running. A query
+        // that fails proves nothing about the task, so only a listing without it counts as absent.
+        var query = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        var taskExists = query.ExitCode == 0;
+        if (!taskExists && (TryListInstalled() is not { } installed || installed.Contains(serviceId))) {
+            error = $"Could not confirm that scheduled task {WindowsTaskUnit.TaskName(serviceId)} is absent (exit {query.ExitCode}): {query.StdErr.Trim()}";
+            return false;
+        }
+
         string wrapper;
         try {
-            wrapper = WrapperOf(serviceId, taskExists: _schtasks(WindowsTaskUnit.QueryArgs(serviceId)).ExitCode == 0);
+            wrapper = WrapperOf(serviceId, taskExists);
         } catch (InvalidOperationException ex) {
             error = ex.Message;
             return false;
         }
 
         var owned = TaskOwnedDaemon(serviceId);
-        _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        var (endCode, _, endErr) = _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        // /End fails for a task that is not running; one still running keeps its registration and wrapper.
+        if (endCode != 0) {
+            var (stateCode, state, _) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+            if (WindowsTaskUnit.StatusFromQuery(stateCode, state) == ServiceState.Running) {
+                error = $"schtasks /End failed (exit {endCode}): {endErr.Trim()}";
+                return false;
+            }
+        }
+
         if (owned is { } pid && _killTree(pid) is { } killError) {
             error = killError;
             return false;
