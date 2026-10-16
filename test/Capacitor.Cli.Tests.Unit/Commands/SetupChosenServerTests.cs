@@ -25,7 +25,7 @@ public class SetupChosenServerTests {
         return new SetupCommand(
             Config.Root, startup,
             AuthFixtures.NewTokenStore(Config.Root),
-            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), new TenantProvisioningClient(new HttpClient()),
+            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(), new TenantProvisioningClient(new HttpClient(), ClientAgent.Cli),
             new AuthProviderDiscovery(factory, TimeProvider.System), NoTelemetry.Facade, AuthEndpoints.Defaults,
             new FakeFacadeFactory(_ => throw new InvalidOperationException("no façade in these tests")),
             FakeImportRunner.Succeeding(),
