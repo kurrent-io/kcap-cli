@@ -44,6 +44,32 @@ public class ProfileResolverLocalTests {
         await Assert.That(result.Warning).IsNull();
     }
 
+    /// <summary>Status says the recording goes to the installation, so the fallback may not land on a
+    /// cloud profile that the ordinary precedence would pick.</summary>
+    [Test]
+    public async Task An_ignored_repository_binding_never_falls_through_to_a_cloud_profile() {
+        var config = new ProfileConfig {
+            ActiveProfile = "cloud",
+            Profiles = new Dictionary<string, Profile> {
+                ["cloud"] = new() { ServerUrl = "https://cloud.example" },
+                ["local"] = new() { ServerUrl = "http://127.0.0.1:51234" },
+            },
+        };
+
+        var result = Resolve(config, Installed, repoConfig: new RepoConfig { Profile = "team" });
+
+        await Assert.That(result.ProfileName).IsEqualTo("local");
+        await Assert.That(result.ServerUrl).IsEqualTo("http://localhost:51234");
+    }
+
+    [Test]
+    public async Task With_no_profile_naming_it_an_ignored_binding_goes_to_the_installation_url() {
+        var result = Resolve(LocalConfig("https://cloud.example"), Installed, repoConfig: new RepoConfig { Profile = "team" });
+
+        await Assert.That(result.ProfileName).IsNull();
+        await Assert.That(result.ServerUrl).IsEqualTo("http://localhost:51234");
+    }
+
     [Test]
     public async Task Without_an_installation_a_missing_repository_profile_still_records_nothing() {
         var result = Resolve(LocalConfig("https://cloud.example"), LocalEndpoints.None,

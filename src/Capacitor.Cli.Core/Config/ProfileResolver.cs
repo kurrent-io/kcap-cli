@@ -73,7 +73,7 @@ public class ProfileResolver(
 
             // On a machine with a local installation a team's binding names a server this machine does
             // not record to, so the recording goes to the installation instead of nowhere.
-            if (_local.Active is null)
+            if (_local.Active is not { } installation)
                 return new(
                     null,
                     null,
@@ -81,10 +81,21 @@ public class ProfileResolver(
                     $"Profile '{repoProfileName}' from .kcap.json not found locally. Run: kcap profile add {repoProfileName} --server-url {repoConfig.ServerUrl}"
                 );
 
-            return ResolveWithoutRepoConfig() with { IgnoredRepoProfile = repoProfileName };
+            return ResolveInstallation(installation) with { IgnoredRepoProfile = repoProfileName };
         }
 
         return ResolveWithoutRepoConfig();
+    }
+
+    /// <summary>The installation, through the profile that names it when one does. Never another server:
+    /// the caller has already told the user the recording goes to the installation.</summary>
+    ResolvedProfile ResolveInstallation(LocalInstallation installation) {
+        var fallback = ResolveWithoutRepoConfig();
+        if (_local.Classify(fallback.ServerUrl) is LocalEndpointClass.Local) return fallback;
+
+        var named = config.Profiles.FirstOrDefault(p => _local.Classify(p.Value.ServerUrl) is LocalEndpointClass.Local).Key;
+
+        return named is not null ? ResolveByName(named) : new(installation.ServerUrl, null, null, null);
     }
 
     ResolvedProfile ResolveWithoutRepoConfig() {

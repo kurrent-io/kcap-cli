@@ -34,6 +34,8 @@ public class LocalEndpointsTests {
     [Arguments("http://localhost:6000")]
     [Arguments("https://localhost:51234")]
     [Arguments("http://127.0.0.2:51234")]
+    [Arguments("http://127.0.0.1:51234?tenant=a")]
+    [Arguments("http://127.0.0.1:51234#top")]
     [Arguments("not a url")]
     public async Task Anything_else_is_ordinary_and_left_as_written(string url) {
         await Assert.That(Installed.Classify(url)).IsTypeOf<LocalEndpointClass.Ordinary>();

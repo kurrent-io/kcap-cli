@@ -44,10 +44,13 @@ public sealed class LocalEndpoints(StateRead<InstallRegistry> registry) {
         return installation.ServerUrl.TrimEnd('/') + path;
     }
 
-    /// <summary>The port of a plain-http URL on one of the three loopback spellings, or null.</summary>
+    /// <summary>The port of a plain-http URL on one of the three loopback spellings, or null. A URL with
+    /// user info, a query or a fragment is not a server base; it is left for validation to reject
+    /// rather than rewritten into one.</summary>
     static int? LoopbackPort(string? url) {
         if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
-        if (uri.Scheme != Uri.UriSchemeHttp || !string.IsNullOrEmpty(uri.UserInfo)) return null;
+        if (uri.Scheme != Uri.UriSchemeHttp) return null;
+        if (!string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment)) return null;
 
         return uri.Host is "localhost" or "127.0.0.1" or "[::1]" ? uri.Port : null;
     }
