@@ -9,6 +9,14 @@ static class WindowsTaskUnit {
     const string ActionCommand = "conhost.exe";
     const string ActionArgumentsPrefix = "--headless cmd.exe /d /s /v:off /c \"\"";
 
+    /// <summary>Every action a kcap release has registered, newest first. Tasks installed by an older
+    /// release keep theirs until reinstalled, so each must still lead to its wrapper.</summary>
+    static readonly (string Command, string Prefix, string Suffix)[] KnownActions = [
+        (ActionCommand, ActionArgumentsPrefix, "\"\""),
+        ("cmd.exe", "/d /s /v:off /c \"\"", "\"\""),
+        ("cmd.exe", "/c \"", "\""),
+    ];
+
     public static string TaskName(string id) => Prefix + id;
 
     public static string WrapperPath(ConfigRoot config, string id) => config.Path($"daemon-service-{id}.cmd");
@@ -297,8 +305,8 @@ static class WindowsTaskUnit {
     public static string[] QueryXmlArgs(string id)               => ["/Query", "/TN", TaskName(id), "/XML"];
 
     /// <summary>The wrapper a task's action runs, read from <c>schtasks /Query /XML</c>, or null unless the
-    /// action is exactly the one <see cref="TaskXml"/> writes: a path from any other action names a file
-    /// the task does not run.</summary>
+    /// action is exactly one a kcap release wrote: a path from any other action names a file the task does
+    /// not run.</summary>
     public static string? WrapperFromTaskXml(string xml) {
         IEnumerable<System.Xml.Linq.XElement> execs;
         try {
@@ -310,13 +318,17 @@ static class WindowsTaskUnit {
         foreach (var exec in execs) {
             var command   = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim();
             var arguments = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value.Trim();
-            if (!string.Equals(command, ActionCommand, StringComparison.OrdinalIgnoreCase) || arguments is null) continue;
-            if (!arguments.StartsWith(ActionArgumentsPrefix, StringComparison.Ordinal)
-                || !arguments.EndsWith("\"\"", StringComparison.Ordinal)
-                || arguments.Length <= ActionArgumentsPrefix.Length + 2) continue;
+            if (command is null || arguments is null) continue;
 
-            var path = arguments[ActionArgumentsPrefix.Length..^2];
-            if (!path.Contains('"')) return path;
+            foreach (var (knownCommand, prefix, suffix) in KnownActions) {
+                if (!string.Equals(command, knownCommand, StringComparison.OrdinalIgnoreCase)
+                    || !arguments.StartsWith(prefix, StringComparison.Ordinal)
+                    || !arguments.EndsWith(suffix, StringComparison.Ordinal)
+                    || arguments.Length <= prefix.Length + suffix.Length) continue;
+
+                var path = arguments[prefix.Length..^suffix.Length];
+                if (!path.Contains('"')) return path;
+            }
         }
 
         return null;

@@ -54,9 +54,9 @@ sealed class WindowsScheduledTaskServiceManager(
     /// <summary>
     /// The wrapper an installed task runs, read from the task's own definition: one installed under another
     /// <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has it elsewhere, and a file left under this root is not
-    /// necessarily the task's. The path under this root stands for a task that is gone, or one whose action
-    /// is not the layout <see cref="WindowsTaskUnit.TaskXml"/> writes. An installed task whose definition
-    /// cannot be read throws: without its wrapper, nothing says which daemon it runs.
+    /// necessarily the task's. The path under this root stands only for a task that is gone. An installed
+    /// task whose definition cannot be read, or whose action no kcap release wrote, throws: without its
+    /// wrapper, nothing says which daemon it runs.
     /// </summary>
     string WrapperOf(string serviceId, bool taskExists) {
         var local = WindowsTaskUnit.WrapperPath(config, serviceId);
@@ -67,7 +67,9 @@ sealed class WindowsScheduledTaskServiceManager(
             throw new InvalidOperationException(
                 $"Could not read the definition of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
 
-        return WindowsTaskUnit.WrapperFromTaskXml(xml) ?? local;
+        return WindowsTaskUnit.WrapperFromTaskXml(xml)
+            ?? throw new InvalidOperationException(
+                $"Scheduled task {WindowsTaskUnit.TaskName(serviceId)} runs an action kcap did not write; it is left as it is.");
     }
 
     public ServiceStatus Status(string serviceId) {

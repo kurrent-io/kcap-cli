@@ -17,8 +17,8 @@ public class WindowsServiceStopTests {
         public string?                                       KillError;
         public int                                           DeleteExit;
         public bool                                          TaskExists = true;
-        // A definition in a layout kcap does not write, so the wrapper under the config root stands.
-        public string                                        TaskXml = "<Task/>";
+        // Null: the definition kcap writes, for the wrapper under the test's config root.
+        public string?                                       TaskXml;
         public bool                                          DefinitionUnreadable;
         public bool                                          ListingFails;
 
@@ -44,16 +44,20 @@ public class WindowsServiceStopTests {
             if (args[0] != "/Query") return (0, "", "");
             if (!args.Contains("/TN")) return ListingFails ? (1, "", "ERROR: Access is denied.") : (0, TaskExists ? "TaskName: \\kcap-daemon-laptop" : "", "");
             if (!TaskExists) return (1, "", "ERROR: The system cannot find the file specified.");
-            if (args.Contains("/XML")) return DefinitionUnreadable ? (1, "", "ERROR: Access is denied.") : (0, TaskXml, "");
+            if (args.Contains("/XML")) return DefinitionUnreadable ? (1, "", "ERROR: Access is denied.") : (0, TaskXml!, "");
             return (0, "TaskName: \\kcap-daemon-laptop", "");
         }
 
         public string? Kill(int pid) { Killed.Add(pid); return KillError; }
     }
 
-    WindowsScheduledTaskServiceManager Manager(FakeHost host) =>
-        new(Config.Root, daemonPid: _ => DaemonPid, schtasks: host.Schtasks,
+    static readonly ServiceSpec Spec = new("laptop", "kcap-daemon.exe", "daemon.log", new Dictionary<string, string>(), []);
+
+    WindowsScheduledTaskServiceManager Manager(FakeHost host) {
+        host.TaskXml ??= WindowsTaskUnit.TaskXml(Spec, WindowsTaskUnit.WrapperPath(Config.Root, "laptop"));
+        return new(Config.Root, daemonPid: _ => DaemonPid, schtasks: host.Schtasks,
             processTable: () => new Dictionary<int, WindowsProcessEntry>(host.Table), killTree: host.Kill);
+    }
 
     [Test]
     public async Task Stop_kills_the_daemon_the_task_was_running_when_asked() {
@@ -151,8 +155,7 @@ public class WindowsServiceStopTests {
         var stray = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
         await File.WriteAllTextAsync(stray, "@echo off\r\n");
         var elsewhere = Tmp.CreateFile("other-config/daemon-service-laptop.cmd", "@echo off\r\n");
-        var spec = new ServiceSpec("laptop", "kcap-daemon.exe", "daemon.log", new Dictionary<string, string>(), []);
-        var host = new FakeHost { TaskXml = WindowsTaskUnit.TaskXml(spec, elsewhere) };
+        var host = new FakeHost { TaskXml = WindowsTaskUnit.TaskXml(Spec, elsewhere) };
 
         var ok = Manager(host).Uninstall("laptop", out _);
 
@@ -170,6 +173,22 @@ public class WindowsServiceStopTests {
         await Assert.That(ok).IsFalse();
         await Assert.That(error).Contains("Could not read the definition");
         await Assert.That(host.Verbs).DoesNotContain("/Delete");
+    }
+
+    /// <summary>A same-named task kcap did not write runs something else, so its wrapper is unknown and
+    /// nothing under this config root is deleted on its behalf.</summary>
+    [Test]
+    public async Task Uninstall_of_a_task_with_an_action_kcap_did_not_write_is_refused() {
+        var stray = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
+        await File.WriteAllTextAsync(stray, "@echo off\r\n");
+        var host = new FakeHost { TaskXml = "<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>" };
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("action kcap did not write");
+        await Assert.That(host.Verbs).DoesNotContain("/Delete");
+        await Assert.That(File.Exists(stray)).IsTrue();
     }
 
     /// <summary>A failed delete followed by a listing that fails says nothing about the task, so the

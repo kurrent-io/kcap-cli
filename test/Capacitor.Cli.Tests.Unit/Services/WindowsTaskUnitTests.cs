@@ -133,6 +133,16 @@ public class WindowsTaskUnitTests {
         await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsEqualTo(wrapper);
     }
 
+    /// <summary>Tasks installed by older releases keep the action those releases wrote until reinstalled.</summary>
+    [Test]
+    [Arguments("cmd.exe", "/d /s /v:off /c &quot;&quot;C:\\k\\daemon-service-laptop.cmd&quot;&quot;")]
+    [Arguments("cmd.exe", "/c &quot;C:\\k\\daemon-service-laptop.cmd&quot;")]
+    public async Task An_action_an_older_release_wrote_still_names_its_wrapper(string command, string arguments) {
+        var xml = $"<Task><Actions><Exec><Command>{command}</Command><Arguments>{arguments}</Arguments></Exec></Actions></Task>";
+
+        await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsEqualTo(@"C:\k\daemon-service-laptop.cmd");
+    }
+
     [Test]
     [Arguments("<Task><Actions><Exec><Command>other.exe</Command><Arguments>--flag</Arguments></Exec></Actions></Task>")]
     [Arguments("<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>")]
