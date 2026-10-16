@@ -8,13 +8,14 @@
                      Title="Kurrent Capacitor — launch approval"
                      Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
                      Width="460" Height="260"
+                     Background="{StaticResource KcapCanvasBrush}" Foreground="{StaticResource KcapTextBrush}"
                      CanResize="False" Topmost="True" WindowStartupLocation="CenterScreen">
     <Grid Margin="20" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
         <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
             <TextBlock Grid.Column="0" x:Name="RequesterText" Text="{Binding RequesterText}"
                        FontSize="16" FontWeight="Bold" TextTrimming="CharacterEllipsis" />
             <TextBlock Grid.Column="1" x:Name="PositionText" Text="{Binding PositionText}"
-                       IsVisible="{Binding PositionVisible}" Opacity="0.7" VerticalAlignment="Center" />
+                       IsVisible="{Binding PositionVisible}" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
         </Grid>
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,8,0,0">
@@ -24,7 +25,7 @@
         </StackPanel>
 
         <TextBlock Grid.Row="2" x:Name="RepoText" Text="{Binding RepoLeaf}" ToolTip.Tip="{Binding RepoFull}"
-                   TextTrimming="CharacterEllipsis" Opacity="0.7" Margin="0,4,0,0" />
+                   TextTrimming="CharacterEllipsis" Foreground="{StaticResource KcapMutedBrush}" Margin="0,4,0,0" />
 
         <!-- Both lines collapse when empty (the countdown goes quiet during a terminal hold, the
              phase line exists only in one) so neither reserves dead space. -->
@@ -37,13 +38,13 @@
 
         <StackPanel Grid.Row="5" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
                     IsVisible="{Binding ButtonsVisible}">
-            <Button x:Name="AllowOnceButton" Content="Allow once"
+            <Button x:Name="AllowOnceButton" Classes="kcapPrimary" Content="Allow once"
                     Command="{Binding AllowOnceCommand}" IsEnabled="{Binding ButtonsEnabled}" />
-            <Button x:Name="AllowRememberButton" Content="Allow &amp; remember"
+            <Button x:Name="AllowRememberButton" Classes="kcapChip" Content="Allow &amp; remember"
                     Command="{Binding AllowRememberCommand}" IsEnabled="{Binding ButtonsEnabled}"
                     IsVisible="{Binding AllowRememberVisible}"
                     ToolTip.Tip="Saves a rule allowing future launches from this requester. Existing deny rules — including Pause — take precedence until removed." />
-            <Button x:Name="DenyButton" Content="Deny"
+            <Button x:Name="DenyButton" Classes="kcapChip" Content="Deny"
                     Command="{Binding DenyCommand}" IsEnabled="{Binding ButtonsEnabled}" />
         </StackPanel>
     </Grid>

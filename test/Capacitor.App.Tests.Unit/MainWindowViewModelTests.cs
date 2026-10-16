@@ -290,13 +290,13 @@ public class MainWindowViewModelTests {
     }
 
     [Test]
-    [Arguments(AttachState.Connecting, null, "connected", StatusColors.InProgress)]
-    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", StatusColors.Unavailable)]
-    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", StatusColors.Disrupted)]
-    [Arguments(AttachState.Connected, null, "connected", StatusColors.Connected)]
-    [Arguments(AttachState.Connected, null, "connecting", StatusColors.InProgress)]
-    [Arguments(AttachState.Connected, null, "reconnecting", StatusColors.InProgress)]
-    [Arguments(AttachState.Connected, null, "disconnected", StatusColors.Disrupted)]
+    [Arguments(AttachState.Connecting, null, "connected", "#A994FF")]
+    [Arguments(AttachState.Unreachable, "daemon_unreachable", "connected", "#949BAA")]
+    [Arguments(AttachState.Unreachable, "daemon_incompatible", "connected", "#FF7272")]
+    [Arguments(AttachState.Connected, null, "connected", "#5BE0B3")]
+    [Arguments(AttachState.Connected, null, "connecting", "#A994FF")]
+    [Arguments(AttachState.Connected, null, "reconnecting", "#A994FF")]
+    [Arguments(AttachState.Connected, null, "disconnected", "#FF7272")]
     public async Task StatusBrushFor_maps_to_the_matching_bucket_color(
             AttachState state, string? reason, string daemonConnection, string expectedHex) {
         var status = new AttachStatus(state, reason, null);

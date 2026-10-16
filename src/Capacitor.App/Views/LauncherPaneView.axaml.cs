@@ -332,7 +332,6 @@ public partial class LauncherPaneView : UserControl {
             // Stretch: left-aligned content stays content-sized and never pushes a trailing pill
             // to the row's right edge (repo list badges).
             HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
-            Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 8),
         };
         row.Classes.Add("kcapGhost");
@@ -377,14 +376,13 @@ public partial class LauncherPaneView : UserControl {
         var muted = Brush("KcapMutedBrush");
         var faint = Brush("KcapFaintBrush");
         var info = Brush("KcapInfoBrush");
-        var raised = Brush("KcapSurfaceRaisedBrush");
         var border = Brush("KcapBorderBrush");
 
         var currentTab = vm.SelectedVendor;
 
         var searchBox = new TextBox {
+            Classes = { "kcapEmbedded" },
             PlaceholderText = "Search models…", FontSize = 13.5,
-            Background = Brushes.Transparent, BorderThickness = new Thickness(0),
             VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
         var underline = new Border { Height = 1, Background = border };
@@ -446,7 +444,6 @@ public partial class LauncherPaneView : UserControl {
                 Content = body, IsEnabled = enabled,
                 HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Left,
-                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
                 CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 7),
             };
             row.Classes.Add("kcapGhost");
@@ -510,12 +507,11 @@ public partial class LauncherPaneView : UserControl {
                     Width = 34, Height = 34, Padding = new Thickness(0),
                     HorizontalContentAlignment = Avalonia.Layout.HorizontalAlignment.Center,
                     VerticalContentAlignment = Avalonia.Layout.VerticalAlignment.Center,
-                    Background = active ? raised : Brushes.Transparent,
-                    BorderBrush = active ? border : Brushes.Transparent, BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(9),
                     Opacity = option.Available ? 1 : 0.4,
                 };
-                tile.Classes.Add(active ? "kcapChip" : "kcapGhost");
+                tile.Classes.Add("kcapGhost");
+                tile.Classes.Set("active", active);
                 ToolTip.SetTip(tile, $"{option.Label} — {HostedHarnessCatalog.DescriptionFor(option)}");
                 tile.Click += (_, _) => {
                     currentTab = vendor;

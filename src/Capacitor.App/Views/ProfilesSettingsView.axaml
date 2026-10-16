@@ -40,7 +40,7 @@
                                     <Button Classes="kcapChip profileSignIn" Content="{Binding SignInLabel}" IsVisible="{Binding CanSignIn}"
                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).SignInCommand}"
                                             CommandParameter="{Binding}" />
-                                    <Button Classes="kcapChip profileRemove" Content="Remove" IsVisible="{Binding CanRemove}"
+                                    <Button Classes="kcapDanger profileRemove" Content="Remove" IsVisible="{Binding CanRemove}"
                                             Command="{Binding $parent[ItemsControl].((vm:ProfilesSettingsViewModel)DataContext).RemoveCommand}"
                                             CommandParameter="{Binding}" />
                                 </StackPanel>

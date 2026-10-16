@@ -98,7 +98,8 @@
         <Setter Property="MinHeight" Value="0" />
         <Setter Property="FontSize" Value="11" />
     </Style>
-    <Style Selector="mv|MarkdownViewer Button.markdown-code-action:pointerover /template/ ContentPresenter">
+    <Style Selector="mv|MarkdownViewer Button.markdown-code-action:pointerover /template/ ContentPresenter,
+                     mv|MarkdownViewer Button.markdown-code-action:pressed /template/ ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
         <Setter Property="TextElement.Foreground" Value="{StaticResource KcapTextBrush}" />
@@ -222,6 +223,11 @@
     </Style>
     <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+    </Style>
+    <Style Selector="mv|MarkdownViewer ToggleButton.markdown-details-summary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        <Setter Property="Opacity" Value="0.55" />
     </Style>
     <Style Selector="mv|MarkdownViewer Border.markdown-indent">
         <Setter Property="Padding" Value="14,0,0,0" />

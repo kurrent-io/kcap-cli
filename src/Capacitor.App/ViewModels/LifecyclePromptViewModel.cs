@@ -26,6 +26,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
     public bool ShowDeclineButton { get; }
 
     public string AcceptButtonText { get; }
+    public bool AcceptIsDestructive { get; }
 
     /// Null when PathDegraded is false — bound with StringConverters.IsNotNullOrEmpty so the
     /// degraded-PATH line collapses instead of reserving dead space (ConsentPromptWindow's same
@@ -56,6 +57,7 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
             InstalledVersion = prompt.CliVersion;
         }
         ShowDeclineButton = prompt.Kind is not (LifecyclePrompt.KindQuarantine or LifecyclePrompt.KindUpdateInfo);
+        AcceptIsDestructive = prompt.Kind == LifecyclePrompt.KindRemoveProfile;
         AcceptButtonText  = prompt.Kind switch {
             LifecyclePrompt.KindQuarantine     => "Acknowledge",
             LifecyclePrompt.KindUpdateInfo     => "Dismiss",

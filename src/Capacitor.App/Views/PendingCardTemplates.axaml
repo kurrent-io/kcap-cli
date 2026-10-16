@@ -17,22 +17,18 @@
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <Button Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
+                            <Button Classes="kcapChip acpOption" Command="{Binding PickCommand}" ToolTip.Tip="{Binding Description}"
                                     Margin="0,0,6,6" Padding="10,4" FontSize="12" CornerRadius="7" MaxWidth="632"
-                                    HorizontalContentAlignment="Stretch"
-                                    Background="{StaticResource KcapSurfaceRaisedBrush}" Foreground="{StaticResource KcapTextBrush}">
+                                    HorizontalContentAlignment="Stretch">
                                 <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
                             </Button>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" IsVisible="{Binding !HasOptions}">
-                    <Button Content="Deny" Command="{Binding DenyCommand}" Background="Transparent" BorderBrush="Transparent"
-                            Foreground="{StaticResource KcapDangerBrush}" Padding="10,4" FontSize="12" CornerRadius="7" />
-                    <Button Content="Allow always" Command="{Binding AllowAlwaysCommand}" IsVisible="{Binding ShowsAllowAlways}"
-                            Background="Transparent" BorderBrush="Transparent" Foreground="{StaticResource KcapMutedBrush}" Padding="10,4" FontSize="12" CornerRadius="7" />
-                    <Button Content="Allow" Command="{Binding AllowCommand}" Padding="12,4" FontSize="12" FontWeight="SemiBold" CornerRadius="7"
-                            Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}" />
+                    <Button Classes="kcapChip" Content="Deny" Command="{Binding DenyCommand}" Padding="10,4" FontSize="12" />
+                    <Button Classes="kcapChip" Content="Allow always" Command="{Binding AllowAlwaysCommand}" IsVisible="{Binding ShowsAllowAlways}" Padding="10,4" FontSize="12" />
+                    <Button Classes="kcapPrimary" Content="Allow" Command="{Binding AllowCommand}" Padding="12,4" FontSize="12" FontWeight="SemiBold" />
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -51,6 +47,10 @@
                 <!-- Option chrome lives in class styles only: a local Background/BorderBrush on
                      the Button would outrank the selected style and leave it inert, and the
                      theme's hover fill on PART_ContentPresenter is overridden for the same reason. -->
+                <Style Selector="Button.option /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+                </Style>
                 <Style Selector="Button.option">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -62,7 +62,8 @@
                     <Setter Property="Cursor" Value="Hand" />
                     <Setter Property="FocusAdorner" Value="{x:Null}" />
                 </Style>
-                <Style Selector="Button.option:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                <Style Selector="Button.option:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                                 Button.option:pressed /template/ ContentPresenter#PART_ContentPresenter">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
                 </Style>
@@ -96,6 +97,10 @@
                     <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
                     <Setter Property="Background" Value="{StaticResource KcapInfoBrush}" />
                 </Style>
+                <Style Selector="Button.step /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+                </Style>
                 <Style Selector="Button.step">
                     <Setter Property="Background" Value="Transparent" />
                     <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
@@ -116,11 +121,17 @@
                     <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </Style>
-                <Style Selector="Button.step:pointerover:not(.current) /template/ ContentPresenter#PART_ContentPresenter">
+                <Style Selector="Button.step:pointerover:not(.current) /template/ ContentPresenter#PART_ContentPresenter,
+                                 Button.step:pressed:not(.current) /template/ ContentPresenter#PART_ContentPresenter">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
                 </Style>
                 <Style Selector="Button.step.current /template/ ContentPresenter#PART_ContentPresenter">
                     <Setter Property="Background" Value="{StaticResource KcapInfoDimBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapInfoBrush}" />
+                </Style>
+                <Style Selector="Button.reviewRow /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
                 </Style>
                 <Style Selector="Button.reviewRow">
                     <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
@@ -133,6 +144,10 @@
                     <Setter Property="Cursor" Value="Hand" />
                     <Setter Property="FocusAdorner" Value="{x:Null}" />
                 </Style>
+                <Style Selector="Button.reviewRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                                 Button.reviewRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
+                    <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+                </Style>
             </Border.Styles>
             <StackPanel Spacing="10" IsEnabled="{Binding !IsBusy}">
                 <ItemsControl ItemsSource="{Binding Steps}" IsVisible="{Binding ShowsSteps}">
@@ -143,7 +158,7 @@
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:QuestionStepViewModel">
-                            <Button Classes="step" Classes.current="{Binding IsCurrent}" Classes.answered="{Binding IsAnswered}"
+                            <Button Classes="kcapChip step" Classes.current="{Binding IsCurrent}" Classes.answered="{Binding IsAnswered}"
                                     Command="{Binding GoCommand}" Margin="0,0,6,4">
                                 <StackPanel Orientation="Horizontal" Spacing="5">
                                     <views:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}"
@@ -170,7 +185,7 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:QuestionOptionViewModel">
-                                            <Button Classes="option" Classes.selected="{Binding IsSelected}" Command="{Binding PickCommand}">
+                                            <Button Classes="kcapChip option" Classes.selected="{Binding IsSelected}" Command="{Binding PickCommand}">
                                                 <DockPanel>
                                                     <Panel DockPanel.Dock="Left" VerticalAlignment="Top">
                                                         <Border Classes="indicator" CornerRadius="8" IsVisible="{Binding !IsMulti}" />
@@ -214,7 +229,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:QuestionGroupViewModel">
-                                <Button Classes="reviewRow" Command="{Binding EditCommand}">
+                                <Button Classes="kcapChip reviewRow" Command="{Binding EditCommand}">
                                     <StackPanel Spacing="3">
                                         <TextBlock Text="{Binding Text}" FontSize="12.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
                                         <TextBlock Text="{Binding AnswerSummary}" FontSize="14" FontWeight="Medium" TextWrapping="Wrap"
@@ -231,8 +246,7 @@
                            IsVisible="{Binding ErrorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <DockPanel IsVisible="{Binding !IsFastPath}">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
-                        <Button Content="Back" Classes="kcapGhost" Command="{Binding BackCommand}" IsVisible="{Binding ShowsSteps}"
-                                Background="Transparent" BorderBrush="Transparent" Foreground="{StaticResource KcapMutedBrush}"
+                        <Button Content="Back" Classes="kcapChip" Command="{Binding BackCommand}" IsVisible="{Binding ShowsSteps}"
                                 Padding="12,5" FontSize="13" CornerRadius="7" />
                         <Button Content="{Binding NextLabel}" Command="{Binding NextCommand}" IsVisible="{Binding ShowsNext}"
                                 Padding="14,5" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
@@ -297,7 +311,7 @@
                     <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="6" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:AcpOptionViewModel">
-                            <Button Classes="acpOption" Command="{Binding PickCommand}"
+                            <Button Classes="kcapChip acpOption" Command="{Binding PickCommand}"
                                     ToolTip.Tip="{Binding Description}">
                                 <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
                             </Button>

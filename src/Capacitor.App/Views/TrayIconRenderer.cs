@@ -11,8 +11,7 @@ namespace Capacitor.App.Views;
 /// ProductIcon.Bitmap (the product mark, Assets/kcap-icon.png) drawn scaled to fill the canvas;
 /// state is a small overlay in the bottom-right corner, not a swapped glyph — Running draws
 /// CountBadge(count) over a filled dark-green circle (legible against the burgundy mark), every
-/// other state a plain color dot from the shared StatusColors palette (also used by MainWindow's
-/// status line, so the window and the tray icon can never disagree). Cached per key so the same
+/// other state a plain color dot chosen for the OS menu-bar surface. Cached per key so the same
 /// (state, count) always returns the same WindowIcon reference — bitmap pixel correctness is
 /// manual macOS verification, not unit-tested. UI-thread-only (MenuModel is delivered on
 /// RxSchedulers.MainThreadScheduler), so the cache dictionary needs no locking.
@@ -77,9 +76,9 @@ public static class TrayIconRenderer {
     }
 
     static string StatusHexFor(TrayState state) => state switch {
-        TrayState.Stopped    => StatusColors.Unavailable,
-        TrayState.Connecting => StatusColors.InProgress,
-        TrayState.Idle       => StatusColors.Connected,
-        _                    => StatusColors.Disrupted,
+        TrayState.Stopped    => "#9E9E9E",
+        TrayState.Connecting => "#FFB300",
+        TrayState.Idle       => "#4CAF50",
+        _                    => "#E53935",
     };
 }

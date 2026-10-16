@@ -51,7 +51,7 @@
             <Button x:Name="SendAnotherButton" Classes="kcapChip" Content="Send another" Command="{Binding SendAnotherCommand}"
                     IsVisible="{Binding IsSent}" />
             <Button x:Name="CancelButton" Classes="kcapChip" Content="Cancel" Click="OnCancel" IsVisible="{Binding !IsSent}" />
-            <Button x:Name="CloseButton" Classes="kcapChip" Content="Close" Click="OnCancel" IsVisible="{Binding IsSent}" />
+            <Button x:Name="CloseButton" Classes="kcapPrimary" Content="Close" Click="OnCancel" IsVisible="{Binding IsSent}" />
             <Button x:Name="SendButton" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" IsVisible="{Binding !IsSent}" />
         </StackPanel>
     </Grid>

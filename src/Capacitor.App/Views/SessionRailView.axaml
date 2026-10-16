@@ -104,6 +104,13 @@
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
+        <Style Selector="Button.railRow:disabled /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.railPr:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
     </UserControl.Styles>
 
     <Border Background="{StaticResource KcapSurfaceBrush}"
