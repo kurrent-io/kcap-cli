@@ -394,6 +394,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// hides them and leaves the hint — a greyed empty box is the wrong affordance.
     public bool ShowsComposer => _showsComposer.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsInterrupt;
+    public bool ShowsInterrupt => _showsInterrupt.Value;
+
     string _vendor = "";
     IReadOnlyList<HarnessOption> _options = HostedHarnessCatalog.Build(null);
 
@@ -670,6 +673,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
+        _showsInterrupt = Observable.CombineLatest(
+                _input.WhenAnyValue(i => i.CanInterrupt),
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant),
+                this.WhenAnyValue(x => x.HasTerminalMenu),
+                this.WhenAnyValue(x => x.AgentStatus),
+                (can, readOnly, menu, status) => can && !readOnly && !menu && status.Kind == AgentStatusKind.Working)
+            .ToProperty(this, x => x.ShowsInterrupt,
+                initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasTerminalMenu && AgentStatus.Kind == AgentStatusKind.Working)
+            .DisposeWith(_disposables);
+
         // The banner carries the read-only explanation for a flow participant, so the hint
         // goes blank there instead of offering a reply that can never be sent.
         _composerHint = Observable.CombineLatest(
@@ -783,11 +796,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         });
         _disposables.Add(SendQueuedCommand);
 
-        var canInterrupt = Observable.CombineLatest(
-            _input.WhenAnyValue(i => i.CanInterrupt),
-            this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            (can, readOnly) => can && !readOnly);
-        InterruptCommand = ReactiveCommand.CreateFromTask(() => _input.InterruptAsync(_lifetimeToken), canInterrupt);
+        InterruptCommand = ReactiveCommand.CreateFromTask(
+            () => _input.InterruptAsync(_lifetimeToken), this.WhenAnyValue(x => x.ShowsInterrupt));
         _disposables.Add(InterruptCommand);
 
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));

@@ -693,18 +693,29 @@ public class ChatTabViewSmokeTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
-    public async Task Escape_from_the_composer_sends_a_control_key_and_preserves_the_draft() {
+    public async Task Interrupt_from_the_button_or_composer_preserves_the_draft_and_staged_files(bool button) {
         await RunOnUiAsync(async () => {
-            var host = new Host();
-            var client = await host.AttachAsync(Tmp.CreateFile("escape.jsonl", [UserLine]));
-            host.Type("keep this draft");
-            host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
-            host.Settle();
-            await Assert.That(client.SentInput).Count().IsEqualTo(1);
-            await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
-            await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
-            await host.CloseAsync();
+            var host = new Host(show: false);
+            host.Window.Width = 550;
+            host.Show();
+            try {
+                var path = Tmp.CreateFile("escape.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = false });
+                host.Type("keep this draft");
+                host.Chat.Tray.AddAll([new StagedAttachment("notes.txt", "text/plain", new byte[] { 1 })]);
+                if (button) Click(host, host.View.FindControl<Button>("InterruptButton")!);
+                else host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                host.Settle();
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+                await Assert.That(host.Chat.Tray.Items.Select(f => f.FileName)).IsEquivalentTo(["notes.txt"]);
+                await Assert.That(host.Chat.ShowsComposer).IsTrue();
+            } finally { await host.CloseAsync(); }
         });
     }
 
