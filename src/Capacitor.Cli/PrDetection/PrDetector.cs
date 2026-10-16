@@ -43,8 +43,9 @@ internal static class GitHubPrDetector {
     /// <summary>
     /// The caller's open PR in host/owner/repo whose head is the nearest commit in HEAD's history:
     /// found by commit, it survives a branch pushed under another name with no upstream, and a
-    /// local commit not yet pushed. Only open PRs qualify, because a merged PR's head can sit in the
-    /// history of a checkout cut from the branch it merged into.
+    /// local commit not yet pushed. Only open PRs qualify, and only commits off every remote's
+    /// default branch: a merged PR's head, or an open PR from the default branch into another, sits
+    /// in the history of every checkout cut from it. A nearest commit heading two PRs links neither.
     /// </summary>
     public static async Task<PrInfo?> DetectForHistoryAsync(
             string host, string owner, string repo, string cwd, Func<TimeSpan> remaining, CommandRunner run) {
@@ -53,7 +54,7 @@ internal static class GitHubPrDetector {
         var cap = remaining();
         if (cap <= TimeSpan.Zero) return null;
 
-        var historyTask = run("git", $"rev-list -n {HistoryDepth} HEAD", cwd, cap);
+        var historyTask = run("git", $"rev-list -n {HistoryDepth} HEAD --not --remotes=*/HEAD", cwd, cap);
         var prsTask = run("gh",
             $"pr list --repo {host}/{owner}/{repo} --author @me --state open --limit 100 --json {Fields},headRefOid,isCrossRepository",
             cwd, cap);
@@ -61,7 +62,8 @@ internal static class GitHubPrDetector {
 
         if (historyTask.Result is not { } history || prsTask.Result is not { } prs) return null;
 
-        var heads = new Dictionary<string, PrInfo>(StringComparer.OrdinalIgnoreCase);
+        // A null value marks a head shared by several PRs.
+        var heads = new Dictionary<string, PrInfo?>(StringComparer.OrdinalIgnoreCase);
         try {
             if (JsonNode.Parse(prs) is not JsonArray rows) return null;
 
@@ -73,7 +75,7 @@ internal static class GitHubPrDetector {
                     continue;
                 }
 
-                heads.TryAdd(oid, pr);
+                heads[oid] = heads.ContainsKey(oid) ? null : pr;
             }
         } catch {
             return null;

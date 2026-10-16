@@ -136,7 +136,7 @@ public class GitHubPrDetectorTests {
 
         await Assert.That(pr!.Number).IsEqualTo(9);
         await Assert.That(pr.HeadRef).IsEqualTo("fix/renamed");
-        await Assert.That(calls).Contains("git rev-list -n 100 HEAD");
+        await Assert.That(calls).Contains("git rev-list -n 100 HEAD --not --remotes=*/HEAD");
         await Assert.That(calls).Contains(
             "gh pr list --repo github.com/acme/widget --author @me --state open --limit 100 --json number,title,url,headRefName,headRefOid,isCrossRepository");
     }
@@ -160,6 +160,18 @@ public class GitHubPrDetectorTests {
     [Arguments(null)]
     public async Task History_lookup_rejects_a_pr_not_on_this_history(string? prs) {
         await Assert.That(await DetectForHistory(HistoryRunner(prs))).IsNull();
+    }
+
+    /// <summary>The nearest commit heads two PRs: neither is linked, nor the older commit's PR.</summary>
+    [Test]
+    public async Task History_lookup_links_nothing_when_the_nearest_head_is_shared() {
+        var run = HistoryRunner("""
+            [{"number":1,"headRefOid":"older","isCrossRepository":false},
+             {"number":2,"headRefOid":"abc123","isCrossRepository":false},
+             {"number":3,"headRefOid":"abc123","isCrossRepository":false}]
+            """);
+
+        await Assert.That(await DetectForHistory(run)).IsNull();
     }
 
     [Test]
