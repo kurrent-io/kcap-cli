@@ -167,12 +167,15 @@ public class WindowsServiceStopTests {
     [Test]
     public async Task Uninstall_of_a_task_whose_definition_cannot_be_read_is_refused() {
         var host = new FakeHost { DefinitionUnreadable = true };
+        host.TaskRunsTheDaemon();
 
         var ok = Manager(host).Uninstall("laptop", out var error);
 
         await Assert.That(ok).IsFalse();
         await Assert.That(error).Contains("Could not read the definition");
+        await Assert.That(host.Verbs).DoesNotContain("/End");
         await Assert.That(host.Verbs).DoesNotContain("/Delete");
+        await Assert.That(host.Killed).IsEmpty();
     }
 
     /// <summary>A same-named task kcap did not write runs something else, so its wrapper is unknown and
@@ -182,12 +185,15 @@ public class WindowsServiceStopTests {
         var stray = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
         await File.WriteAllTextAsync(stray, "@echo off\r\n");
         var host = new FakeHost { TaskXml = "<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>" };
+        host.TaskRunsTheDaemon();
 
         var ok = Manager(host).Uninstall("laptop", out var error);
 
         await Assert.That(ok).IsFalse();
         await Assert.That(error).Contains("action kcap did not write");
+        await Assert.That(host.Verbs).DoesNotContain("/End");
         await Assert.That(host.Verbs).DoesNotContain("/Delete");
+        await Assert.That(host.Killed).IsEmpty();
         await Assert.That(File.Exists(stray)).IsTrue();
     }
 

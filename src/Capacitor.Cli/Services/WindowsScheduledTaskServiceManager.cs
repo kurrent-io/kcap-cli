@@ -133,18 +133,19 @@ sealed class WindowsScheduledTaskServiceManager(
     // same "removed means stopped" launchd and systemd give. A daemon that survives keeps the task and
     // wrapper, so it is still reported and a retry can stop it.
     public bool Uninstall(string serviceId, out string? error) {
-        var owned = TaskOwnedDaemon(serviceId);
-        _schtasks(WindowsTaskUnit.EndArgs(serviceId));
-        if (owned is { } pid && _killTree(pid) is { } killError) {
-            error = killError;
-            return false;
-        }
-
+        // Resolved before anything is stopped: a same-named task kcap did not write is left running.
         string wrapper;
         try {
             wrapper = WrapperOf(serviceId, taskExists: _schtasks(WindowsTaskUnit.QueryArgs(serviceId)).ExitCode == 0);
         } catch (InvalidOperationException ex) {
             error = ex.Message;
+            return false;
+        }
+
+        var owned = TaskOwnedDaemon(serviceId);
+        _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        if (owned is { } pid && _killTree(pid) is { } killError) {
+            error = killError;
             return false;
         }
 
