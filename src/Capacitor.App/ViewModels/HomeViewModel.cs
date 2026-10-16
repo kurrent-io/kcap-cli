@@ -1352,8 +1352,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// target — otherwise it says to re-attach, because restoring would overwrite what is there.
     void ApplyLaunchFailure(string agentId, bool hadAttachments, string reason, string repoPath) {
         var friendly = FriendlyLaunchFailure(reason);
-        // The composer may already be aimed at another folder. The refusal belongs to the one
-        // that was launched.
+        // A text-only refusal names the folder that was launched. Files that were not handed
+        // back still need the re-attach line on whatever folder is selected now.
         if (!hadAttachments) {
             if (SameRepo(repoPath)) StartError = friendly;
             return;
@@ -1372,7 +1372,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             StartError = friendly + " — your draft is back";
             return;
         }
-        if (SameRepo(repoPath)) StartError = friendly + " — re-attach the files to send them again";
+        StartError = friendly + " — re-attach the files to send them again";
     }
 
     bool SameRepo(string repoPath) => PathComparer.Equals(SelectedRepoPath, repoPath);
