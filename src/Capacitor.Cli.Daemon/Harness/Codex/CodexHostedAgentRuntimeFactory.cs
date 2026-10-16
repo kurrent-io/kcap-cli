@@ -193,6 +193,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
             [HostedAgent.AgentIdVar]  = ctx.AgentId,
         };
+        HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
         if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]         = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
@@ -209,6 +210,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     // (which carries the marker only when emitting).
     internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
         childEnv.Remove(HostedAppServerMarkerEnv);
+        childEnv.Remove(HostedAgent.FlowRoleVar);
         foreach (var (k, v) in overlay) childEnv[k] = v;
     }
 

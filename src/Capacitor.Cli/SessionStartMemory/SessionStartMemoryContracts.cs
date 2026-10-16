@@ -57,6 +57,8 @@ internal sealed record SessionStartMemoryContextRequest(
     public bool AllLanesDisabled => Disabled && GuidelinesDisabled && FlowsDisabled;
 }
 
+/// <param name="Fragment">Delivered even on a <see cref="SessionStartMemoryDisposition.RetryableFailure"/>, which
+/// leaves the lease open, so only content safe to deliver again may ride on one.</param>
 internal sealed record SessionStartMemoryContextResult(
     SessionStartMemoryDisposition Disposition,
     string? Fragment = null,

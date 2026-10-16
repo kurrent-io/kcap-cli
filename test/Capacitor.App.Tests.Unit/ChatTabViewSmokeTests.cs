@@ -369,7 +369,10 @@ public class ChatTabViewSmokeTests {
                 host.Window.MouseWheel(center, new Vector(0, 1));
                 host.Settle();
             }
-            for (var i = 0; i < 16; i++) {
+            // A frame's step scales with the wall-clock time since the last one, so back-to-back
+            // ticks can leave the wheel still moving; the resize's frame would then scroll the reader.
+            for (var frame = 0; host.View.IsSmoothScrolling; frame++) {
+                if (frame == 500) throw new InvalidOperationException("The wheel scroll never settled.");
                 AvaloniaHeadlessPlatform.ForceRenderTimerTick();
                 host.Settle();
             }

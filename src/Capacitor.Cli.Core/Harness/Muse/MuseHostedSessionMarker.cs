@@ -15,7 +15,10 @@ namespace Capacitor.Cli.Core.Harness.Muse;
 /// <param name="ServerUrl">The server the daemon talks to.</param>
 /// <param name="Profile">The profile the daemon resolved its server through; null when an explicit URL
 /// chose it.</param>
-/// <remarks>The connection fields are absent from a marker an older daemon wrote, and read as null.</remarks>
+/// <param name="SessionKind">What the daemon launched the session as, in the wire form of
+/// <see cref="HostedSessionKinds"/> — the hook's only source for it, since no environment reaches it.</param>
+/// <param name="FlowRole">The participant's flow role, when the launch named one.</param>
+/// <remarks>The connection and kind fields are absent from a marker an older daemon wrote, and read as null.</remarks>
 public sealed partial record MuseHostedSessionMarker(
         string         SessionId,
         string         AgentId,
@@ -24,7 +27,9 @@ public sealed partial record MuseHostedSessionMarker(
         DateTimeOffset WrittenAt,
         string?        ConfigDir = null,
         string?        ServerUrl = null,
-        string?        Profile   = null
+        string?        Profile   = null,
+        string?        SessionKind = null,
+        string?        FlowRole    = null
     ) {
     public static string DirectoryFor(UserHome home) => ConfigRoot.UnderHome(home.Path).Path("muse-hosted");
 

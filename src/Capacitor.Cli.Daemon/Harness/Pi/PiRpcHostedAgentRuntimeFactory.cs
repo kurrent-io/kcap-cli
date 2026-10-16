@@ -448,6 +448,7 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
         if (!string.IsNullOrEmpty(ctx.ServerUrl)) psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         psi.Environment[HostedAgent.AgentIdVar] = ctx.AgentId;
+        HostedLaunchMarkers.Apply(psi.Environment, ctx);
         if (!string.IsNullOrEmpty(ctx.DaemonId))    psi.Environment["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) psi.Environment["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 

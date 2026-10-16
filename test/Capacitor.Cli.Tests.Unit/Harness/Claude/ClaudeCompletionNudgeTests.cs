@@ -20,7 +20,7 @@ public class ClaudeCompletionNudgeTests {
 
     [Test]
     public async Task Blocks_when_the_ack_the_profile_and_the_message_all_agree() =>
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload())).IsTrue();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(), SessionStartAudience.Interactive)).IsTrue();
 
     [Test]
     [Arguments("")]
@@ -30,33 +30,44 @@ public class ClaudeCompletionNudgeTests {
     [Arguments("not json")]
     [Arguments("[true]")]
     public async Task An_ack_without_a_true_completion_nudge_never_blocks(string ack) =>
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(ack, nextWorkDisabled: false, Payload())).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(ack, nextWorkDisabled: false, Payload(), SessionStartAudience.Interactive)).IsFalse();
 
     [Test]
     public async Task An_absent_ack_body_never_blocks() =>
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(null, nextWorkDisabled: false, Payload())).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(null, nextWorkDisabled: false, Payload(), SessionStartAudience.Interactive)).IsFalse();
 
     [Test]
     public async Task The_next_work_opt_out_never_blocks() =>
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: true, Payload())).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: true, Payload(), SessionStartAudience.Interactive)).IsFalse();
 
     [Test]
     public async Task A_message_that_is_not_a_wrap_up_never_blocks() =>
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(MidTask))).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(MidTask), SessionStartAudience.Interactive)).IsFalse();
 
     /// <summary>The agent is already continuing from a Stop block; blocking again would loop.</summary>
     [Test]
     public async Task A_stop_that_is_already_continuing_from_a_block_never_blocks() =>
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(stopHookActive: true))).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(stopHookActive: true), SessionStartAudience.Interactive)).IsFalse();
+
+    /// <summary>Every other gate agrees, so only the participant marker can withhold the block.</summary>
+    [Test]
+    public async Task A_flow_participant_is_never_blocked() =>
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(),
+            new SessionStartAudience(IsHosted: true, IsFlowParticipant: true))).IsFalse();
+
+    [Test]
+    public async Task A_hosted_agent_that_is_not_a_participant_is_still_blocked() =>
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, nextWorkDisabled: false, Payload(),
+            new SessionStartAudience(IsHosted: true, IsFlowParticipant: false))).IsTrue();
 
     [Test]
     public async Task Without_an_inline_message_the_transcript_tail_decides() {
         var wrapUp  = Tmp.CreateFile("done.jsonl", Line(WrapUp));
         var midTask = Tmp.CreateFile("mid.jsonl", Line(MidTask));
 
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, false, Payload(lastMessage: null, transcriptPath: wrapUp))).IsTrue();
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, false, Payload(lastMessage: null, transcriptPath: midTask))).IsFalse();
-        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, false, Payload(lastMessage: null, transcriptPath: Tmp.PathTo("absent")))).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, false, Payload(lastMessage: null, transcriptPath: wrapUp), SessionStartAudience.Interactive)).IsTrue();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, false, Payload(lastMessage: null, transcriptPath: midTask), SessionStartAudience.Interactive)).IsFalse();
+        await Assert.That(ClaudeCompletionNudge.ShouldBlock(Nudge, false, Payload(lastMessage: null, transcriptPath: Tmp.PathTo("absent")), SessionStartAudience.Interactive)).IsFalse();
     }
 
     [Test]

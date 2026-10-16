@@ -133,7 +133,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
 
     // Server-level usage preamble (MCP `instructions`) — steers clients toward these tools for
     // prior-work / why / who-decided questions over native grep / git log.
-    const string ServerInstructions =
+    internal const string ServerInstructions =
         "Use these tools to recall prior work — 'have we done X before', 'why did we', 'who decided Y', " +
         "'when did we work on Z'. Search here before grepping the code or git log — they search the reasoning " +
         "across past sessions, not just the code. Also use them to find an unfinished plan a session left " +
