@@ -98,7 +98,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string SelectedRepoPath {
         get => _selectedRepoPath;
         set {
-            var changed = !string.Equals(_selectedRepoPath, value, StringComparison.Ordinal);
+            // PathComparer, not ordinal: SameLaunchTarget and the picker already treat casings as one folder.
+            var changed = !PathComparer.Equals(_selectedRepoPath, value);
             this.RaiseAndSetIfChanged(ref _selectedRepoPath, value);
             _selectedRepoPathChanges.OnNext(value);
             // A launch refusal describes the folder that failed. A later pick is a different attempt.
@@ -370,7 +371,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
     /// stamps come from the same clock, so one TimeProvider governs every expiry.
     sealed record PendingLaunch(
-        DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt, string RepoPath);
+        DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt,
+        string RepoPath, string Machine);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -1035,9 +1037,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     void SetMachineSelection(string name, bool remote) {
+        var changed = !string.Equals(SelectedMachine, name, StringComparison.Ordinal)
+            || RemoteMachineSelected != remote;
         SelectedMachine = name;
         RemoteMachineSelected = remote;
         _machineSelectionChanges.OnNext((name, remote));
+        // Same path can exist on two machines; a refusal belongs to the machine that launched.
+        if (changed && StartError != _intakeNotice) StartError = null;
     }
 
     /// A daemon with the local machine id and the local daemon's own name is this same daemon's
@@ -1208,7 +1214,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _signInRequired.OnNext(outcome.Unauthorized);
             if (outcome.Unauthorized)
                 StartError = null;
-            else if (SameRepo(draft.RepoPath) && outcome.Error is { } error)
+            else if (SameLaunchTarget(draft.RepoPath, draft.Machine) && outcome.Error is { } error)
                 StartError = FriendlyLaunchFailure(error);
             return;
         }
@@ -1240,7 +1246,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
         var tracked = RecordPendingLaunch(
-            agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0, uploadedAt, draft.RepoPath);
+            agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0,
+            uploadedAt, draft.RepoPath, draft.Machine);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
         // an agent that isn't there — auto-open and the placeholder row only ever apply to a
         // local target.
@@ -1258,7 +1265,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// False when a row or a buffered failure has already settled the launch.
     bool RecordPendingLaunch(
-            string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt, string repoPath) {
+            string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt,
+            string repoPath, string machine) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -1272,7 +1280,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath);
+            _pendingLaunches[agentId] = new PendingLaunch(
+                _time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath, machine);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (_time.GetUtcNow().UtcDateTime - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1285,7 +1294,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             ForgetLaunch(agentId);
             return false;
         }
-        if (bufferedReason is not null) ApplyLaunchFailure(agentId, hadAttachments, bufferedReason, repoPath);
+        if (bufferedReason is not null)
+            ApplyLaunchFailure(agentId, hadAttachments, bufferedReason, repoPath, machine);
         return bufferedReason is null;
     }
 
@@ -1342,7 +1352,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _pendingLaunches.Remove(agentId);
         }
         if (pending is null) return;
-        ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason, pending.RepoPath);
+        ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason, pending.RepoPath, pending.Machine);
         _directory?.RemovePlaceholder(agentId);
         _launchFailed?.Invoke(agentId);
     }
@@ -1350,12 +1360,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A text-only launch just renders its reason. A launch that carried files hands the draft
     /// back when the composer is still exactly as this launch left it and still aimed at the same
     /// target — otherwise it says to re-attach, because restoring would overwrite what is there.
-    void ApplyLaunchFailure(string agentId, bool hadAttachments, string reason, string repoPath) {
+    void ApplyLaunchFailure(
+            string agentId, bool hadAttachments, string reason, string repoPath, string machine) {
         var friendly = FriendlyLaunchFailure(reason);
-        // A text-only refusal names the folder that was launched. Files that were not handed
-        // back still need the re-attach line on whatever folder is selected now.
+        // A text-only refusal names the folder+machine that was launched. Files that were not
+        // handed back still need the re-attach line on whatever target is selected now.
         if (!hadAttachments) {
-            if (SameRepo(repoPath)) StartError = friendly;
+            if (SameLaunchTarget(repoPath, machine)) StartError = friendly;
             return;
         }
 
@@ -1375,7 +1386,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         StartError = friendly + " — re-attach the files to send them again";
     }
 
-    bool SameRepo(string repoPath) => PathComparer.Equals(SelectedRepoPath, repoPath);
+    bool SameLaunchTarget(string repoPath, string machine) =>
+        PathComparer.Equals(SelectedRepoPath, repoPath)
+        && string.Equals(SelectedMachine, machine, StringComparison.Ordinal);
 
     bool IsRestorable(RetainedDraft retained) =>
         retained.ClearedGoal && _goalEdits == retained.GoalEditsAfterClear
@@ -1402,9 +1415,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// Shown when an older daemon still refuses an empty standalone snapshot. Current daemons
-    /// commit an empty tree instead so a greenfield folder can launch.
+    /// commit an empty tree instead so a greenfield folder can launch. Wording stays neutral about
+    /// whether the folder is a git repo — an initialized commitless repo takes the same path.
     internal const string EmptyFolderStartMessage =
-        "This folder isn't a git repository, and there's nothing in it to start from.";
+        "There's nothing in this folder to start from.";
 
     /// Shown when preparing the workspace failed for some other git reason.
     internal const string WorkspacePrepFailed = "Couldn't prepare a workspace for this folder.";

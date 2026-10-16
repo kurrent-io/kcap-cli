@@ -1835,6 +1835,12 @@ public class HomeViewModelTests {
             await vm.SelectRepositoryAsync("/repo/a");
             await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
 
+            // Same folder under a different casing is still that folder on macOS/Windows.
+            if (!OperatingSystem.IsLinux()) {
+                await vm.SelectRepositoryAsync("/repo/A");
+                await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+            }
+
             await vm.SelectRepositoryAsync("/repo/b");
             await Assert.That(vm.StartError).IsNull();
         });
@@ -1857,6 +1863,35 @@ public class HomeViewModelTests {
             await vm.SelectRepositoryAsync("/repo/b");
             failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
 
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_the_previous_machine_does_not_stick() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/repo/a"],
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
+                launchFailures: failures, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/repo/a");
             await Assert.That(vm.StartError).IsNull();
         });
     }

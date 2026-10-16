@@ -1595,7 +1595,7 @@ public partial class WorktreeManager(
     /// <summary>Legacy refusal from daemons that rejected an empty standalone snapshot. The
     /// launcher still maps this prefix for rolling upgrades; current builds commit an empty tree.</summary>
     internal const string EmptySnapshotFailure =
-        "standalone_snapshot_empty: This folder isn't a git repository, and there's nothing in it to start from.";
+        "standalone_snapshot_empty: There's nothing in this folder to start from.";
 
     static async Task<bool> GitConfigBoolAsync(string cwd, string key, TimeProvider time) {
         var result = await RunGitCaptureResult(cwd, GitTimeout, time, true, [], "config", "--bool", "--get", key);
