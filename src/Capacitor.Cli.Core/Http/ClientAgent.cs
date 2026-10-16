@@ -11,8 +11,9 @@ public sealed record ClientAgent(ClientSurface Surface) {
     public static readonly ClientAgent Cli     = new(ClientSurface.Cli);
     public static readonly ClientAgent Desktop = new(ClientSurface.Desktop);
 
+    // The machine's architecture, not the process's: a translated x64 build on an arm64 Mac is still an arm64 machine.
     public string UserAgent { get; } = Format(
-        CapacitorVersion.CurrentDisplay(), OsName(), RuntimeInformation.ProcessArchitecture, Surface);
+        CapacitorVersion.CurrentDisplay(), OsName(), RuntimeInformation.OSArchitecture, Surface);
 
     public static string Format(string version, string os, Architecture arch, ClientSurface surface) =>
         $"kcap/{version} ({os}-{arch.ToString().ToLowerInvariant()}; {surface.ToString().ToLowerInvariant()})";
