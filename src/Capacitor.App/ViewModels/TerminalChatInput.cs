@@ -115,7 +115,7 @@ internal sealed class TerminalChatInput : ChatInput {
     /// The hint is built from the terminal's own availability, so it is true in the windows where
     /// State alone would lie (a reattach or detach under way while State reads Attached).
     internal static string HintFor(SendAvailability availability, TerminalSessionState state) => availability switch {
-        SendAvailability.Ready         => "Enter sends · Shift+Enter for a new line",
+        SendAvailability.Ready         => ReadyHint,
         SendAvailability.Sending       => "Sending…",
         SendAvailability.Transitioning => "Updating the terminal connection…",
         SendAvailability.ReadOnly      => $"Read-only: {state.Detail}",

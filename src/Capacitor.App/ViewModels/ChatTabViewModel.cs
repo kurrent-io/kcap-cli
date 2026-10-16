@@ -341,6 +341,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// hides them and leaves the hint — a greyed empty box is the wrong affordance.
     public bool ShowsComposer => _showsComposer.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsInterrupt;
+    public bool ShowsInterrupt => _showsInterrupt.Value;
+
     string _vendor = "";
     IReadOnlyList<HarnessOption> _options = HostedHarnessCatalog.Build(null);
 
@@ -589,18 +592,30 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
+        _showsInterrupt = Observable.CombineLatest(
+                _input.WhenAnyValue(i => i.CanInterrupt),
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant),
+                this.WhenAnyValue(x => x.HasUsageLimitQuestion),
+                this.WhenAnyValue(x => x.AgentStatus),
+                (can, readOnly, limit, status) => can && !readOnly && !limit && status.Kind == AgentStatusKind.Working)
+            .ToProperty(this, x => x.ShowsInterrupt,
+                initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasUsageLimitQuestion && AgentStatus.Kind == AgentStatusKind.Working)
+            .DisposeWith(_disposables);
+
         // The banner carries the read-only explanation for a flow participant, so the hint
         // goes blank there instead of offering a reply that can never be sent.
         _composerHint = Observable.CombineLatest(
                 _input.WhenAnyValue(i => i.Hint),
+                this.WhenAnyValue(x => x.ShowsInterrupt),
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 this.WhenAnyValue(x => x.UploadingFiles),
                 this.WhenAnyValue(x => x.HasUsageLimitQuestion),
                 _intakeNotice,
-                (hint, readOnly, uploading, limit, notice) =>
+                (hint, showsInterrupt, readOnly, uploading, limit, notice) =>
                     uploading > 0 ? $"Uploading {uploading} file{(uploading == 1 ? "" : "s")}…"
                         : notice ?? (readOnly ? ""
                             : limit ? "Choose how to handle the usage limit. A message here would be typed into that menu."
+                            : showsInterrupt && hint == ChatInput.ReadyHint ? ChatInput.InterruptableHint
                             : hint))
             .ToProperty(this, x => x.ComposerHint, initialValue: IsReadOnlyParticipant ? "" : _input.Hint)
             .DisposeWith(_disposables);

@@ -6,6 +6,9 @@ namespace Capacitor.App.ViewModels;
 /// The composer's channel to the agent. The terminal channel commits when the paste is accepted; the
 /// frame channel when the daemon's ack arrives — that difference lives in SendAsync alone.
 public abstract class ChatInput : ReactiveObject, IDisposable {
+    internal const string ReadyHint = "Enter sends · Shift+Enter for a new line";
+    internal const string InterruptableHint = "Enter sends · Shift+Enter for a new line · Esc to interrupt";
+
     public abstract SendAvailability Availability { get; }
     public abstract bool CanAcceptText { get; }
     public abstract string Hint { get; }
