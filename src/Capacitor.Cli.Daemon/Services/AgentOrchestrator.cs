@@ -3377,13 +3377,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 SetAgentStatus(agent, status);
 
-                // PrivateLocal agents make no per-agent server calls (deny-all).
+                // PrivateLocal agents make no per-agent server calls (deny-all). A refused report must
+                // not skip the local teardown below: that leaks the process and keeps the forwarder alive.
                 if (!agent.IsPrivate) {
-                    if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
+                    try {
+                        if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
+                    } catch (Exception ex) {
+                        LogCleanupStepFailed(ex, "reporting the final status", agent.Id);
+                    }
 
-                    var stopReason = status == "Completed" ? "exited" : "failed";
+                    try {
+                        var stopReason = status == "Completed" ? "exited" : "failed";
 
-                    await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                        await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                    } catch (Exception ex) {
+                        LogCleanupStepFailed(ex, "recording the run's stop", agent.Id);
+                    }
                 }
             }
 
