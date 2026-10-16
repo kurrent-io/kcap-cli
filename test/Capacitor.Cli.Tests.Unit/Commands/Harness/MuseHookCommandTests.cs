@@ -6,6 +6,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.PrDetection;
 using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
@@ -566,6 +567,69 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
         await Assert.That(new HookSpool(Config.Root, TimeProvider.System).HasBacklog(ParentDashless)).IsTrue();
         await Assert.That(stdout.ToString().StartsWith("<!-- kcap-memory-index:v1 -->\n", StringComparison.Ordinal)).IsTrue();
+    }
+
+    // ── What a hosted session and a flow participant are given ─────────────────────────────
+
+    async Task<string> StartWithEveryFragmentAvailableAsync(string? sessionKind, bool hosted) {
+        StubHooks();
+        StubMemoryIndex(3);
+        StageParentLog();
+        Home.CreateFile(Path.GetRelativePath(Home.Path, TestHarnesses.Under(Home).Of<MuseHarness>().Paths.SettingsJson),
+            """{"mcp_servers":{"kcap-workitems":{"command":"kcap"},"kcap-plans":{"command":"kcap"},"kcap-flows":{"command":"kcap"}}}""");
+        _server.Given(Request.Create().WithPath("/api/flows/definitions").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithHeader("Content-Type", "application/json")
+                .WithBody("""{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}"""));
+        new FirstRunNoticeStore(Config.Root).Arm();
+        if (hosted)
+            MuseHostedSessionMarker.Write(Home, new MuseHostedSessionMarker(
+                ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow, SessionKind: sessionKind));
+
+        var stdout = new StringWriter();
+        var exit   = await Command().Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        return stdout.ToString();
+    }
+
+    /// <summary>The control the two tests below are measured against.</summary>
+    [Test]
+    public async Task An_interactive_session_gets_every_fragment() {
+        var written = await StartWithEveryFragmentAvailableAsync(sessionKind: null, hosted: false);
+
+        await Assert.That(written).Contains("## Team memory");
+        await Assert.That(written).Contains("## Work items");
+        await Assert.That(written).Contains("## Plans");
+        await Assert.That(written).Contains("Flows you may offer");
+        await Assert.That(written).Contains("## Kurrent Capacitor is set up");
+    }
+
+    /// <summary>Muse runs a hook with a cleared environment, so the daemon's marker file is the only
+    /// place the participant kind can come from.</summary>
+    [Test]
+    public async Task A_flow_participant_named_by_the_marker_gets_no_driver_guidance_or_onboarding() {
+        var written = await StartWithEveryFragmentAvailableAsync(HostedSessionKinds.FlowParticipantWire, hosted: true);
+
+        await Assert.That(written).DoesNotContain("## Team memory");
+        await Assert.That(written).DoesNotContain("## Work items");
+        await Assert.That(written).DoesNotContain("## Plans");
+        await Assert.That(written).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(written).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(written).DoesNotContain("Flows you may offer");
+    }
+
+    /// <summary>A marker an older daemon wrote carries no kind: the session is hosted, not a participant.</summary>
+    [Test]
+    [Arguments(HostedSessionKinds.HostedAgentWire)]
+    [Arguments(null)]
+    public async Task A_hosted_agent_keeps_the_driver_guidance_and_loses_the_onboarding(string? sessionKind) {
+        var written = await StartWithEveryFragmentAvailableAsync(sessionKind, hosted: true);
+
+        await Assert.That(written).Contains("## Team memory");
+        await Assert.That(written).Contains("## Work items");
+        await Assert.That(written).Contains("## Plans");
+        await Assert.That(written).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(new FirstRunNoticeStore(Config.Root).TryClaim()).IsTrue();
     }
 
     [Test]

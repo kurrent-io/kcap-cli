@@ -31,7 +31,13 @@ namespace Capacitor.Cli;
 static class McpServerNudgeAvailability {
     /// <param name="serverName">The registration name, e.g. <c>kcap-plans</c>.</param>
     /// <param name="codexConfigPath">Overrides the Codex <c>config.toml</c> path (test seam); null uses the default.</param>
-    public static bool IsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string serverName, string? codexConfigPath = null) {
+    /// <param name="audience">The session asking; null is an interactive session.</param>
+    public static bool IsRegisteredFor(HarnessId harness, HarnessRegistry harnesses, string serverName,
+                                       string? codexConfigPath = null, SessionStartAudience? audience = null) {
+        // The on-disk config is machine-wide. A flow participant is launched with only its flow's
+        // servers (a strict MCP config, disabled inheritance or an isolated home), so it has none of these.
+        if (audience?.IsFlowParticipant is true) return false;
+
         try {
             return harness switch {
                 // Claude loads the plugin's bundled .mcp.json, so the server is available exactly when

@@ -17,23 +17,24 @@ internal sealed class SessionStartCompositeContextProvider(
         if (request.AllLanesDisabled) return SessionStartMemoryContextResult.Empty;
         if (request.Budget <= TimeSpan.Zero) return SessionStartMemoryContextResult.Retry;
 
-        using var expiry = new CancellationTokenSource(request.Budget, time);
+        // The lanes stop short of the budget, so what they return still reaches a caller waiting exactly that long.
+        var cutoff = request.Budget > LaneReserve * 2 ? request.Budget - LaneReserve : request.Budget / 2;
+        using var expiry = new CancellationTokenSource(cutoff, time);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(request.CancellationToken, expiry.Token);
 
         var flowsTask = request.FlowsDisabled ? null : RunLaneAsync(() => flows.FetchAsync(request, cts.Token));
 
         // Flows ignore scope, and a slow scope resolution must not spend the budget they share.
         if (request.Disabled && request.GuidelinesDisabled)
-            return Combine(null, null, flowsTask is null ? null : await flowsTask);
+            return Combine(null, null, ReportFlows(flowsTask is null ? null : await flowsTask));
 
         SessionStartMemoryScope scope;
         try {
             scope = await scopeResolver.ResolveAsync(request.Cwd, request.Budget, cts.Token);
         } catch (Exception ex) when (IsFailOpen(ex)) {
             diagnostic?.Invoke($"SessionStart scope resolution skipped: {ex.Message}");
-            if (flowsTask is not null) await flowsTask;
 
-            return SessionStartMemoryContextResult.Retry;
+            return Combine(SessionStartMemoryContextResult.Retry, null, ReportFlows(flowsTask is null ? null : await flowsTask));
         }
 
         // Started before any further await so the lanes share the budget in parallel.
@@ -44,7 +45,14 @@ internal sealed class SessionStartCompositeContextProvider(
         var guidelinesResult = guidelinesTask is null ? null : await guidelinesTask;
         var flowsResult      = flowsTask      is null ? null : await flowsTask;
 
-        return Combine(memoryResult, guidelinesResult, flowsResult);
+        return Combine(memoryResult, guidelinesResult, ReportFlows(flowsResult));
+    }
+
+    SessionStartMemoryContextResult? ReportFlows(SessionStartMemoryContextResult? flows) {
+        if (flows?.Disposition == SessionStartMemoryDisposition.RetryableFailure)
+            diagnostic?.Invoke("SessionStart flows lane skipped: no flow catalogue could be fetched or used from the cache");
+
+        return flows;
     }
 
     async Task<SessionStartMemoryContextResult> RunLaneAsync(Func<Task<SessionStartMemoryContextResult>> lane) {
@@ -56,7 +64,8 @@ internal sealed class SessionStartCompositeContextProvider(
         }
     }
 
-    // Flows content alone must not commit the lease while memory or guidelines want a retry.
+    // Flows content alone must not commit the lease while memory or guidelines want a retry, but it is
+    // marker-less and safe to deliver again, so it rides along with the retry.
     static SessionStartMemoryContextResult Combine(
             SessionStartMemoryContextResult? memoryResult, SessionStartMemoryContextResult? guidelinesResult, SessionStartMemoryContextResult? flowsResult) {
         var memoryFragment     = Fragment(memoryResult);
@@ -67,7 +76,7 @@ internal sealed class SessionStartCompositeContextProvider(
             return Committed(Compose(memoryFragment, [guidelinesFragment, flowsFragment]));
 
         if (IsRetry(memoryResult) || IsRetry(guidelinesResult))
-            return Retry([memoryResult, guidelinesResult, flowsResult]);
+            return Retry([memoryResult, guidelinesResult, flowsResult]) with { Fragment = flowsFragment is null ? null : Compose(null, [flowsFragment]) };
 
         if (flowsFragment is not null) return Committed(Compose(null, [flowsFragment]));
         if (IsRetry(flowsResult)) return Retry([flowsResult]);
@@ -94,6 +103,8 @@ internal sealed class SessionStartCompositeContextProvider(
 
         return present.Count == 0 ? memoryFragment : memoryFragment + "\n\n" + rest;
     }
+
+    static readonly TimeSpan LaneReserve = TimeSpan.FromMilliseconds(250);
 
     static bool IsFailOpen(Exception ex) =>
         ex is HttpRequestException or IOException or JsonException or

@@ -111,6 +111,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
             [HostedAgent.AgentIdVar]  = ctx.AgentId
         };
+        HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
         // OrphanReaper env-marker scan can reap a recordless survivor of a PRIOR incarnation of THIS

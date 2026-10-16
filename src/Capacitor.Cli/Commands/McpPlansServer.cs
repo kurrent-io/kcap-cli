@@ -11,6 +11,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.Cli.Plans;
 
 namespace Capacitor.Cli.Commands;
 
@@ -181,10 +182,24 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         }
     }
 
+    /// <summary>Longer than a Claude plan-edit hook can hold the document, which is its 3 s timeout.</summary>
+    internal TimeSpan DeclareLockWait { get; init; } = TimeSpan.FromSeconds(5);
+
     async Task<string> DeclareAsync(JsonNode id, HttpClient client, string baseUrl, JsonObject? args, string cwd, string? repoRoot) {
+        var ledger   = new DeclaredDocumentLedger(config, time);
+        var resolved = BuildDeclaration(args, cwd, repoRoot);
+
+        // Under the lock an edit refresh cannot interleave, so the text read and the arguments
+        // recorded are the last the server gets. Without it this declaration could land after a
+        // newer refresh, so the agent is asked to retry instead.
+        using var gate = await ledger.LockAsync(resolved.SessionId, resolved.Document.Path, DeclareLockWait);
+        if (gate is null)
+            return BuildToolResult(id, $"Error: {resolved.WirePath} is being refreshed after an edit; call declare_plan_document again.", isError: true);
+
         var declaration = BuildDeclaration(args, cwd, repoRoot);
 
-        using var response = await client.PostAsync($"{baseUrl}/api/plans/documents", ToJsonContent(declaration.Body));
+        using var response = await client.PostAsync(DocumentsUrl(baseUrl), ToJsonContent(declaration.Body));
+        if (response.IsSuccessStatusCode) ledger.Record(declaration.SessionId, declaration.Document, baseUrl);
 
         return await RelayAsync(id, response, baseUrl, body => AnnotateDeclaration(body, declaration));
     }
@@ -299,6 +314,8 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
     internal static string? ReadPlanId(string body) =>
         TryParseObject(body)?["plan_id"] is JsonValue v && v.TryGetValue<string>(out var id) && !string.IsNullOrWhiteSpace(id) ? id : null;
 
+    internal static string DocumentsUrl(string baseUrl) => $"{baseUrl}/api/plans/documents";
+
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
     // Content is declared verbatim, so a snapshot must hash to what the server stores: a file that
@@ -338,13 +355,15 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
             }
         }
 
-        if (McpToolArguments.OptionalString(args, "argues_from") is { } arguesFrom)
-            body["argues_from"] = WirePath(Path.GetFullPath(arguesFrom, cwd), repoRoot);
+        var arguesFrom = McpToolArguments.OptionalString(args, "argues_from") is { } rawArguesFrom ? Path.GetFullPath(rawArguesFrom, cwd) : null;
+        if (arguesFrom is not null)
+            body["argues_from"] = WirePath(arguesFrom, repoRoot);
 
-        if (McpToolArguments.OptionalString(args, "work_item_id") is { } workItemId)
+        var workItemId = McpToolArguments.OptionalString(args, "work_item_id");
+        if (workItemId is not null)
             body["work_item_id"] = workItemId;
 
-        return new(body, wirePath, repoRoot, length, omitted);
+        return new(body, sessionId, new DeclaredDocument(fullPath, kind, arguesFrom, workItemId, cwd, repoRoot), wirePath, repoRoot, length, omitted);
     }
 
     /// <summary>Bound on link hops while resolving a declared path; a chain deeper than this is a
@@ -555,7 +574,8 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
           + "to the Capacitor server this session is recorded to — the one `kcap login` signed in to, which "
           + "already holds the session's transcript — keyed by path against the git repository root. Nothing is "
           + "published anywhere else. Returns plan_id, document_key and whether the plan was created; declaring "
-          + "the same document again attaches this session to the same plan.",
+          + "the same document again attaches this session to the same plan and replaces the stored copy with the "
+          + "file's current text, so declare it again whenever you change it.",
             new("object", new() {
                 ["kind"]         = new("string", "One of 'plan', 'spec' or 'design'."),
                 ["path"]         = new("string", "Path to the document, absolute or relative to the project directory."),

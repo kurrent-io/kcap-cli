@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "kcap hook --claude --no-update-check",
-            "timeout": 5
+            "timeout": 9
           }
         ]
       }
@@ -108,6 +108,16 @@
           {
             "type": "command",
             "command": "kcap hook --claude --task-list --no-update-check",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "kcap hook --claude --plan-edit --no-update-check",
             "timeout": 3
           }
         ]

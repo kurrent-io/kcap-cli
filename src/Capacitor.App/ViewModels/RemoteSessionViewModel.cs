@@ -26,6 +26,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     readonly SessionAccessService _access;
     readonly CompositeDisposable _disposables = new();
+    readonly ComposerDrafts? _drafts;
     readonly SerialDisposable _lease = new();
     readonly IUrlOpener _opener;
     // Never disposed, so a row revision landing after teardown cannot throw; the chat and its
@@ -200,7 +201,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             AgentActionService actions, IServerLane lane, SessionDetailReader readDetail, IUrlOpener opener, TimeProvider time, IWorkContextSource workContext,
             Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
-            Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null) {
+            Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
+            ComposerDrafts? drafts = null) {
+        _drafts = drafts;
         _row = row;
         _opener = opener;
         _access = access;
@@ -248,7 +251,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
-            planActivity: planActivity, openCard: OpenCard);
+            planActivity: planActivity, openCard: OpenCard, drafts: drafts);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
             : null;
@@ -383,6 +386,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     }
 
     static void Log(string note) => Console.Error.WriteLine($"kcap: remote chat: {note}");
+
+    public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Remote, origin, AgentId);
 
     public async Task TeardownAsync() {
         _disposables.Dispose();

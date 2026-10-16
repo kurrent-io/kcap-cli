@@ -643,13 +643,14 @@ public partial class App : Application {
         // Workspace links only: the explicit "Open in web" actions keep the browser.
         var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
             agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
+        var drafts = new ComposerDrafts();
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: linkGitHub,
             access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
-            commands: commands);
+            commands: commands, drafts: drafts);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -658,7 +659,7 @@ public partial class App : Application {
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
-                    signInCompleted: serverClients.SignInCompleted, plans: plans)
+                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts)
                 : null;
 
         _coordinator = new MainWindowCoordinator(

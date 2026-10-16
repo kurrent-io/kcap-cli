@@ -718,6 +718,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var subject = open.PullRequests?.Selected?.Subject;
         OpenSessionCore(open.AgentId, origin, revealInRail: false);
         if (ReferenceEquals(CurrentWorkspace, open)) return;
+        open.HandDraftTo(origin);
         if (terminal) {
             switch (CurrentWorkspace) {
                 case WorkspaceViewModel local: local.ShowTerminalCommand.Execute().Subscribe(); break;

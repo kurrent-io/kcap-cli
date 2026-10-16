@@ -22,6 +22,8 @@ internal static class PtyEnvScrub {
     public static readonly string[] HostedAgentVars = [
         HostedAgent.AgentIdVar,
         HostedAgent.RenderedVar,
-        HostedAgent.BridgeUrlVar
+        HostedAgent.BridgeUrlVar,
+        HostedAgent.SessionKindVar,
+        HostedAgent.FlowRoleVar
     ];
 }

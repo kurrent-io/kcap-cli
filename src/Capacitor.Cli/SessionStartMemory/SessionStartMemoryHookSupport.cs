@@ -30,18 +30,20 @@ internal static class SessionStartMemoryHookSupport {
             WorkingDirectory workdir,
             Func<CancellationToken, Task<HttpClient>> client,
             TimeProvider time,
-            ISessionStartMemoryScopeResolver? scopeResolver = null) {
+            ISessionStartMemoryScopeResolver? scopeResolver = null,
+            Action<string>? diagnostic = null) {
         var resolver = scopeResolver ?? new SessionStartMemoryScopeResolver(router, config, workdir, time);
 
         var memory     = new SessionStartMemoryContextProvider(resolver, client, time);
         var guidelines = new SessionStartGuidelinesLane(client, time);
-        var flows      = new SessionStartFlowsLane(client, time);
-        return new SessionStartCompositeContextProvider(resolver, memory, guidelines, flows, time);
+        var flows      = new SessionStartFlowsLane(client, time, SessionStartFlowsCatalogCache.Default(config));
+        return new SessionStartCompositeContextProvider(resolver, memory, guidelines, flows, time, diagnostic);
     }
 
     /// <summary>Offering a flow the agent cannot start is worse than not offering it.</summary>
-    public static bool FlowsLaneDisabled(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null) =>
-        !McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, KcapMcpServers.FlowsServerName, codexConfigPath);
+    public static bool FlowsLaneDisabled(HarnessId harness, HarnessRegistry harnesses, string? codexConfigPath = null,
+                                         SessionStartAudience? audience = null) =>
+        !McpServerNudgeAvailability.IsRegisteredFor(harness, harnesses, KcapMcpServers.FlowsServerName, codexConfigPath, audience);
 
     /// <summary>
     /// Awaits an in-flight fragment fetch under the budget remaining AT THIS INSTANT — never the

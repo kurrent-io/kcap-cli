@@ -32,7 +32,9 @@ public class PtyEnvScrubTests {
         await Assert.That(PtyEnvScrub.HostedAgentVars).IsEquivalentTo(new[] {
             "KCAP_AGENT_ID",
             "KCAP_RENDERED_AGENT",
-            "KCAP_DAEMON_URL"
+            "KCAP_DAEMON_URL",
+            "KCAP_SESSION_KIND",
+            "KCAP_FLOW_ROLE"
         }, CollectionOrdering.Matching);
     }
 }

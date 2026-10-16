@@ -26,6 +26,8 @@ public sealed class CursorHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
         HarnessRegistry harnesses, HostedAgent hosted, ICapacitorHttpClient http, WatcherManager watchers,
         GitProviderRouter router, WorkingDirectory workdir) {
+    readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
+
     readonly CursorMarkers  _markers  = new(config, clock.Time);
 
     string Url => profiles.Resolution.ServerUrl!;
@@ -528,9 +530,9 @@ public sealed class CursorHookCommand(
             // orchestration), so re-read it; sessionStart fires once per session and the read is
             // fail-open under the surrounding catch.
             var nudgeProfile   = profiles.Effective;
-            var sessionNudges  = SessionNudges.Resolve(HarnessId.Cursor, sessionId, nudgeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()));
-            var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true, config, harnesses, clock.Time);
-            var firstRunNotice = FirstRunNoticeEmitter.Resolve(nudgeProfile?.DisableFirstRunNotice is true, config, HarnessId.Cursor, harnesses);
+            var sessionNudges  = SessionNudges.Resolve(HarnessId.Cursor, sessionId, nudgeProfile, harnesses, PlanEntitlementStore.Get(Url, config, clock.Time.GetUtcNow()), audience);
+            var harnessNudge   = HarnessNudgeEmitter.ResolveFragmentForHook(nudgeProfile?.DisableHarnessNudge is true || !audience.GetsOnboarding, config, harnesses, clock.Time);
+            var firstRunNotice = FirstRunNoticeEmitter.Resolve(nudgeProfile?.DisableFirstRunNotice is true || !audience.GetsOnboarding, config, HarnessId.Cursor, harnesses);
             return SessionStartMemoryOutputAdapters.Render(HarnessId.Cursor, fragment,
                 HarnessNudgeEmitter.Combine(sessionNudges, harnessNudge, firstRunNotice));
         } catch {
@@ -579,9 +581,9 @@ public sealed class CursorHookCommand(
         // Effective profile (ResolvedProfile.Profile is null under --server-url/KCAP_URL). ct-bound to
         // the dispatcher deadline so the config read cancels rather than lingering when abandoned.
         var activeProfile      = profiles.Effective;
-        var disabled           = activeProfile?.DisableMemoryIndex is true;
+        var disabled           = activeProfile?.DisableMemoryIndex is true || !audience.GetsDriverGuidance;
         var guidelinesDisabled = activeProfile?.DisableSessionGuidelines is true;
-        var flowsDisabled      = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Cursor, harnesses);
+        var flowsDisabled      = SessionStartMemoryHookSupport.FlowsLaneDisabled(HarnessId.Cursor, harnesses, audience: audience);
         if (disabled && guidelinesDisabled && flowsDisabled) return null;
 
         try {
