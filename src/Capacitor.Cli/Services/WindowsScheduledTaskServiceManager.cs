@@ -156,10 +156,11 @@ sealed class WindowsScheduledTaskServiceManager(
 
         var owned = TaskOwnedDaemon(serviceId);
         var (endCode, _, endErr) = _schtasks(WindowsTaskUnit.EndArgs(serviceId));
-        // /End fails for a task that is not running; one still running keeps its registration and wrapper.
+        // /End fails for a task that is not running. Going ahead takes a query that succeeds and shows it
+        // stopped: one still running, or one that cannot be read, keeps its registration and wrapper.
         if (endCode != 0) {
             var (stateCode, state, _) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
-            if (WindowsTaskUnit.StatusFromQuery(stateCode, state) == ServiceState.Running) {
+            if (stateCode != 0 || WindowsTaskUnit.StatusFromQuery(stateCode, state) == ServiceState.Running) {
                 error = $"schtasks /End failed (exit {endCode}): {endErr.Trim()}";
                 return false;
             }

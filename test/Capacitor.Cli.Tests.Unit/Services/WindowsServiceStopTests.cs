@@ -24,6 +24,7 @@ public class WindowsServiceStopTests {
         public bool                                          QueryFails;
         public int                                           EndExit;
         public bool                                          Running;
+        public bool                                          QueryFailsAfterEnd;
 
         public void TaskRunsTheDaemon() {
             Table[40]        = new(1, "conhost.exe");
@@ -40,7 +41,10 @@ public class WindowsServiceStopTests {
             Verbs.Add(args[0]);
             // Ending the task takes its console host and wrapper with it; the daemon outlives them.
             if (args[0] == "/End") {
-                if (EndExit != 0) return (EndExit, "", "ERROR: Access is denied.");
+                if (EndExit != 0) {
+                    QueryFails |= QueryFailsAfterEnd;
+                    return (EndExit, "", "ERROR: Access is denied.");
+                }
                 Table.Remove(40); Table.Remove(50);
                 Running = false;
             }
@@ -262,5 +266,21 @@ public class WindowsServiceStopTests {
         await Assert.That(ok).IsTrue();
         await Assert.That(error).IsNull();
         await Assert.That(host.Verbs).Contains("/Delete");
+    }
+
+    /// <summary>A query after a failed /End that fails too says nothing about whether the task stopped,
+    /// so the task keeps its registration and wrapper.</summary>
+    [Test]
+    public async Task Uninstall_whose_end_and_follow_up_query_both_fail_keeps_the_task() {
+        var host = new FakeHost { EndExit = 1, QueryFailsAfterEnd = true };
+        var wrapper = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
+        await File.WriteAllTextAsync(wrapper, "@echo off\r\n");
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("/End failed");
+        await Assert.That(host.Verbs).DoesNotContain("/Delete");
+        await Assert.That(File.Exists(wrapper)).IsTrue();
     }
 }
