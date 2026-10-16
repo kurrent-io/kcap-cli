@@ -23,6 +23,7 @@ public class McpMemoryServerTests {
 
     [Test]
     [Arguments("""{"id":"m1","expected_version":"v1"}""", """{"ok":true}""", true)]
+    [Arguments("""{"id":"m1","expected_version":"v1"}""", """{"ok":true,"version":null}""", true)]
     [Arguments("""{"id":"m1","expected_version":"v1"}""", """{"ok":true,"version":"v2"}""", false)]
     [Arguments("""{"id":"m1"}""", """{"ok":true}""", false)]
     public async Task An_update_a_server_applied_without_its_version_check_says_so(string args, string body, bool noticed) {

@@ -205,7 +205,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         if (args?["expected_version"] is null) return body;
 
         try {
-            if (JsonNode.Parse(body) is JsonObject { } answer && answer.ContainsKey("version")) return body;
+            if (JsonNode.Parse(body) is JsonObject { } answer && answer["version"] is not null) return body;
         } catch (JsonException) { }
 
         return $"{body}\nNote: this server does not support expected_version, so the update was applied without checking for concurrent changes.";
