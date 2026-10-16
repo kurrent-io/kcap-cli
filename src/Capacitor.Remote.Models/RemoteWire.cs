@@ -14,10 +14,7 @@ public static class HubMethods {
     public const string ReleaseResizeTerminal  = "ReleaseResizeTerminal";
     public const string SubscribeToChat        = "SubscribeToChat";
     public const string UnsubscribeFromChat    = "UnsubscribeFromChat";
-    public const string SubscribeToAcpEphemeral = "SubscribeToAcpEphemeral";
-    public const string SubscribeToStream      = "SubscribeToStream";
     public const string RegisterSessionAccessWatch = "RegisterSessionAccessWatch";
-    public const string ResolveAttribution     = "ResolveAttribution";
 }
 
 /// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
