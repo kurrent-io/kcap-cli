@@ -87,8 +87,12 @@ public sealed class ConsoleOutput : IDisposable {
         readonly StringWriter _inner;
         readonly object       _gate = new();
 
-        public CapturedWriter(string? newLine) =>
+        public CapturedWriter(string? newLine) {
             _inner = newLine is null ? new StringWriter() : new StringWriter { NewLine = newLine };
+            // Parameterless WriteLine() reads this writer's newline, not the inner one's.
+            if (newLine is not null)
+                NewLine = newLine;
+        }
 
         public override Encoding Encoding => _inner.Encoding;
 

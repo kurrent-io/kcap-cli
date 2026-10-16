@@ -26,4 +26,14 @@ public class ConsoleOutputTests {
 
         await Assert.That(capture.GetCapturedError()).Contains("boom");
     }
+
+    [Test]
+    public async Task A_custom_newline_applies_to_a_blank_line_and_a_string_line() {
+        using var capture = ConsoleOutput.StartErrorCapture("\n");
+
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("x");
+
+        await Assert.That(capture.GetCapturedError()).IsEqualTo("\nx\n");
+    }
 }
