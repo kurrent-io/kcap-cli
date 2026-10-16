@@ -1051,7 +1051,7 @@ jobs:
         run: |
           set -euo pipefail
           source scripts/lib/hash.sh
-          mkdir -p trio/bin && unzip -q trio/kcap-win-x64.zip -d trio/bin
+          unzip -q trio/kcap-win-x64.zip -d trio
           sha256_of trio/bin/kcap-daemon.exe > trio/bin/daemon.sha256
           sha256_of trio/bin/kcap.exe > trio/bin/kcap.sha256
 
