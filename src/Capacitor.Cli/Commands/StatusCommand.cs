@@ -78,8 +78,13 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
 
         // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
-        Console.Write("  Daemon:  ");
-        await WriteAgentStatusAsync(store);
+        var daemons = ReadDaemonEntries(store);
+        await Console.Out.WriteLineAsync($"  Daemon:  {DaemonLine(daemons)}");
+
+        foreach (var warning in DaemonDriftLines(
+                     CapacitorVersion.Current(), daemons, InstalledUnits(out var verifySupported),
+                     UnitIdentity.ResolveDaemonBinary(), verifySupported))
+            await Console.Out.WriteLineAsync($"           {warning}");
 
         return 0;
     }
@@ -135,7 +140,7 @@ public sealed class StatusCommand(
             harnesses,
             new StatusDaemonJson(
                 live.Count > 0,
-                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value))],
+                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value, e.Version is { } v ? CapacitorVersion.Display(v) : null))],
                 daemons.Count > live.Count));
     }
 
@@ -332,30 +337,68 @@ public sealed class StatusCommand(
 
     internal static string FormatBundledVersionLine(string current) => $"kcap {current} (bundled with Kurrent Capacitor)";
 
-    static async Task WriteAgentStatusAsync(DaemonStore store) {
-        var entries = ReadDaemonEntries(store);
-        var live    = entries.Where(e => e.Alive).ToList();
+    internal static string DaemonLine(IReadOnlyList<DaemonEntry> entries) {
+        var live = entries.Where(e => e.Alive).ToList();
 
-        switch (live.Count) {
-            case 0:
-                await Console.Out.WriteLineAsync(
-                    entries.Count == 0
-                        ? "not running"
-                        : "not running (stale PID files; `kcap daemon doctor --clean` to remove)"
-                );
+        return live.Count switch {
+            0 when entries.Count == 0 => "not running",
+            0 => "not running (stale PID files; `kcap daemon doctor --clean` to remove)",
+            1 => $"running — {Describe(live[0])}",
+            _ => $"running ({live.Count}) — {string.Join(", ", live.Select(Describe))}",
+        };
 
-                return;
-            case 1:
-                await Console.Out.WriteLineAsync($"running — {live[0].Name} (PID {live[0].Pid})");
+        static string Describe(DaemonEntry e) =>
+            e.Version is { } v ? $"{e.Name} (PID {e.Pid}, {CapacitorVersion.Display(v)})" : $"{e.Name} (PID {e.Pid})";
+    }
 
-                return;
-            default: {
-                var summary = string.Join(", ", live.Select(e => $"{e.Name} (PID {e.Pid})"));
-                await Console.Out.WriteLineAsync($"running ({live.Count}) — {summary}");
-
-                break;
-            }
+    /// <summary>The installed service units and the daemon binary each runs; empty when they cannot be read.</summary>
+    IReadOnlyList<(string Id, string? Binary)> InstalledUnits(out bool verifySupported) {
+        verifySupported = false;
+        try {
+            var manager = ServiceManagerFactory.ForCurrentOs(config, home, time);
+            verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
+            return [.. (manager.TryListInstalled() ?? []).Select(id => (id, manager.Status(id).BinaryPath))];
+        } catch (Exception ex) when (ex is PlatformNotSupportedException or IOException or UnauthorizedAccessException
+                                      or InvalidOperationException or System.ComponentModel.Win32Exception) {
+            return [];
         }
+    }
+
+    /// <summary>
+    /// One warning per daemon that `kcap update` does not reach: one running another version than this
+    /// CLI, or one whose service unit runs a binary outside this CLI's install. Each names the command
+    /// that puts it on this install.
+    /// </summary>
+    internal static IReadOnlyList<string> DaemonDriftLines(
+            string cliVersion, IReadOnlyList<DaemonEntry> daemons, IReadOnlyList<(string Id, string? Binary)> units,
+            string? daemonBinary, bool verifySupported) {
+        var cli      = CapacitorVersion.Display(cliVersion);
+        var versions = daemons.Where(d => d is { Alive: true, Version: not null })
+            .ToDictionary(d => d.Name, d => CapacitorVersion.Display(d.Version!));
+        var unitBinaries = units.ToDictionary(u => u.Id, u => u.Binary);
+
+        List<string> lines = [];
+
+        foreach (var name in versions.Keys.Union(unitBinaries.Keys).Order(StringComparer.Ordinal)) {
+            var drifted = versions.TryGetValue(name, out var version) && version != cli;
+            var hasUnit = unitBinaries.TryGetValue(name, out var binary);
+            var outside = binary is not null && daemonBinary is not null && !UnitIdentity.SameDaemon(binary, daemonBinary);
+            if (!drifted && !outside) continue;
+
+            List<string> facts = [];
+            if (drifted) facts.Add($"daemon '{name}' runs {version}, but this kcap is {cli}");
+            if (outside) facts.Add($"{(drifted ? "its service" : $"service '{name}'")} runs {binary}, outside this kcap's install, so `kcap update` does not reach it");
+
+            var fix = !hasUnit
+                ? $"`kcap daemon stop --name {name}`, then `kcap daemon start --name {name}`"
+                : verifySupported
+                    ? $"`kcap daemon service install --replace --verify --name {name}`"
+                    : $"`kcap daemon service install --name {name}`";
+
+            lines.Add($"⚠ {string.Join("; ", facts)}. Run {fix}.");
+        }
+
+        return lines;
     }
 
     /// <summary>
@@ -397,7 +440,9 @@ public sealed class StatusCommand(
             // A present but unparseable marker is a hard-death breadcrumb, not an absence: it is
             // counted as stale rather than skipped, so the file someone has to clean up is reported.
             entries.Add(entry is { } e
-                ? new DaemonEntry(name, e.Pid, DaemonPidProbe.IsOurDaemon(e.Pid, e.StartToken))
+                ? DaemonPidProbe.IsOurDaemon(e.Pid, e.StartToken)
+                    ? new DaemonEntry(name, e.Pid, true, DaemonVersionMarker.TryRead(store, name))
+                    : new DaemonEntry(name, e.Pid, false)
                 : new DaemonEntry(name, null, false));
         }
 
@@ -405,7 +450,8 @@ public sealed class StatusCommand(
     }
 
     /// <param name="Pid">Null when the marker is present but carries no usable PID.</param>
-    internal sealed record DaemonEntry(string Name, int? Pid, bool Alive);
+    /// <param name="Version">The version a live daemon recorded at startup, when it recorded one.</param>
+    internal sealed record DaemonEntry(string Name, int? Pid, bool Alive, string? Version = null);
 
     /// <summary>
     /// Whether a wired agent has run a kcap hook on this machine: proof the hooks loaded (and, for

@@ -2481,6 +2481,10 @@ You'll see the offer on whichever surface reaches you:
   until you trust kcap's). A hook running proves the integration loaded, not that a session reached
   the server. `--json` carries the time as `last_hook_event`, and a git older than 2.54,
   which ignores the commit hook, gets its own warning line.
+- **`kcap status`** shows each running daemon's version, and warns, naming the fix, when a daemon
+  runs a different version than the CLI or its service runs a binary outside the CLI's own install
+  (one `kcap update` does not reach, such as an older npm install's). `--json` carries it as each
+  daemon's `version`.
 
 Manage the nudges with `kcap harness`:
 
@@ -2514,7 +2518,7 @@ after a `--all` dismiss is still offered once.
 ### Other commands
 
 ```bash
-kcap status         # server, auth, hooks (and when each agent last ran one), daemon
+kcap status         # server, auth, hooks (and when each agent last ran one), daemon and its version
 kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)
