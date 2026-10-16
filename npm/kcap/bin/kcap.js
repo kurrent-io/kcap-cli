@@ -23,8 +23,10 @@ function resolveInstallSpec(info) {
 
 // npm serves a packument from its cache for five minutes; within that window an install can
 // resolve against a listing that predates the platform package's version and silently skip it.
+// Scripts are skipped because runUpdate runs the refresh itself; letting postinstall run would
+// repeat it, and npm with an allowScripts policy warns that it blocked it.
 function npmInstallArgs(spec) {
-  return ["install", "-g", spec, "--prefer-online"];
+  return ["install", "-g", spec, "--prefer-online", "--ignore-scripts"];
 }
 
 // Builds the arg list for the `kcap update --check` probe, forwarding only

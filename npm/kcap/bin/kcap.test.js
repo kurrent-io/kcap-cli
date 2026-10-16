@@ -21,7 +21,7 @@ assert.strictEqual(resolveInstallSpec({ install_tag: "" }), "@kurrent/kcap@lates
 assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@1.0.1");
 
 // Revalidates npm's cached packument, so a platform package published minutes ago is not skipped.
-assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online"]);
+assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online", "--ignore-scripts"]);
 {
   const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
   assert(src.includes('spawnSync("npm", npmInstallArgs('), "kcap update must install through npmInstallArgs");
