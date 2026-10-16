@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -30,8 +31,9 @@ public class StatusAuthResolutionTests {
         });
 
     Task<StatusCommand.AuthSnapshot> ResolveAsync(
-            MachineAuth? machine = null, StatusCommand.ServerReach? server = null, bool sendsNoBearer = false) =>
-        StatusCommand.ResolveAuthAsync(Tokens, machine ?? MachineAuth.None, Profile, server ?? Reached, sendsNoBearer);
+            MachineAuth? machine = null, StatusCommand.ServerReach? server = null, LocalEndpointClass? endpoint = null) =>
+        StatusCommand.ResolveAuthAsync(
+            Tokens, machine ?? MachineAuth.None, Profile, server ?? Reached, endpoint ?? new LocalEndpointClass.Ordinary());
 
     // A server announcing no auth provider is usable as it stands, which is the first thing the
     // credential lane checks — so neither an empty token store nor a machine credential changes it.
@@ -57,9 +59,25 @@ public class StatusAuthResolutionTests {
         await SaveTokenAsync(Server, TimeSpan.FromHours(1));
 
         var auth = await ResolveAsync(
-            server: new StatusCommand.ServerReach(Server, false, null, AuthProvider.WorkOS), sendsNoBearer: true);
+            server: new StatusCommand.ServerReach(Server, false, null, AuthProvider.WorkOS),
+            endpoint: new LocalEndpointClass.Local(new LocalInstallation("inst-1", 51234, Server, "1.0.0")));
 
         await Assert.That(auth.State).IsEqualTo(StatusAuthState.NotRequired);
+    }
+
+    /// <summary>Whoami and skills refuse these, so status may not call them fine; and the remedy is
+    /// setup, not the login a token state would suggest.</summary>
+    [Test]
+    public async Task A_removed_or_undeterminable_installation_is_a_problem_not_a_login() {
+        await SaveTokenAsync(Server, TimeSpan.FromHours(1));
+
+        var retired      = await ResolveAsync(endpoint: new LocalEndpointClass.Retired(new RetiredInstallation("inst-0", 51234, Server)));
+        var undetermined = await ResolveAsync(endpoint: new LocalEndpointClass.Undetermined("the registry cannot be read"));
+
+        await Assert.That(retired.State).IsEqualTo(StatusAuthState.LocalUnavailable);
+        await Assert.That(StatusCommand.FormatAuthLine(retired, DateTimeOffset.UtcNow)).Contains("removed local installation");
+        await Assert.That(undetermined.State).IsEqualTo(StatusAuthState.LocalUnavailable);
+        await Assert.That(StatusCommand.FormatAuthLine(undetermined, DateTimeOffset.UtcNow)).Contains("registry cannot be read");
     }
 
     // An unanswered probe knows nothing about the provider. Reading that as "no auth" would call

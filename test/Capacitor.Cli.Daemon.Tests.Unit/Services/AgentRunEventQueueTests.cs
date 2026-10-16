@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
@@ -82,11 +83,47 @@ public class AgentRunEventQueueTests {
         await Assert.That(sent).IsEquivalentTo(["Bearer b-1", null], CollectionOrdering.Matching);
     }
 
-    sealed class HeaderCapture(List<string?> sent) : HttpMessageHandler {
+    /// <summary>A refused bearer is rotated before the next attempt; re-reading would hand back a
+    /// revoked machine token until its local expiry.</summary>
+    [Test]
+    public async Task A_refused_bearer_is_rotated_before_the_next_attempt() {
+        var sent        = new List<string?>();
+        var credentials = new RotatingCredentials("old", "new");
+        var config      = new DaemonConfig { Name = "queue-test", ServerUrl = "http://server.test", Profiles = Resolutions.None(Config.Root) };
+        var statuses    = new Queue<HttpStatusCode>([HttpStatusCode.Unauthorized, HttpStatusCode.OK]);
+
+        using var queue = new AgentRunEventQueue(
+            config, credentials, TimeProvider.System, new CapturingLogger(), new HttpClient(new HeaderCapture(sent, statuses)));
+
+        await Assert.That(async () => await queue.PostDirectAsync("agent-1", new AgentRunStopped("done", 0), CancellationToken.None))
+            .Throws<HttpRequestException>();
+        await queue.PostDirectAsync("agent-1", new AgentRunStopped("done", 0), CancellationToken.None);
+
+        await Assert.That(sent).IsEquivalentTo(new string?[] { "Bearer old", "Bearer new" }, CollectionOrdering.Matching);
+        await Assert.That(credentials.Refused).IsEquivalentTo(new string?[] { "old" });
+    }
+
+    sealed class HeaderCapture(List<string?> sent, Queue<HttpStatusCode>? statuses = null) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             sent.Add(request.Headers.Authorization?.ToString());
 
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            return Task.FromResult(new HttpResponseMessage(statuses?.Dequeue() ?? HttpStatusCode.OK));
+        }
+    }
+
+    sealed class RotatingCredentials(string first, string replacement) : ICredentialSource {
+        string _current = first;
+
+        public List<string?> Refused { get; } = [];
+
+        public Task<CredentialState> ResolveAsync(CancellationToken ct) =>
+            Task.FromResult(new CredentialState(_current, AuthStatus.Ok));
+
+        public Task<CredentialState> RotateAsync(string? refused, CancellationToken ct) {
+            Refused.Add(refused);
+            _current = replacement;
+
+            return ResolveAsync(ct);
         }
     }
 

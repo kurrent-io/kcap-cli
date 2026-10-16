@@ -1135,7 +1135,8 @@ sealed class SetupCommand(
         // Built from the profile login stored the token under: discovery may have switched it after startup.
         var snapshot   = await AppConfig.LoadProfileConfig(config);
         var loggedInto   = new ProfileContext(
-            new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
+            new ResolvedProfile(null, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null)
+                .Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), snapshot);
 
         // The browser path cannot fall back to a prompt: the user is looking at the browser, and its
         // service request waits on this name. So it walks a bounded list instead.
@@ -1203,7 +1204,8 @@ sealed class SetupCommand(
         // rather than re-resolved: CLI/env/repo precedence could land on something else than what
         // this run just wrote.
         var saved = new ProfileContext(
-            new(serverUrl, activeName, defaultProfile, null), await AppConfig.LoadProfileConfig(config));
+            new ResolvedProfile(null, activeName, defaultProfile, null).Retargeted(serverUrl, LocalEndpoints.Read(localRoot)),
+            await AppConfig.LoadProfileConfig(config));
 
         // Here rather than in the browser leg, and after the write above rather than before it: the unit
         // bakes the profile, the expected server and the daemon name, and `saved` is the only context that

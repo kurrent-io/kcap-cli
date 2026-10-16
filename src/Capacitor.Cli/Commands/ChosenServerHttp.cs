@@ -21,12 +21,13 @@ namespace Capacitor.Cli.Commands;
 public sealed class ChosenServerHttp(
         ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine, LocalRoot localRoot) {
     public ServiceProvider For(string serverUrl, ProfileContext? chosen = null) {
-        var context = chosen ?? new ProfileContext(profiles.Resolution.Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), profiles.Snapshot);
+        var basis   = chosen ?? profiles;
+        var context = new ProfileContext(basis.Resolution.Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), basis.Snapshot);
 
         return new ServiceCollection()
             .AddSingleton(config)
             .AddSingleton(context)
-            .AddSingleton(new CapacitorServer(serverUrl, config, context))
+            .AddSingleton(new CapacitorServer(context.Resolution.ServerUrl, config, context))
             .AddCapacitorHttp(env, machine)
             .BuildValidated();
     }
