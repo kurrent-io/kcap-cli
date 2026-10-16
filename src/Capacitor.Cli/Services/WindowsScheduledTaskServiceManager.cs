@@ -42,12 +42,16 @@ sealed class WindowsScheduledTaskServiceManager(
 
     public IReadOnlyList<string> ListInstalled() => TryListInstalled() ?? [];
 
+    // schtasks names a task by its folder path, `\kcap-daemon-x`; the split is explicit because
+    // Path.GetFileName only treats a backslash as a separator on Windows.
+    static string LeafTaskName(string taskPath) => taskPath[(taskPath.LastIndexOf('\\') + 1)..];
+
     public IReadOnlyList<string>? TryListInstalled() {
         var (code, stdout, _) = _schtasks(["/Query", "/FO", "LIST"]);
         if (code != 0) return null;
         return [.. stdout.Split('\n')
             .Where(l => l.TrimStart().StartsWith("TaskName:", StringComparison.OrdinalIgnoreCase))
-            .Select(l => WindowsTaskUnit.IdFromTaskName(Path.GetFileName(l.Split(':', 2)[1].Trim())))
+            .Select(l => WindowsTaskUnit.IdFromTaskName(LeafTaskName(l.Split(':', 2)[1].Trim())))
             .Where(id => id is not null).Select(id => id!).Distinct().Order()];
     }
 
