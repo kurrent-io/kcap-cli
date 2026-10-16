@@ -1,0 +1,28 @@
+namespace Capacitor.Cli.LocalEdition;
+
+/// <summary>
+/// The OS service that runs the local server: launchd on macOS, systemd on Linux. Every call runs under the
+/// lifecycle lease. Failures throw <see cref="Core.LocalEdition.LocalLifecycleException"/> naming what is
+/// left.
+///
+/// <para>A stop persists: the unit is disabled as well as stopped, so neither its restart policy nor the
+/// next login starts it again until <see cref="Start"/>. That is what lets a transaction switch versions or
+/// remove data with nothing able to start the server under it.</para>
+/// </summary>
+interface ILocalServerService {
+    string Describe { get; }
+
+    /// <summary>Writes the unit, replacing an older one, and starts it. Does not wait for readiness.</summary>
+    void Install(LocalServerUnit unit);
+
+    /// <summary>Enables and starts an installed unit.</summary>
+    void Start(LocalServerUnit unit);
+
+    /// <summary>Disables and stops the unit, then waits until nothing of the stack is alive.</summary>
+    Task StopAsync(LocalServerUnit unit, CancellationToken ct);
+
+    /// <summary>A verified stop, then the unit file removed.</summary>
+    Task UninstallAsync(LocalServerUnit unit, CancellationToken ct);
+
+    bool IsInstalled(LocalServerUnit unit);
+}
