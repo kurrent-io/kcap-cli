@@ -85,15 +85,23 @@ sealed class SystemdServiceManager(
             throw new InvalidOperationException($"systemctl --user daemon-reload exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}")}");
     }
 
-    public void Install(ServiceSpec spec, bool startNow) {
+    public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         WriteUnitFiles(spec);
-        ServiceProcess.Check("systemctl", SystemdUnit.DaemonReloadArgs());
-        ServiceProcess.Check("systemctl", SystemdUnit.EnableArgs(spec.ServiceId));
-        if (startNow) ServiceProcess.Check("systemctl", SystemdUnit.RestartArgs(spec.ServiceId));
+        error = Systemctl(SystemdUnit.DaemonReloadArgs())
+             ?? Systemctl(SystemdUnit.EnableArgs(spec.ServiceId))
+             ?? (startNow ? Systemctl(SystemdUnit.RestartArgs(spec.ServiceId)) : null);
+        return error is null;
+    }
+
+    string? Systemctl(string[] args) {
+        var (code, _, err) = _runProcess("systemctl", args);
+        return code == 0 ? null : $"systemctl {string.Join(' ', args)} failed (exit {code}): {err.Trim()}";
     }
 
     /// <summary>No distinct verify path for systemd yet — delegate mechanically to <see cref="Install"/>.</summary>
-    public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, startNow: true);
+    public void WriteAndBootstrap(ServiceSpec spec) {
+        if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);
+    }
 
     public bool Uninstall(string serviceId, out string? error) {
         ServiceProcess.Run("systemctl", SystemdUnit.DisableNowArgs(serviceId));

@@ -31,13 +31,15 @@ public class WindowsServiceVerifyTests {
         public ServiceQuery Query(string serviceId) =>
             new(Registered ? LabelProbe.Loaded : LabelProbe.Absent, UnitPresent, State, null, Running ? JobPid : null);
 
-        public void Install(ServiceSpec spec, bool startNow) {
+        public bool Install(ServiceSpec spec, bool startNow, out string? error) {
             Calls.Add("install");
             Registered = UnitPresent = true;
             if (startNow) Launch();
+            error = null;
+            return true;
         }
 
-        public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, true);
+        public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, true, out _);
 
         public bool Uninstall(string serviceId, out string? error) {
             Calls.Add($"uninstall:{serviceId}");

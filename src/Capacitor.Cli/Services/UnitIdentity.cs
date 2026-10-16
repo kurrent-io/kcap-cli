@@ -22,6 +22,16 @@ static class UnitIdentity {
         return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
     }
 
+    /// <summary>Whether a unit's binary is <paramref name="daemonBinary"/>, by its version directory or the
+    /// stable <c>current</c> path alike. An unreadable unit binary (null) is not.</summary>
+    public static bool SameDaemon(string? unitBinary, string daemonBinary) =>
+        unitBinary is not null && string.Equals(Canonical(unitBinary), Canonical(daemonBinary), PathComparison);
+
+    static string Canonical(string path) => ScriptInstallLayout.Stabilize(Path.GetFullPath(path));
+
+    static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     /// <summary>config.json path for a baked <c>KCAP_CONFIG_DIR</c>, or the default config root
     /// when the unit baked none.</summary>
     public static string ConfigPathFromUnitEnv(IReadOnlyDictionary<string, string> unitEnv, ConfigRoot config) =>

@@ -405,8 +405,41 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        manager.Install(spec, startNow);
-        return 0;
+        var before = TryQuery(spec.ServiceId);
+        if (manager.Install(spec, startNow, out var error)) return 0;
+
+        await Console.Error.WriteLineAsync(InstallFailure(
+            spec, manager.Describe(), error, before, verifySupported: manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager));
+        return 1;
+    }
+
+    ServiceQuery? TryQuery(string serviceId) {
+        try {
+            return manager.Query(serviceId);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            return null;
+        }
+    }
+
+    /// <summary>Why a plain install failed, and, when the unit was already loaded, whether it runs this
+    /// install's daemon and how to reinstall it.</summary>
+    internal static string InstallFailure(
+            ServiceSpec spec, string describe, string? error, ServiceQuery? before, bool verifySupported) {
+        var id      = spec.ServiceId;
+        var message = $"Could not install service '{id}' ({describe}): {error}";
+        if (before is not { Probe: LabelProbe.Loaded } loaded) return message;
+
+        var reinstall = verifySupported
+            ? $"`kcap daemon service install --replace --verify --name {id}`"
+            : $"`kcap daemon service uninstall --name {id}`, then `kcap daemon service install --name {id}`";
+
+        var detail = UnitIdentity.SameDaemon(loaded.BinaryPath, spec.DaemonBinaryPath)
+            ? $"The service was already installed and loaded, running this install's daemon ({spec.DaemonBinaryPath}). "
+            + $"To reinstall it in place, run {reinstall}."
+            : $"The service was already installed and loaded, running {loaded.BinaryPath ?? "a daemon binary kcap could not read"} "
+            + $"rather than this install's daemon ({spec.DaemonBinaryPath}). To point it at this install, run {reinstall}.";
+
+        return $"{message}{Environment.NewLine}  {detail}";
     }
 
     async Task<int> Uninstall() {

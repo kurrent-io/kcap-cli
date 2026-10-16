@@ -89,13 +89,47 @@ sealed partial class LaunchdServiceManager(
         catch { return null; }
     }
 
-    public void Install(ServiceSpec spec, bool startNow) {
+    /// <summary>How long a plain install waits for a booted-out job to unload. <c>bootout</c> returns
+    /// while a running job is still exiting, and a bootstrap before it has gone fails with EIO.</summary>
+    public static readonly TimeSpan UnloadWait = TimeSpan.FromSeconds(15);
+    static readonly TimeSpan UnloadPoll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Boots out any existing job, waits for launchd to let go of the label, then rewrites the
+    /// plist and bootstraps it. A label that stays loaded leaves the plist untouched, so the file on
+    /// disk keeps describing the job launchd runs.</summary>
+    public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         var plistPath = LaunchdUnit.PlistPath(home, spec.ServiceId);
-        // idempotent: bootout an existing job (ignore failure), then rewrite + bootstrap.
-        ServiceProcess.Run("launchctl", LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
+        RunCtl(null, LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
+
+        if (WaitUnloaded(spec.ServiceId) is { } label) {
+            error = label == LabelProbe.Loaded
+                ? $"launchd still had the job loaded {UnloadWait.TotalSeconds:0}s after bootout, so its plist was left as it was"
+                : "launchctl print could not say whether the job unloaded, so its plist was left as it was";
+            return false;
+        }
+
         WriteUnitFiles(spec);
-        ServiceProcess.Check("launchctl", LaunchdUnit.BootstrapArgs(Uid(), plistPath)); // RunAtLoad starts it
-        if (!startNow) ServiceProcess.Run("launchctl", LaunchdUnit.KillArgs(Uid(), spec.ServiceId));
+        var (code, _, err, _) = RunCtl(null, LaunchdUnit.BootstrapArgs(Uid(), plistPath)); // RunAtLoad starts it
+        if (code != 0) {
+            error = $"launchctl bootstrap failed (exit {code}): {LaunchdUnit.ToolError(err)}";
+            return false;
+        }
+
+        if (!startNow) RunCtl(null, LaunchdUnit.KillArgs(Uid(), spec.ServiceId));
+        error = null;
+        return true;
+    }
+
+    /// <summary>Null once the label is absent; otherwise the last probe's answer when the wait ran out.</summary>
+    LabelProbe? WaitUnloaded(string serviceId) {
+        var started = time.GetTimestamp();
+        while (true) {
+            var (exit, stdout, stderr, _) = RunCtl(null, LaunchdUnit.PrintArgs(Uid(), serviceId));
+            var label = LaunchdUnit.ClassifyPrint(exit, stdout, stderr);
+            if (label == LabelProbe.Absent) return null;
+            if (time.GetElapsedTime(started) >= UnloadWait) return label;
+            Thread.Sleep(UnloadPoll);
+        }
     }
 
     /// <summary>The install-verify engine's fresh-install mutation: write + bootstrap, no leading
@@ -109,7 +143,7 @@ sealed partial class LaunchdServiceManager(
         if (timedOut)
             throw new TimeoutException("launchctl bootstrap timed out and was terminated");
         if (code != 0)
-            throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {err.Trim()}");
+            throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {LaunchdUnit.ToolError(err)}");
     }
 
     /// <summary>Per launchctl call, which normally answers in milliseconds. Refresh runs under the npm
@@ -231,7 +265,7 @@ sealed partial class LaunchdServiceManager(
     /// </summary>
     (string? Error, LabelProbe? After) Bootstrap(string serviceId, string plistPath, bool acceptAnySpawnType) {
         var (exit, _, err, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootstrapArgs(Uid(), plistPath));
-        if (!timedOut && exit != 0) return ($"launchctl bootstrap failed (exit {exit}): {err.Trim()}", null);
+        if (!timedOut && exit != 0) return ($"launchctl bootstrap failed (exit {exit}): {LaunchdUnit.ToolError(err)}", null);
 
         var (label, stdout) = Probe(serviceId);
         if (label != LabelProbe.Loaded)
@@ -296,7 +330,7 @@ sealed partial class LaunchdServiceManager(
                 var (bootstrapExit, _, bootstrapErr, bootstrapTimedOut) = RunCtl(timeout, LaunchdUnit.BootstrapArgs(Uid(), LaunchdUnit.PlistPath(home, serviceId)));
                 if (bootstrapTimedOut) { error = "launchctl bootstrap timed out and was terminated"; return false; }
                 if (bootstrapExit != 0) {
-                    error = $"launchctl bootstrap failed (exit {bootstrapExit}): {bootstrapErr.Trim()}";
+                    error = $"launchctl bootstrap failed (exit {bootstrapExit}): {LaunchdUnit.ToolError(bootstrapErr)}";
                     return false;
                 }
                 break;
@@ -341,7 +375,7 @@ sealed partial class LaunchdServiceManager(
         var (bootstrapExit, _, bootstrapErr, bootstrapTimedOut) = RunCtl(remaining, LaunchdUnit.BootstrapArgs(Uid(), LaunchdUnit.PlistPath(home, serviceId)));
         if (bootstrapTimedOut) { error = "launchctl bootstrap timed out and was terminated"; return false; }
         if (bootstrapExit != 0) {
-            error = $"launchctl bootstrap failed (exit {bootstrapExit}): {bootstrapErr.Trim()}";
+            error = $"launchctl bootstrap failed (exit {bootstrapExit}): {LaunchdUnit.ToolError(bootstrapErr)}";
             return false;
         }
 

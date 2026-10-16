@@ -51,7 +51,8 @@ interface IServiceManager {
     IReadOnlyList<string>?       TryListInstalled() => ListInstalled();
     ServiceStatus                Status(string serviceId);
     ServiceQuery                 Query(string serviceId);
-    void Install(ServiceSpec spec, bool startNow);
+    /// <summary>False when the OS tool refused the registration, with its reason in <paramref name="error"/>.</summary>
+    bool Install(ServiceSpec spec, bool startNow, out string? error);
     /// <summary>Write + activate only, no leading bootout — the fresh-install half of <see cref="Install"/>
     /// for the verify engine, which classifies the label itself via <see cref="Query"/> and only calls
     /// this on a positive Absent (so there is nothing to boot out). Managers with no distinct verify path
