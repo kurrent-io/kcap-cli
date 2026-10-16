@@ -154,7 +154,7 @@ public class MuseHookCommandTests : IDisposable {
         var (root, profiles) = await Resolve(connection, () => ConfigRoot.UnderHome(Home.Path));
 
         await Assert.That(root.Directory).IsEqualTo(daemonRoot);
-        await Assert.That((await AppConfig.ResolveActiveProfile([], ConfigRoot.UnderHome(Home.Path), ProfileOverrides.None)).Resolution.ServerUrl)
+        await Assert.That((await AppConfig.ResolveActiveProfile([], ConfigRoot.UnderHome(Home.Path), ProfileOverrides.None, NoLocalInstallation.Endpoints)).Resolution.ServerUrl)
             .IsNull();
 
         await Command(root: root, profiles: profiles).Handle(new StringReader(SessionStartPayload("startup")), new StringWriter(), _ => null, Today);
@@ -742,7 +742,7 @@ public class MuseHookCommandTests : IDisposable {
     /// <summary>The process-level resolution a cleared-environment hook gets, as the composition root builds it.</summary>
     static async Task<(ConfigRoot Root, ProfileContext Profiles)> Resolve(MuseHookConnection connection, Func<ConfigRoot> fallback) {
         var root = connection.ConfigRootOr(fallback);
-        return (root, connection.Bind(await AppConfig.ResolveActiveProfile([], root, connection.Apply(ProfileOverrides.None))));
+        return (root, connection.Bind(await AppConfig.ResolveActiveProfile([], root, connection.Apply(ProfileOverrides.None), NoLocalInstallation.Endpoints)));
     }
 
     string StageParentLog(params string[] lines) {

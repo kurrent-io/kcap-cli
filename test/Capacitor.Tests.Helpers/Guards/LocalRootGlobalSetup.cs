@@ -13,6 +13,9 @@ public class LocalRootGlobalSetup {
 
     public static string SentinelLocalRoot => Path.Combine(Dir.Path, "not-a-directory", "local");
 
+    /// <summary>A root nothing creates, so its registry reads as absent.</summary>
+    public static string AbsentLocalRoot => Path.Combine(Dir.Path, "absent");
+
     [BeforeEvery(Assembly)]
     public static void PinLocalRoot() {
         Dir.CreateFile("not-a-directory");
