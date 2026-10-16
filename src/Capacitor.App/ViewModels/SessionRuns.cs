@@ -19,6 +19,7 @@ public sealed class SessionRuns(TimeProvider time) {
     readonly Dictionary<string, RunRow> _byAgent = new(StringComparer.Ordinal);
     /// Rows per presented state, indexed by the state's value.
     readonly int[] _counts = new int[Enum.GetValues<RunState>().Length];
+    int _runningBackground;
     bool _sessionOver;
 
     public IAvaloniaReadOnlyList<RunRow> Rows => _rows;
@@ -29,7 +30,8 @@ public sealed class SessionRuns(TimeProvider time) {
 
     public int Count(RunState state) => _counts[(int)state];
 
-    /// Raised after any call that changed how many rows present any one state.
+    /// Raised after any call that changed how many rows present any one state, or how many running
+    /// rows are in the background.
     public event Action? Changed;
 
     /// The lane's verdict that nothing more will arrive: a view over the rows, not a transition,
@@ -139,8 +141,10 @@ public sealed class SessionRuns(TimeProvider time) {
             counts[(int)row.State]++;
         }
         StableRows.Sync(_running, _rows.Where(row => row.IsRunning));
-        if (counts.SequenceEqual(_counts)) return;
+        var runningBackground = _running.Count(row => row.IsBackground);
+        if (counts.SequenceEqual(_counts) && runningBackground == _runningBackground) return;
         counts.CopyTo(_counts);
+        _runningBackground = runningBackground;
         Changed?.Invoke();
     }
 }

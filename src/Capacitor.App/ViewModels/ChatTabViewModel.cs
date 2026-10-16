@@ -144,19 +144,27 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         this.RaisePropertyChanged(nameof(QueueSummary));
     }
 
-    /// The note is the headline while a turn is live, and a foreground launch is already a Task
-    /// row in the transcript; the strip speaks only for runs that outlive the turn.
-    public bool HasRunningRuns => _runs.RunningCount > 0 && ActivityNote.Length == 0;
+    /// While a turn is live a foreground launch is already a Task row in the transcript, so the
+    /// strip keeps only the runs that outlive the turn.
+    IEnumerable<RunRow> StripRows =>
+        ActivityNote.Length == 0 ? _runs.Running : _runs.Running.Where(static r => r.IsBackground);
 
-    /// The one live row when there is exactly one: the view reads its name and state line, which
-    /// the row itself keeps current; a detach or a tick changes neither count, so nothing here
-    /// would hear of it.
-    public RunRow? RunningRow =>
-        _runs.RunningCount == 1 ? _runs.Rows.FirstOrDefault(r => r.IsRunning) : null;
+    public bool HasRunningRuns => StripRows.Any();
+
+    /// The one strip row when there is exactly one: the view reads its name and state line, which
+    /// the row itself keeps current, so a tick changes nothing here.
+    public RunRow? RunningRow {
+        get {
+            using var rows = StripRows.GetEnumerator();
+            if (!rows.MoveNext()) return null;
+            var only = rows.Current;
+            return rows.MoveNext() ? null : only;
+        }
+    }
 
     public string RunSummary {
         get {
-            var running = _runs.Rows.Where(r => r.IsRunning).ToList();
+            var running = StripRows.ToList();
             if (running.Count < 2) return "";
             var shells = running.Count(r => r.IsShell);
             var agents = running.Count - shells;
@@ -374,8 +382,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         get => _activityNote;
         private set {
             if (_activityNote == value) return;
+            var turnChanged = _activityNote.Length == 0 != (value.Length == 0);
             this.RaiseAndSetIfChanged(ref _activityNote, value);
+            if (!turnChanged) return;
             this.RaisePropertyChanged(nameof(HasRunningRuns));
+            this.RaisePropertyChanged(nameof(RunningRow));
+            this.RaisePropertyChanged(nameof(RunSummary));
         }
     }
 

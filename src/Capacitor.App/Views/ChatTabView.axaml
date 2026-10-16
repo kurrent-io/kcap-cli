@@ -303,8 +303,8 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto">
-                <!-- Runs that outlive the turn; the activity note never shares the screen with it. Warning
-                     marks work in flight here as it does on a running tool, not attention. -->
+                <!-- Runs that outlive the turn. Warning marks work in flight here as it does on a running
+                     tool, not attention. -->
                 <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="13,10"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                         BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningRuns}">
