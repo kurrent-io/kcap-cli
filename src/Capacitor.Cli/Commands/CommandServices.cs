@@ -96,6 +96,7 @@ public static class CommandServices {
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
         services.AddTransient<CurateCommand>();
+        services.AddTransient<MemoriesCommand>();
         services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();

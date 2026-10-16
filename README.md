@@ -181,6 +181,7 @@ At a glance — each links to its section below:
 | [`kcap review`](#pr-review-with-full-context) | Launch a PR review with full transcript context |
 | [`kcap mcp <server>`](#sessions-mcp-server-for-agents) | Run an MCP server (sessions / flows / memory / …) for agents |
 | [`kcap curate apply`](#curate-guidelines) | Sync promoted guidelines into `CLAUDE.md` / `AGENTS.md` |
+| [`kcap memories import`](#import-local-memories) | Copy Claude Code's local memory notes into server memories |
 | [`kcap page`](#pages) | Publish a self-contained HTML page and get a link to share |
 | [`kcap skills sync`](#skills-sync) | Materialize the repo's approved skill docs into every present harness's skills tree |
 | [`kcap daemon …`](#daemon) | Run and manage the agent daemon |
@@ -810,6 +811,18 @@ kcap page delete art_01J9...
 ```
 
 A page is private to its owner until `--visibility` says otherwise. `--to` names one audience member (`user:<id>`, `team:<slug>`, `project:<id>`) and is only read under `scoped`; on `share` it replaces the whole audience, so a grant you leave out is one you are taking away. `--session` cites a session the page came out of and defaults to `KCAP_SESSION_ID`, so an agent's publish is attributed without ceremony. The URL is whatever the server says it is — printed on stdout; refusals go to stderr and name the limit they hit along with its value.
+
+### Import local memories
+
+Claude Code keeps its auto-memory per machine, under `~/.claude/projects/<dir>/memory/`. `kcap memories import` copies those notes into server memories once, so they follow you to another machine and can be shared. Run it on the machine that holds the files.
+
+```bash
+kcap memories import --dry-run                 # show the plan for this directory's Claude project
+kcap memories import --audience org --global   # save as org-wide memories, after confirming
+kcap memories import --from ~/notes --update   # read another folder; overwrite slugs that exist
+```
+
+Each note's `name` becomes the slug, `description` the summary and the body the content; type `user` is saved as `preference`. `MEMORY.md` is skipped. The memories land at the current checkout's repository unless `--project <slug>` or `--global` says otherwise — a Claude project folder is only imported from the checkout it was recorded in — with the `user` audience unless `--audience team|org` says otherwise. A slug that already exists is reported and left alone, or overwritten with `--update`, so a re-run is safe; a near-duplicate the server finds is reported beside the save. An `--audience org` import you may not publish directly is queued for an admin's approval; with a `--project` home, re-running it after approval queues it again.
 
 ### Curate guidelines
 

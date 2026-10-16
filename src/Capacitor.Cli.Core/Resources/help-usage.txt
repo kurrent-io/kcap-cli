@@ -77,6 +77,9 @@ Session:
 Curation:
   curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
 
+Memories:
+  memories import [opts]           Copy Claude Code's local memory notes into server memories
+
 Pages:
   page publish <file.html> [opts]  Publish a self-contained HTML page, print its link
   page list [--mine]               Pages you can see

@@ -613,6 +613,8 @@ switch (command) {
                 return 1;
         }
     }
+    case "memories":
+        return await Run<MemoriesCommand>().HandleAsync(args);
     case "page":
     case "artefact":
         return await Run<ArtefactCommand>().HandleAsync(args);
