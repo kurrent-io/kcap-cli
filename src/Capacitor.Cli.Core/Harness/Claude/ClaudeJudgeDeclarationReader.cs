@@ -41,11 +41,45 @@ public static class ClaudeJudgeDeclarationReader {
         "User rejected tool use",
     ];
 
+    /// <summary>Warming stops after this many reads (1 GiB at the default allowance) even if the
+    /// file is still ahead of it.</summary>
+    const int MaxWarmReads = 64;
+
+    /// <summary>The one scan state a session has, shared by every seam that consults for it and by
+    /// the warm-up, so a cursor any of them advanced saves the others the read.</summary>
+    public static string StatePath(ConfigRoot config, string sessionId) =>
+        config.Path("policy", "judge", $"{PolicySnapshotStore.Sanitize(sessionId)}.json");
+
     public static ClaudeJudgeDeclarations Read(string? transcriptPath, string? toolUseId, string? cwd, string? statePath = null) =>
         Read(transcriptPath, toolUseId, cwd, statePath, MaxBytesPerRead);
 
     internal static ClaudeJudgeDeclarations Read(
-            string? transcriptPath, string? toolUseId, string? cwd, string? statePath, long maxBytesPerRead) {
+            string? transcriptPath, string? toolUseId, string? cwd, string? statePath, long maxBytesPerRead) =>
+        Read(transcriptPath, toolUseId, cwd, statePath, maxBytesPerRead, out _);
+
+    /// <summary>
+    /// Reads a session's transcript up to its end into the state at <paramref name="statePath"/>,
+    /// so the first consultation reads only what was appended since. Without it, that consultation
+    /// pays for the whole backlog, and a backlog over one read's allowance leaves it windowless.
+    /// Returns the number of reads taken.
+    /// </summary>
+    public static int Warm(string transcriptPath, string? cwd, string statePath, CancellationToken ct = default) =>
+        Warm(transcriptPath, cwd, statePath, MaxBytesPerRead, ct);
+
+    internal static int Warm(string transcriptPath, string? cwd, string statePath, long maxBytesPerRead, CancellationToken ct) {
+        var reads = 0;
+        var more  = true;
+        while (more && reads < MaxWarmReads && !ct.IsCancellationRequested) {
+            Read(transcriptPath, null, cwd, statePath, maxBytesPerRead, out more);
+            reads++;
+        }
+        return reads;
+    }
+
+    /// <param name="more">True when bytes were left unread for want of allowance.</param>
+    static ClaudeJudgeDeclarations Read(
+            string? transcriptPath, string? toolUseId, string? cwd, string? statePath, long maxBytesPerRead, out bool more) {
+        more = false;
         if (string.IsNullOrEmpty(transcriptPath)) return ClaudeJudgeDeclarations.Unreadable;
 
         var state     = Load(statePath, transcriptPath);
@@ -67,6 +101,7 @@ public static class ClaudeJudgeDeclarationReader {
         }
 
         if (changed) Save(statePath, state);
+        more = !caughtUp;
 
         // Mid-backlog the newest messages and refusals are not read yet, so the read so far proves
         // nothing about the turn or the refusal history.
