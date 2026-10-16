@@ -23,7 +23,7 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
     static DBusConnection Connection => DBusConnection.Session;
     readonly Dictionary<string, Pending> _pending = new(StringComparer.Ordinal);
     readonly List<IDisposable> _watches = [];
-    Task<bool>? _ready;
+    Task<(bool Actions, bool Markup)>? _ready;
     bool _disposed;
 
     public void Show(DesktopNotification notification, Action<string?> activated) {
@@ -40,14 +40,14 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
 
     async Task ShowAsync(DesktopNotification notification, (string Key, string Label, string Id)[] actions, Pending pending) {
         try {
-            var buttons = await EnsureReadyAsync();
+            var (buttons, markup) = await EnsureReadyAsync();
             var body = buttons || actions.Length == 0 ? notification.Body : $"{notification.Body}\n\nOpen Kurrent Capacitor to respond.";
             string[] wire = buttons ? [DefaultAction, "", .. actions.SelectMany(a => new[] { a.Key, a.Label })] : [];
             // A request with choices must outlive the server's default timeout, whose close drops it.
             var expire = actions.Length > 0 ? 0 : -1;
-            // The body is parsed as markup by servers that advertise body-markup.
+            // Only servers advertising body-markup parse the body; the rest show escapes literally.
             var id = await Connection.CallMethodAsync(
-                Notify(notification.Title, SecurityElement.Escape(body), wire, expire), (m, _) => m.GetBodyReader().ReadUInt32());
+                Notify(notification.Title, markup ? SecurityElement.Escape(body) : body, wire, expire), (m, _) => m.GetBodyReader().ReadUInt32());
             dispatch(() => {
                 if (!_disposed && _pending.ContainsValue(pending)) pending.NativeId = id;
                 else CloseNative(id);
@@ -58,13 +58,13 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
     }
 
     // A failed connection is not kept, so the next notification tries again.
-    Task<bool> EnsureReadyAsync() {
+    Task<(bool Actions, bool Markup)> EnsureReadyAsync() {
         if (_ready is { IsFaulted: true } or { IsCanceled: true }) _ready = null;
         return _ready ??= ConnectAsync();
     }
 
-    /// Subscribes to the server's signals and answers whether it draws action buttons.
-    async Task<bool> ConnectAsync() {
+    /// Subscribes to the server's signals and answers which of action buttons and body markup it supports.
+    async Task<(bool Actions, bool Markup)> ConnectAsync() {
         var watches = new List<IDisposable>();
         try {
             watches.Add(await Connection.WatchSignalAsync(null, Path, Service, "ActionInvoked",
@@ -78,10 +78,10 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
             var capabilities = await Connection.CallMethodAsync(GetCapabilities(), (m, _) => m.GetBodyReader().ReadArrayOfString());
             if (_disposed) {
                 foreach (var watch in watches) watch.Dispose();
-                return false;
+                return (false, false);
             }
             _watches.AddRange(watches);
-            return capabilities.Contains("actions");
+            return (capabilities.Contains("actions"), capabilities.Contains("body-markup"));
         } catch {
             foreach (var watch in watches) watch.Dispose();
             throw;
