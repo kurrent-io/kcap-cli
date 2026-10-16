@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -71,13 +73,13 @@ public class MemoriesCommandTests {
     }
 
     [Test]
-    public async Task A_claude_project_memory_folder_decodes_to_its_working_directory() {
-        var projects = Tmp.PathTo("claude", "projects");
+    public async Task A_claude_project_folder_is_homed_only_at_the_checkout_it_was_recorded_in() {
+        var claude  = new ClaudePaths(new UserHome(Tmp.PathTo("home")), null);
+        var workdir = Tmp.PathTo("work", "acme-app");
 
-        await Assert.That(MemoriesCommand.DecodedProjectDir(Tmp.PathTo("claude", "projects", "-work-acme", "memory"), projects))
-            .IsEqualTo("/work/acme");
-        await Assert.That(MemoriesCommand.DecodedProjectDir(Tmp.PathTo("notes", "memory"), projects)).IsNull();
-        await Assert.That(MemoriesCommand.DecodedProjectDir(Tmp.PathTo("claude", "projects", "-work-acme"), projects)).IsNull();
+        await Assert.That(MemoriesCommand.PlaceDir(Path.Combine(claude.ProjectDir(workdir), "memory"), workdir, claude)).IsEqualTo(workdir);
+        await Assert.That(MemoriesCommand.PlaceDir(Path.Combine(claude.ProjectDir(Tmp.PathTo("work", "other")), "memory"), workdir, claude)).IsNull();
+        await Assert.That(MemoriesCommand.PlaceDir(Tmp.PathTo("notes", "memory"), workdir, claude)).IsEqualTo(workdir);
     }
 
     [Test]

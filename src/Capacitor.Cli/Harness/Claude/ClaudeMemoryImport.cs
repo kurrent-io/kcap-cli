@@ -31,7 +31,8 @@ public static partial class ClaudeMemoryImport {
         var slug = MemorySlug.Normalize(file.Name is { Length: > 0 } n ? n : Path.GetFileNameWithoutExtension(file.FileName));
         if (slug is null) return MemoryImportCandidate.Skip(file.FileName, null, "name has no usable slug characters");
 
-        var content = file.Body.Trim();
+        // Blank lines framing the body are dropped; indentation and anything inside it are markdown and kept.
+        var content = file.Body.TrimStart('\r', '\n').TrimEnd();
         if (content.Length == 0) return MemoryImportCandidate.Skip(file.FileName, slug, "empty body");
         if (Encoding.UTF8.GetByteCount(content) > ContentMaxUtf8Bytes)
             return MemoryImportCandidate.Skip(file.FileName, slug, $"body over {ContentMaxUtf8Bytes / 1024} KiB");

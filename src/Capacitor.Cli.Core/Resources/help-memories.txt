@@ -21,8 +21,9 @@ Options:
   --yes, -y          Skip the confirmation prompt.
 
 Notes:
-  - The home defaults to the repository the Claude project folder was named
-    after, or the current directory's when that folder cannot be found.
+  - The home defaults to the current directory's repository. A Claude project
+    folder is only imported from the checkout it was recorded in; from anywhere
+    else, pass --project or --global.
   - name becomes the slug, description the one-line summary (cut to 300 chars),
     the body the content (notes over 64 KiB are skipped). type user is saved as
     preference; feedback, project and reference carry over; anything else is

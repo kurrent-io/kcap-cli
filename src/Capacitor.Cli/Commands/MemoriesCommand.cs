@@ -52,25 +52,41 @@ class MemoriesCommand(
         }
 
         string? repoHash = null;
+        string? placeDir = null;
         if (project is null && !global) {
-            var placeDir = DecodedProjectDir(from, claude.Projects) is { } decoded && Directory.Exists(decoded) ? decoded : workdir.Path;
-            repoHash = await new CwdRepository(config, placeDir, router, time).GetHashAsync();
+            placeDir = PlaceDir(from, workdir.Path, claude);
+            repoHash = placeDir is null ? null : await new CwdRepository(config, placeDir, router, time).GetHashAsync();
             if (repoHash is null) {
-                await Console.Error.WriteLineAsync(
-                    $"Cannot resolve a repository for {placeDir} — run from its checkout, or pass --project <slug> or --global.");
+                await Console.Error.WriteLineAsync(placeDir is null
+                    ? $"{from} belongs to another Claude project — run from the checkout it was recorded in, or pass --project <slug> or --global."
+                    : $"Cannot resolve a repository for {placeDir} — run from its checkout, or pass --project <slug> or --global.");
                 return 1;
             }
         }
 
-        var files = new List<ClaudeMemoryFile>();
-        foreach (var path in Directory.EnumerateFiles(from, "*.md").Order(StringComparer.Ordinal)) {
-            var name = Path.GetFileName(path);
-            if (name.Equals(ClaudeMemoryFile.IndexFileName, StringComparison.OrdinalIgnoreCase)) continue;
-            files.Add(ClaudeMemoryFile.Parse(name, await File.ReadAllTextSharedAsync(path)));
+        string[] paths;
+        try {
+            paths = [.. Directory.EnumerateFiles(from, "*.md").Order(StringComparer.Ordinal)];
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync($"Cannot list {from}: {ex.Message}");
+            return 1;
         }
 
-        var plan = ClaudeMemoryImport.Plan(files);
-        var place = project is not null ? $"project {project}" : global ? "the whole org" : $"repo {repoHash}";
+        var files      = new List<ClaudeMemoryFile>();
+        var unreadable = new List<MemoryImportCandidate>();
+        foreach (var path in paths) {
+            var name = Path.GetFileName(path);
+            if (name.Equals(ClaudeMemoryFile.IndexFileName, StringComparison.OrdinalIgnoreCase)) continue;
+
+            try {
+                files.Add(ClaudeMemoryFile.Parse(name, await File.ReadAllTextSharedAsync(path)));
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                unreadable.Add(MemoryImportCandidate.Skip(name, null, $"unreadable: {ex.Message}"));
+            }
+        }
+
+        IReadOnlyList<MemoryImportCandidate> plan = [.. ClaudeMemoryImport.Plan(files), .. unreadable];
+        var place = project is not null ? $"project {project}" : global ? "the whole org" : $"the repository at {placeDir}";
         await Console.Out.WriteLineAsync($"{plan.Count(c => c.SkipReason is null)} of {plan.Count} notes in {from} → {audience} audience, {place}");
         foreach (var c in plan) await Console.Out.WriteLineAsync(Row(c));
 
@@ -86,7 +102,7 @@ class MemoriesCommand(
 
         var baseUrl   = profiles.Resolution.ServerUrl!;
         var machineId = await ResolveMachineIdAsync();
-        using var client = await http.ForSessionAsync();
+        using var client = await http.ForCommandAsync();
 
         var failed = 0;
         foreach (var c in plan.Where(c => c.SkipReason is null)) {
@@ -153,16 +169,21 @@ class MemoriesCommand(
         return line.ToString();
     }
 
-    /// <summary>The working directory a Claude project folder was named after, when <paramref name="memoryDir"/> is that
-    /// folder's <c>memory</c> directory. Claude's encoding maps <c>/</c> and <c>.</c> alike to <c>-</c>, so the decoding
-    /// is a guess the caller checks exists.</summary>
-    internal static string? DecodedProjectDir(string memoryDir, string claudeProjects) {
+    /// <summary>The directory whose repository the notes are homed at, or null when that cannot be told. A Claude project
+    /// folder belongs to the directory it was named after, and Claude's naming folds <c>/</c>, <c>.</c> and <c>-</c>
+    /// together, so its name cannot be decoded back into a path: it is matched by encoding the working directory instead.
+    /// Any other folder is homed at the working directory.</summary>
+    internal static string? PlaceDir(string memoryDir, string workdir, ClaudePaths claude) {
         var memory     = Path.TrimEndingDirectorySeparator(Path.GetFullPath(memoryDir));
         var projectDir = Path.GetDirectoryName(memory);
-        if (projectDir is null || Path.GetFileName(memory) != "memory") return null;
-        if (!string.Equals(Path.GetDirectoryName(projectDir), Path.TrimEndingDirectorySeparator(Path.GetFullPath(claudeProjects)), StringComparison.Ordinal)) return null;
+        var projects   = Path.TrimEndingDirectorySeparator(Path.GetFullPath(claude.Projects));
 
-        return SessionImporter.DecodeCwdFromDirName(Path.GetFileName(projectDir));
+        if (projectDir is null || Path.GetFileName(memory) != "memory"
+         || !string.Equals(Path.GetDirectoryName(projectDir), projects, StringComparison.Ordinal))
+            return workdir;
+
+        var own = Path.TrimEndingDirectorySeparator(Path.GetFullPath(claude.ProjectDir(workdir)));
+        return string.Equals(own, projectDir, StringComparison.Ordinal) ? workdir : null;
     }
 
     static string Row(MemoryImportCandidate c) {

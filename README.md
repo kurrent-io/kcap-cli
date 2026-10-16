@@ -822,7 +822,7 @@ kcap memories import --audience org --global   # save as org-wide memories, afte
 kcap memories import --from ~/notes --update   # read another folder; overwrite slugs that exist
 ```
 
-Each note's `name` becomes the slug, `description` the summary and the body the content; type `user` is saved as `preference`. `MEMORY.md` is skipped. The memories land at the repository the Claude project folder was named after unless `--project <slug>` or `--global` says otherwise, with the `user` audience unless `--audience team|org` says otherwise. A slug that already exists is reported and left alone, or overwritten with `--update`, so a re-run is safe; a near-duplicate the server finds is reported beside the save.
+Each note's `name` becomes the slug, `description` the summary and the body the content; type `user` is saved as `preference`. `MEMORY.md` is skipped. The memories land at the current checkout's repository unless `--project <slug>` or `--global` says otherwise — a Claude project folder is only imported from the checkout it was recorded in — with the `user` audience unless `--audience team|org` says otherwise. A slug that already exists is reported and left alone, or overwritten with `--update`, so a re-run is safe; a near-duplicate the server finds is reported beside the save.
 
 ### Curate guidelines
 

@@ -44,6 +44,10 @@ public class ClaudeMemoryImportTests {
         await Assert.That(ClaudeMemoryImport.Map(Note(name: name, body: body, description: description)).SkipReason).IsEqualTo(reason);
 
     [Test]
+    public async Task Body_keeps_its_markdown_but_not_the_blank_lines_around_it() =>
+        await Assert.That(ClaudeMemoryImport.Map(Note(body: "\n\n    indented code\n- item\n\n")).Content).IsEqualTo("    indented code\n- item");
+
+    [Test]
     public async Task A_body_over_64_KiB_is_skipped() =>
         await Assert.That(ClaudeMemoryImport.Map(Note(body: new string('x', ClaudeMemoryImport.ContentMaxUtf8Bytes + 1))).SkipReason)
             .IsEqualTo("body over 64 KiB");
