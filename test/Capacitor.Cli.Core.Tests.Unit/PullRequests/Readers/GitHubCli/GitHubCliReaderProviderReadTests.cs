@@ -18,6 +18,24 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
+    public async Task Reset_starts_a_fresh_view_and_an_old_completion_cannot_replace_its_cache() {
+        using var h = await Ready(Tmp);
+        var pending = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], pending);
+        var old = h.Provider.OverviewAsync("session", Subject, default);
+        h.Provider.ResetSession("session");
+        h.Process.When(["pr", "view"], GhHarness.Fixture("pr-view.json").Replace("Add the thing", "Fresh snapshot", StringComparison.Ordinal));
+        var fresh = h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        var current = await fresh;
+        pending.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await old;
+        await Assert.That(current.Data!.Title).IsEqualTo("Fresh snapshot");
+        await Assert.That((await h.Provider.OverviewAsync("session", Subject, default)).Data!.Title).IsEqualTo("Fresh snapshot");
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Overview_maps_lifecycle_decision_rollup_and_summaries_with_a_constant_lease() {
         using var h = await Ready(Tmp);
         var read = await h.Provider.OverviewAsync("session", Subject, default);
