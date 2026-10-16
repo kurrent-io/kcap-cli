@@ -702,8 +702,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .DisposeWith(_disposables);
 
         // A paste stays in flight after the row is added. The note is already right; the button
-        // waits until the channel will take another send.
-        _input.WhenAnyValue(i => i.CanAcceptText)
+        // waits until the channel will take another send. A terminal menu is the same: the channel
+        // may still accept text, but that text would land in the menu.
+        Observable.Merge(
+                _input.WhenAnyValue(i => i.CanAcceptText).Select(_ => Unit.Default),
+                this.WhenAnyValue(x => x.HasTerminalMenu).Select(_ => Unit.Default))
             .Subscribe(_ => RefreshQueuedSend())
             .DisposeWith(_disposables);
 
