@@ -142,12 +142,12 @@
                 <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
                                 IsVisible="{Binding CurrentWorkspace, Converter={x:Static ObjectConverters.IsNotNull}}">
                     <ContentControl.DataTemplates>
-                        <DataTemplate x:DataType="vm:WorkspaceViewModel">
+                        <views:RetainedViewTemplate x:DataType="vm:WorkspaceViewModel">
                             <views:WorkspaceView />
-                        </DataTemplate>
-                        <DataTemplate x:DataType="vm:RemoteSessionViewModel">
+                        </views:RetainedViewTemplate>
+                        <views:RetainedViewTemplate x:DataType="vm:RemoteSessionViewModel">
                             <views:RemoteSessionView />
-                        </DataTemplate>
+                        </views:RetainedViewTemplate>
                     </ContentControl.DataTemplates>
                 </ContentControl>
             </Panel>
