@@ -81,7 +81,7 @@ public sealed class StatusCommand(
         var daemons = ReadDaemonEntries(store);
         await Console.Out.WriteLineAsync($"  Daemon:  {DaemonLine(daemons)}");
 
-        var (units, verifySupported) = await InstalledUnitsAsync();
+        var (units, verifySupported) = InstalledUnits();
         foreach (var warning in DaemonDriftLines(
                      CapacitorVersion.Current(), daemons, units, UnitIdentity.ResolveDaemonBinary(), verifySupported))
             await Console.Out.WriteLineAsync($"           {warning}");
@@ -351,28 +351,31 @@ public sealed class StatusCommand(
             e.Version is { } v ? $"{e.Name} (PID {e.Pid}, {CapacitorVersion.Display(v)})" : $"{e.Name} (PID {e.Pid})";
     }
 
-    /// <summary>How long status waits for the installed units to be listed. Listing them asks schtasks on
-    /// Windows, which can stall; status skips the unit checks rather than hang.</summary>
+    /// <summary>How long status gives schtasks, all calls together, to list the units on Windows. A call
+    /// still running when it is spent is killed, and status reads that unit as unreadable.</summary>
     static readonly TimeSpan UnitsBudget = TimeSpan.FromSeconds(3);
 
     /// <summary>The installed service units and the daemon binary each names; a unit whose binary cannot
-    /// be read is kept with a null binary. Empty when the units cannot be listed in time.</summary>
-    async Task<(IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported)> InstalledUnitsAsync() {
-        IServiceManager manager;
+    /// be read is kept with a null binary. launchd and systemd read only unit files here.</summary>
+    (IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported) InstalledUnits() {
+        if (OperatingSystem.IsWindows())
+            return (ReadUnits(new WindowsScheduledTaskServiceManager(config, schtasks: BoundedSchtasks(time.GetTimestamp()))), true);
+
         try {
-            manager = ServiceManagerFactory.ForCurrentOs(config, home, time);
+            var manager = ServiceManagerFactory.ForCurrentOs(config, home, time);
+            return (ReadUnits(manager), manager is LaunchdServiceManager);
         } catch (PlatformNotSupportedException) {
             return ([], false);
         }
-
-        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
-        try {
-            var units = await Task.Run(() => ReadUnits(manager)).WaitAsync(UnitsBudget, time);
-            return (units, verifySupported);
-        } catch (TimeoutException) {
-            return ([], verifySupported);
-        }
     }
+
+    Func<string[], (int ExitCode, string StdOut, string StdErr)> BoundedSchtasks(long started) => args => {
+        var left = UnitsBudget - time.GetElapsedTime(started);
+        if (left <= TimeSpan.Zero) return (1, "", "kcap status ran out of time to ask schtasks");
+
+        var (code, stdout, stderr, timedOut) = ServiceProcess.RunBounded("schtasks", args, left);
+        return timedOut ? (1, "", "schtasks timed out and was terminated") : (code, stdout, stderr);
+    };
 
     internal static IReadOnlyList<(string Id, string? Binary)> ReadUnits(IServiceManager manager) {
         IReadOnlyList<string>? ids;

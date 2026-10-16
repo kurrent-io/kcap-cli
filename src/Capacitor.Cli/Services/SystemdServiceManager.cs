@@ -105,7 +105,9 @@ sealed class SystemdServiceManager(
         if (error is not null) {
             if (previous is null) File.Delete(path);
             else _writeUnit(path, previous, null);
-            Systemctl(SystemdUnit.DaemonReloadArgs());
+            if (Systemctl(SystemdUnit.DaemonReloadArgs()) is { } reloadError)
+                error += $"; the previous unit file was put back, but {reloadError}, so systemd may still hold the new "
+                       + "definition until the next `systemctl --user daemon-reload`";
             return false;
         }
 
