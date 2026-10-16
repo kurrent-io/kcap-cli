@@ -514,6 +514,7 @@ public class MainWindowSmokeTests {
 
                 vm.CloseWorkspace();
                 Dispatcher.UIThread.RunJobs();
+                var heldWhileClosed = first.DataContext;
 
                 vm.OpenSession("fedcba9876543210fedcba9876543210");
                 Dispatcher.UIThread.RunJobs();
@@ -523,11 +524,55 @@ public class MainWindowSmokeTests {
                 vm.CloseWorkspace();
                 window.Close();
                 Dispatcher.UIThread.RunJobs();
-                return (Same: ReferenceEquals(first, second), boundTo);
+                return (Same: ReferenceEquals(first, second), boundTo, heldWhileClosed);
             });
 
             await Assert.That(reuse.Same).IsTrue();
             await Assert.That(reuse.boundTo).IsEqualTo("fedcba9876543210fedcba9876543210");
+            await Assert.That(reuse.heldWhileClosed).IsNull(); // the retained view lets the closed session go
+        });
+    }
+
+    /// A local session in between hands the slot to the other template; the next remote session
+    /// still gets the remote view the window built first.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_session_after_a_local_one_reuses_the_remote_view() {
+        using var host = new RemoteHost();
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var reuse = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var (actions, _) = NewActions(service);
+                var vm = new MainWindowViewModel(
+                    service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                    workspaceFactory: agentId => NewWorkspace(service, actions, agentId),
+                    remoteWorkspaceFactory: host.New);
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+
+                vm.OpenSession("remote-1", AgentOrigin.Remote);
+                Dispatcher.UIThread.RunJobs();
+                var first = window.GetVisualDescendants().OfType<RemoteSessionView>().Single();
+
+                vm.OpenSession("local-1", AgentOrigin.Local);
+                Dispatcher.UIThread.RunJobs();
+                var localShown = window.GetVisualDescendants().OfType<WorkspaceView>().Count();
+
+                vm.OpenSession("remote-2", AgentOrigin.Remote);
+                Dispatcher.UIThread.RunJobs();
+                var second = window.GetVisualDescendants().OfType<RemoteSessionView>().Single();
+                var boundTo = (second.DataContext as RemoteSessionViewModel)?.AgentId;
+
+                vm.CloseWorkspace();
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return (Same: ReferenceEquals(first, second), localShown, boundTo);
+            });
+
+            await Assert.That(reuse.localShown).IsEqualTo(1);
+            await Assert.That(reuse.Same).IsTrue();
+            await Assert.That(reuse.boundTo).IsEqualTo("remote-2");
         });
     }
 

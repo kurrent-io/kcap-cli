@@ -473,6 +473,34 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// The window reuses one view for every session it opens: a reader who scrolled up in one
+    /// session must not open the next one scrolled up and off the tail.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_new_session_in_the_same_view_opens_at_the_bottom_and_follows() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("first.jsonl", Enumerable.Repeat(UserLine, 60).ToArray()));
+            WheelUp(host);
+            host.Settle();
+            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
+
+            var next = new Host(show: false);
+            var nextPath = Tmp.CreateFile("second.jsonl", Enumerable.Repeat(UserLine, 60).ToArray());
+            await next.LoadAsync(nextPath);
+            host.View.DataContext = next.Chat;
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            await next.AppendAndTickAsync(nextPath, 20);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+
+            await host.CloseAsync();
+            await next.CloseAsync();
+        });
+    }
+
     /// Pins that the initial load lands the reader at the bottom even when it completes before the
     /// view's first layout pass — an unshown window, and a tab collapsed from the start — so there
     /// is no ScrollViewer to read "was at end" from when the rows arrive.

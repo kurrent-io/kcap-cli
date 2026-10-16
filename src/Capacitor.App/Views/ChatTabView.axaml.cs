@@ -87,6 +87,18 @@ public partial class ChatTabView : UserControl {
             () => (DataContext as ChatTabViewModel)?.Attachments, TimeProvider.System);
     }
 
+    /// The window reuses this view for every session it opens, so the reading position belongs to
+    /// the session it was showing: the next one starts at the tail.
+    protected override void OnDataContextChanged(EventArgs e) {
+        DropToggleAnchor();
+        CancelSmoothScroll();
+        _thumbDragging = false;
+        _thumbFraction = null;
+        _readerGesture = false;
+        _followTail = true;
+        base.OnDataContextChanged(e);
+    }
+
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
         DropToggleAnchor();
         CancelSmoothScroll();

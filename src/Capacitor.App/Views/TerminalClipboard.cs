@@ -25,9 +25,10 @@ static class TerminalClipboard {
         Application.Current?.PlatformSettings?.HotkeyConfiguration.Paste.Any(g => g.Matches(e)) == true;
 
     internal static async Task PasteAsync(TerminalControl terminal) {
-        if (TopLevel.GetTopLevel(terminal)?.Clipboard is not { } clipboard) return;
+        if (TopLevel.GetTopLevel(terminal)?.Clipboard is not { } clipboard || terminal.Model is not { } model) return;
         var text = await clipboard.TryGetTextAsync();
-        if (string.IsNullOrEmpty(text) || terminal.Model is not { } model) return;
+        // The control is reused across sessions: a paste outlived by its session goes nowhere.
+        if (string.IsNullOrEmpty(text) || !ReferenceEquals(terminal.Model, model)) return;
         model.Send(TerminalInputEncoder.Paste(text));
     }
 }
