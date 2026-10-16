@@ -52,7 +52,7 @@ internal sealed class ServerChatInput : ChatInput {
     public override bool CanInterrupt => _hasTerminal && CanAcceptText;
 
     public override string Hint => _notice ?? Availability switch {
-        SendAvailability.Ready   => "Enter sends · Shift+Enter for a new line",
+        SendAvailability.Ready   => ReadyHint,
         SendAvailability.Sending => "Sending…",
         SendAvailability.Ended   => "This session has ended",
         _                        => "Connecting to the session…",

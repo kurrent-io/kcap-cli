@@ -1,7 +1,10 @@
 using System.Reactive.Linq;
+using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using DynamicData;
@@ -232,5 +235,49 @@ public class ChatComposerTests {
             return hintChangedOnUi;
         });
         await Assert.That(onUi).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Working_turn_surfaces_interrupt_button_and_hint_and_escape_from_chat_list_interrupts() {
+        await RunOnUiAsync(async () => {
+            var (daemon, _, _, chat, client, _) = await BuildAttachedAsync();
+            var view = new ChatTabView { DataContext = chat };
+            var window = new Window { Content = view, Width = 800, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var interruptButton = view.FindControl<Button>("InterruptButton")!;
+            var chatItems = view.FindControl<ItemsControl>("ChatItems")!;
+
+            await Assert.That(chat.ShowsInterrupt).IsFalse();
+            await Assert.That(interruptButton.IsEffectivelyVisible).IsFalse();
+            await Assert.That(chat.ComposerHint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { Status = "Running", AwaitingInput = false });
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            await Assert.That(chat.ShowsInterrupt).IsTrue();
+            await Assert.That(interruptButton.IsEffectivelyVisible).IsTrue();
+            await Assert.That(chat.ComposerHint).IsEqualTo("Enter sends · Shift+Enter for a new line · Esc to interrupt");
+
+            chatItems.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Escape });
+            await WaitUntilAsync(() => client.SentInput.Count == 1, what: "escape sent from chat list");
+            await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { Status = "Running", AwaitingInput = true });
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            await Assert.That(chat.ShowsInterrupt).IsFalse();
+            await Assert.That(interruptButton.IsEffectivelyVisible).IsFalse();
+            await Assert.That(chat.ComposerHint).IsEqualTo("Enter sends · Shift+Enter for a new line");
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            await chat.TeardownAsync();
+        });
     }
 }
