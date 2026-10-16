@@ -12,7 +12,7 @@ public sealed record ClaudeMemoryFile(string FileName, string? Name, string? Des
     /// <summary>Reads only the flat <c>key: value</c> pairs the notes use, plus one nested <c>metadata:</c> block and
     /// quoted or block-scalar values. A file without frontmatter is all body.</summary>
     public static ClaudeMemoryFile Parse(string fileName, string text) {
-        var lines = text.TrimStart('﻿').ReplaceLineEndings("\n").Split('\n');
+        var lines = text.TrimStart('\uFEFF').ReplaceLineEndings("\n").Split('\n');
 
         if (lines.Length == 0 || lines[0].TrimEnd() != "---") return new(fileName, null, null, null, text);
 

@@ -26,7 +26,7 @@ public class ClaudeMemoryFileTests {
     [Test]
     public async Task Reads_a_top_level_type_quoted_values_and_crlf() {
         var file = ClaudeMemoryFile.Parse("a.md",
-            "﻿---\r\nname: 'it''s'\r\ndescription: \"a: \\\"quoted\\\" line\"\r\ntype: user\r\n---\r\nbody\r\n");
+            "\uFEFF---\r\nname: 'it''s'\r\ndescription: \"a: \\\"quoted\\\" line\"\r\ntype: user\r\n---\r\nbody\r\n");
 
         await Assert.That(file.Name).IsEqualTo("it's");
         await Assert.That(file.Description).IsEqualTo("a: \"quoted\" line");
