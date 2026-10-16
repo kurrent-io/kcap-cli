@@ -620,25 +620,80 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A live turn owns the footer: the activity note is showing, and a foreground launch is
-    /// already a Task row. The note returns once the turn is over and the run is still going.
+    /// A foreground launch is already a Task row while its turn is live, so the strip leaves it
+    /// out until the turn is over.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_strip_yields_to_the_activity_note_while_a_turn_is_live() {
+    public async Task The_strip_leaves_a_foreground_run_to_the_transcript_while_a_turn_is_live() {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var raised = new List<string?>();
             h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
             await h.PushAsync(Dto(path) with { AwaitingInput = false });
             await h.TickAsync();
             await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
             await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await Assert.That(h.Chat.RunningRow).IsNull();
 
             raised.Clear();
             await h.PushAsync(Dto(path) with { AwaitingInput = true });
             await Assert.That(h.Chat.ActivityNote).IsEmpty();
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Explore");
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunningRow));
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The next prompt starts a live turn; a run still going in the background stays in the strip
+    /// until it ends, as it stays in the sidebar.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_background_run_stays_in_the_strip_through_the_next_turn() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [ShellCallLine, ShellLaunchLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
+
+            File.AppendAllText(path, AgentCallLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
+            await Assert.That(h.Chat.RunSummary).IsEmpty();
+
+            File.AppendAllText(path, ShellFinishLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A detach changes no state count, yet it is what brings a mid-turn run into the strip.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_sent_to_the_background_mid_turn_joins_the_strip() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var raised = new List<string?>();
+            h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+
+            raised.Clear();
+            File.AppendAllText(path, AgentLaunchLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(h.Chat.RunningRow!.StateText).StartsWith("running in background · ");
             await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
             await h.TeardownAsync();
         });
