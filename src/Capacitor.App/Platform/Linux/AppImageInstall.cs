@@ -71,8 +71,11 @@ public sealed record AppImageInstall(string Image) {
                 Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
                 File.Copy(file, copy);
             }
-            if (Directory.Exists(destination)) Directory.Delete(destination, recursive: true);
-            Directory.Move(temp, destination);
+            var old = $"{destination}.{Guid.NewGuid():N}.old";
+            if (Directory.Exists(destination)) Directory.Move(destination, old);
+            try { Directory.Move(temp, destination); }
+            catch { if (Directory.Exists(old)) Directory.Move(old, destination); throw; }
+            if (Directory.Exists(old)) Directory.Delete(old, recursive: true);
         } finally {
             if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
         }
