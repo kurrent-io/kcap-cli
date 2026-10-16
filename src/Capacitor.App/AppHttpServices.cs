@@ -22,6 +22,7 @@ public static class AppHttpServices {
         services.AddSingleton(config);
         services.AddSingleton(env);
         services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton(ClientAgent.Desktop);
         services.AddCapacitorForeignClients();
         services.AddSingleton<TokenStore>();
 

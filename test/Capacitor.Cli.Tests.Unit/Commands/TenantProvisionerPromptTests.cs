@@ -1,6 +1,7 @@
 using System.Net;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -81,6 +82,6 @@ public class TenantProvisionerPromptTests {
     }
 
     static SpectreTenantProvisioner Provisioner(ProvisioningStubHandler handler) =>
-        new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false)), ProvisioningStubHandler.BaseUrl,
+        new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false), ClientAgent.Cli), ProvisioningStubHandler.BaseUrl,
             NoTelemetry.Facade, TimeProvider.System, isInteractive: () => true);
 }

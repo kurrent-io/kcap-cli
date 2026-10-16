@@ -9,6 +9,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Time.Testing;
 using ReactiveUI.Reactive;
 
@@ -90,7 +91,7 @@ public class SignInStepViewModelTests {
             var bridges = new WizardBridges(
                 action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults,
                 progress => new WizardTenantProvisioner(
-                    new TenantProvisioningClient(new HttpClient(Signup)), "https://signup.example", progress,
+                    new TenantProvisioningClient(new HttpClient(Signup), ClientAgent.Desktop), "https://signup.example", progress,
                     CliTelemetry.Disabled(TimeProvider.System), Time));
 
             Picker      = bridges.Picker;

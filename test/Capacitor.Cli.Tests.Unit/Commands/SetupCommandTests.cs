@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using WireMock.RequestBuilders;
@@ -18,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class SetupCommandTests {
     // Never reached: these tests drive the import and discovery steps, which do not provision.
-    static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
+    static readonly TenantProvisioningClient Provisioning = new(new HttpClient(), ClientAgent.Cli);
     static readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
     static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();

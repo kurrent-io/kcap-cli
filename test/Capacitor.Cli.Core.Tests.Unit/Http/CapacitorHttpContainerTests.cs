@@ -741,6 +741,7 @@ public class CapacitorHttpContainerTests : IDisposable {
 
         await Assert.That(sp.GetService<TenantProvisioningClient>()).IsNotNull();
         await Assert.That(sp.GetService<ICapacitorHttpClient>()).IsNull();
+        await Assert.That(sp.GetService<ClientAgent>()).IsEqualTo(ClientAgent.Cli);
     }
 
     /// <summary>Our version tags are for our own server, and the signup control plane is not it.</summary>

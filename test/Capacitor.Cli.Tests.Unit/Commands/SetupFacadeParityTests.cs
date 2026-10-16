@@ -2,6 +2,7 @@ using System.Text;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using static Capacitor.Tests.Helpers.AuthFixtures;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
@@ -62,7 +63,7 @@ public class SetupFacadeParityTests {
     }
 
     // Never reached: these tests drive the import and discovery steps, which do not provision.
-    static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
+    static readonly TenantProvisioningClient Provisioning = new(new HttpClient(), ClientAgent.Cli);
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
     static readonly AuthProviderDiscovery Discovery = new(HttpFactory, TimeProvider.System);
 

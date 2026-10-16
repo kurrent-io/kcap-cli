@@ -155,6 +155,9 @@ public static class CapacitorHttpServices {
 
         // No base address on either: their URLs come from the environment on every read, so one
         // pinned at container-build time would outlive the override it was resolved from.
+        // A default rather than a requirement: every host but the desktop app is the CLI, and the desktop
+        // app registers its own ahead of this.
+        services.TryAddSingleton(ClientAgent.Cli);
         services.AddHttpClient<TenantProvisioningClient>();
         services.AddHttpClient<IAuthProxyClient, AuthProxyClient>();
 
