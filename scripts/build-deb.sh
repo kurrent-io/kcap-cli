@@ -39,7 +39,7 @@ cat > "$root/DEBIAN/control" <<EOF
 Package: kurrent-capacitor
 Version: $deb_version
 Architecture: amd64
-Maintainer: Kurrent
+Maintainer: Kurrent <team@kcap.ai>
 Installed-Size: $(du -sk "$root/usr" | cut -f1)
 Depends: libc6, libgcc-s1, libstdc++6, zlib1g, libicu78 | libicu76 | libicu74 | libicu72 | libicu70 | libicu67, libssl3 | libssl1.1, libx11-6, libice6, libsm6, libfontconfig1
 Section: devel
