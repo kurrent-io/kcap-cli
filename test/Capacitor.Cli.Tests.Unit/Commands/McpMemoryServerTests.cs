@@ -14,6 +14,14 @@ public class McpMemoryServerTests {
     }
 
     [Test]
+    public async Task Update_body_forwards_the_expected_version() {
+        var body = McpMemoryServer.BuildUpdateBody(Args("""{"id":"m1","content":"c","expected_version":"v1"}"""));
+
+        await Assert.That(body["expected_version"]!.GetValue<string>()).IsEqualTo("v1");
+        await Assert.That(body["content"]!.GetValue<string>()).IsEqualTo("c");
+    }
+
+    [Test]
     public async Task Search_url_omits_missing_context() {
         var url = McpMemoryServer.BuildSearchUrl("http://x", Args("""{"query":"a"}"""), null, null);
 

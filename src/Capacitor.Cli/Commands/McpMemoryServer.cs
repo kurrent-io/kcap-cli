@@ -275,9 +275,10 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     }
 
     internal static JsonObject BuildUpdateBody(JsonObject? args) => new() {
-        ["description"] = args?["description"]?.GetValue<string>(),
-        ["content"]     = args?["content"]?.GetValue<string>(),
-        ["kind"]        = args?["kind"]?.GetValue<string>()
+        ["description"]      = args?["description"]?.GetValue<string>(),
+        ["content"]          = args?["content"]?.GetValue<string>(),
+        ["kind"]             = args?["kind"]?.GetValue<string>(),
+        ["expected_version"] = args?["expected_version"]?.GetValue<string>()
     };
 
     internal static JsonObject BuildRescopeBody(JsonObject? args) {
@@ -403,7 +404,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["limit"] = new("number", "Max results (default 10, max 50).")
             }, ["query"]), McpToolAnnotations.Read),
         new("get_memory",
-            "Fetch a memory's full content by id or slug. Slug resolution precedence: your memories, then your teams', then org-wide; repo-scoped before global.",
+            "Fetch a memory's full content by id or slug. Slug resolution precedence: your memories, then your teams', then org-wide; repo-scoped before global. The result's version is what update_memory takes as expected_version.",
             new("object", new() {
                 ["id_or_slug"] = new("string", "Memory id (32 hex) or slug.")
             }, ["id_or_slug"]), McpToolAnnotations.Read),
@@ -422,12 +423,13 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
             }, ["audience", "slug", "description", "content", "kind"]), McpToolAnnotations.Additive),
         new("update_memory",
-            "Update an existing memory's description/content/kind (any subset).",
+            "Update an existing memory's description/content/kind (any subset). Content replaces the whole body, so build it from a fresh get_memory and pass that result's version as expected_version: if anyone changed the memory since, nothing is written and the 409 carries the current version and body — merge your change into that body and retry with its version (a 409 without them means call get_memory again first). Omitting expected_version overwrites whatever is there.",
             new("object", new() {
-                ["id"]          = new("string", "Memory id"),
-                ["description"] = new("string", "New one-line summary"),
-                ["content"]     = new("string", "New body"),
-                ["kind"]        = new("string", "preference | feedback | project | reference")
+                ["id"]               = new("string", "Memory id"),
+                ["description"]      = new("string", "New one-line summary"),
+                ["content"]          = new("string", "New body"),
+                ["kind"]             = new("string", "preference | feedback | project | reference"),
+                ["expected_version"] = new("string", "The version get_memory returned; the update is refused if the memory changed since")
             }, ["id"]), McpToolAnnotations.Destructive),
         new("rescope_memory",
             "Change a memory's audience — who can see + edit it (promote your user memory to team, org, or a project's members) — or move its home (where it surfaces) to a project, a repo, or the whole org. Two orthogonal axes: audience_project sets the PEOPLE (audience 'project'); project, repo_hash or global: true sets the PLACE — at most one per call. A project move takes precedence over audience; a repo_hash or global move must be sent alone, with no audience, team, audience_project or project — change the audience in a separate call.",
