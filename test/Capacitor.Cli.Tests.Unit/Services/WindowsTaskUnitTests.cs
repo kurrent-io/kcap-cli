@@ -136,6 +136,7 @@ public class WindowsTaskUnitTests {
     [Test]
     [Arguments("<Task><Actions><Exec><Command>other.exe</Command><Arguments>--flag</Arguments></Exec></Actions></Task>")]
     [Arguments("<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>")]
+    [Arguments("<Task><Actions><Exec><Command>notepad.exe</Command><Arguments>--headless cmd.exe /d /s /v:off /c &quot;&quot;C:\\x\\daemon-service-laptop.cmd&quot;&quot;</Arguments></Exec></Actions></Task>")]
     [Arguments("not xml")]
     public async Task A_task_kcap_did_not_write_names_no_wrapper(string xml) {
         await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsNull();

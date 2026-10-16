@@ -52,21 +52,27 @@ sealed class WindowsScheduledTaskServiceManager(
     }
 
     /// <summary>
-    /// The wrapper under this config root, or else the one the task itself runs: a task installed under
-    /// another <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has its wrapper elsewhere, and without it the
-    /// task's daemon binary is unknown.
+    /// The wrapper an installed task runs, read from the task's own definition: one installed under another
+    /// <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has it elsewhere, and a file left under this root is not
+    /// necessarily the task's. The path under this root stands for a task that is gone, or one whose action
+    /// is not the layout <see cref="WindowsTaskUnit.TaskXml"/> writes. An installed task whose definition
+    /// cannot be read throws: without its wrapper, nothing says which daemon it runs.
     /// </summary>
-    string WrapperOf(string serviceId) {
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
-        if (File.Exists(wrapper)) return wrapper;
+    string WrapperOf(string serviceId, bool taskExists) {
+        var local = WindowsTaskUnit.WrapperPath(config, serviceId);
+        if (!taskExists) return local;
 
-        var (code, xml, _) = _schtasks(WindowsTaskUnit.QueryXmlArgs(serviceId));
-        return code == 0 && WindowsTaskUnit.WrapperFromTaskXml(xml) is { } fromTask && File.Exists(fromTask) ? fromTask : wrapper;
+        var (code, xml, err) = _schtasks(WindowsTaskUnit.QueryXmlArgs(serviceId));
+        if (code != 0)
+            throw new InvalidOperationException(
+                $"Could not read the definition of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
+
+        return WindowsTaskUnit.WrapperFromTaskXml(xml) ?? local;
     }
 
     public ServiceStatus Status(string serviceId) {
         var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var wrapper = WrapperOf(serviceId);
+        var wrapper = WrapperOf(serviceId, taskExists: code == 0);
         // Report the daemon binary baked inside the wrapper (not the wrapper itself)
         // so doctor catches a moved kcap-daemon.exe even when the wrapper still exists.
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
@@ -75,7 +81,7 @@ sealed class WindowsScheduledTaskServiceManager(
 
     public ServiceQuery Query(string serviceId) {
         var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var wrapper = WrapperOf(serviceId);
+        var wrapper = WrapperOf(serviceId, taskExists: code == 0);
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         var state = WindowsTaskUnit.StatusFromQuery(code, stdout);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
@@ -132,10 +138,18 @@ sealed class WindowsScheduledTaskServiceManager(
             return false;
         }
 
-        var wrapper = WrapperOf(serviceId);
+        string wrapper;
+        try {
+            wrapper = WrapperOf(serviceId, taskExists: _schtasks(WindowsTaskUnit.QueryArgs(serviceId)).ExitCode == 0);
+        } catch (InvalidOperationException ex) {
+            error = ex.Message;
+            return false;
+        }
+
         var (code, _, err) = _schtasks(WindowsTaskUnit.DeleteArgs(serviceId));
-        // A failed delete of a task that is already gone is the outcome asked for.
-        if (code != 0 && _schtasks(WindowsTaskUnit.QueryArgs(serviceId)).ExitCode == 0) {
+        // A failed delete counts as done only when a listing shows the task gone; one that cannot be read
+        // keeps the wrapper, which the task still needs at the next sign-in.
+        if (code != 0 && (TryListInstalled() is not { } listed || listed.Contains(serviceId))) {
             error = $"schtasks /Delete failed (exit {code}): {err.Trim()}";
             return false;
         }

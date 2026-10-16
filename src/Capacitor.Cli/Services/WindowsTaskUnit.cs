@@ -6,6 +6,8 @@ namespace Capacitor.Cli.Services;
 /// <summary>Pure rendering + command vectors for a per-user Windows logon Scheduled Task.</summary>
 static class WindowsTaskUnit {
     const string Prefix = "kcap-daemon-";
+    const string ActionCommand = "conhost.exe";
+    const string ActionArgumentsPrefix = "--headless cmd.exe /d /s /v:off /c \"\"";
 
     public static string TaskName(string id) => Prefix + id;
 
@@ -242,8 +244,8 @@ static class WindowsTaskUnit {
           </Settings>
           <Actions Context="Author">
             <Exec>
-              <Command>conhost.exe</Command>
-              <Arguments>--headless cmd.exe /d /s /v:off /c ""{Guarded("the wrapper path", wrapperPath)}""</Arguments>
+              <Command>{ActionCommand}</Command>
+              <Arguments>{ActionArgumentsPrefix}{Guarded("the wrapper path", wrapperPath)}""</Arguments>
             </Exec>
           </Actions>
         </Task>
@@ -294,22 +296,30 @@ static class WindowsTaskUnit {
     public static string[] QueryArgs(string id)                  => ["/Query", "/TN", TaskName(id), "/FO", "LIST"];
     public static string[] QueryXmlArgs(string id)               => ["/Query", "/TN", TaskName(id), "/XML"];
 
-    /// <summary>The wrapper a task's action runs, read from <c>schtasks /Query /XML</c>, or null when the
-    /// action is not the one <see cref="TaskXml"/> writes.</summary>
+    /// <summary>The wrapper a task's action runs, read from <c>schtasks /Query /XML</c>, or null unless the
+    /// action is exactly the one <see cref="TaskXml"/> writes: a path from any other action names a file
+    /// the task does not run.</summary>
     public static string? WrapperFromTaskXml(string xml) {
-        string? arguments;
+        IEnumerable<System.Xml.Linq.XElement> execs;
         try {
-            arguments = System.Xml.Linq.XDocument.Parse(xml).Descendants()
-                .FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value;
+            execs = [.. System.Xml.Linq.XDocument.Parse(xml).Descendants().Where(e => e.Name.LocalName == "Exec")];
         } catch (System.Xml.XmlException) {
             return null;
         }
 
-        const string Marker = "/c \"\"";
-        var start = arguments?.IndexOf(Marker, StringComparison.Ordinal) ?? -1;
-        if (start < 0 || !arguments!.EndsWith("\"\"", StringComparison.Ordinal)) return null;
-        var path = arguments[(start + Marker.Length)..^2];
-        return path.Length > 0 ? path : null;
+        foreach (var exec in execs) {
+            var command   = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim();
+            var arguments = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value.Trim();
+            if (!string.Equals(command, ActionCommand, StringComparison.OrdinalIgnoreCase) || arguments is null) continue;
+            if (!arguments.StartsWith(ActionArgumentsPrefix, StringComparison.Ordinal)
+                || !arguments.EndsWith("\"\"", StringComparison.Ordinal)
+                || arguments.Length <= ActionArgumentsPrefix.Length + 2) continue;
+
+            var path = arguments[ActionArgumentsPrefix.Length..^2];
+            if (!path.Contains('"')) return path;
+        }
+
+        return null;
     }
 
     public static ServiceState StatusFromQuery(int exitCode, string stdout) {

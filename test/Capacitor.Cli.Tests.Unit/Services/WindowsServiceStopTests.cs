@@ -17,7 +17,10 @@ public class WindowsServiceStopTests {
         public string?                                       KillError;
         public int                                           DeleteExit;
         public bool                                          TaskExists = true;
-        public string?                                       TaskXml;
+        // A definition in a layout kcap does not write, so the wrapper under the config root stands.
+        public string                                        TaskXml = "<Task/>";
+        public bool                                          DefinitionUnreadable;
+        public bool                                          ListingFails;
 
         public void TaskRunsTheDaemon() {
             Table[40]        = new(1, "conhost.exe");
@@ -38,9 +41,11 @@ public class WindowsServiceStopTests {
                 if (DeleteExit != 0) return (DeleteExit, "", "ERROR: Access is denied.");
                 TaskExists = false;
             }
-            if (args[0] == "/Query" && args.Contains("/XML")) return TaskXml is null ? (1, "", "ERROR: not found") : (0, TaskXml, "");
-            if (args[0] == "/Query") return TaskExists ? (0, "TaskName: kcap-daemon-laptop", "") : (1, "", "ERROR: not found");
-            return (0, "", "");
+            if (args[0] != "/Query") return (0, "", "");
+            if (!args.Contains("/TN")) return ListingFails ? (1, "", "ERROR: Access is denied.") : (0, TaskExists ? "TaskName: \\kcap-daemon-laptop" : "", "");
+            if (!TaskExists) return (1, "", "ERROR: The system cannot find the file specified.");
+            if (args.Contains("/XML")) return DefinitionUnreadable ? (1, "", "ERROR: Access is denied.") : (0, TaskXml, "");
+            return (0, "TaskName: \\kcap-daemon-laptop", "");
         }
 
         public string? Kill(int pid) { Killed.Add(pid); return KillError; }
@@ -139,10 +144,12 @@ public class WindowsServiceStopTests {
         await Assert.That(error).IsNull();
     }
 
-    /// <summary>A task installed under another config root has its wrapper elsewhere; the task's own
-    /// definition still leads to it, so uninstalling removes that wrapper too.</summary>
+    /// <summary>The task's own definition names its wrapper, so uninstalling removes that one: a task
+    /// installed under another config root has it elsewhere, and a file left under this root is not it.</summary>
     [Test]
-    public async Task Uninstall_finds_a_wrapper_outside_this_config_root_through_the_task() {
+    public async Task Uninstall_removes_the_wrapper_the_task_runs_not_a_stray_one_under_this_root() {
+        var stray = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
+        await File.WriteAllTextAsync(stray, "@echo off\r\n");
         var elsewhere = Tmp.CreateFile("other-config/daemon-service-laptop.cmd", "@echo off\r\n");
         var spec = new ServiceSpec("laptop", "kcap-daemon.exe", "daemon.log", new Dictionary<string, string>(), []);
         var host = new FakeHost { TaskXml = WindowsTaskUnit.TaskXml(spec, elsewhere) };
@@ -151,5 +158,32 @@ public class WindowsServiceStopTests {
 
         await Assert.That(ok).IsTrue();
         await Assert.That(File.Exists(elsewhere)).IsFalse();
+        await Assert.That(File.Exists(stray)).IsTrue();
+    }
+
+    [Test]
+    public async Task Uninstall_of_a_task_whose_definition_cannot_be_read_is_refused() {
+        var host = new FakeHost { DefinitionUnreadable = true };
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("Could not read the definition");
+        await Assert.That(host.Verbs).DoesNotContain("/Delete");
+    }
+
+    /// <summary>A failed delete followed by a listing that fails says nothing about the task, so the
+    /// wrapper it may still need is kept.</summary>
+    [Test]
+    public async Task Uninstall_whose_delete_and_listing_both_fail_keeps_the_wrapper() {
+        var host = new FakeHost { DeleteExit = 1, ListingFails = true };
+        var wrapper = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
+        await File.WriteAllTextAsync(wrapper, "@echo off\r\n");
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("Access is denied");
+        await Assert.That(File.Exists(wrapper)).IsTrue();
     }
 }
