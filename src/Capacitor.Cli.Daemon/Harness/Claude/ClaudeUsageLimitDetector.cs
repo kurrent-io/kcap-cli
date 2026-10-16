@@ -1,21 +1,13 @@
 using Capacitor.Cli.Core.LocalIpc;
-using Capacitor.Cli.Daemon.Pty;
 
-namespace Capacitor.Cli.Daemon.Services;
+namespace Capacitor.Cli.Daemon.Harness.Claude;
 
 /// Reads Claude Code's usage-limit menu off the live PTY screen. The menu is terminal chrome:
 /// the option set depends on the account, and the transcript never records it. A match is a
 /// limit line, the title, and at least two of the choices the CLI actually offers. The title
 /// and the choices alone are what a session prints when someone asks it to show the menu.
-internal sealed class ClaudeUsageLimitDetector {
+internal static class ClaudeUsageLimitDetector {
     public const string Prompt = "What do you want to do?";
-
-    readonly AnsiScreen _screen = new(PtyDefaults.Cols, PtyDefaults.Rows);
-
-    public UsageLimitNoticeDto? Observe(ReadOnlySpan<byte> chunk) {
-        _screen.Write(chunk);
-        return Parse(_screen.Text());
-    }
 
     internal static UsageLimitNoticeDto? Parse(string screen) {
         var lines = screen.Split('\n');
