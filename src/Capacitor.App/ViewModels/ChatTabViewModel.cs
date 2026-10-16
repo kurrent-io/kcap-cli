@@ -52,10 +52,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
+    /// Dropped by an explicit idle resend; kept only so a late echo of that copy is absorbed and
+    /// cannot settle the replacement row that now tracks the same text.
+    readonly List<QueuedChatMessage> _superseded = new();
     /// The send the channel has not answered yet. It is tracked like a queued message but kept out
     /// of the strip: the composer still holds its text, and one prompt must not show in both.
     QueuedChatMessage? _sending;
     QueuedChatMessage? _lastSent;
+    bool _sendCommandExecuting;
+    bool _bypassRecallGuard;
+    ChatSendOutcome? _lastSendOutcome;
 
     IEnumerable<QueuedChatMessage> Tracked => _sending is { } sending ? _queuedMessages.Append(sending) : _queuedMessages;
     readonly Dictionary<string, ToolCallItem> _pendingTools = new(StringComparer.Ordinal);
@@ -467,8 +473,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool AgentIsIdle => !_ended && !SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
 
     /// Idle, and the channel will take text: a queued prompt is not waiting on a step.
+    /// A send still uploading keeps CanAcceptText true, so the busy flag closes that window too.
     bool AgentCanTakeQueuedNow =>
-        AgentIsIdle && !IsReadOnlyParticipant && !HasUsageLimitQuestion && _input.CanAcceptText;
+        AgentIsIdle && !IsReadOnlyParticipant && !HasTerminalMenu && _input.CanAcceptText
+        && !_sendCommandExecuting;
 
     void RefreshQueuedSend() {
         var idle = AgentIsIdle;
@@ -710,93 +718,44 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
         // is still the user's own draft, not the snapshot.
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
-            var snapshot = ComposerText;
-            var edits = _composerEdits;
-            // The edit count is what says this text was recalled and left alone. Typing the same
-            // words is a second send: one transcript echo retires one queued row.
-            var already = edits == _recallEdits
-                ? _queuedMessages.FirstOrDefault(q =>
-                    !q.IsForeign && !q.Acknowledged && q.AttachmentIds.Count == 0 && q.MatchesText(snapshot))
-                : null;
-            if (already is not null && Tray.Snapshot().Count == 0) {
-                if (_composerEdits == edits && ComposerText == snapshot) ComposerText = "";
-                return;
-            }
-            var draftRevision = _drafts?.Revision(_origin, _agentId) ?? 0;
-            var files = Tray.Snapshot();
-            if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
-            IReadOnlyList<string> ids = [];
-            if (files.Count > 0) {
-                // The bytes have to be on the server before the prompt names them: a prompt that
-                // arrives first points the agent at ids the store has never seen.
-                UploadingFiles = files.Count;
-                UploadOutcome upload;
-                try { upload = await _uploader.UploadAsync(files, _lifetimeToken); }
-                catch (OperationCanceledException) { return; }
-                finally { UploadingFiles = 0; }
-                if (_lifetimeToken.IsCancellationRequested) return;
-                if (upload.Kind != UploadKind.Uploaded) {
-                    Notice(upload.Kind == UploadKind.Unauthorized ? "sign in to attach files" : upload.Reason ?? "the upload failed");
-                    return;
-                }
-                ids = upload.Ids;
-                // Re-asked after the upload: the window is long enough for the session to end or the
-                // daemon to drop the capability, and the channel would otherwise refuse the send with
-                // the chips still staged and nothing said about them.
-                if (!Attachments.CanAttach) {
-                    Notice(Attachments.AttachHint ?? LocalFrameChatInput.AttachmentsRefused);
-
-                    return;
-                }
-            }
-            // The upload can finish after the menu is on screen. The text would be typed into
-            // that menu, so the draft and the chips stay where they are.
-            if (HasTerminalMenu) return;
-            var chipIds = files.Select(f => f.Id).ToList();
-            var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
-            if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
-            _lastSent = queued;
-            _sending = queued;
-            _unechoed.Add(queued);
-            if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
-            ChatSendOutcome outcome;
-            try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
-            catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
-            catch (Exception ex) {
-                LogOnce($"send: {ex.Message}");
-                outcome = ChatSendOutcome.Unconfirmed;
-            }
-            finally { _sending = null; }
-            if (_lifetimeToken.IsCancellationRequested) {
-                // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
-                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
-                return;
-            }
-            if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
-            var waits = !queued.Acknowledged && outcome switch {
-                ChatSendOutcome.Accepted    => _openFeed is not null,
-                ChatSendOutcome.Unconfirmed => true,
-                _                           => false,
-            };
-            if (waits) {
-                if (outcome == ChatSendOutcome.Unconfirmed) queued.MarkUnconfirmed();
-                _queuedMessages.Add(queued);
-            }
-            RefreshQueue();
-            if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
-            if (queued.Acknowledged) ConfirmDelivery(queued);
+            await SendComposerAsync(ComposerText, includeTray: true, bypassRecall: _bypassRecallGuard);
         }, canSend);
         _disposables.Add(SendCommand);
+        SendCommand.IsExecuting
+            .Subscribe(executing => {
+                _sendCommandExecuting = executing;
+                RefreshQueuedSend();
+            })
+            .DisposeWith(_disposables);
 
-        // Drops the stuck row first, so the send below is the only copy the banner tracks.
+        // Drops the stuck row first, so the send below is the only copy the banner tracks. The
+        // tray and an unrelated draft stay put: this path delivers that one text alone.
         SendQueuedCommand = ReactiveCommand.CreateFromTask<QueuedChatMessage>(async message => {
-            if (!message.CanSendNow || message.Acknowledged || message.IsForeign) return;
+            if (!message.CanSendNow || message.Acknowledged || message.IsForeign || message.DispatchId is not null) return;
+            var draft = ComposerText;
+            var tray = Tray.Snapshot();
+            Tray.Clear();
             _queuedMessages.Remove(message);
             _unechoed.Remove(message);
             if (ReferenceEquals(_lastSent, message)) _lastSent = null;
             RefreshQueue();
-            ComposerText = message.Text;
-            await SendCommand.Execute();
+            _lastSendOutcome = null;
+            _bypassRecallGuard = true;
+            try {
+                ComposerText = message.Text;
+                await SendCommand.Execute();
+            } finally {
+                _bypassRecallGuard = false;
+            }
+            Tray.Restore(tray);
+            if (_lastSendOutcome is null or ChatSendOutcome.Rejected)
+                RestoreQueuedRow(message);
+            else
+                _superseded.Add(message);
+            // An unrelated draft comes back; a recall of this same text stays cleared on accept.
+            if (!string.Equals(draft, message.Text, StringComparison.Ordinal)
+                && !string.Equals(ComposerText, draft, StringComparison.Ordinal))
+                ComposerText = draft;
         });
         _disposables.Add(SendQueuedCommand);
 
@@ -954,6 +913,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _items.Clear();
         _history.Clear();
         _unechoed.Clear();
+        _superseded.Clear();
         _pendingTools.Clear();
         _settledTools.Clear();
         _questionAsks.Clear();
@@ -980,11 +940,101 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void RebaseQueuedMessages(long? offset) {
         _inputGeneration++;
         foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
+        foreach (var queued in _superseded) queued.Rebase(_inputGeneration, offset);
         RefreshQueue();
     }
 
     void ClearSentDraft(QueuedChatMessage queued) {
         if (_composerEdits == queued.ComposerEdits && ComposerText == queued.Text) ComposerText = "";
+    }
+
+    void RestoreQueuedRow(QueuedChatMessage message) {
+        if (message.Acknowledged) return;
+        if (!_queuedMessages.Contains(message)) _queuedMessages.Add(message);
+        if (!_unechoed.Contains(message)) _unechoed.Add(message);
+        _lastSent ??= message;
+        RefreshQueue();
+    }
+
+    async Task SendComposerAsync(string snapshot, bool includeTray, bool bypassRecall) {
+        _lastSendOutcome = null;
+        var edits = _composerEdits;
+        // The edit count is what says this text was recalled and left alone. Typing the same
+        // words is a second send: one transcript echo retires one queued row. An explicit row
+        // Send bypasses that guard: the selected copy was already retired for this attempt.
+        if (!bypassRecall) {
+            var already = edits == _recallEdits
+                ? _queuedMessages.FirstOrDefault(q =>
+                    !q.IsForeign && !q.Acknowledged && q.AttachmentIds.Count == 0 && q.MatchesText(snapshot))
+                : null;
+            if (already is not null && Tray.Snapshot().Count == 0) {
+                if (_composerEdits == edits && ComposerText == snapshot) ComposerText = "";
+                return;
+            }
+        }
+        var draftRevision = _drafts?.Revision(_origin, _agentId) ?? 0;
+        var files = includeTray ? Tray.Snapshot() : [];
+        if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
+        IReadOnlyList<string> ids = [];
+        if (files.Count > 0) {
+            // The bytes have to be on the server before the prompt names them: a prompt that
+            // arrives first points the agent at ids the store has never seen.
+            UploadingFiles = files.Count;
+            UploadOutcome upload;
+            try { upload = await _uploader.UploadAsync(files, _lifetimeToken); }
+            catch (OperationCanceledException) { return; }
+            finally { UploadingFiles = 0; }
+            if (_lifetimeToken.IsCancellationRequested) return;
+            if (upload.Kind != UploadKind.Uploaded) {
+                Notice(upload.Kind == UploadKind.Unauthorized ? "sign in to attach files" : upload.Reason ?? "the upload failed");
+                return;
+            }
+            ids = upload.Ids;
+            // Re-asked after the upload: the window is long enough for the session to end or the
+            // daemon to drop the capability, and the channel would otherwise refuse the send with
+            // the chips still staged and nothing said about them.
+            if (!Attachments.CanAttach) {
+                Notice(Attachments.AttachHint ?? LocalFrameChatInput.AttachmentsRefused);
+                return;
+            }
+        }
+        // The upload can finish after the menu is on screen. The text would be typed into
+        // that menu, so the draft and the chips stay where they are.
+        if (HasTerminalMenu) return;
+        var chipIds = files.Select(f => f.Id).ToList();
+        var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
+        if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
+        _lastSent = queued;
+        _sending = queued;
+        _unechoed.Add(queued);
+        if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
+        ChatSendOutcome outcome;
+        try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
+        catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
+        catch (Exception ex) {
+            LogOnce($"send: {ex.Message}");
+            outcome = ChatSendOutcome.Unconfirmed;
+        }
+        finally { _sending = null; }
+        _lastSendOutcome = outcome;
+        if (_lifetimeToken.IsCancellationRequested) {
+            // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
+            if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
+            return;
+        }
+        if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
+        var waits = !queued.Acknowledged && outcome switch {
+            ChatSendOutcome.Accepted    => _openFeed is not null,
+            ChatSendOutcome.Unconfirmed => true,
+            _                           => false,
+        };
+        if (waits) {
+            if (outcome == ChatSendOutcome.Unconfirmed) queued.MarkUnconfirmed();
+            _queuedMessages.Add(queued);
+        }
+        RefreshQueue();
+        if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
+        if (queued.Acknowledged) ConfirmDelivery(queued);
     }
 
     void ConfirmDelivery(QueuedChatMessage queued) {
@@ -1116,6 +1166,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
+                var superseded = _superseded.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
+                if (superseded is not null) {
+                    superseded.Acknowledged = true;
+                    _superseded.Remove(superseded);
+                    continue;
+                }
                 var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
                 acknowledged.Acknowledged = true;

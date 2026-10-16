@@ -48,7 +48,8 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle ? IdlePickupNote : AwaitingPickupNote;
 
     internal void SetPickup(bool agentIdle, bool canSend) {
-        var send = canSend && IsAwaitingPickup && AttachmentIds.Count == 0;
+        // A server-listed prompt is already a live dispatch: offering Send would submit another.
+        var send = canSend && IsAwaitingPickup && AttachmentIds.Count == 0 && DispatchId is null;
         var idleChanged = _agentIdle != agentIdle;
         var sendChanged = _canSendNow != send;
         _agentIdle = agentIdle;
