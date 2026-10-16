@@ -62,8 +62,7 @@ public class LocalLifecycleTests {
 
     [Test]
     public async Task An_unreadable_journal_stops_every_command() {
-        Root.EnsureCreated();
-        File.WriteAllText(Root.JournalPath, "{ truncated");
+        Tmp.CreateFile(["local", "journal.json"], "{ truncated");
         var lifecycle = new LocalLifecycle(Root, [new UndoSetup()], TimeProvider.System);
 
         await Assert.That(() => lifecycle.RunAsync(Wait, (_, _) => Task.FromResult(true), CancellationToken.None))

@@ -43,15 +43,17 @@ public class LocalStateFilesTests {
     [Arguments("not json")]
     [Arguments("{\"schema\":1,\"active\":{\"id\":\"x\",\"server_url\":\"http://localhost:1\",\"version\":\"1\"}}")]
     [Arguments("{\"schema\":0}")]
+    [Arguments("{\"schema\":1,\"active\":null}")]
+    [Arguments("{\"schema\":1,\"active\":null,\"retired\":[null]}")]
     public async Task A_malformed_registry_is_unreadable_not_absent(string content) {
-        File.WriteAllText(Root.RegistryPath, content);
+        Tmp.CreateFile(["local", "install.json"], content);
 
         await Assert.That(LocalStateFiles.ReadRegistry(Root)).IsTypeOf<StateRead<InstallRegistry>.Unreadable>();
     }
 
     [Test]
     public async Task A_registry_from_a_newer_schema_says_to_update() {
-        File.WriteAllText(Root.RegistryPath, "{\"schema\":2}");
+        Tmp.CreateFile(["local", "install.json"], "{\"schema\":2}");
 
         var read = (StateRead<InstallRegistry>.Unreadable)LocalStateFiles.ReadRegistry(Root);
 
@@ -105,6 +107,16 @@ public class LocalStateFilesTests {
         await Assert.That(read.Value.InstallationId).IsEqualTo("inst-1");
         await Assert.That(read.Value.StartedAt).IsEqualTo(entry.StartedAt);
         await Assert.That(read.Value.Details["port"]).IsEqualTo("51234");
+    }
+
+    [Test]
+    [Arguments("")]
+    [Arguments(",\"server_start\":\"maybe\"")]
+    public async Task A_journal_without_a_clear_start_decision_is_unreadable(string serverStart) {
+        Tmp.CreateFile(["local", "journal.json"],
+            "{\"schema\":1,\"operation\":\"setup\",\"phase\":\"staged\",\"started_at\":\"2026-10-16T12:00:00Z\"" + serverStart + "}");
+
+        await Assert.That(LocalStateFiles.ReadJournal(Root)).IsTypeOf<StateRead<LifecycleJournalEntry>.Unreadable>();
     }
 
     [Test]

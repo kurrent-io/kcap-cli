@@ -35,10 +35,23 @@ public static partial class LocalStateFiles {
 
         if (File.Exists(root.JournalPath) || Directory.Exists(root.JournalPath))
             throw new LocalLifecycleException($"The lifecycle journal {root.JournalPath} could not be removed.");
+
+        DirectorySync.Flush(root.Directory);
     }
 
-    static void Write(string path, byte[] bytes) =>
-        AtomicFile.Replace(path, bytes, OperatingSystem.IsWindows() ? null : OwnerReadWrite, followLink: false, durable: true);
+    static void Write(string path, byte[] bytes) {
+        for (var attempt = 1; ; attempt++) {
+            try {
+                AtomicFile.Replace(path, bytes, OperatingSystem.IsWindows() ? null : OwnerReadWrite, followLink: false, durable: true);
+                break;
+            } catch (Exception ex) when (OperatingSystem.IsWindows() && ex is IOException or UnauthorizedAccessException && attempt < 10) {
+                // A reader's open handle refuses the replace on Windows until it closes.
+                Thread.Sleep(20 * attempt);
+            }
+        }
+
+        DirectorySync.Flush(Path.GetDirectoryName(path)!);
+    }
 
     static StateRead<T> Read<TWire, T>(string path, JsonTypeInfo<TWire> info, Func<TWire, T?> map)
         where TWire : class
@@ -46,7 +59,11 @@ public static partial class LocalStateFiles {
         byte[] bytes;
 
         try {
-            bytes = File.ReadAllBytes(path);
+            // Share-all, so a reader never refuses the writer's replace on Windows.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            bytes = buffer.ToArray();
         } catch (FileNotFoundException) {
             return new StateRead<T>.Absent();
         } catch (DirectoryNotFoundException) {
@@ -86,10 +103,13 @@ public static partial class LocalStateFiles {
             active = new(id, port, url, version);
         }
 
+        // Required even when empty: a registry that lost its retired list would let a purged port be reused.
+        if (wire.Retired is null) return null;
+
         var retired = new List<RetiredInstallation>();
 
-        foreach (var r in wire.Retired ?? []) {
-            if (r.Id is not { Length: > 0 } id || r.ServerUrl is not { Length: > 0 } url || r.Port is not { } port) return null;
+        foreach (var r in wire.Retired) {
+            if (r is null || r.Id is not { Length: > 0 } id || r.ServerUrl is not { Length: > 0 } url || r.Port is not { } port) return null;
 
             retired.Add(new(id, port, url));
         }
@@ -101,6 +121,7 @@ public static partial class LocalStateFiles {
         if (wire.Schema is < 1 or > CurrentSchema) return null;
         if (wire.Operation is not { Length: > 0 } operation || wire.Phase is not { Length: > 0 } phase || wire.StartedAt is not { } startedAt)
             return null;
+        if (wire.ServerStart is not (Allow or Deny)) return null;
 
         return new(operation, phase, wire.ServerStart == Allow, wire.InstallationId, startedAt, wire.Details ?? new Dictionary<string, string>());
     }
@@ -129,7 +150,7 @@ public static partial class LocalStateFiles {
     internal sealed class RegistryWire {
         public int                    Schema  { get; set; }
         public InstallationWire?      Active  { get; set; }
-        public List<InstallationWire>? Retired { get; set; }
+        public List<InstallationWire?>? Retired { get; set; }
     }
 
     internal sealed class InstallationWire {
