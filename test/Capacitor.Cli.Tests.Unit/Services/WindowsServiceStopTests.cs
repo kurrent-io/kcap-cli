@@ -283,4 +283,22 @@ public class WindowsServiceStopTests {
         await Assert.That(host.Verbs).DoesNotContain("/Delete");
         await Assert.That(File.Exists(wrapper)).IsTrue();
     }
+
+    /// <summary>A task that can be neither queried nor listed is not taken as absent: its daemon would read
+    /// as unknown, and an uninstall scoped to a folder would skip it and report success.</summary>
+    [Test]
+    public async Task Status_of_a_task_that_cannot_be_queried_or_listed_throws() {
+        var host = new FakeHost { QueryFails = true, ListingFails = true };
+
+        await Assert.That(() => Manager(host).Status("laptop")).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Status_of_a_task_a_listing_leaves_out_is_not_installed() {
+        var host = new FakeHost { TaskExists = false };
+
+        var status = Manager(host).Status("laptop");
+
+        await Assert.That(status.State).IsEqualTo(ServiceState.NotInstalled);
+    }
 }

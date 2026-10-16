@@ -76,8 +76,16 @@ sealed class WindowsScheduledTaskServiceManager(
                 $"Scheduled task {WindowsTaskUnit.TaskName(serviceId)} runs an action kcap did not write; it is left as it is.");
     }
 
+    /// <summary>A failed query of one task proves nothing about it: only a listing that succeeds and leaves
+    /// it out says it is gone.</summary>
+    bool ConfirmedAbsent(string serviceId) => TryListInstalled() is { } installed && !installed.Contains(serviceId);
+
     public ServiceStatus Status(string serviceId) {
-        var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
+        var (code, stdout, err) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        if (code != 0 && !ConfirmedAbsent(serviceId))
+            throw new InvalidOperationException(
+                $"Could not read the state of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
+
         var wrapper = WrapperOf(serviceId, taskExists: code == 0);
         // Report the daemon binary baked inside the wrapper (not the wrapper itself)
         // so doctor catches a moved kcap-daemon.exe even when the wrapper still exists.
@@ -137,11 +145,10 @@ sealed class WindowsScheduledTaskServiceManager(
     // same "removed means stopped" launchd and systemd give. A daemon that survives keeps the task and
     // wrapper, so it is still reported and a retry can stop it.
     public bool Uninstall(string serviceId, out string? error) {
-        // Resolved before anything is stopped: a same-named task kcap did not write is left running. A query
-        // that fails proves nothing about the task, so only a listing without it counts as absent.
+        // Resolved before anything is stopped: a same-named task kcap did not write is left running.
         var query = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
         var taskExists = query.ExitCode == 0;
-        if (!taskExists && (TryListInstalled() is not { } installed || installed.Contains(serviceId))) {
+        if (!taskExists && !ConfirmedAbsent(serviceId)) {
             error = $"Could not confirm that scheduled task {WindowsTaskUnit.TaskName(serviceId)} is absent (exit {query.ExitCode}): {query.StdErr.Trim()}";
             return false;
         }
