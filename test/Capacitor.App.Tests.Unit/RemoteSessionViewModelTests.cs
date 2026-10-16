@@ -738,6 +738,39 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A refused or missing seed stops the remote feed for good, so the count the workspace handed
+    /// over must not outlive it.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_remote_background_monitor_whose_feed_stops_withdraws_the_running_command(bool notFound) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var call = AgentCall.Replace("toolu_A", "toolu_S").Replace("\"Agent\"", "\"Bash\"");
+            const string launch = """{"call_id":"toolu_S","result":"Command running in background with ID: b1.","extensions":{"claude_code":{"tool_use_result":{"backgroundTaskId":"b1"}}}}""";
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, call),
+                Event(1, CanonicalEventTypes.ToolResultReceived, launch)));
+            var refusal = new SessionDetailFetch(null, NotFound: notFound, Unauthorized: !notFound);
+            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+                new BackgroundCommandMonitor(key, report, ended, new FakeDaemonClientService(), h.Directory,
+                    h.Access, (_, _) => Task.FromResult(refusal), h.Lane, h.Time));
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var vm = h.Build(Harness.Row(vendor: "claude") with { AwaitingInput = true }, commands: commands);
+            await h.UntilAsync(vm, () => latest.GetValueOrDefault("remote:a1") == 1, "running command");
+            await vm.TeardownAsync();
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (latest.ContainsKey("remote:a1")) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("Stopped feed kept its running command");
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await Task.Delay(10);
+            }
+            await Assert.That(latest.ContainsKey("remote:a1")).IsFalse();
+        });
+    }
+
     /// Events shaped as the server writes them: tool_use_result on the result, no origin_kind on
     /// the notification.
     [Test]

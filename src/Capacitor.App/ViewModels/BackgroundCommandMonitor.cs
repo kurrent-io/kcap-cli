@@ -102,6 +102,8 @@ internal sealed class BackgroundCommandMonitor : IDisposable {
             var read = await Task.Run(feed.ReadAppended).ConfigureAwait(false);
             await Dispatcher.UIThread.InvokeAsync(() => {
                 if (_disposed || generation != _generation) return;
+                // A remote feed stops on either verdict; a local one retries on the next poll.
+                if (_remote && read.Status is FeedStatus.Missing or FeedStatus.Failed) { _ended(); return; }
                 if (read.Status == FeedStatus.Missing) { _report(0); return; }
                 if (read.Status == FeedStatus.Failed) return;
                 // The seed may arrive after this read drained the feed; only a consumed Reset counts.
