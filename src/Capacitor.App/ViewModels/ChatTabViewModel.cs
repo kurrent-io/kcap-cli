@@ -712,11 +712,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
-            // The up-arrow history includes a send the transcript has not echoed. Enter on that
-            // text would accept a second copy; one echo then clears the first row and the second
-            // stays queued after the step it was waiting on is already gone.
-            var already = _queuedMessages.FirstOrDefault(q =>
-                !q.IsForeign && !q.Acknowledged && q.AttachmentIds.Count == 0 && q.MatchesText(snapshot));
+            // The edit count is what says this text was recalled and left alone. Typing the same
+            // words is a second send: one transcript echo retires one queued row.
+            var already = edits == _recallEdits
+                ? _queuedMessages.FirstOrDefault(q =>
+                    !q.IsForeign && !q.Acknowledged && q.AttachmentIds.Count == 0 && q.MatchesText(snapshot))
+                : null;
             if (already is not null && Tray.Snapshot().Count == 0) {
                 if (_composerEdits == edits && ComposerText == snapshot) ComposerText = "";
                 return;

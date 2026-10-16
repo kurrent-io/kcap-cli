@@ -1586,7 +1586,7 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Enter on a prompt that is already queued leaves that one row. Send on the row, once the
+    /// Enter on a recalled copy of a queued prompt leaves that one row. Send on the row, once the
     /// agent is idle, is what delivers it.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1613,9 +1613,9 @@ public class ChatTabViewModelTests {
             await h.PushAsync(Dto(path) with { AwaitingInput = false });
             await Assert.That(queued.CanSendNow).IsFalse();
             await Assert.That(queued.PickupNote).IsEqualTo(QueuedChatMessage.AwaitingPickupNote);
-            h.Chat.ComposerText = "look";
-            var blocked = h.Chat.SendCommand.Execute().ToTask();
-            await blocked;
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(input.Pending).IsNull();
             await Assert.That(input.Sends).Count().IsEqualTo(1);
             await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
 
