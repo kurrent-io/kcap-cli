@@ -8,7 +8,6 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Threading;
 using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
@@ -21,10 +20,15 @@ public partial class SessionRailView : UserControl {
     // The rail's 44px chrome row IS the title bar on this surface — see WindowChrome.
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
 
-    // Posted: Click runs before the button's command, and closing the flyout detaches the item,
-    // which nulls its inherited DataContext and with it the command about to run.
-    void OnHelpFlyoutItemClick(object? sender, RoutedEventArgs e) =>
-        Dispatcher.UIThread.Post(() => RailHelpButton.Flyout?.Hide());
+    // Button.OnClick raises ClickEvent before reading Command, and Flyout.Hide detaches the popup
+    // parent and clears inherited DataContext on its rows, so capture and run Command here.
+    void OnHelpFlyoutItemClick(object? sender, RoutedEventArgs e) {
+        if (sender is not Button { Command: { } command, CommandParameter: var parameter }
+            || !command.CanExecute(parameter)) return;
+        RailHelpButton.Flyout?.Hide();
+        command.Execute(parameter);
+        e.Handled = true;
+    }
 
     AboutWindow? _about;
 
