@@ -196,6 +196,25 @@ public class McpPlansServerTests {
     }
 
     [Test]
+    public async Task A_symlinked_spelling_of_the_session_checkout_is_still_the_session_checkout() {
+        // Creating a symlink needs a privilege the Windows CI runner lacks.
+        if (OperatingSystem.IsWindows()) return;
+
+        var (root, _) = SeedRepo();
+        var alias     = Tmp.PathTo("alias");
+        Directory.CreateSymbolicLink(alias, root.Path);
+        var direct    = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md"}"""), root, root);
+
+        var byPath  = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = Path.Combine(alias, "docs", "plan.md") }, root, root);
+        var byNamed = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = "docs/plan.md", ["workspace_root"] = alias }, root, root);
+
+        foreach (var d in (PlanDocumentDeclaration[])[byPath, byNamed]) {
+            await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
+            await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(direct.Body["workspace_root"]!.GetValue<string>());
+        }
+    }
+
+    [Test]
     public async Task A_checkout_of_another_repository_is_declared_only_when_named_as_the_workspace_root() {
         var (root, _) = SeedRepo();
         var other     = Tmp.CreateDir("other");

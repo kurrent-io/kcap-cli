@@ -334,11 +334,11 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         if (!File.Exists(fullPath))
             throw new ArgumentException($"'{rawPath}' does not exist (resolved against {baseDir}).");
 
-        // A file in the session's own checkout goes root-relative, keyed as discovery keys it; one in
-        // another checkout goes absolute, which is what lets the server key it off that checkout.
-        var ownCheckout = PathComparison.Equal(checkout, repoRoot ?? cwd);
+        // A file in the session's own checkout, under any spelling of it, goes root-relative, keyed as
+        // discovery keys it; one in another checkout goes absolute, which lets the server key it there.
+        var ownCheckout = PathComparison.Equal(CanonicalPath.Resolve(checkout), CanonicalPath.Resolve(repoRoot ?? cwd));
         var keyRoot     = ownCheckout ? repoRoot : checkout;
-        string Wire(string path) => ownCheckout ? WirePath(path, repoRoot) : path;
+        string Wire(string path) => ownCheckout ? WirePath(path, repoRoot is null ? null : checkout) : path;
 
         var (hash, snapshot, length) = ReadDocument(fullPath);
         var wirePath = Wire(fullPath);
