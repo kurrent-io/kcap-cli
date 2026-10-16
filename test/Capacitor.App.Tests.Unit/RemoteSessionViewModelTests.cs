@@ -40,9 +40,10 @@ public class RemoteSessionViewModelTests {
             });
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
-                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null) {
+                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
+                BackgroundCommandActivity? commands = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, pullRequests: pullRequests, plans: plans);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -658,6 +659,84 @@ public class RemoteSessionViewModelTests {
     const string AgentLaunch = """{"call_id":"toolu_A","result":"Async agent launched successfully.","extensions":{"claude_code":{"tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}}}""";
     const string AgentNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}""";
     const string MetaNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}""";
+
+    [Test]
+    public async Task An_already_denied_background_session_releases_its_feed_before_access_returns() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+            using var lease = h.Access.Acquire("s2");
+            await WaitUntilAsync(async () => await lease.State.FirstAsync() == SessionAccessState.Denied, "denied session");
+            var row = Harness.Row(sessionId: null);
+            h.Directory.Rows.AddOrUpdate(row);
+            var unexpectedRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            BackgroundCommandMonitor? monitor = null;
+            var ended = false;
+            monitor = new BackgroundCommandMonitor(row.Key, _ => { }, () => {
+                ended = true;
+                monitor!.Dispose();
+            }, new FakeDaemonClientService(), h.Directory, h.Access, (_, _) => {
+                unexpectedRead.TrySetResult();
+                return Task.FromResult(h.Detail);
+            }, h.Lane, h.Time);
+            using var lifetime = monitor;
+
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = "s2" });
+            await Assert.That(ended).IsTrue();
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+            h.Lane.SessionAccessChangedSubject.OnNext("s2");
+            await WaitUntilAsync(async () => await lease.State.FirstAsync() == SessionAccessState.Established, "restored access");
+            var quiet = Task.Delay(TimeSpan.FromSeconds(1));
+            await Assert.That(await Task.WhenAny(unexpectedRead.Task, quiet)).IsSameReferenceAs(quiet);
+            await Assert.That(h.Lane.Tails).IsEmpty();
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_remote_background_command_remains_working_after_navigation_until_it_or_the_session_ends(bool sessionEnds) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var call = AgentCall.Replace("toolu_A", "toolu_S").Replace("\"Agent\"", "\"Bash\"");
+            const string launch = """{"call_id":"toolu_S","result":"Command running in background with ID: b1.","extensions":{"claude_code":{"tool_use_result":{"backgroundTaskId":"b1"}}}}""";
+            const string finished = """{"content":"<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_S</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>"}""";
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, call),
+                Event(1, CanonicalEventTypes.ToolResultReceived, launch)));
+            BackgroundCommandMonitor? monitor = null;
+            var backgroundSeed = new TaskCompletionSource<SessionDetailFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+                monitor = new BackgroundCommandMonitor(key, report, ended, new FakeDaemonClientService(), h.Directory,
+                    h.Access, (_, ct) => backgroundSeed.Task.WaitAsync(ct), h.Lane, h.Time));
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var row = Harness.Row(vendor: "claude") with { AwaitingInput = true };
+            var vm = h.Build(row, commands: commands);
+            await h.UntilAsync(vm, () => latest.GetValueOrDefault("remote:a1") == 1, "running command");
+            await vm.TeardownAsync();
+            h.Time.Advance(ChatTabViewModel.PollInterval);
+            await Task.Yield();
+            await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(latest.GetValueOrDefault("remote:a1")).IsEqualTo(1);
+            backgroundSeed.SetResult(h.Detail);
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 2, what: "background monitor tail");
+            h.Time.Advance(ChatTabViewModel.PollInterval);
+            await Task.Yield();
+            await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(latest.GetValueOrDefault("remote:a1")).IsEqualTo(1);
+
+            if (sessionEnds) h.Directory.Rows.AddOrUpdate(row with { Status = "Completed" });
+            else h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, finished));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (latest.ContainsKey("remote:a1")) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("Background command did not settle");
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await Task.Delay(10);
+            }
+            await Assert.That(latest.ContainsKey("remote:a1")).IsFalse();
+        });
+    }
 
     /// Events shaped as the server writes them: tool_use_result on the result, no origin_kind on
     /// the notification.
