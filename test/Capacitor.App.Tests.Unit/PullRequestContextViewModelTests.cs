@@ -393,6 +393,32 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    [Arguments("capacity_exhausted", false)]
+    [Arguments("capacity_exhausted", true)]
+    [Arguments("rate_limited", false)]
+    [Arguments("rate_limited", true)]
+    [Arguments("budget_exhausted", false)]
+    [Arguments("budget_exhausted", true)]
+    public Task List_refreshes_obey_host_cooldowns_but_not_content_retry_deadlines(string reason, bool manual) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Push(); await h.Show();
+            h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+                PullRequestReadKind.Unavailable, Subject: subject, Reason: reason, RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(2))));
+            h.Time.Advance(TimeSpan.FromSeconds(25));
+            await WaitUntilAsync(() => h.Source.Overviews == 2 && !h.Vm.IsReading, what: "overview retry received");
+            await Assert.That(h.Source.Lists).IsEqualTo(1);
+
+            h.Time.Advance(TimeSpan.FromSeconds(manual ? 4 : 5));
+            Dispatcher.UIThread.RunJobs();
+            if (manual) h.Vm.Refresh();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh settled");
+            await Assert.That(h.Source.Lists).IsEqualTo(reason == "capacity_exhausted" ? 2 : 1);
+            await Assert.That(h.Source.Overviews).IsEqualTo(2);
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
     public Task A_transient_list_failure_respects_retry_after_and_keeps_a_fresh_overview() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
         h.Source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, AccessFailure: "transient",

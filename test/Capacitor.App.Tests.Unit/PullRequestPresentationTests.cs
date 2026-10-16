@@ -506,6 +506,7 @@ public class PullRequestPresentationTests {
         await h.SettleAsync();
         await Assert.That(h.Model.HasNotice).IsFalse();
         var freshness = h.Reader.FindControl<TextBlock>("FreshnessText")!;
+        await Assert.That(freshness.IsEffectivelyVisible).IsTrue();
         await Assert.That(freshness.Text).Contains("Earlier snapshot");
         await Assert.That(freshness.Text).Contains(h.Model.FetchedLabel);
     });

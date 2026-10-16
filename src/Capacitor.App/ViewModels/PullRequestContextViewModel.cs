@@ -106,8 +106,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     bool RenewingSnapshot => _hasDisplayed && _accessSeconds > 0 && _overviewPending;
     // Both in-flight renewal and failed-renewal grace end at the same access-based deadline.
     double SnapshotDisplayRemaining => _accessSeconds + SnapshotGrace.TotalSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds;
-    DateTime? ReadRetryAt => _selected is { } choice && _rateLimits.TryGetValue(RateLimitKey(choice.Subject), out var rateLimit)
-        && (_retryAt is null || rateLimit > _retryAt) ? rateLimit : _retryAt;
+    DateTime? HostRateLimitRetryAt => _selected is { } choice && _rateLimits.TryGetValue(RateLimitKey(choice.Subject), out var rateLimit) ? rateLimit : null;
+    DateTime? ReadRetryAt => HostRateLimitRetryAt is { } rateLimit && (_retryAt is null || rateLimit > _retryAt) ? rateLimit : _retryAt;
     static string RateLimitKey(PullRequestSubjectDto subject) => (subject.Provider + "|" + subject.Host).ToLowerInvariant();
     string SectionKey => _section == "thread_comments" ? _section + ":" + _thread : _section == "threads" ? _section + ":" + _resolved : _section;
     string _resolved = "unresolved";
@@ -347,7 +347,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             if (!_stopped && !_refreshing) {
                 var pollGap = _queuedRefresh ? 3 : Math.Max(30, _pollAfter);
                 next = _lastRefresh is { } last ? pollGap - _time.GetElapsedTime(last).TotalSeconds : 1;
-                if (ReadRetryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
+                if (HostRateLimitRetryAt is { } retry && retry > _time.GetUtcNow().UtcDateTime)
                     next = Math.Max(next, (retry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
                 if (_listRetryAt is { } listRetry && listRetry > _time.GetUtcNow().UtcDateTime)
                     next = Math.Max(next, (listRetry - _time.GetUtcNow().UtcDateTime).TotalSeconds);
@@ -377,7 +377,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         }
         if (!_masked && !_grace && _accessSeconds > 0 && Remaining <= 5 && !_legacy && !_stopped && !_overviewPending
             && !(ReadRetryAt > _time.GetUtcNow().UtcDateTime)) RequestOverview();
-        if (!(ReadRetryAt > _time.GetUtcNow().UtcDateTime) && !(_listRetryAt > _time.GetUtcNow().UtcDateTime) && !_stopped
+        if (!(HostRateLimitRetryAt > _time.GetUtcNow().UtcDateTime) && !(_listRetryAt > _time.GetUtcNow().UtcDateTime) && !_stopped
             && (_queuedRefresh || _lastRefresh is null || _time.GetElapsedTime(_lastRefresh.Value).TotalSeconds >= Math.Max(30, _pollAfter))) RequestRefresh();
         if (!_masked && _accessSeconds > 0 && Remaining <= 0 && !_grace) {
             if (!RenewingSnapshot) EnterGrace();

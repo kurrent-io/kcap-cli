@@ -12,7 +12,7 @@ public sealed partial class PullRequestContextViewModel {
     void RequestRefresh(bool manual = false) {
         if (_disposed || !_foreground || _session is not { } session) return;
         if (manual) { _source.ResetSession(session); _stopped = false; _refreshDiscovery = true; _refreshPage = true; _lastOverview = null; }
-        if (_stopped || ReadRetryAt > _time.GetUtcNow().UtcDateTime || _listRetryAt > _time.GetUtcNow().UtcDateTime) return;
+        if (_stopped || HostRateLimitRetryAt > _time.GetUtcNow().UtcDateTime || _listRetryAt > _time.GetUtcNow().UtcDateTime) return;
         // A click waits out a short gap only; the poll keeps the longer one.
         if (_refreshing || _lastRefresh is { } last && _time.GetElapsedTime(last).TotalSeconds < (manual || _queuedRefresh ? 3 : 15)) {
             _queuedRefresh |= manual;
