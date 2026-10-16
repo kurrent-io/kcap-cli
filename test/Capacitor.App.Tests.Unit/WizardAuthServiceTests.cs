@@ -293,7 +293,7 @@ public class ConsentFlipIdentityFailClosedTests {
     public async Task Unreadable_config_resolves_an_identity_that_matches_nothing() {
         File.WriteAllText(ConfigPath, "{not json");
 
-        await Assert.That(AppUnderTest.ResolveConsentFlipIdentity(Config.Root)).IsEqualTo(("", "", ""));
+        await Assert.That(AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root)).IsEqualTo(("", "", ""));
     }
 
     [Test]
@@ -303,7 +303,7 @@ public class ConsentFlipIdentityFailClosedTests {
         var claim  = new ConsentFlipClaim("acme", "https://acme.example:443");
         claims.Arm(claim);
 
-        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root), "acme-daemon");
+        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root), "acme-daemon");
 
         await Assert.That(consumed).IsFalse();
         await Assert.That(claims.Pending()).IsEquivalentTo([claim]);
@@ -321,7 +321,7 @@ public class ConsentFlipIdentityFailClosedTests {
         var claim  = new ConsentFlipClaim("acme", ServerIdentity.Canonicalize("https://acme.example")!);
         claims.Arm(claim);
 
-        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root), "acme-daemon");
+        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root), "acme-daemon");
 
         await Assert.That(consumed).IsTrue();
         await Assert.That(claims.Pending()).IsEmpty();

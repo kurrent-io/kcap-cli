@@ -87,7 +87,7 @@ public class SettingsWindowSmokeTests {
         });
         var tokens = AuthFixtures.NewTokenStore(Config.Root);
         var profiles = new ProfilesSettingsViewModel(Config.Root, tokens,
-            new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, TimeProvider.System), "work",
+            new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System), "work",
             (_, _, _) => Task.CompletedTask, (_, _) => Task.FromResult(false));
         await profiles.RefreshAsync();
         var service = new FakeDaemonClientService();

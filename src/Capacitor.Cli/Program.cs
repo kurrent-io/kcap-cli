@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.Claude;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 using ReviewCommand = Capacitor.Cli.Commands.ReviewCommand;
 using WatchCommand = Capacitor.Cli.Commands.WatchCommand;
@@ -165,7 +166,7 @@ var serverEnv = museHook.Apply(ProfileOverrides.FromEnvironment());
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
+var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, LocalEndpoints.Read(LocalRoot.FromEnvironment(home)), workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
 
 if (museHook.MissingProfileWarning(profiles) is { } missingProfile) {
     Console.Error.WriteLine(missingProfile);
