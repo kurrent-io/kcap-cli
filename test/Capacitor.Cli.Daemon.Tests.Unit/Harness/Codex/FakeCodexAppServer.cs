@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
@@ -43,6 +44,10 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
     // When set, turn/start responds inProgress and does NOT auto-emit turn/completed — the turn stays
     // active so a follow-up input is steered onto it. Complete it with CompleteHeldTurnAsync.
     public bool        HoldTurnOpen;
+    /// <summary>`model/list` pages, served in order; each page's nextCursor names the following one.</summary>
+    public List<JsonArray> ModelPages = [];
+    /// <summary>The `model/list` page answered with a result that is not a model list.</summary>
+    public int?            MalformedModelPage;
 
     // ── Observed ───────────────────────────────────────────────────────────────────────────────
     public readonly List<string>       ReceivedMethods    = [];
@@ -112,6 +117,21 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                     foreach (var m in opt.EnumerateArray()) InitializeOptOuts.Add(m.GetString() ?? "");
                 await RespondAsync(id, new JsonObject { ["userAgent"] = "codex-fake" }, ct);
                 break;
+
+            case "model/list": {
+                var index = @params.ValueKind == JsonValueKind.Object && Str(@params, "cursor") is { } c ? int.Parse(c, CultureInfo.InvariantCulture) : 0;
+                if (index == MalformedModelPage) {
+                    await RespondAsync(id, new JsonObject { ["unexpected"] = true }, ct);
+                    break;
+                }
+
+                var page  = index < ModelPages.Count ? ModelPages[index] : [];
+                await RespondAsync(id, new JsonObject {
+                    ["data"]       = page.DeepClone(),
+                    ["nextCursor"] = index + 1 < ModelPages.Count ? (index + 1).ToString(CultureInfo.InvariantCulture) : null,
+                }, ct);
+                break;
+            }
 
             case "hooks/list":
                 await RespondAsync(id, new JsonObject { ["data"] = HooksData.DeepClone() }, ct);
