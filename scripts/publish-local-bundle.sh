@@ -27,9 +27,27 @@ refuse() {
   exit 1
 }
 
+# Each check answers "stored", "absent", or refuses a stored object that is not this build's.
+archive_state() {
+  exists "$name.tar.gz" "$tmp/archive" || { echo absent; return; }
+  cmp -s "$tmp/archive" "$dir/$name.tar.gz" || refuse "$name.tar.gz is already uploaded with other bytes."
+  echo stored
+}
+signature_state() {
+  exists "$name.json.sig" "$tmp/sig" || { echo absent; return; }
+  bash "$here/local-manifest-key.sh" verify "$pub" "$dir/$name.json" "$tmp/sig" >/dev/null 2>&1 \
+    || refuse "$name.json.sig is already uploaded and does not sign this manifest."
+  echo stored
+}
+
 if exists "$name.json" "$tmp/published.json"; then
   cmp -s "$tmp/published.json" "$dir/$name.json" || {
     echo "$name.json is already published from another build. A published version is never replaced: cut a new version." >&2
+    exit 1; }
+  # Called directly, not in $(...), so a refusal or an R2 failure ends the script.
+  archive_state > "$tmp/a"; signature_state > "$tmp/s"
+  [ "$(cat "$tmp/a") $(cat "$tmp/s")" = "stored stored" ] || {
+    echo "$name.json is published but its archive or signature is missing from local/$rid/: restore them by hand." >&2
     exit 1; }
   echo "$name is already published with these bytes"
   exit 0
@@ -38,20 +56,13 @@ fi
 # shellcheck disable=SC2086 # $R2 is a flag list
 put() { aws s3 cp $R2 "$1" "$DEST/$(basename "$1")" --content-type "$2" --cache-control "public, max-age=31536000, immutable"; }
 
-if exists "$name.tar.gz" "$tmp/archive"; then
-  cmp -s "$tmp/archive" "$dir/$name.tar.gz" || refuse "$name.tar.gz is already uploaded with other bytes."
-  echo "$name.tar.gz is already uploaded with these bytes"
-else
-  put "$dir/$name.tar.gz" application/gzip
-fi
+archive_state > "$tmp/a"
+if [ "$(cat "$tmp/a")" = stored ]; then echo "$name.tar.gz is already uploaded with these bytes"
+else put "$dir/$name.tar.gz" application/gzip; fi
 
-if exists "$name.json.sig" "$tmp/sig"; then
-  bash "$here/local-manifest-key.sh" verify "$pub" "$dir/$name.json" "$tmp/sig" \
-    || refuse "$name.json.sig is already uploaded and does not sign this manifest."
-  echo "$name.json.sig is already uploaded and signs this manifest"
-else
-  put "$dir/$name.json.sig" text/plain
-fi
+signature_state > "$tmp/s"
+if [ "$(cat "$tmp/s")" = stored ]; then echo "$name.json.sig is already uploaded and signs this manifest"
+else put "$dir/$name.json.sig" text/plain; fi
 
 put "$dir/$name.json" application/json
 echo "published $name to $DEST"

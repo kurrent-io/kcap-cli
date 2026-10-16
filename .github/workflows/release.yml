@@ -1352,6 +1352,8 @@ jobs:
           set -euo pipefail
           mkdir -p check
           tar -xzf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C check
+          bash scripts/verify-local-bundle.sh check
+          # Only Apple's ticket lookup is retried: it can lag the accepted submission.
           for attempt in 1 2 3 4 5; do
             bash scripts/verify-local-bundle.sh check --notarized && exit 0
             echo "notarization not visible yet (attempt $attempt)"; sleep 30

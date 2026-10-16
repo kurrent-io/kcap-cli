@@ -76,6 +76,12 @@ run "a stored signature of another manifest refuses" 1
 grep -q "does not sign this manifest" "$tmp/out" || { echo "FAIL: signature refusal: $(cat "$tmp/out")"; fail=1; }
 [ "$(log)" = "$n.tar.gz " ] || { echo "FAIL: got past a foreign signature: $(log)"; fail=1; }
 
+for broken in "rm $n.tar.gz" "rm $n.json.sig" "printf x > $n.tar.gz"; do
+  fresh; cp "$art/$n.tar.gz" "$art/$n.json" "$art/$n.json.sig" "$B/"; (cd "$B" && eval "$broken")
+  run "a published manifest with a broken set: $broken" 1
+  [ -z "$(log)" ] || { echo "FAIL: uploaded over a published manifest: $(log)"; fail=1; }
+done
+
 fresh; touch "$tmp/bucket/.broken"
 run "an R2 failure is never read as unpublished" 1
 
