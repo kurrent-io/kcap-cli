@@ -22,11 +22,15 @@ public sealed record AppImageInstall(string Image) {
             : Path.Combine(home.Path, ".local", "share");
         var root   = Path.Combine(dataHome, "kcap", "desktop");
         var target = Path.Combine(root, "bin");
+        var stamp  = Path.Combine(root, "image.stamp");
+        var identity = ImageIdentity();
 
         try {
+            if (identity is not null && Staged(stamp, identity, bundleCli, target)) return target;
             Directory.CreateDirectory(target);
             foreach (var name in CliFiles) Stage(Path.Combine(bundleCli, name), Path.Combine(target, name));
             StageTree(BundleLayout.PluginDirectory(appDirectory), BundleLayout.PluginDirectory(root));
+            if (identity is not null) File.WriteAllText(stamp, identity);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             Console.Error.WriteLine($"kcap: could not copy the bundled CLI to {root}, running it from the AppImage: {ex.Message}");
             return bundleCli;
@@ -34,6 +38,16 @@ public sealed record AppImageInstall(string Image) {
 
         return target;
     }
+
+    // The image's size and mtime stand for its contents, so a matching stamp skips hashing the bundle.
+    string? ImageIdentity() {
+        var image = new FileInfo(Image);
+        return image.Exists ? $"{image.Length}:{image.LastWriteTimeUtc.Ticks}" : null;
+    }
+
+    static bool Staged(string stamp, string identity, string bundleCli, string target) =>
+        File.Exists(stamp) && File.ReadAllText(stamp) == identity
+        && CliFiles.Where(name => File.Exists(Path.Combine(bundleCli, name))).All(name => File.Exists(Path.Combine(target, name)));
 
     static void Stage(string source, string destination) {
         if (!File.Exists(source) || SameContent(source, destination)) return;
