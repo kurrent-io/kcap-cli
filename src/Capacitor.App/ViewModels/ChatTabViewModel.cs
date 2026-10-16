@@ -140,6 +140,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     static string MessageCount(int count) => $"{count} message{(count == 1 ? "" : "s")}";
 
     void RefreshQueue() {
+        RefreshQueuedSend();
         this.RaisePropertyChanged(nameof(HasQueuedMessages));
         this.RaisePropertyChanged(nameof(QueueSummary));
     }
@@ -293,6 +294,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
+    public ReactiveCommand<QueuedChatMessage, Unit> SendQueuedCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
     public ReactiveCommand<string, Unit> RunCodeCommand { get; }
@@ -459,6 +461,19 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
         ShowsActivityNote = _failureNote is not null && Phase != ChatTabPhase.Failed && ActivityNote.Length > 0;
         RefreshAgentStatus();
+        RefreshQueuedSend();
+    }
+
+    bool AgentIsIdle => !_ended && !SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
+
+    /// Idle, and the channel will take text: a queued prompt is not waiting on a step.
+    bool AgentCanTakeQueuedNow =>
+        AgentIsIdle && !IsReadOnlyParticipant && !HasUsageLimitQuestion && _input.CanAcceptText;
+
+    void RefreshQueuedSend() {
+        var idle = AgentIsIdle;
+        var can = AgentCanTakeQueuedNow;
+        foreach (var queued in _queuedMessages) queued.SetPickup(idle, can);
     }
 
     void RefreshAgentStatus() {
@@ -678,6 +693,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
+        // A paste stays in flight after the row is added. The note is already right; the button
+        // waits until the channel will take another send.
+        _input.WhenAnyValue(i => i.CanAcceptText)
+            .Subscribe(_ => RefreshQueuedSend())
+            .DisposeWith(_disposables);
+
         var canSend = Observable.CombineLatest(
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
@@ -691,6 +712,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
             var snapshot = ComposerText;
             var edits = _composerEdits;
+            // The up-arrow history includes a send the transcript has not echoed. Enter on that
+            // text would accept a second copy; one echo then clears the first row and the second
+            // stays queued after the step it was waiting on is already gone.
+            var already = _queuedMessages.FirstOrDefault(q =>
+                !q.IsForeign && !q.Acknowledged && q.AttachmentIds.Count == 0 && q.MatchesText(snapshot));
+            if (already is not null && Tray.Snapshot().Count == 0) {
+                if (_composerEdits == edits && ComposerText == snapshot) ComposerText = "";
+                return;
+            }
             var draftRevision = _drafts?.Revision(_origin, _agentId) ?? 0;
             var files = Tray.Snapshot();
             if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
@@ -756,6 +786,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);
         _disposables.Add(SendCommand);
+
+        // Drops the stuck row first, so the send below is the only copy the banner tracks.
+        SendQueuedCommand = ReactiveCommand.CreateFromTask<QueuedChatMessage>(async message => {
+            if (!message.CanSendNow || message.Acknowledged || message.IsForeign) return;
+            _queuedMessages.Remove(message);
+            _unechoed.Remove(message);
+            if (ReferenceEquals(_lastSent, message)) _lastSent = null;
+            RefreshQueue();
+            ComposerText = message.Text;
+            await SendCommand.Execute();
+        });
+        _disposables.Add(SendQueuedCommand);
 
         var canInterrupt = Observable.CombineLatest(
             _input.WhenAnyValue(i => i.CanInterrupt),

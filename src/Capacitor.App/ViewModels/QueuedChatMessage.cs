@@ -9,6 +9,8 @@ namespace Capacitor.App.ViewModels;
 /// Only the ids are held: the chips themselves live in the tray until a delivery clears them.
 public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset, IReadOnlyList<Guid> attachmentIds) : ReactiveObject {
     public const string AwaitingPickupNote = "The agent reads it when its current step ends";
+    /// Shown instead of <see cref="AwaitingPickupNote"/> when nothing is in a step to end.
+    public const string IdlePickupNote = "The agent is not in a step";
 
     public string Text { get; } = text;
     public IReadOnlyList<Guid> AttachmentIds { get; } = attachmentIds;
@@ -26,7 +28,32 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
             _isUnconfirmed = value;
             this.RaisePropertyChanged();
             this.RaisePropertyChanged(nameof(IsAwaitingPickup));
+            this.RaisePropertyChanged(nameof(PickupNote));
         }
+    }
+
+    bool _agentIdle;
+    bool _canSendNow;
+    /// The agent is idle and the channel can take text, so this row can be delivered instead of waiting.
+    public bool CanSendNow {
+        get => _canSendNow;
+        private set {
+            if (_canSendNow == value) return;
+            _canSendNow = value;
+            this.RaisePropertyChanged();
+        }
+    }
+
+    /// Which wait the row describes. A channel that is still delivering the last paste is not a step.
+    public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle ? IdlePickupNote : AwaitingPickupNote;
+
+    internal void SetPickup(bool agentIdle, bool canSend) {
+        var send = canSend && IsAwaitingPickup && AttachmentIds.Count == 0;
+        var idleChanged = _agentIdle != agentIdle;
+        var sendChanged = _canSendNow != send;
+        _agentIdle = agentIdle;
+        if (sendChanged) CanSendNow = send;
+        if (idleChanged) this.RaisePropertyChanged(nameof(PickupNote));
     }
 
     /// An own send the channel accepted but the transcript has not echoed: the runtime reads a
@@ -44,6 +71,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         if (!_serverListed) return;
         _serverListed = false;
         this.RaisePropertyChanged(nameof(IsAwaitingPickup));
+        this.RaisePropertyChanged(nameof(PickupNote));
     }
     /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
     public bool IsForeign { get; private init; }
@@ -56,6 +84,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         _serverListed = true;
         IsUnconfirmed = false;
         this.RaisePropertyChanged(nameof(IsAwaitingPickup));
+        this.RaisePropertyChanged(nameof(PickupNote));
     }
 
     internal bool MatchesText(string text) => Normalize(Text) == Normalize(text);

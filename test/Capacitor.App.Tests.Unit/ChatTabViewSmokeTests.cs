@@ -722,7 +722,20 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.IsVisible).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "queued follow-up")).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsFalse();
+            await Assert.That(host.Chat.QueuedMessages.Single().PickupNote).IsEqualTo(QueuedChatMessage.IdlePickupNote);
+            // The paste is still in flight, so Send appears once the channel will take text.
+            host.Time.Advance(CrDelay);
+            await host.Terminal.PendingDeliveryForTesting!;
+            host.Settle();
+            await Assert.That(host.Chat.QueuedMessages.Single().CanSendNow).IsTrue();
+            // Nothing is in a step, so the row offers Send instead of promising the step will end.
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.IdlePickupNote && t.IsVisible)).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
+            await Assert.That(banner.GetVisualDescendants().OfType<Button>().Any(b => b.Name == "SendQueuedButton" && b.IsVisible)).IsTrue();
+            host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = false });
+            host.Settle();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsTrue();
+            await Assert.That(banner.GetVisualDescendants().OfType<Button>().Any(b => b.Name == "SendQueuedButton" && b.IsVisible)).IsFalse();
             host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Completed" });
             host.Settle();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsTrue();

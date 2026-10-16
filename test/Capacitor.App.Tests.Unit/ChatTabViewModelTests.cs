@@ -1586,6 +1586,51 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Enter on a prompt that is already queued leaves that one row. Send on the row, once the
+    /// agent is idle, is what delivers it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Enter_on_queued_text_does_not_add_a_second_row_and_send_delivers_it_once_idle() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            await Assert.That(queued.CanSendNow).IsTrue();
+            await Assert.That(queued.PickupNote).IsEqualTo(QueuedChatMessage.IdlePickupNote);
+
+            h.Chat.ComposerText = "";
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+            await h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(input.Pending).IsNull();
+            await Assert.That(input.Sends).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(queued);
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await Assert.That(queued.CanSendNow).IsFalse();
+            await Assert.That(queued.PickupNote).IsEqualTo(QueuedChatMessage.AwaitingPickupNote);
+            h.Chat.ComposerText = "look";
+            var blocked = h.Chat.SendCommand.Execute().ToTask();
+            await blocked;
+            await Assert.That(input.Sends).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            await Assert.That(input.Sends).Count().IsEqualTo(2);
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsNotSameReferenceAs(queued);
+            await Assert.That(h.Chat.QueuedMessages.Single().Text).IsEqualTo("look");
+            await h.TeardownAsync();
+        });
+    }
+
     /// Text equality cannot prove a recall was left alone: an edit undone by hand lands on the
     /// same string, and that string is the user's own draft now.
     [Test]
