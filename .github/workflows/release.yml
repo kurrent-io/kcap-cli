@@ -1229,3 +1229,186 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ github.ref_name }}" "releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe" --clobber
+
+  # The local-edition bundle is built unsigned by kcap-server's local-bundle workflow on the same tag
+  # and attached to that tag's kcap-server release. A tarball cannot be stapled: the signed tree is
+  # notarized as a zip, so each Mach-O's ticket is found online, and the manifest signature plus its
+  # SHA-256 are what the CLI checks before it extracts anything.
+  local-bundle:
+    name: Sign and notarize the local bundle (osx-arm64)
+    needs: [ci, verify-release-immutable]
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      RID: osx-arm64
+      MANIFEST_KEY: src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the manifest signing key
+        env:
+          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
+        run: bash scripts/local-manifest-key.sh check "$MANIFEST_KEY"
+
+      # The cheap first line of the immutability rule; local-publish repeats it inside its
+      # concurrency group against the actual bytes.
+      - name: Refuse an already-published version
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+          DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
+        run: |
+          set -euo pipefail
+          KEY="kcap-local-${{ steps.version.outputs.VERSION }}-$RID.json"
+          set +e; bash scripts/r2-fetch.sh "$KEY" published.json; rc=$?; set -e
+          case "$rc" in
+            0)  echo "::error::local/$RID/$KEY is already published. A published bundle is never rebuilt: cut a new version."; exit 1 ;;
+            44) echo "local/$RID/$KEY is not published yet" ;;
+            *)  exit 1 ;;
+          esac
+
+      # kcap-server is private. An installation token lasts an hour, which bounds the wait below.
+      - name: Get a token that reads kcap-server
+        id: server-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.KURRENT_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KURRENT_CI_APP_PRIVATE_KEY }}
+          owner: kurrent-io
+          repositories: kcap-server
+          permission-contents: read
+
+      - name: Download the unsigned bundle and the server's smoke test
+        id: download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.server-token.outputs.token }}
+          SERVER_WAIT_TIMEOUT: 2700
+          SERVER_WAIT_INTERVAL: 30
+        run: |
+          set -euo pipefail
+          NAME="kcap-local-${{ steps.version.outputs.VERSION }}-$RID"
+          archive="$(bash scripts/wait-server-bundle.sh "$GITHUB_REF_NAME" "$NAME.tar.gz" "$RUNNER_TEMP/unsigned")"
+          gh api -H 'Accept: application/vnd.github.raw' \
+            "repos/kurrent-io/kcap-server/contents/scripts/smoke-local-bundle.sh?ref=$GITHUB_REF_NAME" > "$RUNNER_TEMP/smoke-local-bundle.sh"
+          echo "NAME=$NAME" >> "$GITHUB_OUTPUT"
+          echo "ARCHIVE=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Import signing keychain and notary profile
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: bash scripts/import-signing-keychain.sh
+
+      - name: Sign every Mach-O and re-archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tree out
+          tar -xzf "${{ steps.download.outputs.ARCHIVE }}" -C tree
+          bash scripts/sign-local-bundle.sh "${{ secrets.APPLE_SIGNING_IDENTITY }}" "$KEYCHAIN" tree
+          bash scripts/verify-local-bundle.sh tree
+          # Same root-level layout as the server's archive; no AppleDouble or xattr entries.
+          COPYFILE_DISABLE=1 tar --no-xattrs -czf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C tree .
+
+      # Hardened runtime is enforced when the binary runs, not when it is signed.
+      - name: Smoke-start the signed archive
+        run: bash "$RUNNER_TEMP/smoke-local-bundle.sh" "out/${{ steps.download.outputs.NAME }}.tar.gz"
+
+      - name: Notarize the signed tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent tree "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --keychain-profile kcap-notary --keychain "$KEYCHAIN" \
+            --wait --timeout 45m --output-format json > notary.json || true
+          cat notary.json
+          id="$(jq -r '.id // empty' notary.json)"
+          if [ "$(jq -r '.status // empty' notary.json)" != "Accepted" ]; then
+            [ -n "$id" ] && xcrun notarytool log "$id" --keychain-profile kcap-notary --keychain "$KEYCHAIN" || true
+            echo "::error::notarization was not accepted"; exit 1
+          fi
+
+      # Checks the archive about to be published, not the tree it came from.
+      - name: Verify the published archive is signed and notarized
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p check
+          tar -xzf "out/${{ steps.download.outputs.NAME }}.tar.gz" -C check
+          for attempt in 1 2 3 4 5; do
+            bash scripts/verify-local-bundle.sh check --notarized && exit 0
+            echo "notarization not visible yet (attempt $attempt)"; sleep 30
+          done
+          exit 1
+
+      - name: Build and sign the manifest
+        env:
+          LOCAL_BUNDLE_MANIFEST_KEY: ${{ secrets.LOCAL_BUNDLE_MANIFEST_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="${{ steps.download.outputs.NAME }}"
+          bash scripts/build-local-manifest.sh "${{ steps.version.outputs.VERSION }}" "$RID" "out/$NAME.tar.gz" "$MANIFEST_KEY" > "out/$NAME.json"
+          bash scripts/local-manifest-key.sh sign "$MANIFEST_KEY" "out/$NAME.json" "out/$NAME.json.sig"
+          cat "out/$NAME.json"
+
+      - name: Upload the signed bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: local-bundle-osx-arm64
+          path: out/
+          if-no-files-found: error
+
+  local-publish:
+    name: Publish the local bundle (osx-arm64)
+    needs: local-bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: local-publish
+      cancel-in-progress: false
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2: --endpoint-url ${{ secrets.R2_ENDPOINT }}
+      DEST: s3://${{ secrets.R2_BUCKET }}/local/osx-arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the signed bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: local-bundle-osx-arm64
+          path: local/
+
+      - name: Check the manifest against the archive and the embedded key
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="kcap-local-${{ steps.version.outputs.VERSION }}-osx-arm64"
+          bash scripts/local-manifest-key.sh verify src/Capacitor.Cli.Core/Resources/local-bundle-manifest-key.pem "local/$NAME.json" "local/$NAME.json.sig"
+          source scripts/lib/hash.sh
+          [ "$(jq -r .sha256 "local/$NAME.json")" = "$(sha256_of "local/$NAME.tar.gz")" ] \
+            || { echo "::error::the manifest does not describe the archive beside it"; exit 1; }
+
+      - name: Upload the archive, signature and manifest
+        run: bash scripts/publish-local-bundle.sh local "${{ steps.version.outputs.VERSION }}" osx-arm64
