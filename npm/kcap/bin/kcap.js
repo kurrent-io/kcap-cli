@@ -27,6 +27,13 @@ function npmInstallArgs(spec) {
   return ["install", "-g", spec, "--prefer-online"];
 }
 
+// runUpdate runs the refresh itself, so letting postinstall run would repeat it, and npm with an
+// allowScripts policy warns that it blocked it. The manual repair command keeps scripts: nothing
+// refreshes after it but postinstall.
+function npmUpdateArgs(spec) {
+  return [...npmInstallArgs(spec), "--ignore-scripts"];
+}
+
 // Builds the arg list for the `kcap update --check` probe, forwarding only
 // the channel-switch flags (`--beta`/`--stable`) from the user's `kcap update`
 // invocation. Nothing else is forwarded — the probe already supplies `--check`
@@ -359,7 +366,7 @@ function runUpdate(binaryPath, updArgs) {
     }
   }
 
-  const res = spawnSync("npm", npmInstallArgs(resolveInstallSpec(info)), {
+  const res = spawnSync("npm", npmUpdateArgs(resolveInstallSpec(info)), {
     stdio: "inherit",
     windowsHide: true,
     ...npmOpts,
@@ -406,6 +413,7 @@ function runUpdate(binaryPath, updArgs) {
 module.exports = {
   resolveInstallSpec,
   npmInstallArgs,
+  npmUpdateArgs,
   probeArgs,
   trashDirFor,
   trashDirFromLauncher,
