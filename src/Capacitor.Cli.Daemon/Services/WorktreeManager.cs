@@ -434,16 +434,22 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
-        // Inventoried and logged here, not at the source: `add -A` in this worktree is where the standalone
-        // path's filters resolve. Round 6 removed the source-level logging as dead, and this call was
-        // applying overrides inline — silently disabling LFS against a README that promises the opposite.
+        // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
         await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. standaloneOverrides], "add", "-A");
-        // Identity supplied explicitly. This is the daemon's OWN bookkeeping commit, not the user's work,
-        // so it must not depend on the host having git identity configured — a machine without a global
-        // user.email fails with "Author identity unknown". Found while the broken copy was temporarily
-        // repaired and this line became reachable for the first time; that repair was reverted then and has
-        // landed now, so this is live rather than speculative.
+        // An empty index makes commit exit 1 with the reason on stdout and stderr empty, so the
+        // launcher would show a bare git command. Refuse before that.
+        var staged = await RunGitCaptureResult(
+            worktreePath, GitTimeout, time, sourceReadOnly: false,
+            [.. noHooks, .. standaloneOverrides],
+            "diff", "--cached", "--quiet");
+        if (staged.ExitCode == 0)
+            throw new InvalidOperationException(EmptySnapshotFailure);
+        if (staged.ExitCode != 1)
+            throw new InvalidOperationException(
+                $"git diff --cached --quiet failed: {GitFailureDetail(staged.Stderr, staged.Stdout)}");
+        // Bookkeeping commit. Identity is explicit: a host with no user.email fails with
+        // "Author identity unknown".
         await RunGit(worktreePath, GitTimeout,
             time,
             [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
@@ -1565,16 +1571,28 @@ public partial class WorktreeManager(
             params string[] args) {
         var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, args);
         if (result.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', args)} failed: {GitFailureDetail(result.Stderr, result.Stdout)}");
     }
 
     static async Task<string> RunGitCapture(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, params string[] args) {
         var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, [], args);
         if (result.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', args)} failed: {GitFailureDetail(result.Stderr, result.Stdout)}");
         return result.Stdout;
     }
+
+    /// <summary>Stderr when git wrote one; otherwise stdout. A commit with nothing staged reports
+    /// that only on stdout, and a reason built from stderr alone is then a bare command.</summary>
+    static string GitFailureDetail(string stderr, string stdout) =>
+        (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim();
+
+    /// <summary>A standalone snapshot whose index is empty. The desktop launcher maps this prefix
+    /// to a sentence; the text after the colon is what any other surface shows.</summary>
+    internal const string EmptySnapshotFailure =
+        "standalone_snapshot_empty: This folder isn't a git repository, and there's nothing in it to start from.";
 
     static async Task<bool> GitConfigBoolAsync(string cwd, string key, TimeProvider time) {
         var result = await RunGitCaptureResult(cwd, GitTimeout, time, true, [], "config", "--bool", "--get", key);

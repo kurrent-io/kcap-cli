@@ -89,6 +89,20 @@ public class StandaloneSnapshotTests {
 
     }
 
+    /// <summary>A folder with nothing to commit must not surface as a bare <c>git commit</c> line.
+    /// That command exits 1 with the reason on stdout and stderr empty.</summary>
+    [Test]
+    public async Task Empty_folder_is_refused_before_the_snapshot_commit() {
+        using var root = new TempDir("standalone");
+        var source     = root.CreateDir("proj");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => NewManager().CreateAsync(source, "empty"));
+
+        await Assert.That(ex.Message).IsEqualTo(WorktreeManager.EmptySnapshotFailure);
+        await Assert.That(IsPresent(Path.Combine(source, ".capacitor", "worktrees", "empty"))).IsFalse();
+    }
+
     // ---- 2/3: outside links are not materialised ----------------------------------------------------
 
     /// <summary>A link to an outside FILE must not bring the file's bytes in.
