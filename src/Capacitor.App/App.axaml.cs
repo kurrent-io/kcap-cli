@@ -155,6 +155,7 @@ public partial class App : Application {
     // last, since its transitions are what the feed subscribes to.
     ServerPermissionFeed? _permissionFeed;
     SessionAttentionTracker? _attention;
+    BackgroundCommandActivity? _commands;
     SessionAccessService? _sessionAccess;
     PullRequestToneCache? _pullRequestTones;
     ConsentPromptCoordinator? _promptCoordinator;
@@ -335,7 +336,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
@@ -356,6 +357,7 @@ public partial class App : Application {
             _notificationSettings = null;
             _permissionFeed = null;
             _attention = null;
+            _commands = null;
             _permissions = null;
             _sessionAccess = null;
             _pullRequestTones = null;
@@ -653,7 +655,9 @@ public partial class App : Application {
             : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
         _menuBar?.SetFeedbackAction(openFeedback);
 
-        var commands = new BackgroundCommandActivity();
+        var commands = new BackgroundCommandActivity((key, report, ended) =>
+            new BackgroundCommandMonitor(key, report, ended, service, directory, sessionAccess, readDetail, serverLane, _time));
+        _commands = commands;
         Action linkGitHub = () => {
             if (profiles?.Resolution.ServerUrl is { Length: > 0 } url)
                 LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
@@ -1920,7 +1924,7 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });

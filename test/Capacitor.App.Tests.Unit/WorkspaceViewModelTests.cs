@@ -662,25 +662,51 @@ public class WorkspaceViewModelTests {
     /// out, since the daemon already counts that one. The header reads them too, so a finished
     /// turn with a command still running is Working there as well.
     [Test]
+    [Arguments("command")]
+    [Arguments("session")]
+    [Arguments("removed")]
     [NotInParallel("AvaloniaSession")]
-    public async Task Running_background_commands_are_reported_until_the_workspace_is_torn_down() {
+    public async Task Running_background_commands_remain_working_after_navigation_and_settle_when_finished(string finish) {
         await RunOnUiAsync(async () => {
-            var commands = new BackgroundCommandActivity();
+            var daemon = new FakeDaemonClientService();
+            using var directory = new FakeAgentDirectory();
+            var time = new FakeTimeProvider();
+            var lane = new FakeServerLane();
+            using var access = new SessionAccessService(lane, time);
+            BackgroundCommandMonitor? monitor = null;
+            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+                monitor = new BackgroundCommandMonitor(key, report, ended, daemon, directory, access,
+                    (_, _) => Task.FromResult(new SessionDetailFetch(null)), lane, time));
             IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
             using var subscription = commands.Running.Subscribe(running => latest = running);
-            var daemon = new FakeDaemonClientService();
-            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider(), commands: commands);
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time, commands: commands);
             var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, ShellCallLine, ShellLaunchLine]);
-
-            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, AwaitingInput = true });
+            var dto = Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, AwaitingInput = true };
+            using var selected = new BehaviorSubject<string?>("a1");
+            using var railRow = new RailSessionViewModel(AgentRow.FromLocal(dto, new RepoIdentity("repo", "repo")),
+                selected, Observable.Return<IReadOnlySet<string>>(new HashSet<string>()), Observable.Return(false),
+                _ => { }, _ => { }, time, agentsRunningCommands: commands.Running);
+            daemon.Agents.AddOrUpdate(dto);
             await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
             await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
 
             await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
             await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
+            selected.OnNext("another-agent");
             await vm.TeardownAsync();
+            await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);
+            await Assert.That(railRow.Status.Kind).IsEqualTo(AgentStatusKind.Working);
+            await Assert.That(railRow.Status.Pulses).IsTrue();
+
+            if (finish == "session") daemon.Agents.AddOrUpdate(daemon.Agents.Lookup("a1").Value with { Status = "Completed" });
+            else if (finish == "removed") daemon.Agents.RemoveKey("a1");
+            else File.AppendAllText(path, """{"type":"user","origin":{"kind":"task-notification"},"message":{"role":"user","content":"<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_S</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>"}}""" + "\n");
+            time.Advance(ChatTabViewModel.PollInterval);
+            await WaitUntilAsync(() => !latest.ContainsKey("local:a1"), what: "background command completion");
             await Assert.That(latest.ContainsKey("local:a1")).IsFalse();
+            await Assert.That(railRow.Status.Kind).IsEqualTo(AgentStatusKind.Idle);
         });
     }
 }
