@@ -144,6 +144,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Arguments("/A/B/kcap-daemon", "/a/b", false, false)]
     [Arguments("/A/B/kcap-daemon", "/a/b", true, true)]
     [Arguments("/a/b/../c/kcap-daemon", "/a/b", false, false)]
+    [Arguments("/a/kcap-daemon", "/", false, true)]
     public async Task IsUnder_compares_whole_path_segments(string path, string dir, bool ignoreCase, bool expected) {
         await Assert.That(DaemonServiceCommands.IsUnder(Path.GetFullPath(path), dir, ignoreCase)).IsEqualTo(expected);
     }

@@ -480,7 +480,9 @@ sealed class DaemonServiceCommands(
     }
 
     internal static bool IsUnder(string path, string dir, bool ignoreCase) {
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir)) + Path.DirectorySeparatorChar;
+        // A filesystem root keeps its separator through the trim.
+        var trimmed = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        var root = Path.EndsInDirectorySeparator(trimmed) ? trimmed : trimmed + Path.DirectorySeparatorChar;
         return Path.GetFullPath(path).StartsWith(root, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
