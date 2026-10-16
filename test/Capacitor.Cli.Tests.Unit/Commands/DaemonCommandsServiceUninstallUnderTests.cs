@@ -20,7 +20,9 @@ public class DaemonCommandsServiceUninstallUnderTests {
         public string Describe() => "fake";
         public string UnitDirectory => "";
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
+        public bool ListingFails;
         public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
+        public IReadOnlyList<string>? TryListInstalled() => ListingFails ? null : ListInstalled();
         public ServiceStatus Status(string serviceId) {
             Interlocked.Increment(ref _statusReads);
             return binaries[serviceId] == Unreadable
@@ -107,6 +109,21 @@ public class DaemonCommandsServiceUninstallUnderTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(manager.Uninstalled).IsEquivalentTo(["laptop"]);
         await Assert.That(console.GetCapturedError()).Contains("'broken'");
+    }
+
+    /// <summary>A listing that failed is not an empty one: reporting success would leave the app's task
+    /// retrying its deleted daemon at every sign-in.</summary>
+    [Test]
+    public async Task A_listing_that_fails_is_reported_not_taken_as_no_units() {
+        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var manager = new RecordingManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) { ListingFails = true };
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(manager.Uninstalled).IsEmpty();
+        await Assert.That(console.GetCapturedError()).Contains("Could not list the installed services");
     }
 
     [Test]

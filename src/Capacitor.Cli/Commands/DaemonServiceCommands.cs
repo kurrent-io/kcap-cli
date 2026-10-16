@@ -432,9 +432,14 @@ sealed class DaemonServiceCommands(
     /// npm or standalone install wrote.
     /// </summary>
     internal async Task<int> UninstallUnder(string dir) {
+        if (manager.TryListInstalled() is not { } units) {
+            await Console.Error.WriteLineAsync($"Could not list the installed services ({manager.Describe()}); nothing was uninstalled.");
+            return 1;
+        }
+
         var failed = false;
 
-        foreach (var unit in manager.ListInstalled()) {
+        foreach (var unit in units) {
             try {
                 if (!Owned(unit)) continue;
 

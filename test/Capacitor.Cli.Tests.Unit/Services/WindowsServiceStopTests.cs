@@ -6,6 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// leaves behind.</summary>
 public class WindowsServiceStopTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+    [TempDir] public required TempDir Tmp { get; init; }
 
     const int DaemonPid = 100;
 
@@ -14,6 +15,9 @@ public class WindowsServiceStopTests {
         public readonly List<string>                         Verbs = [];
         public readonly List<int>                            Killed = [];
         public string?                                       KillError;
+        public int                                           DeleteExit;
+        public bool                                          TaskExists = true;
+        public string?                                       TaskXml;
 
         public void TaskRunsTheDaemon() {
             Table[40]        = new(1, "conhost.exe");
@@ -30,6 +34,12 @@ public class WindowsServiceStopTests {
             Verbs.Add(args[0]);
             // Ending the task takes its console host and wrapper with it; the daemon outlives them.
             if (args[0] == "/End") { Table.Remove(40); Table.Remove(50); }
+            if (args[0] == "/Delete") {
+                if (DeleteExit != 0) return (DeleteExit, "", "ERROR: Access is denied.");
+                TaskExists = false;
+            }
+            if (args[0] == "/Query" && args.Contains("/XML")) return TaskXml is null ? (1, "", "ERROR: not found") : (0, TaskXml, "");
+            if (args[0] == "/Query") return TaskExists ? (0, "TaskName: kcap-daemon-laptop", "") : (1, "", "ERROR: not found");
             return (0, "", "");
         }
 
@@ -104,5 +114,42 @@ public class WindowsServiceStopTests {
         await Assert.That(host.Killed).IsEquivalentTo(new[] { DaemonPid });
         await Assert.That(host.Verbs).Contains("/Delete");
         await Assert.That(File.Exists(wrapper)).IsFalse();
+    }
+
+    [Test]
+    public async Task Uninstall_whose_task_cannot_be_deleted_keeps_the_wrapper_and_reports_why() {
+        var host = new FakeHost { DeleteExit = 1 };
+        var wrapper = WindowsTaskUnit.WrapperPath(Config.Root, "laptop");
+        await File.WriteAllTextAsync(wrapper, "@echo off\r\n");
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(error).Contains("Access is denied");
+        await Assert.That(File.Exists(wrapper)).IsTrue();
+    }
+
+    [Test]
+    public async Task Uninstall_of_a_task_already_gone_succeeds() {
+        var host = new FakeHost { DeleteExit = 1, TaskExists = false };
+
+        var ok = Manager(host).Uninstall("laptop", out var error);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(error).IsNull();
+    }
+
+    /// <summary>A task installed under another config root has its wrapper elsewhere; the task's own
+    /// definition still leads to it, so uninstalling removes that wrapper too.</summary>
+    [Test]
+    public async Task Uninstall_finds_a_wrapper_outside_this_config_root_through_the_task() {
+        var elsewhere = Tmp.CreateFile("other-config/daemon-service-laptop.cmd", "@echo off\r\n");
+        var spec = new ServiceSpec("laptop", "kcap-daemon.exe", "daemon.log", new Dictionary<string, string>(), []);
+        var host = new FakeHost { TaskXml = WindowsTaskUnit.TaskXml(spec, elsewhere) };
+
+        var ok = Manager(host).Uninstall("laptop", out _);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(File.Exists(elsewhere)).IsFalse();
     }
 }

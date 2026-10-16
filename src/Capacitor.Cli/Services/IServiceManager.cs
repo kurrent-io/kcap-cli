@@ -47,6 +47,8 @@ interface IServiceManager {
     string UnitDirectory { get; }
     IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec);
     IReadOnlyList<string>        ListInstalled();
+    /// <summary>Null when the units could not be listed, which <see cref="ListInstalled"/> reports as none.</summary>
+    IReadOnlyList<string>?       TryListInstalled() => ListInstalled();
     ServiceStatus                Status(string serviceId);
     ServiceQuery                 Query(string serviceId);
     void Install(ServiceSpec spec, bool startNow);

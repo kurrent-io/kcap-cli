@@ -121,4 +121,23 @@ public class WindowsTaskUnitTests {
 
         await Assert.That(xml).Contains($"<UserId>{Environment.UserDomainName}\\{Environment.UserName}</UserId>");
     }
+
+    /// <summary>The wrapper is found from the task itself, so a task installed under another config root
+    /// can still be traced to its daemon.</summary>
+    [Test]
+    [Arguments(@"C:\Users\u\.config\kcap\daemon-service-laptop.cmd")]
+    [Arguments(@"C:\Users\R&D (x)\kcap\daemon-service-laptop.cmd")]
+    public async Task The_wrapper_is_read_back_from_the_task_definition(string wrapper) {
+        var xml = WindowsTaskUnit.TaskXml(Spec(), wrapper);
+
+        await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsEqualTo(wrapper);
+    }
+
+    [Test]
+    [Arguments("<Task><Actions><Exec><Command>other.exe</Command><Arguments>--flag</Arguments></Exec></Actions></Task>")]
+    [Arguments("<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>")]
+    [Arguments("not xml")]
+    public async Task A_task_kcap_did_not_write_names_no_wrapper(string xml) {
+        await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsNull();
+    }
 }

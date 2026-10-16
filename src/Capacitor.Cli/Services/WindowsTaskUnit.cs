@@ -292,6 +292,25 @@ static class WindowsTaskUnit {
     public static string[] RunArgs(string id)                    => ["/Run", "/TN", TaskName(id)];
     public static string[] EndArgs(string id)                    => ["/End", "/TN", TaskName(id)];
     public static string[] QueryArgs(string id)                  => ["/Query", "/TN", TaskName(id), "/FO", "LIST"];
+    public static string[] QueryXmlArgs(string id)               => ["/Query", "/TN", TaskName(id), "/XML"];
+
+    /// <summary>The wrapper a task's action runs, read from <c>schtasks /Query /XML</c>, or null when the
+    /// action is not the one <see cref="TaskXml"/> writes.</summary>
+    public static string? WrapperFromTaskXml(string xml) {
+        string? arguments;
+        try {
+            arguments = System.Xml.Linq.XDocument.Parse(xml).Descendants()
+                .FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value;
+        } catch (System.Xml.XmlException) {
+            return null;
+        }
+
+        const string Marker = "/c \"\"";
+        var start = arguments?.IndexOf(Marker, StringComparison.Ordinal) ?? -1;
+        if (start < 0 || !arguments!.EndsWith("\"\"", StringComparison.Ordinal)) return null;
+        var path = arguments[(start + Marker.Length)..^2];
+        return path.Length > 0 ? path : null;
+    }
 
     public static ServiceState StatusFromQuery(int exitCode, string stdout) {
         if (exitCode != 0) return ServiceState.NotInstalled;

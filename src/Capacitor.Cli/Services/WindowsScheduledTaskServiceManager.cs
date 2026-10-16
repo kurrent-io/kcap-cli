@@ -40,18 +40,33 @@ sealed class WindowsScheduledTaskServiceManager(
 
     static string TaskXmlTempPath(ConfigRoot config, string id) => config.Path($"daemon-service-{id}.task.xml");
 
-    public IReadOnlyList<string> ListInstalled() {
-        var (code, stdout, _) = ServiceProcess.Run("schtasks", "/Query", "/FO", "LIST");
-        if (code != 0) return [];
+    public IReadOnlyList<string> ListInstalled() => TryListInstalled() ?? [];
+
+    public IReadOnlyList<string>? TryListInstalled() {
+        var (code, stdout, _) = _schtasks(["/Query", "/FO", "LIST"]);
+        if (code != 0) return null;
         return [.. stdout.Split('\n')
             .Where(l => l.TrimStart().StartsWith("TaskName:", StringComparison.OrdinalIgnoreCase))
             .Select(l => WindowsTaskUnit.IdFromTaskName(Path.GetFileName(l.Split(':', 2)[1].Trim())))
             .Where(id => id is not null).Select(id => id!).Distinct().Order()];
     }
 
+    /// <summary>
+    /// The wrapper under this config root, or else the one the task itself runs: a task installed under
+    /// another <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has its wrapper elsewhere, and without it the
+    /// task's daemon binary is unknown.
+    /// </summary>
+    string WrapperOf(string serviceId) {
+        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        if (File.Exists(wrapper)) return wrapper;
+
+        var (code, xml, _) = _schtasks(WindowsTaskUnit.QueryXmlArgs(serviceId));
+        return code == 0 && WindowsTaskUnit.WrapperFromTaskXml(xml) is { } fromTask && File.Exists(fromTask) ? fromTask : wrapper;
+    }
+
     public ServiceStatus Status(string serviceId) {
         var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        var wrapper = WrapperOf(serviceId);
         // Report the daemon binary baked inside the wrapper (not the wrapper itself)
         // so doctor catches a moved kcap-daemon.exe even when the wrapper still exists.
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
@@ -60,7 +75,7 @@ sealed class WindowsScheduledTaskServiceManager(
 
     public ServiceQuery Query(string serviceId) {
         var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        var wrapper = WrapperOf(serviceId);
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         var state = WindowsTaskUnit.StatusFromQuery(code, stdout);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
@@ -117,8 +132,14 @@ sealed class WindowsScheduledTaskServiceManager(
             return false;
         }
 
-        _schtasks(WindowsTaskUnit.DeleteArgs(serviceId));
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        var wrapper = WrapperOf(serviceId);
+        var (code, _, err) = _schtasks(WindowsTaskUnit.DeleteArgs(serviceId));
+        // A failed delete of a task that is already gone is the outcome asked for.
+        if (code != 0 && _schtasks(WindowsTaskUnit.QueryArgs(serviceId)).ExitCode == 0) {
+            error = $"schtasks /Delete failed (exit {code}): {err.Trim()}";
+            return false;
+        }
+
         if (File.Exists(wrapper)) File.Delete(wrapper);
         error = null;
         return true;
