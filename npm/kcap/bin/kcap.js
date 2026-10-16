@@ -23,10 +23,15 @@ function resolveInstallSpec(info) {
 
 // npm serves a packument from its cache for five minutes; within that window an install can
 // resolve against a listing that predates the platform package's version and silently skip it.
-// Scripts are skipped because runUpdate runs the refresh itself; letting postinstall run would
-// repeat it, and npm with an allowScripts policy warns that it blocked it.
 function npmInstallArgs(spec) {
-  return ["install", "-g", spec, "--prefer-online", "--ignore-scripts"];
+  return ["install", "-g", spec, "--prefer-online"];
+}
+
+// runUpdate runs the refresh itself, so letting postinstall run would repeat it, and npm with an
+// allowScripts policy warns that it blocked it. The manual repair command keeps scripts: nothing
+// refreshes after it but postinstall.
+function npmUpdateArgs(spec) {
+  return [...npmInstallArgs(spec), "--ignore-scripts"];
 }
 
 // Builds the arg list for the `kcap update --check` probe, forwarding only
@@ -361,7 +366,7 @@ function runUpdate(binaryPath, updArgs) {
     }
   }
 
-  const res = spawnSync("npm", npmInstallArgs(resolveInstallSpec(info)), {
+  const res = spawnSync("npm", npmUpdateArgs(resolveInstallSpec(info)), {
     stdio: "inherit",
     windowsHide: true,
     ...npmOpts,
@@ -408,6 +413,7 @@ function runUpdate(binaryPath, updArgs) {
 module.exports = {
   resolveInstallSpec,
   npmInstallArgs,
+  npmUpdateArgs,
   probeArgs,
   trashDirFor,
   trashDirFromLauncher,

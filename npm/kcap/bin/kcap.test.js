@@ -5,6 +5,7 @@ const path = require("node:path");
 const {
   resolveInstallSpec,
   npmInstallArgs,
+  npmUpdateArgs,
   probeArgs,
   trashDirFor,
   trashDirFromLauncher,
@@ -21,10 +22,12 @@ assert.strictEqual(resolveInstallSpec({ install_tag: "" }), "@kurrent/kcap@lates
 assert.strictEqual(resolveInstallSpec({ install_tag: "1.0.1" }), "@kurrent/kcap@1.0.1");
 
 // Revalidates npm's cached packument, so a platform package published minutes ago is not skipped.
-assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online", "--ignore-scripts"]);
+assert.deepStrictEqual(npmInstallArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online"]);
+// kcap update refreshes on its own; the printed repair command must leave postinstall to do it.
+assert.deepStrictEqual(npmUpdateArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "@kurrent/kcap@1.0.2", "--prefer-online", "--ignore-scripts"]);
 {
   const src = fs.readFileSync(path.join(__dirname, "kcap.js"), "utf8");
-  assert(src.includes('spawnSync("npm", npmInstallArgs('), "kcap update must install through npmInstallArgs");
+  assert(src.includes('spawnSync("npm", npmUpdateArgs('), "kcap update must install through npmUpdateArgs");
 }
 
 assert.deepStrictEqual(probeArgs([]), ["update", "--check", "--no-update-check"]);
