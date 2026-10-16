@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
@@ -129,7 +130,7 @@ class MemoriesCommand(
                        && await ExistingOrgMemoryAsync(client, baseUrl, c.Slug!, global ? null : repoHash, machineId) is { } existing
                     ? await UpdateExistingAsync(client, baseUrl, existing, c, flags.ContainsKey("--update"))
                     : await SaveAsync(client, baseUrl, body, c, flags.ContainsKey("--update"));
-            } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) {
+            } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException) {
                 outcome = $"failed ({ex.Message})";
             }
 
@@ -164,7 +165,9 @@ class MemoriesCommand(
             var asked = body["audience"]?.GetValue<string>();
             if (update && held is not null && held != asked) return $"exists as a {held} memory, skipped (--update overwrites only an existing {asked} memory)";
 
-            return await UpdateExistingAsync(client, baseUrl, memoryId!, c, update);
+            return memoryId is null && update
+                ? "failed (the server's conflict answer named no memory)"
+                : await UpdateExistingAsync(client, baseUrl, memoryId ?? "", c, update);
         }
 
         var line = new StringBuilder("created");

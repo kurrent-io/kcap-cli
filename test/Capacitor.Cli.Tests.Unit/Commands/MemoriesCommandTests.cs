@@ -70,6 +70,13 @@ public class MemoriesCommandTests {
     }
 
     [Test]
+    public async Task A_conflict_that_names_no_memory_is_a_failure_line() {
+        using var server = ServerAnswering("""{"slug_conflict":true}""");
+
+        await Assert.That(await Save(server, update: true)).IsEqualTo("failed (the server's conflict answer named no memory)");
+    }
+
+    [Test]
     public async Task A_refused_credential_stops_the_import() {
         using var server = ServerAnswering("", status: 401);
 
