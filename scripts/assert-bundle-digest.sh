@@ -20,7 +20,9 @@ expected="$(tr -d '[:space:]' < "$digest_file")"
 [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo "recorded digest is not 64 hex chars: '$expected'" >&2; exit 1; }
 
 # A macOS .app keeps the binaries in Contents/MacOS; a Velopack Windows install in current/.
-if [ -d "$bundle/Contents/MacOS" ]; then bin="$bundle/Contents/MacOS"; exe=""; else bin="$bundle/current"; exe=".exe"; fi
+if [ -d "$bundle/Contents/MacOS" ]; then bin="$bundle/Contents/MacOS"; exe=""
+elif [ -d "$bundle/bin" ]; then bin="$bundle/bin"; exe=""
+else bin="$bundle/current"; exe=".exe"; fi
 daemon="$bin/kcap-daemon$exe"
 cli="$bin/kcap$exe"
 [ -f "$daemon" ] || { echo "missing $daemon" >&2; exit 1; }

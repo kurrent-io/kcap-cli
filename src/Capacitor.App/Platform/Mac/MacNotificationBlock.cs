@@ -2,7 +2,9 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
-namespace Capacitor.App.Services.Notifications;
+using Capacitor.App.Services.Notifications;
+
+namespace Capacitor.App.Platform.Mac;
 
 /// Owns a copied Objective-C block. Each native copy owns its own GCHandle, so delayed completion
 /// remains valid after the caller releases its copy. Layout follows Clang's Apple Block ABI.
@@ -66,13 +68,13 @@ internal sealed unsafe partial class MacNotificationBlock : IDisposable {
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void Authorized(nint block, byte granted, nint error) {
         try { ((Action<bool, nint>)GCHandle.FromIntPtr(((Block*)block)->State).Target!)(granted != 0, error); }
-        catch (Exception failure) { NativeDesktopNotificationSink.Report(failure); }
+        catch (Exception failure) { DesktopNotifications.Report(failure); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void Completed(nint block, nint error) {
         try { ((Action<nint>)GCHandle.FromIntPtr(((Block*)block)->State).Target!)(error); }
-        catch (Exception failure) { NativeDesktopNotificationSink.Report(failure); }
+        catch (Exception failure) { DesktopNotifications.Report(failure); }
     }
 
     public static void Finish(nint block) => ((delegate* unmanaged[Cdecl]<nint, void>)((Block*)block)->Invoke)(block);

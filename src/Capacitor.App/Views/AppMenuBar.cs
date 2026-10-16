@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Views;
 

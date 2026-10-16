@@ -1,6 +1,6 @@
 using Avalonia;
 
-namespace Capacitor.App;
+namespace Capacitor.App.Platform.Mac;
 
 /// The macOS renderer order, overridable through KCAP_APP_RENDERER (metal, opengl, software) so a
 /// renderer-specific defect can be compared on one build. An unknown value keeps the default.

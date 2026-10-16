@@ -1,8 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using Capacitor.App.Services.Notifications;
 using Microsoft.Win32;
 
-namespace Capacitor.App.Services.Notifications;
+namespace Capacitor.App.Platform.Windows;
 
 /// Windows has no permission prompt: an app's toasts are on until the user turns them off, either
 /// for this app or for every app. Both switches live in the user's registry hive, and the app's own

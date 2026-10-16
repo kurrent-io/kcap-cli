@@ -1,4 +1,4 @@
-using Capacitor.App.Services;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 

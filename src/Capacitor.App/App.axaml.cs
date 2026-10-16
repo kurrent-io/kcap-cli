@@ -30,6 +30,7 @@ using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App;
 
@@ -242,20 +243,19 @@ public partial class App : Application {
             desktop.ShutdownRequested += OnShutdownRequested;
             var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
-            desktop.Exit += (_, _) => windowLifecycle.Dispose();
-            if (OperatingSystem.IsWindows())
-                Program.Instance?.OnShowRequested(() => Dispatcher.UIThread.Post(() => {
-                    if (_shutdownStarted) return;
-                    if (MainWindowAction(_coordinator) is { } showMain) {
-                        showMain();
-                        return;
-                    }
-                    // Onboarding and the startup screens come before the main window exists.
-                    var startup = _wizardWindow is { IsVisible: true } wizard ? wizard : desktop.Windows.FirstOrDefault(w => w.IsVisible);
-                    if (startup is null) return;
-                    if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
-                    startup.Activate();
-                }));
+            desktop.Exit += (_, _) => { windowLifecycle.Dispose(); Program.Host.Dispose(); };
+            Program.Host.OnSecondLaunch(() => Dispatcher.UIThread.Post(() => {
+                if (_shutdownStarted) return;
+                if (MainWindowAction(_coordinator) is { } showMain) {
+                    showMain();
+                    return;
+                }
+                // Onboarding and the startup screens come before the main window exists.
+                var startup = _wizardWindow is { IsVisible: true } wizard ? wizard : desktop.Windows.FirstOrDefault(w => w.IsVisible);
+                if (startup is null) return;
+                if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
+                startup.Activate();
+            }));
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
             _menuBar.Install();
@@ -278,7 +278,7 @@ public partial class App : Application {
         try {
             if (RunInstallLocationGuard(desktop)) return; // the guard window owns the rest of this run
             _updater = CreateUpdater();
-            if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.UpdateRelaunch)) return; // the process is being replaced
+            if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.Host.UpdateRelaunch)) return; // the process is being replaced
 
             // The lane is constructed first — every daemon mutation routes through this one instance, and its dependencies need neither a resolved profile nor a live service.
             var laneRunner = new ProcessRunner(_time);
@@ -726,11 +726,12 @@ public partial class App : Application {
         if (!_shutdownStarted) {
             var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
             _notificationSettings = notificationSettings;
-            var notificationSink = new NativeDesktopNotificationSink();
+            var notificationSink = Program.Host.CreateNotificationSink(a => Dispatcher.UIThread.Post(a));
+            var notificationAccess = DesktopNotifications.AccessOf(notificationSink);
             _notificationSink = notificationSink;
-            _notificationAccess = notificationSink;
+            _notificationAccess = notificationAccess;
             _notificationAccessPrompt = new DesktopNotificationAccessPrompt(
-                notificationSink, notificationSettings.Changes,
+                notificationAccess, notificationSettings.Changes,
                 Window.IsActiveProperty.Changed.Where(change => change.NewValue.GetValueOrDefault())
                     .Select(_ => System.Reactive.Unit.Default),
                 () => !_shutdownStarted && desktop.Windows.Any(window => window.IsActive),
@@ -778,12 +779,7 @@ public partial class App : Application {
                 _setupRestarting = false;
                 return;
             }
-            var executable = Environment.ProcessPath ?? throw new InvalidOperationException("The app's executable could not be found.");
-            var start = new ProcessStartInfo(executable) { UseShellExecute = false };
-            if (Path.GetFileNameWithoutExtension(executable) == "dotnet")
-                start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
-            start.ArgumentList.Add("--setup");
-            if (OperatingSystem.IsWindows()) start.ArgumentList.Add(SingleInstanceGuard.RelaunchArg);
+            var start = Program.Host.NewCopy("--setup");
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}"); }
@@ -828,7 +824,7 @@ public partial class App : Application {
             vm = new SettingsViewModel(settings, service, ops,
                 async (name, ct) => (await LocalControlProbe.ProbeAsync(_daemonStore, name, _time, OneShotProbeTimeout, ct)).Reachable,
                 lane.RunAsync, (prompt, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow, prompt, ct),
-                ct => RelaunchForSettingsAsync(desktop, _time, ct), OperatingSystem.IsMacOS() || OperatingSystem.IsWindows(), startupSettled, lane.CanRetireAsync,
+                ct => RelaunchForSettingsAsync(desktop, _time, ct), Program.Host.CanRelaunchNow, startupSettled, lane.CanRetireAsync,
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
@@ -886,25 +882,7 @@ public partial class App : Application {
 
     static async Task<bool> RelaunchForSettingsAsync(
             IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
-        // Windows has no bundle to reopen, so the relaunch is a new copy of this executable. It
-        // starts on Exit, once teardown is over: shutdown can outlast the new copy's wait for the
-        // single-instance lock.
-        if (OperatingSystem.IsWindows()) {
-            // Checked before shutting down: past that point a start that fails leaves nothing running.
-            if (Environment.ProcessPath is not { } exe || !File.Exists(exe)) return false;
-            var start = new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false };
-            desktop.Exit += (_, _) => {
-                try { Process.Start(start)?.Dispose(); }
-                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not relaunch: {ex.Message}"); }
-            };
-            desktop.TryShutdown();
-            return true;
-        }
-
-        if (InstallLocation.BundleRoot(Environment.ProcessPath) is not { } bundle) return false;
-        var result = await new ProcessRunner(time).RunAsync("/usr/bin/open", ["-n", bundle],
-            new RunOptions(Timeout: TimeSpan.FromSeconds(10)), ct);
-        if (result.TimedOut || result.ExitCode != 0) return false;
+        if (!await Program.Host.StartSecondCopyAsync(desktop, time, ct)) return false;
         desktop.TryShutdown();
         return true;
     }
@@ -998,7 +976,7 @@ public partial class App : Application {
     async Task<bool> RunWizardModeAsync(
             IClassicDesktopStyleApplicationLifetime desktop, DaemonMutationLane lane, OutcomeChannel channel,
             IProcessRunner runner, ILoginShellProbe probe, ProfileContext? profiles, bool alreadyAuthenticated) {
-        var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
+        var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
         var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
@@ -1389,7 +1367,7 @@ public partial class App : Application {
             Action<string> setLifecycleStatus, Action<string> setLifecycleAttention,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             ResolvedProfile? profile, Func<bool> requiresAppRestart) {
-        var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
+        var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         var runner  = new ProcessRunner(_time);
         var probe   = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
         var canonicalServer = ServerIdentity.Canonicalize(profile?.ServerUrl);

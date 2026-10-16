@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Capacitor.App.Services.Notifications;
+using Capacitor.App.Services.Notifications;
+
+namespace Capacitor.App.Platform.Mac;
 
 internal sealed class MacNotificationCategories(
     Func<string, IReadOnlyList<DesktopNotificationAction>, nint> create,

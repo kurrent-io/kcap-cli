@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Mac;
 
 /// <summary>
 /// Asks CoreVideo for the same display link Avalonia.Native registers during setup, so the answer is

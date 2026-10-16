@@ -4,7 +4,7 @@ using System.Xml;
 using System.Xml.Linq;
 using Capacitor.Cli.Core;
 
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Mac;
 
 public sealed record MoveOutcome(bool Moved, string? InstalledPath, string? Error);
 

@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Windows;
 
 /// One running copy per executable path and sign-in session on Windows, the parity of macOS
 /// refusing a second copy of a bundle. A second launch asks the running copy to show its main

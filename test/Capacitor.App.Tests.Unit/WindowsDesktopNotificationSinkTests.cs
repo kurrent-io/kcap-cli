@@ -1,16 +1,17 @@
 using Avalonia.Labs.Notifications;
 using Avalonia.Media.Imaging;
 using Capacitor.App.Services.Notifications;
+using Capacitor.App.Platform.Windows;
 
 namespace Capacitor.App.Tests.Unit;
 
-public class NativeDesktopNotificationSinkTests {
+public class WindowsDesktopNotificationSinkTests {
     static DesktopNotification Permission(string id = "request") => new(id, "Permission", "cat a && echo <done>", [new("allow", "Allow"), new("decline", "Decline")]);
 
     [Test]
-    public async Task Windows_payload_escapes_command_markup_and_offers_only_supplied_choices() {
+    public async Task Payload_escapes_command_markup_and_offers_only_supplied_choices() {
         var manager = new Manager();
-        using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: true);
+        using var sink = new WindowsDesktopNotificationSink(manager, a => a());
         sink.Show(Permission(), _ => { });
         var shown = manager.Created.Single();
         await Assert.That(shown.Message).IsEqualTo("cat a &amp;&amp; echo &lt;done&gt;");
@@ -19,17 +20,17 @@ public class NativeDesktopNotificationSinkTests {
     }
 
     [Test]
-    public async Task Windows_action_labels_escape_agent_supplied_scope_names() {
+    public async Task Action_labels_escape_agent_supplied_scope_names() {
         var manager = new Manager();
-        using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: true);
+        using var sink = new WindowsDesktopNotificationSink(manager, a => a());
         sink.Show(new("scope", "Permission", "Command", [new("always", "Always for user's <project>")]), _ => { });
         await Assert.That(manager.Created.Single().Actions.Single().Caption).IsEqualTo("Always for user&apos;s &lt;project&gt;");
     }
 
     [Test]
-    public async Task Linux_button_activation_keeps_its_action_even_when_IsActivated_is_true() {
+    public async Task Button_activation_keeps_its_action_even_when_IsActivated_is_true() {
         var manager = new Manager();
-        using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: false);
+        using var sink = new WindowsDesktopNotificationSink(manager, a => a());
         var replies = new List<string?>();
         sink.Show(Permission(), replies.Add);
         var shown = manager.Created.Single();
@@ -42,7 +43,7 @@ public class NativeDesktopNotificationSinkTests {
     public async Task Closing_before_queued_activation_discards_it() {
         var manager = new Manager();
         var queued = new Queue<Action>();
-        using var sink = new NativeDesktopNotificationSink(manager, queued.Enqueue, windows: false);
+        using var sink = new WindowsDesktopNotificationSink(manager, queued.Enqueue);
         var replies = new List<string?>();
         sink.Show(Permission(), replies.Add);
         var shown = manager.Created.Single();
@@ -57,7 +58,7 @@ public class NativeDesktopNotificationSinkTests {
     public async Task Replacing_and_disposing_withdraws_old_toasts_and_rejects_stale_callbacks() {
         var manager = new Manager();
         var replies = new List<string?>();
-        var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: false);
+        var sink = new WindowsDesktopNotificationSink(manager, a => a());
         sink.Show(Permission(), replies.Add);
         sink.Show(Permission(), replies.Add);
         manager.Complete(new() { NotificationId = manager.Created[0].Id, ActionTag = manager.Created[0].Actions.Single(a => a.Caption == "Allow").Tag });
@@ -70,7 +71,7 @@ public class NativeDesktopNotificationSinkTests {
     [Test]
     public async Task Unknown_choices_and_dismissal_never_answer_a_request_but_body_click_opens_it() {
         var manager = new Manager();
-        using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: false);
+        using var sink = new WindowsDesktopNotificationSink(manager, a => a());
         var replies = new List<string?>();
         sink.Show(Permission(), replies.Add);
         var id = manager.Created.Single().Id;
@@ -87,7 +88,7 @@ public class NativeDesktopNotificationSinkTests {
     [Test]
     public async Task Callback_failure_cannot_escape_the_native_event_boundary() {
         var manager = new Manager();
-        using var sink = new NativeDesktopNotificationSink(manager, a => a(), windows: false);
+        using var sink = new WindowsDesktopNotificationSink(manager, a => a());
         sink.Show(Permission(), _ => throw new InvalidOperationException("simulated navigation failure"));
         var shown = manager.Created.Single();
         manager.Complete(new() { NotificationId = shown.Id, ActionTag = shown.Actions.Single(a => a.Caption == "Allow").Tag });
@@ -100,7 +101,7 @@ public class NativeDesktopNotificationSinkTests {
         var outer = new QueueContext(queued);
         var previous = SynchronizationContext.Current;
         var manager = new Manager { AsyncFailure = true };
-        using var sink = new NativeDesktopNotificationSink(manager, queued.Enqueue, windows: false);
+        using var sink = new WindowsDesktopNotificationSink(manager, queued.Enqueue);
         var escaped = new List<Exception>();
         bool restored;
         try {
@@ -118,14 +119,14 @@ public class NativeDesktopNotificationSinkTests {
     [Test]
     public async Task Queued_action_from_a_previous_process_cannot_answer_a_reused_native_id() {
         var oldManager = new Manager();
-        using var oldSink = new NativeDesktopNotificationSink(oldManager, a => a(), windows: true);
+        using var oldSink = new WindowsDesktopNotificationSink(oldManager, a => a());
         oldSink.Show(Permission("old-process-request"), _ => { });
         var oldToast = oldManager.Created.Single();
         var staleAllow = oldToast.Actions.Single(a => a.Caption == "Allow").Tag;
 
         // A fresh manager models the library restarting its native numeric IDs at 1.
         var currentManager = new Manager();
-        using var currentSink = new NativeDesktopNotificationSink(currentManager, a => a(), windows: true);
+        using var currentSink = new WindowsDesktopNotificationSink(currentManager, a => a());
         var replies = new List<string?>();
         currentSink.Show(Permission("new-process-request"), replies.Add);
         var currentToast = currentManager.Created.Single();

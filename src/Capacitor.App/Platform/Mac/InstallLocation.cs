@@ -1,4 +1,4 @@
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Mac;
 
 public enum InstallLocationKind { NotABundle, Applications, UserApplications, DmgVolume, Translocated, Other }
 

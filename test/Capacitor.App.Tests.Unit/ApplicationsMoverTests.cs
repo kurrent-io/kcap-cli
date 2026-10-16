@@ -1,5 +1,5 @@
-using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 

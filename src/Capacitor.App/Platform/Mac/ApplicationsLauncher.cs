@@ -1,6 +1,6 @@
 using Capacitor.Cli.Core;
 
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Mac;
 
 internal sealed class ApplicationsLauncher(IProcessRunner runner, Func<string, bool?> isRunning, TimeProvider time) {
     internal async Task<bool> OpenAsync(string path, CancellationToken ct) {
