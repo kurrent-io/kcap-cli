@@ -171,6 +171,10 @@ public class RemoteSessionViewModelTests {
             h.WorkSource.Gate();
             vm.WorkContext.RefreshCommand.Execute().Subscribe();
             await WaitUntilAsync(() => h.WorkSource.InFlight == 1, what: "refresh pending");
+            // Under the immediate scheduler the verdict below clears the sections off the UI thread,
+            // racing a settle the refresh dispatched there; settled reads have nothing left to re-apply.
+            await (vm.WorkContext.Plan.PendingReadForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
             if (denied) {
                 h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
                 h.Lane.SessionAccessChangedSubject.OnNext("s1");
