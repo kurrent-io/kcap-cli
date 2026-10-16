@@ -465,6 +465,7 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task Thirty_second_background_poll_renews_overview_without_flashing_grace_or_stale() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial overview settled");
         var sawStale = false;
         h.Vm.PropertyChanged += (_, e) => {
             if (e.PropertyName == nameof(PullRequestContextViewModel.HasStaleOverview) && h.Vm.HasStaleOverview)
