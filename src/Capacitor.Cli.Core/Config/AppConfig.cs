@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Core.Config;
 
@@ -56,7 +57,7 @@ public static class AppConfig {
     /// remote matching — used by the daemon, which is not bound to a working
     /// directory.
     /// </summary>
-    public static async Task<ProfileContext> ResolveActiveProfile(string[] args, ConfigRoot config, ProfileOverrides env) {
+    public static async Task<ProfileContext> ResolveActiveProfile(string[] args, ConfigRoot config, ProfileOverrides env, LocalEndpoints local) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
@@ -68,7 +69,8 @@ public static class AppConfig {
             env.Profile,
             repoConfig: null,
             repoRemoteUrls: [],
-            repoPath: null
+            repoPath: null,
+            local
         );
 
         var resolved = resolver.Resolve();
@@ -81,7 +83,7 @@ public static class AppConfig {
     }
 
     public static async Task<ProfileContext> ResolveForRepo(
-            string[] args, ConfigRoot root, ProfileOverrides env, WorkingDirectory workdir, int gitTimeoutMs = 5000) {
+            string[] args, ConfigRoot root, ProfileOverrides env, LocalEndpoints local, WorkingDirectory workdir, int gitTimeoutMs = 5000) {
         var idx          = Array.IndexOf(args, "--server-url");
         var cliServerUrl = (idx >= 0 && idx + 1 < args.Length) ? args[idx + 1] : null;
 
@@ -98,7 +100,8 @@ public static class AppConfig {
                 env.Profile,
                 repoConfig: null,
                 repoRemoteUrls: [],
-                repoPath: null
+                repoPath: null,
+                local
             );
             var quickResolved = resolver.Resolve();
 
@@ -131,7 +134,8 @@ public static class AppConfig {
                 env.Profile,
                 repoConfig,
                 remoteUrls,
-                repoRoot
+                repoRoot,
+                local
             );
 
             var resolved = resolver.Resolve();

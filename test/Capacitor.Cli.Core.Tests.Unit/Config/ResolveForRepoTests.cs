@@ -26,7 +26,7 @@ public class ResolveForRepoTests {
     }
 
     async Task<string?> ResolveIn(string[] args, ProfileOverrides env) =>
-        (await AppConfig.ResolveForRepo(args, Config.Root, env, new WorkingDirectory(Repo.Path), gitTimeoutMs: 1000))
+        (await AppConfig.ResolveForRepo(args, Config.Root, env, NoLocalInstallation.Endpoints, new WorkingDirectory(Repo.Path), gitTimeoutMs: 1000))
         .Resolution.ServerUrl;
 
     [Test]

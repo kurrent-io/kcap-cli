@@ -41,7 +41,7 @@ public class ProfilesSettingsViewModelTests {
     ProfilesSettingsViewModel Make(TokenStore tokens, string bound = "work",
             Func<string, string, CancellationToken, Task>? openSignIn = null,
             Func<string, CancellationToken, Task<bool>>? confirm = null) =>
-        new(Config.Root, tokens, new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, TimeProvider.System), bound,
+        new(Config.Root, tokens, new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System), bound,
             openSignIn ?? ((_, _, _) => Task.CompletedTask), confirm ?? ((_, _) => Task.FromResult(true)));
 
     [Test]

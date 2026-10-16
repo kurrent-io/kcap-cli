@@ -34,6 +34,9 @@ public sealed class StatusCommand(
         var server = await ProbeServerAsync(http, baseUrl, config, time);
         await Console.Out.WriteLineAsync(FormatReachability(server));
 
+        if (profiles.Resolution.IgnoredRepoProfile is { } ignored)
+            await Console.Out.WriteLineAsync($"           {IgnoredRepoProfileLine(ignored)}");
+
         // Auth
         var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
         await Console.Out.WriteLineAsync($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
@@ -459,6 +462,9 @@ public sealed class StatusCommand(
         git is not null && git < GitHookInstaller.MinimumGit
             ? $"{git.ToString(3)} ignores kcap's commit hook (needs {GitHookInstaller.MinimumGit}+); commits are read from the agent's shell commands"
             : null;
+
+    internal static string IgnoredRepoProfileLine(string profile) =>
+        $".kcap.json names profile '{profile}', which is not set up here; recording to the local installation instead";
 
     /// <summary>
     /// Renders the Hooks status line: every harness, wired or not, in registry order. What "wired"

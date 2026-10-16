@@ -13,7 +13,7 @@ namespace Capacitor.App.Tests.Unit;
 public class OnboardingGateTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System);
+    OnboardingGate Gate() => new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System);
 
     const string ProfileName = "acme";
     const string ServerUrl = "https://acme.example";
@@ -28,7 +28,7 @@ public class OnboardingGateTests {
             MakeToken(AuthProvider.GitHubApp, expired: false, serverUrl: ServerUrl));
 
         var (gate, _) = await App.ResolveAndEvaluateGateAsync(Config.Root,
-            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(App.ShouldShowWizard(gate, null)).IsFalse();
         await Assert.That(App.ShouldShowWizard(gate, [])).IsFalse();
@@ -39,7 +39,7 @@ public class OnboardingGateTests {
     [Test]
     public async Task Unconfigured_profile_still_opens_setup_without_desktop_state() {
         var (gate, _) = await App.ResolveAndEvaluateGateAsync(Config.Root,
-            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+            AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(App.ShouldShowWizard(gate, [])).IsTrue();
     }
@@ -275,7 +275,7 @@ public class OnboardingGateTests {
     public async Task EvaluateResolvedAsync_never_re_resolves_ignoring_a_config_change_after_capture() {
         WriteConfig(SingleProfileConfig(
             new Profile { ServerUrl = ServerUrl, AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl) }));
-        var resolved = (await AppConfig.ResolveActiveProfile([], Config.Root, ProfileOverrides.None)).Resolution;
+        var resolved = (await AppConfig.ResolveActiveProfile([], Config.Root, ProfileOverrides.None, NoLocalInstallation.Endpoints)).Resolution;
 
         // Mutates the identity underneath the already-captured resolution — a fresh self-resolving
         // EvaluateAsync call at this point would see NoProfile instead.
