@@ -20,7 +20,15 @@ public partial class SessionRailView : UserControl {
     // The rail's 44px chrome row IS the title bar on this surface — see WindowChrome.
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
 
-    void OnHelpFlyoutItemClick(object? sender, RoutedEventArgs e) => RailHelpButton.Flyout?.Hide();
+    // Button.OnClick raises ClickEvent before reading Command, and Flyout.Hide detaches the popup
+    // parent and clears inherited DataContext on its rows, so capture and run Command here.
+    void OnHelpFlyoutItemClick(object? sender, RoutedEventArgs e) {
+        if (sender is not Button { Command: { } command, CommandParameter: var parameter }
+            || !command.CanExecute(parameter)) return;
+        RailHelpButton.Flyout?.Hide();
+        command.Execute(parameter);
+        e.Handled = true;
+    }
 
     void OnPullRequestClick(object? sender, RoutedEventArgs e) {
         if (sender is not Button { DataContext: RailSessionViewModel vm } anchor

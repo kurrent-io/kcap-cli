@@ -1416,6 +1416,55 @@ public class MainWindowSmokeTests {
         }
     });
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_help_flyout_items_close_the_flyout_and_invoke_their_commands_when_clicked() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var opener = new RecordingOpener();
+        var reported = new List<Capacitor.Cli.Core.Commands.FeedbackCategory>();
+        var setupOpened = 0;
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            openFeedback: reported.Add, opener: opener, requestSetup: () => setupOpened++);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+
+            void OpenAndClick(string buttonName) {
+                flyout.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                ClickFlyoutButton(rail.FindControl<Button>(buttonName)!);
+            }
+
+            OpenAndClick("RailHelpSetupButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(setupOpened).IsEqualTo(1);
+
+            OpenAndClick("RailHelpDocsButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl]);
+
+            OpenAndClick("RailHelpBugButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(reported).IsEquivalentTo([Capacitor.Cli.Core.Commands.FeedbackCategory.Bug]);
+
+            OpenAndClick("RailHelpFeedbackButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(reported).IsEquivalentTo([
+                Capacitor.Cli.Core.Commands.FeedbackCategory.Bug,
+                Capacitor.Cli.Core.Commands.FeedbackCategory.Feedback,
+            ]);
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// Off macOS the help flyout carries the app menu's Settings, Changelog and version — the only
     /// in-window route to Settings where no native menu bar is drawn. Settings stays inert until the
     /// app hands it an action.
@@ -1427,9 +1476,10 @@ public class MainWindowSmokeTests {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         var settings = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
+        var opener = new RecordingOpener();
         var opened = 0;
         var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-            settingsAction: settings, appMenuInWindow: inWindow);
+            opener: opener, settingsAction: settings, appMenuInWindow: inWindow);
         var window = new MainWindow { DataContext = vm };
         try {
             window.Show();
@@ -1443,21 +1493,30 @@ public class MainWindowSmokeTests {
 
             var items = rail.FindControl<StackPanel>("RailAppMenuItems")!;
             var settingsButton = rail.FindControl<Button>("RailHelpSettingsButton")!;
+            var changelogButton = rail.FindControl<Button>("RailHelpChangelogButton")!;
             await Assert.That(items.IsVisible).IsEqualTo(inWindow);
             await Assert.That(settingsButton.Content).IsEqualTo("Settings…");
-            await Assert.That(rail.FindControl<Button>("RailHelpChangelogButton")!.Content).IsEqualTo("Changelog");
+            await Assert.That(changelogButton.Content).IsEqualTo("Changelog");
             await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Kurrent Capacitor ");
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
 
             settings.OnNext(() => opened++);
             Dispatcher.UIThread.RunJobs();
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsTrue();
-            settingsButton.Command!.Execute(null);
-            Dispatcher.UIThread.RunJobs();
-            await Assert.That(opened).IsEqualTo(1);
+            if (inWindow) {
+                ClickFlyoutButton(settingsButton);
+                await Assert.That(flyout.IsOpen).IsFalse();
+                await Assert.That(opened).IsEqualTo(1);
 
-            flyout.Hide();
-            Dispatcher.UIThread.RunJobs();
+                flyout.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                ClickFlyoutButton(changelogButton);
+                await Assert.That(flyout.IsOpen).IsFalse();
+                await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
+            } else {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
         } finally {
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -1644,9 +1703,11 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             var signIn = rail.FindControl<Button>("RailHelpSignInButton")!;
             var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled && signIn.Classes.Contains("kcapGhost");
-            vm.SignInCommand.Execute().Subscribe();
-            Dispatcher.UIThread.RunJobs();
+            ClickFlyoutButton(signIn);
+            var closedOnClick = !flyout.IsOpen;
 
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
@@ -1655,12 +1716,25 @@ public class MainWindowSmokeTests {
             flyout.Hide();
             window.Close();
             Dispatcher.UIThread.RunJobs();
-            return (whileOut, clicks, whileIn);
+            return (whileOut && closedOnClick, clicks, whileIn);
         });
 
         await Assert.That(visibleWhileOut).IsTrue();
         await Assert.That(clicks).IsEqualTo(1);
         await Assert.That(visibleWhileIn).IsFalse();
+    }
+
+    static void ClickFlyoutButton(Button button) {
+        Dispatcher.UIThread.RunJobs();
+        var top = TopLevel.GetTopLevel(button)
+            ?? throw new InvalidOperationException("Flyout button is not attached to a TopLevel.");
+        top.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        var point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), top)
+            ?? throw new InvalidOperationException("Flyout button has no coordinates in its TopLevel.");
+        top.MouseDown(point, MouseButton.Left);
+        top.MouseUp(point, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
     }
 
     /// 330 of rail plus 400 of pane must never squeeze the center column to nothing.
