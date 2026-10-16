@@ -4070,7 +4070,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             psi.ArgumentList.Add("generate-whats-done");
             psi.ArgumentList.Add(sessionId);
 
-            using var proc = Process.Start(psi);
+            using var proc = Process.Start(WindowsLaunchCommand.Apply(psi, _config.Binaries));
 
             if (proc is null) {
                 LogWhatsDoneSpawnFailed(null, sessionId);
