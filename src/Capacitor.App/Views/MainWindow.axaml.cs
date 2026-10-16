@@ -7,7 +7,6 @@ using Avalonia.Input;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
-using ReactiveUI;
 using ReactiveUI.Reactive;
 using ReactiveUI.Avalonia.Reactive;
 
