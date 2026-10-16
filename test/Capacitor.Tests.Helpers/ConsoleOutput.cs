@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Capacitor.Tests.Helpers;
 
 /// <summary>
@@ -14,18 +16,18 @@ namespace Capacitor.Tests.Helpers;
 public sealed class ConsoleOutput : IDisposable {
     static int Active;
 
-    readonly TextWriter?  _originalOut;
-    readonly TextWriter?  _originalError;
-    readonly StringWriter _out;
-    readonly StringWriter _error;
+    readonly TextWriter?    _originalOut;
+    readonly TextWriter?    _originalError;
+    readonly CapturedWriter _out;
+    readonly CapturedWriter _error;
 
     bool _disposed;
 
     ConsoleOutput(bool stdout, bool stderr, string? newLine) {
         // Callers that assert on exact output pass "\n": StringWriter otherwise inherits
         // Environment.NewLine, which is "\r\n" on Windows and would only ever fail there.
-        _out   = newLine is null ? new StringWriter() : new StringWriter { NewLine = newLine };
-        _error = newLine is null ? new StringWriter() : new StringWriter { NewLine = newLine };
+        _out   = new CapturedWriter(newLine);
+        _error = new CapturedWriter(newLine);
 
         if (Interlocked.Exchange(ref Active, 1) == 1)
             throw new InvalidOperationException(
@@ -57,10 +59,10 @@ public sealed class ConsoleOutput : IDisposable {
     public static ConsoleOutput StartFullCapture(string? newLine = null) => new(stdout: true, stderr: true, newLine);
 
     /// <summary>Readable both during the capture and after disposal.</summary>
-    public string GetCapturedOutput() => _out.ToString();
+    public string GetCapturedOutput() => _out.Snapshot();
 
     /// <inheritdoc cref="GetCapturedOutput"/>
-    public string GetCapturedError() => _error.ToString();
+    public string GetCapturedError() => _error.Snapshot();
 
     public void Dispose() {
         if (_disposed)
@@ -77,5 +79,45 @@ public sealed class ConsoleOutput : IDisposable {
 #pragma warning restore TUnit0055
 
         Interlocked.Exchange(ref Active, 0);
+    }
+
+    // StringBuilder.ToString walks its chunks while a concurrent append links a new one and throws
+    // ArgumentOutOfRangeException (chunkLength). Every write and every snapshot take _gate.
+    sealed class CapturedWriter : TextWriter {
+        readonly StringWriter _inner;
+        readonly object       _gate = new();
+
+        public CapturedWriter(string? newLine) {
+            _inner = newLine is null ? new StringWriter() : new StringWriter { NewLine = newLine };
+            // Parameterless WriteLine() reads this writer's newline, not the inner one's.
+            if (newLine is not null)
+                NewLine = newLine;
+        }
+
+        public override Encoding Encoding => _inner.Encoding;
+
+        public override void Write(char value) {
+            lock (_gate) _inner.Write(value);
+        }
+
+        public override void Write(string? value) {
+            lock (_gate) _inner.Write(value);
+        }
+
+        public override void Write(char[] buffer, int index, int count) {
+            lock (_gate) _inner.Write(buffer, index, count);
+        }
+
+        public override void Write(ReadOnlySpan<char> buffer) {
+            lock (_gate) _inner.Write(buffer);
+        }
+
+        public override void WriteLine(string? value) {
+            lock (_gate) _inner.WriteLine(value);
+        }
+
+        public string Snapshot() {
+            lock (_gate) return _inner.ToString();
+        }
     }
 }
