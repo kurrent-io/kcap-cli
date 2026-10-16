@@ -73,6 +73,21 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
 
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) {
+        var dir = CodexModelCatalogProbe.DirectoryFor(_config.Store.StateDirectory(_config.Name));
+
+        return CodexModelCatalogProbe.RunAsync(
+            () => {
+                Directory.CreateDirectory(dir);
+                return _spawnFactory(_pty.CliPath, [], null, dir, new Dictionary<string, string>(), _config, _loggerFactory);
+            },
+            string.IsNullOrEmpty(_config.Version) ? "0.0.0" : _config.Version, _time, _logger, ct);
+    }
+
+    /// <summary>Codex rewrites its cached catalog when it refetches it, and its auth file when the
+    /// account changes; either can change the models this account may launch.</summary>
+    public IReadOnlyList<string> CatalogFingerprintPaths => [_launcher.Paths.ModelsCache, _launcher.Paths.AuthJson];
+
     // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
     // the only one whose fetch happens alongside a live, write-contained process: the store keeps
     // that write outside every cwd it could steer. Protected kinds fetch before the process exists.

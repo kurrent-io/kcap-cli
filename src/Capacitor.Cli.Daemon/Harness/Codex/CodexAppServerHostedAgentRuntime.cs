@@ -519,7 +519,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
             case "turn/completed": {
                 var turn = n.Params is { } p ? p.Obj("turn") : null;
                 if (turn?.Str("status") is "failed")
-                    _logger.LogWarning("codex app-server: turn completed with status=failed.");
+                    _logger.LogWarning("codex app-server: turn failed: {Error}", turn?.Obj("error")?.Str("message") ?? "(no error message)");
                 _dispatcher.OnTurnCompleted(turn?.Str("id"));
                 break;
             }
