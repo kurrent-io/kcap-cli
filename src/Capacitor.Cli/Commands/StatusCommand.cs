@@ -81,7 +81,7 @@ public sealed class StatusCommand(
         var daemons = ReadDaemonEntries(store);
         await Console.Out.WriteLineAsync($"  Daemon:  {DaemonLine(daemons)}");
 
-        var (units, verifySupported) = InstalledUnits();
+        var (units, verifySupported) = await InstalledUnitsAsync();
         foreach (var warning in DaemonDriftLines(
                      CapacitorVersion.Current(), daemons, units, UnitIdentity.ResolveDaemonBinary(), verifySupported))
             await Console.Out.WriteLineAsync($"           {warning}");
@@ -351,21 +351,28 @@ public sealed class StatusCommand(
             e.Version is { } v ? $"{e.Name} (PID {e.Pid}, {CapacitorVersion.Display(v)})" : $"{e.Name} (PID {e.Pid})";
     }
 
-    /// <summary>How long status gives schtasks, all calls together, to list the units on Windows. A call
-    /// still running when it is spent is killed, and status reads that unit as unreadable.</summary>
+    /// <summary>How long status gives the unit read. On Windows it is also the budget schtasks shares
+    /// across its calls, and a call still running when it is spent is killed.</summary>
     static readonly TimeSpan UnitsBudget = TimeSpan.FromSeconds(3);
 
     /// <summary>The installed service units and the daemon binary each names; a unit whose binary cannot
-    /// be read is kept with a null binary. launchd and systemd read only unit files here.</summary>
-    (IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported) InstalledUnits() {
-        if (OperatingSystem.IsWindows())
-            return (ReadUnits(new WindowsScheduledTaskServiceManager(config, schtasks: BoundedSchtasks(time.GetTimestamp()))), true);
-
+    /// be read is kept with a null binary. launchd and systemd read only unit files here. Empty when the
+    /// read does not finish within <see cref="UnitsBudget"/>, so a stalled home directory cannot hang status.</summary>
+    async Task<(IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported)> InstalledUnitsAsync() {
+        IServiceManager manager;
         try {
-            var manager = ServiceManagerFactory.ForCurrentOs(config, home, time);
-            return (ReadUnits(manager), manager is LaunchdServiceManager);
+            manager = OperatingSystem.IsWindows()
+                ? new WindowsScheduledTaskServiceManager(config, schtasks: BoundedSchtasks(time.GetTimestamp()))
+                : ServiceManagerFactory.ForCurrentOs(config, home, time);
         } catch (PlatformNotSupportedException) {
             return ([], false);
+        }
+
+        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
+        try {
+            return (await Task.Run(() => ReadUnits(manager)).WaitAsync(UnitsBudget, time), verifySupported);
+        } catch (TimeoutException) {
+            return ([], verifySupported);
         }
     }
 
