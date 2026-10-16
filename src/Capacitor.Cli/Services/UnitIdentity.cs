@@ -22,15 +22,15 @@ static class UnitIdentity {
         return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
     }
 
-    /// <summary>Whether a unit's binary is <paramref name="daemonBinary"/>, by its version directory or the
-    /// stable <c>current</c> path alike. An unreadable unit binary (null) is not.</summary>
+    /// <summary>Whether a unit's binary is <paramref name="daemonBinary"/>, by its version directory, the
+    /// stable <c>current</c> path or a symlinked spelling alike. An unreadable unit binary (null) is not.
+    /// Case counts outside Windows: a macOS volume can be case-sensitive, and calling two installs one
+    /// would hide the drift this exists to report.</summary>
     public static bool SameDaemon(string? unitBinary, string daemonBinary) =>
-        unitBinary is not null && string.Equals(Canonical(unitBinary), Canonical(daemonBinary), PathComparison);
+        unitBinary is not null && string.Equals(Canonical(unitBinary), Canonical(daemonBinary),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    static string Canonical(string path) => ScriptInstallLayout.Stabilize(Path.GetFullPath(path));
-
-    static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    static string Canonical(string path) => PhysicalPath.Of(ScriptInstallLayout.Stabilize(Path.GetFullPath(path)));
 
     /// <summary>config.json path for a baked <c>KCAP_CONFIG_DIR</c>, or the default config root
     /// when the unit baked none.</summary>

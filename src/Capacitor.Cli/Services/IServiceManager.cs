@@ -50,6 +50,9 @@ interface IServiceManager {
     /// <summary>Null when the units could not be listed, which <see cref="ListInstalled"/> reports as none.</summary>
     IReadOnlyList<string>?       TryListInstalled() => ListInstalled();
     ServiceStatus                Status(string serviceId);
+    /// <summary>The daemon binary the installed unit names, read without asking the OS supervisor where
+    /// the unit file says it; null when it cannot be read.</summary>
+    string?                      UnitBinary(string serviceId) => Status(serviceId).BinaryPath;
     ServiceQuery                 Query(string serviceId);
     /// <summary>False when the OS tool refused the registration, with its reason in <paramref name="error"/>.</summary>
     bool Install(ServiceSpec spec, bool startNow, out string? error);

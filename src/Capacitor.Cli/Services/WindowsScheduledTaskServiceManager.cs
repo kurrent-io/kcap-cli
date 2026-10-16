@@ -133,12 +133,24 @@ sealed class WindowsScheduledTaskServiceManager(
         return files;
     }
 
+    /// <summary>A refused registration puts the previous wrapper back: an existing task runs whatever its
+    /// wrapper names at the next sign-in, so a failed install must not leave it repointed.</summary>
     public bool Install(ServiceSpec spec, bool startNow, out string? error) {
+        var wrapperPath = WindowsTaskUnit.WrapperPath(config, spec.ServiceId);
+        var previous    = File.Exists(wrapperPath) ? File.ReadAllText(wrapperPath) : null;
+
         var files = WriteUnitFiles(spec);
         var xmlPath = files.First(f => f.Path.EndsWith(".task.xml", StringComparison.Ordinal)).Path;
         error = Schtasks(WindowsTaskUnit.CreateArgs(spec.ServiceId, xmlPath));
         File.Delete(xmlPath); // the task XML is only needed for registration
-        if (error is null && startNow) error = Schtasks(WindowsTaskUnit.RunArgs(spec.ServiceId));
+
+        if (error is not null) {
+            if (previous is null) File.Delete(wrapperPath);
+            else _writeUnit(wrapperPath, previous, WrapperEncoding);
+            return false;
+        }
+
+        if (startNow) error = Schtasks(WindowsTaskUnit.RunArgs(spec.ServiceId));
         return error is null;
     }
 

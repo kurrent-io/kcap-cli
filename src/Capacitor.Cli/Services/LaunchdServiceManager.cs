@@ -58,6 +58,8 @@ sealed partial class LaunchdServiceManager(
         return new ServiceStatus(LaunchdUnit.StatusFromPrint(code, stdout), bin);
     }
 
+    public string? UnitBinary(string serviceId) => ReadBinaryPathSafe(LaunchdUnit.PlistPath(home, serviceId));
+
     public ServiceQuery Query(string serviceId)                 => QueryCore(serviceId, null);
     public ServiceQuery Query(string serviceId, TimeSpan t)     => QueryCore(serviceId, t);
 
@@ -89,22 +91,23 @@ sealed partial class LaunchdServiceManager(
         catch { return null; }
     }
 
-    /// <summary>How long a plain install waits for a booted-out job to unload. <c>bootout</c> returns
-    /// while a running job is still exiting, and a bootstrap before it has gone fails with EIO.</summary>
+    /// <summary>How long a plain install gives <c>bootout</c> and the job's unload together. <c>bootout</c>
+    /// returns while a running job is still exiting, and a bootstrap before it has gone fails with EIO.</summary>
     public static readonly TimeSpan UnloadWait = TimeSpan.FromSeconds(15);
     static readonly TimeSpan UnloadPoll = TimeSpan.FromMilliseconds(100);
 
     /// <summary>Boots out any existing job, waits for launchd to let go of the label, then rewrites the
-    /// plist and bootstraps it. A label that stays loaded leaves the plist untouched, so the file on
-    /// disk keeps describing the job launchd runs.</summary>
+    /// plist and bootstraps it. A label that is not seen to unload leaves the plist untouched, so the
+    /// file on disk keeps describing the job launchd runs.</summary>
     public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         var plistPath = LaunchdUnit.PlistPath(home, spec.ServiceId);
-        RunCtl(null, LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
+        var started   = time.GetTimestamp();
+        RunCtl(UnloadWait, LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
 
-        if (WaitUnloaded(spec.ServiceId) is { } label) {
+        if (WaitUnloaded(spec.ServiceId, started) is { } label) {
             error = label == LabelProbe.Loaded
                 ? $"launchd still had the job loaded {UnloadWait.TotalSeconds:0}s after bootout, so its plist was left as it was"
-                : "launchctl print could not say whether the job unloaded, so its plist was left as it was";
+                : "launchctl could not say whether the job unloaded, so its plist was left as it was";
             return false;
         }
 
@@ -120,16 +123,17 @@ sealed partial class LaunchdServiceManager(
         return true;
     }
 
-    /// <summary>Null once the label is absent; otherwise the last probe's answer when the wait ran out.</summary>
-    LabelProbe? WaitUnloaded(string serviceId) {
-        var started = time.GetTimestamp();
-        while (true) {
-            var (exit, stdout, stderr, _) = RunCtl(null, LaunchdUnit.PrintArgs(Uid(), serviceId));
-            var label = LaunchdUnit.ClassifyPrint(exit, stdout, stderr);
+    /// <summary>Null once the label is absent; otherwise the last probe's answer when the deadline
+    /// <paramref name="started"/> + <see cref="UnloadWait"/> passed. Each probe gets only what is left.</summary>
+    LabelProbe? WaitUnloaded(string serviceId, long started) {
+        var label = LabelProbe.Unknown;
+        while (UnloadWait - time.GetElapsedTime(started) is var left && left > TimeSpan.Zero) {
+            var (exit, stdout, stderr, timedOut) = RunCtl(left, LaunchdUnit.PrintArgs(Uid(), serviceId));
+            label = timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(exit, stdout, stderr);
             if (label == LabelProbe.Absent) return null;
-            if (time.GetElapsedTime(started) >= UnloadWait) return label;
             Thread.Sleep(UnloadPoll);
         }
+        return label;
     }
 
     /// <summary>The install-verify engine's fresh-install mutation: write + bootstrap, no leading

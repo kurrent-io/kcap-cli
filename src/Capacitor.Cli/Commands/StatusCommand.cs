@@ -81,9 +81,9 @@ public sealed class StatusCommand(
         var daemons = ReadDaemonEntries(store);
         await Console.Out.WriteLineAsync($"  Daemon:  {DaemonLine(daemons)}");
 
+        var (units, verifySupported) = await InstalledUnitsAsync();
         foreach (var warning in DaemonDriftLines(
-                     CapacitorVersion.Current(), daemons, InstalledUnits(out var verifySupported),
-                     UnitIdentity.ResolveDaemonBinary(), verifySupported))
+                     CapacitorVersion.Current(), daemons, units, UnitIdentity.ResolveDaemonBinary(), verifySupported))
             await Console.Out.WriteLineAsync($"           {warning}");
 
         return 0;
@@ -351,18 +351,50 @@ public sealed class StatusCommand(
             e.Version is { } v ? $"{e.Name} (PID {e.Pid}, {CapacitorVersion.Display(v)})" : $"{e.Name} (PID {e.Pid})";
     }
 
-    /// <summary>The installed service units and the daemon binary each runs; empty when they cannot be read.</summary>
-    IReadOnlyList<(string Id, string? Binary)> InstalledUnits(out bool verifySupported) {
-        verifySupported = false;
+    /// <summary>How long status waits for the installed units to be listed. Listing them asks schtasks on
+    /// Windows, which can stall; status skips the unit checks rather than hang.</summary>
+    static readonly TimeSpan UnitsBudget = TimeSpan.FromSeconds(3);
+
+    /// <summary>The installed service units and the daemon binary each names; a unit whose binary cannot
+    /// be read is kept with a null binary. Empty when the units cannot be listed in time.</summary>
+    async Task<(IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported)> InstalledUnitsAsync() {
+        IServiceManager manager;
         try {
-            var manager = ServiceManagerFactory.ForCurrentOs(config, home, time);
-            verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
-            return [.. (manager.TryListInstalled() ?? []).Select(id => (id, manager.Status(id).BinaryPath))];
-        } catch (Exception ex) when (ex is PlatformNotSupportedException or IOException or UnauthorizedAccessException
-                                      or InvalidOperationException or System.ComponentModel.Win32Exception) {
-            return [];
+            manager = ServiceManagerFactory.ForCurrentOs(config, home, time);
+        } catch (PlatformNotSupportedException) {
+            return ([], false);
+        }
+
+        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
+        try {
+            var units = await Task.Run(() => ReadUnits(manager)).WaitAsync(UnitsBudget, time);
+            return (units, verifySupported);
+        } catch (TimeoutException) {
+            return ([], verifySupported);
         }
     }
+
+    internal static IReadOnlyList<(string Id, string? Binary)> ReadUnits(IServiceManager manager) {
+        IReadOnlyList<string>? ids;
+        try {
+            ids = manager.TryListInstalled();
+        } catch (Exception ex) when (IsUnitReadFailure(ex)) {
+            return [];
+        }
+
+        return [.. (ids ?? []).Select(id => (id, Binary(id)))];
+
+        string? Binary(string id) {
+            try {
+                return manager.UnitBinary(id);
+            } catch (Exception ex) when (IsUnitReadFailure(ex)) {
+                return null;
+            }
+        }
+    }
+
+    static bool IsUnitReadFailure(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception;
 
     /// <summary>
     /// One warning per daemon that `kcap update` does not reach: one running another version than this

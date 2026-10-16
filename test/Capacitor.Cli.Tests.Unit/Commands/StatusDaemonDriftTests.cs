@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -42,5 +43,30 @@ internal sealed class StatusDaemonDriftTests {
 
         string[] want = expected is null ? [] : [expected];
         await Assert.That(lines).IsEquivalentTo(want);
+    }
+
+    /// <summary>One unreadable unit keeps its place with no binary, so the units after it are still
+    /// checked and the daemon is still advised as service-managed.</summary>
+    [Test]
+    public async Task An_unreadable_unit_is_kept_without_hiding_the_others() {
+        var units = StatusCommand.ReadUnits(new UnitsManager(new() { ["a"] = null, ["b"] = NpmBin }));
+
+        await Assert.That(units).IsEquivalentTo([("a", (string?)null), ("b", (string?)NpmBin)]);
+    }
+
+    sealed class UnitsManager(Dictionary<string, string?> binaries) : IServiceManager {
+        public string Describe() => "units";
+        public string UnitDirectory => "";
+        public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
+        public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
+        public string? UnitBinary(string serviceId) =>
+            binaries[serviceId] ?? throw new InvalidOperationException($"cannot read {serviceId}");
+        public ServiceStatus Status(string serviceId) => throw new NotSupportedException();
+        public ServiceQuery Query(string serviceId) => throw new NotSupportedException();
+        public bool Install(ServiceSpec spec, bool startNow, out string? error) => throw new NotSupportedException();
+        public void WriteAndBootstrap(ServiceSpec spec) => throw new NotSupportedException();
+        public bool Uninstall(string serviceId, out string? error) => throw new NotSupportedException();
+        public bool Start(string serviceId, out string? error) => throw new NotSupportedException();
+        public bool Stop(string serviceId, out string? error) => throw new NotSupportedException();
     }
 }

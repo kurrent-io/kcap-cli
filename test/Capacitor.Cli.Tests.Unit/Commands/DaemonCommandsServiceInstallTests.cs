@@ -115,31 +115,37 @@ internal sealed class DaemonCommandsServiceInstallTests {
 
     const string Ours = "/home/u/.local/share/kcap/current/bin/kcap-daemon";
     const string Npm  = "/opt/homebrew/lib/node_modules/@kurrent/kcap/bin/kcap-daemon";
+    const string Fail = "Could not install service 'tony' (launchd LaunchAgent): boom";
+    const string Replace = "`kcap daemon service install --replace --verify --name tony`";
 
-    public static IEnumerable<Func<(string Case, LabelProbe Probe, string? Binary, bool VerifySupported, string? Detail)>> FailureCases() {
-        yield return () => ("not loaded before", LabelProbe.Absent, Npm, true, null);
-        yield return () => ("loaded, this install", LabelProbe.Loaded, Ours, true,
-            $"The service was already installed and loaded, running this install's daemon ({Ours}). "
-          + "To reinstall it in place, run `kcap daemon service install --replace --verify --name tony`.");
-        yield return () => ("loaded, another install", LabelProbe.Loaded, Npm, true,
-            $"The service was already installed and loaded, running {Npm} rather than this install's daemon ({Ours}). "
-          + "To point it at this install, run `kcap daemon service install --replace --verify --name tony`.");
-        yield return () => ("loaded, no verify on this platform", LabelProbe.Loaded, Npm, false,
-            $"The service was already installed and loaded, running {Npm} rather than this install's daemon ({Ours}). "
+    static ServiceQuery Q(LabelProbe probe, string? binary) => new(probe, true, ServiceState.Running, binary, null);
+
+    public static IEnumerable<Func<(string Case, ServiceQuery Before, ServiceQuery? After, bool VerifySupported, string Expected)>> FailureCases() {
+        yield return () => ("not loaded before", Q(LabelProbe.Absent, Npm), Q(LabelProbe.Absent, Npm), true, Fail);
+        yield return () => ("still loaded, this install", Q(LabelProbe.Loaded, Ours), Q(LabelProbe.Loaded, Ours), true,
+            $"{Fail}\n  The service is still loaded, and its unit names this install's daemon ({Ours}). To reinstall it in place, run {Replace}.");
+        yield return () => ("still loaded, another install", Q(LabelProbe.Loaded, Npm), Q(LabelProbe.Loaded, Npm), true,
+            $"{Fail}\n  The service is still loaded, and its unit names {Npm}, not this install's daemon ({Ours}). To point it at this install, run {Replace}.");
+        yield return () => ("stopped, unit rewritten to this install", Q(LabelProbe.Loaded, Npm), Q(LabelProbe.Absent, Ours), true,
+            $"{Fail}\n  The service was loaded and is now stopped; its unit names this install's daemon ({Ours}). To install it again, run {Replace}.");
+        yield return () => ("state unreadable after", Q(LabelProbe.Loaded, Npm), null, true,
+            $"{Fail}\n  The service was loaded; kcap could not tell whether it still is (see `kcap daemon service status --name tony`). Its unit names {Npm}, not this install's daemon ({Ours}). To point it at this install, run {Replace}.");
+        yield return () => ("no verify on this platform", Q(LabelProbe.Loaded, Npm), Q(LabelProbe.Loaded, Npm), false,
+            $"{Fail}\n  The service is still loaded, and its unit names {Npm}, not this install's daemon ({Ours}). "
           + "To point it at this install, run `kcap daemon service uninstall --name tony`, then `kcap daemon service install --name tony`.");
     }
 
+    /// <summary>The state after the failure decides the wording, since the install may already have
+    /// stopped the old job; the unit it names is read from whichever query still sees the unit.</summary>
     [Test]
     [MethodDataSource(nameof(FailureCases))]
-    public async Task Install_failure_says_which_daemon_a_loaded_unit_runs(
-            string @case, LabelProbe probe, string? binary, bool verifySupported, string? detail) {
-        var spec   = new ServiceSpec("tony", Ours, "/x/log", new Dictionary<string, string>(), []);
-        var before = new ServiceQuery(probe, true, ServiceState.Running, binary, null);
+    public async Task Install_failure_says_what_state_the_service_is_left_in(
+            string @case, ServiceQuery before, ServiceQuery? after, bool verifySupported, string expected) {
+        var spec = new ServiceSpec("tony", Ours, "/x/log", new Dictionary<string, string>(), []);
 
-        var text = DaemonServiceCommands.InstallFailure(spec, "launchd LaunchAgent", "boom", before, verifySupported);
+        var text = DaemonServiceCommands.InstallFailure(spec, "launchd LaunchAgent", "boom", before, after, verifySupported);
 
-        var expected = "Could not install service 'tony' (launchd LaunchAgent): boom";
-        await Assert.That(text).IsEqualTo(detail is null ? expected : $"{expected}{Environment.NewLine}  {detail}");
+        await Assert.That(text).IsEqualTo(expected.Replace("\n", Environment.NewLine));
     }
 
     sealed class CountingManager : IServiceManager {

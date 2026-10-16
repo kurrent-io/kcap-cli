@@ -34,6 +34,15 @@ sealed class SystemdServiceManager(
         return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), bin);
     }
 
+    public string? UnitBinary(string serviceId) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        try {
+            return File.Exists(path) ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
+    }
+
     public ServiceQuery Query(string serviceId) {
         var path = SystemdUnit.UnitPath(home, serviceId);
         var unitPresent = File.Exists(path);
@@ -85,11 +94,22 @@ sealed class SystemdServiceManager(
             throw new InvalidOperationException($"systemctl --user daemon-reload exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}")}");
     }
 
+    /// <summary>A refused reload or enable puts the previous unit file back, so a failed install leaves
+    /// the unit as it was. A refused restart does not: the unit is installed, only not started.</summary>
     public bool Install(ServiceSpec spec, bool startNow, out string? error) {
+        var path     = SystemdUnit.UnitPath(home, spec.ServiceId);
+        var previous = File.Exists(path) ? File.ReadAllText(path) : null;
+
         WriteUnitFiles(spec);
-        error = Systemctl(SystemdUnit.DaemonReloadArgs())
-             ?? Systemctl(SystemdUnit.EnableArgs(spec.ServiceId))
-             ?? (startNow ? Systemctl(SystemdUnit.RestartArgs(spec.ServiceId)) : null);
+        error = Systemctl(SystemdUnit.DaemonReloadArgs()) ?? Systemctl(SystemdUnit.EnableArgs(spec.ServiceId));
+        if (error is not null) {
+            if (previous is null) File.Delete(path);
+            else _writeUnit(path, previous, null);
+            Systemctl(SystemdUnit.DaemonReloadArgs());
+            return false;
+        }
+
+        error = startNow ? Systemctl(SystemdUnit.RestartArgs(spec.ServiceId)) : null;
         return error is null;
     }
 
