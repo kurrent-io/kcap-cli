@@ -326,20 +326,28 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var sessionId = McpSessionId.Resolve(args);
         var kind      = McpToolArguments.RequireString(args, "kind");
         var rawPath   = McpToolArguments.RequireString(args, "path");
-        var boundary  = repoRoot ?? cwd;
-        var fullPath  = ContainedPath(rawPath, cwd, boundary);
+        var named     = McpToolArguments.OptionalString(args, "workspace_root");
+        var baseDir   = named is null ? cwd : Path.GetFullPath(named, cwd);
+        var checkout  = named is null ? DocumentCheckout(Path.GetFullPath(rawPath, baseDir), repoRoot, cwd) : NamedCheckout(named, baseDir);
+        var fullPath  = ContainedPath(rawPath, baseDir, checkout);
 
         if (!File.Exists(fullPath))
-            throw new ArgumentException($"'{rawPath}' does not exist (resolved against {cwd}).");
+            throw new ArgumentException($"'{rawPath}' does not exist (resolved against {baseDir}).");
+
+        // A file in the session's own checkout, under any spelling of it, goes root-relative, keyed as
+        // discovery keys it; one in another checkout goes absolute, which lets the server key it there.
+        var ownCheckout = PathComparison.Equal(CanonicalPath.Resolve(checkout), CanonicalPath.Resolve(repoRoot ?? cwd));
+        var keyRoot     = ownCheckout ? repoRoot : checkout;
+        string Wire(string path) => ownCheckout ? WirePath(path, repoRoot is null ? null : checkout) : path;
 
         var (hash, snapshot, length) = ReadDocument(fullPath);
-        var wirePath = WirePath(fullPath, repoRoot);
+        var wirePath = Wire(fullPath);
 
         var body = new JsonObject {
             ["session_id"]     = sessionId,
             ["kind"]           = kind,
             ["path"]           = wirePath,
-            ["workspace_root"] = repoRoot,
+            ["workspace_root"] = keyRoot,
             ["content_hash"]   = hash
         };
 
@@ -355,15 +363,42 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
             }
         }
 
-        var arguesFrom = McpToolArguments.OptionalString(args, "argues_from") is { } rawArguesFrom ? Path.GetFullPath(rawArguesFrom, cwd) : null;
+        var arguesFrom = McpToolArguments.OptionalString(args, "argues_from") is { } rawArguesFrom ? Path.GetFullPath(rawArguesFrom, baseDir) : null;
         if (arguesFrom is not null)
-            body["argues_from"] = WirePath(arguesFrom, repoRoot);
+            body["argues_from"] = Wire(arguesFrom);
 
         var workItemId = McpToolArguments.OptionalString(args, "work_item_id");
         if (workItemId is not null)
             body["work_item_id"] = workItemId;
 
-        return new(body, sessionId, new DeclaredDocument(fullPath, kind, arguesFrom, workItemId, cwd, repoRoot), wirePath, repoRoot, length, omitted);
+        if (OptionalPlanId(args) is { } planId)
+            body["plan_id"] = planId;
+
+        var document = new DeclaredDocument(fullPath, kind, arguesFrom, workItemId, cwd, repoRoot, named is null ? null : checkout);
+        return new(body, sessionId, document, wirePath, keyRoot, length, omitted);
+    }
+
+    /// <summary>The checkout a declared file is bounded by: the session's own, unless the file sits in
+    /// a different working tree of the same repository — a linked worktree, which may be nested inside
+    /// the session's checkout or beside it. A file anywhere else stays bounded by the session's checkout,
+    /// which refuses it.</summary>
+    static string DocumentCheckout(string fullPath, string? repoRoot, string cwd) {
+        var own = repoRoot ?? cwd;
+        if (repoRoot is null || Path.GetDirectoryName(fullPath) is not { } dir || GitRepository.FindRoot(dir) is not { } holder) return own;
+        if (PathComparison.Equal(holder, repoRoot)) return own;
+
+        var common = GitRepository.ResolveCommonDir(holder);
+        return common is not null && PathComparison.Equal(common, GitRepository.ResolveCommonDir(repoRoot) ?? "") ? holder : own;
+    }
+
+    /// <summary>A checkout the agent named: the git working tree holding that directory, of whatever
+    /// repository, since the agent may work in several.</summary>
+    static string NamedCheckout(string named, string directory) {
+        if (!Directory.Exists(directory))
+            throw new ArgumentException($"workspace_root '{named}' is not a directory.");
+
+        return GitRepository.FindRoot(directory)
+            ?? throw new ArgumentException($"workspace_root '{named}' is not inside a git working tree.");
     }
 
     /// <summary>Bound on link hops while resolving a declared path; a chain deeper than this is a
@@ -377,7 +412,9 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         var fullPath = Path.GetFullPath(rawPath, cwd);
 
         if (!IsInside(fullPath, boundary))
-            throw new ArgumentException($"'{rawPath}' is outside the project root ({boundary}); only files under it can be declared.");
+            throw new ArgumentException(
+                $"'{rawPath}' is outside the project root ({boundary}); only files under it or in another worktree of its repository "
+              + "can be declared. For a file in another checkout you work in, pass that checkout as workspace_root.");
 
         // Both sides are resolved the way the kernel opens them, so a link above the root (macOS's
         // /var → /private/var) cancels out and only a link that leaves the tree remains.
@@ -575,13 +612,16 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
           + "already holds the session's transcript — keyed by path against the git repository root. Nothing is "
           + "published anywhere else. Returns plan_id, document_key and whether the plan was created; declaring "
           + "the same document again attaches this session to the same plan and replaces the stored copy with the "
-          + "file's current text, so declare it again whenever you change it.",
+          + "file's current text, so declare it again whenever you change it. A document declared after set_plan_tasks, "
+          + "or from another checkout of a document the session's plan already holds, joins the session's current plan.",
             new("object", new() {
-                ["kind"]         = new("string", "One of 'plan', 'spec' or 'design'."),
-                ["path"]         = new("string", "Path to the document, absolute or relative to the project directory."),
-                ["argues_from"]  = new("string", "Path of the document this one argues from — the spec a plan implements, or the design a spec refines — so both land on one plan."),
-                ["work_item_id"] = new("string", "Work item the plan belongs to, when known."),
-                ["session_id"]   = new("string", "Session to attach. Defaults to the session this server runs in when omitted.")
+                ["kind"]           = new("string", "One of 'plan', 'spec' or 'design'."),
+                ["path"]           = new("string", "Path to the document, absolute or relative to the project directory (or to workspace_root when given)."),
+                ["argues_from"]    = new("string", "Path of the document this one argues from — the spec a plan implements, or the design a spec refines — so both land on one plan."),
+                ["work_item_id"]   = new("string", "Work item the plan belongs to, when known."),
+                ["plan_id"]        = new("string", "Plan to attach the document to — the plan you are continuing, when you declare its document from a different checkout. Omit to let the document find or start its plan."),
+                ["workspace_root"] = new("string", "The checkout the document is in, when it is not the project directory — a worktree or clone you work in. Defaults to the project directory, or to the worktree an absolute path lies in."),
+                ["session_id"]     = new("string", "Session to attach. Defaults to the session this server runs in when omitted.")
             }, ["kind", "path"]), McpToolAnnotations.Upsert),
         new(PlanToolNames.SetTasks,
             "Declare the plan's task list as a full ordered snapshot, replacing the declared list. Call it when a "
