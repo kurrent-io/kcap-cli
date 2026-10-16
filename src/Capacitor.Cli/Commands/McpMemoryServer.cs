@@ -191,12 +191,24 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            return BuildToolResult(id, body);
+            return BuildToolResult(id, toolName == "update_memory" ? WithUncheckedVersionNotice(arguments, body) : body);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         }
+    }
+
+    /// <summary>A server that predates expected_version ignores it and applies the update unchecked; its answer carries
+    /// no version, which is the only sign the caller gets, so the result says so rather than reading as a checked write.</summary>
+    internal static string WithUncheckedVersionNotice(JsonObject? args, string body) {
+        if (args?["expected_version"] is null) return body;
+
+        try {
+            if (JsonNode.Parse(body) is JsonObject { } answer && answer.ContainsKey("version")) return body;
+        } catch (JsonException) { }
+
+        return $"{body}\nNote: this server does not support expected_version, so the update was applied without checking for concurrent changes.";
     }
 
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");

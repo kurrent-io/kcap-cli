@@ -22,6 +22,17 @@ public class McpMemoryServerTests {
     }
 
     [Test]
+    [Arguments("""{"id":"m1","expected_version":"v1"}""", """{"ok":true}""", true)]
+    [Arguments("""{"id":"m1","expected_version":"v1"}""", """{"ok":true,"version":"v2"}""", false)]
+    [Arguments("""{"id":"m1"}""", """{"ok":true}""", false)]
+    public async Task An_update_a_server_applied_without_its_version_check_says_so(string args, string body, bool noticed) {
+        var result = McpMemoryServer.WithUncheckedVersionNotice(Args(args), body);
+
+        await Assert.That(result.Contains("does not support expected_version")).IsEqualTo(noticed);
+        await Assert.That(result.StartsWith(body, StringComparison.Ordinal)).IsTrue();
+    }
+
+    [Test]
     public async Task Search_url_omits_missing_context() {
         var url = McpMemoryServer.BuildSearchUrl("http://x", Args("""{"query":"a"}"""), null, null);
 
