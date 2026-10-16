@@ -157,7 +157,15 @@ class MemoriesCommand(
         var result   = JsonNode.Parse(text)?.AsObject();
         var memoryId = result?["memory"]?["memory_id"]?.GetValue<string>();
 
-        if (result?["slug_conflict"]?.GetValue<bool>() == true) return await UpdateExistingAsync(client, baseUrl, memoryId!, c, update);
+        if (result?["slug_conflict"]?.GetValue<bool>() == true) {
+            // A save to org the caller may not make directly is checked against their own pool, so the slug can be held by an
+            // unrelated personal memory that --update must not overwrite.
+            var held  = result["memory"]?["audience"]?.GetValue<string>();
+            var asked = body["audience"]?.GetValue<string>();
+            if (update && held is not null && held != asked) return $"exists as a {held} memory, skipped (--update overwrites only an existing {asked} memory)";
+
+            return await UpdateExistingAsync(client, baseUrl, memoryId!, c, update);
+        }
 
         var line = new StringBuilder("created");
         if (result?["promotion_status"]?.GetValue<string>() == "pending_approval") line.Append(", org promotion pending approval");

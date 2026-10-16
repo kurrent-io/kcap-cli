@@ -59,6 +59,17 @@ public class MemoriesCommandTests {
     }
 
     [Test]
+    public async Task Update_never_overwrites_a_memory_of_another_audience() {
+        using var server = ServerAnswering("""{"memory":{"memory_id":"m1","audience":"user"},"near_duplicate":null,"slug_conflict":true}""");
+        using var client = new HttpClient();
+
+        var outcome = await MemoriesCommand.SaveAsync(client, server.Url!, new JsonObject { ["audience"] = "org" }, Candidate, update: true);
+
+        await Assert.That(outcome).IsEqualTo("exists as a user memory, skipped (--update overwrites only an existing org memory)");
+        await Assert.That(server.LogEntries.Any(e => e.RequestMessage.Method == "PUT")).IsFalse();
+    }
+
+    [Test]
     public async Task A_refused_credential_stops_the_import() {
         using var server = ServerAnswering("", status: 401);
 

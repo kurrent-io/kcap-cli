@@ -29,4 +29,6 @@ Notes:
     preference; feedback, project and reference carry over; anything else is
     saved as reference.
   - Re-running is safe: slugs already saved are reported, not duplicated.
+    One exception: an org import you may not publish directly is queued for
+    approval, and for a --project home a re-run after approval queues it again.
   - The plan does not ask the server which slugs exist; that shows on import.
