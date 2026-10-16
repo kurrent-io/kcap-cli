@@ -18,12 +18,19 @@
         <Style Selector="Button.artefactRow /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="Transparent" />
         </Style>
-        <Style Selector="Button.artefactRow:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Style Selector="Button.artefactRow:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.artefactRow:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
         </Style>
         <!-- Selection is info blue, as the rail row and the segment are. -->
         <Style Selector="Button.artefactRow.selected /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
+        </Style>
+        <Style Selector="Button.artefactRow:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Opacity" Value="0.55" />
         </Style>
     </UserControl.Styles>
     <Grid ColumnDefinitions="240,*">

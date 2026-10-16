@@ -90,7 +90,7 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="services:SpecialKeyChoice">
-                                    <Button Classes="specialKey" Content="{Binding Label}" Padding="10,4" FontSize="12" CornerRadius="7"
+                                    <Button Classes="kcapChip" Content="{Binding Label}" Padding="10,4" FontSize="12" CornerRadius="7"
                                             Command="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).Terminal.SendKeyCommand}"
                                             CommandParameter="{Binding Key}" />
                                 </DataTemplate>

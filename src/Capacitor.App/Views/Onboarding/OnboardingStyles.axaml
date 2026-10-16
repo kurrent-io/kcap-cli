@@ -235,7 +235,7 @@
 
     <!-- Fields inside the pane keep the app's kcapField chrome, on the card's own surface. -->
     <Style Selector="TextBox.frField">
-        <Setter Property="Background" Value="#0B0F10" />
+        <Setter Property="Background" Value="{StaticResource FrFieldBrush}" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="CaretBrush" Value="{StaticResource KcapTextBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
@@ -247,14 +247,14 @@
         <Setter Property="PlaceholderForeground" Value="{StaticResource FrDimBrush}" />
     </Style>
     <Style Selector="TextBox.frField /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="#0B0F10" />
+        <Setter Property="Background" Value="{StaticResource FrFieldBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource FrControlBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="4" />
     </Style>
     <Style Selector="TextBox.frField:pointerover /template/ Border#PART_BorderElement,
                      TextBox.frField:focus /template/ Border#PART_BorderElement">
-        <Setter Property="Background" Value="#0B0F10" />
+        <Setter Property="Background" Value="{StaticResource FrFieldBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
         <Setter Property="BorderThickness" Value="1" />
     </Style>

@@ -41,12 +41,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     static readonly IBrush DisruptedBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Disrupted));
     static readonly IBrush UnavailableBrush = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Color.Parse(StatusColors.Unavailable));
 
-    static IBrush Paint(string hex) => hex switch {
-        StatusColors.Connected => ConnectedBrush,
-        StatusColors.InProgress => InProgressBrush,
-        StatusColors.Disrupted => DisruptedBrush,
-        _ => UnavailableBrush,
-    };
+    static IBrush Paint(string hex) =>
+        hex == StatusColors.Connected ? ConnectedBrush :
+        hex == StatusColors.InProgress ? InProgressBrush :
+        hex == StatusColors.Disrupted ? DisruptedBrush : UnavailableBrush;
 
     readonly IDaemonClientService _service;
 

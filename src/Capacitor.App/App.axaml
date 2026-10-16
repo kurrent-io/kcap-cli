@@ -10,6 +10,33 @@
              ButtonBackgroundPointerOver would paint a near-white fill under our light Foreground
              and the control vanishes on hover. -->
         <ResourceDictionary>
+            <SolidColorBrush x:Key="FrAccentBrush" Color="#DED9FF" />
+            <SolidColorBrush x:Key="FrAccentHoverBrush" Color="#C6BDFF" />
+            <SolidColorBrush x:Key="FrAccentOnBrush" Color="#080B0D" />
+            <SolidColorBrush x:Key="FrAccentWashBrush" Color="#1ADED9FF" />
+            <SolidColorBrush x:Key="FrAtmosphereBrush" Color="#DBABC0" />
+            <SolidColorBrush x:Key="FrMutedBrush" Color="#A79AB8" />
+            <SolidColorBrush x:Key="FrDimBrush" Color="#818C90" />
+            <SolidColorBrush x:Key="FrNeutralBrush" Color="#B8B9C1" />
+            <SolidColorBrush x:Key="FrSurfaceBrush" Color="#9E1E2528" />
+            <SolidColorBrush x:Key="FrSurfaceBorderBrush" Color="#24DED9FF" />
+            <SolidColorBrush x:Key="FrControlBorderBrush" Color="#38DED9FF" />
+            <SolidColorBrush x:Key="FrDividerBrush" Color="#17DED9FF" />
+            <SolidColorBrush x:Key="FrPanelBorderBrush" Color="#262E31" />
+            <SolidColorBrush x:Key="FrSkeletonBrush" Color="#1C2427" />
+            <SolidColorBrush x:Key="FrRailIdleBrush" Color="#29DED9FF" />
+            <SolidColorBrush x:Key="FrRailStopBrush" Color="#57DED9FF" />
+            <SolidColorBrush x:Key="FrRailPassedBrush" Color="#B8DED9FF" />
+            <SolidColorBrush x:Key="FrWarningFillBrush" Color="#0DFF7272" />
+            <SolidColorBrush x:Key="FrWarningBorderBrush" Color="#47FF7272" />
+            <SolidColorBrush x:Key="FrResolvedFillBrush" Color="#0D5BE0B3" />
+            <SolidColorBrush x:Key="FrResolvedBorderBrush" Color="#425BE0B3" />
+            <RadialGradientBrush x:Key="FrBloomBrush" GradientOrigin="50%,50%" Center="50%,50%" RadiusX="50%" RadiusY="50%">
+                <GradientStop Offset="0" Color="#2B8D5FFF" />
+                <GradientStop Offset="0.4" Color="#128D5FFF" />
+                <GradientStop Offset="0.7" Color="#008D5FFF" />
+            </RadialGradientBrush>
+            <FontFamily x:Key="FrMonoFont">Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace</FontFamily>
             <SolidColorBrush x:Key="KcapCanvasBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSurfaceBrush" Color="#12151D" />
             <SolidColorBrush x:Key="KcapSurfaceRaisedBrush" Color="#191D27" />
@@ -23,6 +50,15 @@
             <!-- Primary CTAs: near-white fill. Green is status only; a selection uses info blue. -->
             <SolidColorBrush x:Key="KcapPrimaryBrush" Color="#F1F3F7" />
             <SolidColorBrush x:Key="KcapOnPrimaryBrush" Color="#0B0D12" />
+            <SolidColorBrush x:Key="KcapOnSuccessBrush" Color="#07120E" />
+            <SolidColorBrush x:Key="FrFieldBrush" Color="#0B0F10" />
+            <Color x:Key="VendorClaudeColor">#D97757</Color>
+            <Color x:Key="VendorMistralColor">#FA520F</Color>
+            <Color x:Key="VendorMuseAssistantColor">#2F6FE0</Color>
+            <Color x:Key="VendorGrokColor">#F5F5F5</Color>
+            <Color x:Key="VendorMuseColor">#4B93FF</Color>
+            <Color x:Key="VendorNeutralColor">#F1F3F7</Color>
+            <Color x:Key="VendorFallbackColor">#B0B7C6</Color>
             <SolidColorBrush x:Key="KcapSuccessBrush" Color="#5BE0B3" />
             <SolidColorBrush x:Key="KcapSuccessDimBrush" Color="#173F36" />
             <SolidColorBrush x:Key="KcapWarningBrush" Color="#F4B860" />
@@ -51,7 +87,6 @@
             <SolidColorBrush x:Key="ScrollViewerScrollBarsSeparatorBackground" Color="#00000000" />
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
-                <ResourceInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingResources.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
@@ -404,6 +439,33 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <Style Selector="Button.acpOption /template/ ContentPresenter#PART_ContentPresenter,
+                         ToggleButton.acpOption /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.acpOption:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         ToggleButton.acpOption:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.acpOption:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                         ToggleButton.acpOption:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.acpOption:disabled /template/ ContentPresenter#PART_ContentPresenter,
+                         ToggleButton.acpOption:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.acpOption:disabled">
+            <Setter Property="Opacity" Value="0.55" />
+        </Style>
         <!-- The chip look on a radio. Fluent draws an ellipse glyph beside the content, so this is a
              template swap rather than setters; the presenter is deliberately not named
              PART_ContentPresenter, which keeps Fluent's per-state presenter styles off the chip. -->
@@ -471,6 +533,35 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <Style Selector="Button.kcapDangerPrimary">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Button.kcapDangerPrimary /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDangerPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDangerPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDangerPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
         <!-- Ghost rows (picker lists, help flyout): Fluent paints the presenter, so rest and hover
              both have to pin it — otherwise the theme's grey hover bar shows on our dark panel. -->
         <Style Selector="Button.kcapGhost">
@@ -495,6 +586,11 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
             <Setter Property="Opacity" Value="0.55" />
+        </Style>
+        <Style Selector="Button.kcapGhost.active /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapGhost.active:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapGhost.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSelectionBrush}" />
         </Style>
         <!-- Ghost sizes. Declared after the ghost rules on purpose: a later style wins, so a
              size that also recolours has to come after the colour it replaces. -->

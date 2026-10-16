@@ -32,12 +32,10 @@
                             <TextBlock Text="{Binding SizeLabel}" FontSize="10.5"
                                        Foreground="{StaticResource KcapFaintBrush}" />
                         </StackPanel>
-                        <Button x:Name="ChipRemove" Command="{Binding RemoveCommand}" AutomationProperties.Name="Remove attachment"
-                                ToolTip.Tip="Remove" Width="20" Height="20" Padding="0" FontSize="10"
+                        <Button Classes="kcapGhost kcapIcon" x:Name="ChipRemove" Command="{Binding RemoveCommand}" AutomationProperties.Name="Remove attachment"
+                                ToolTip.Tip="Remove" Width="20" Height="20" MinWidth="20" MinHeight="20" Padding="0" FontSize="10"
                                 CornerRadius="10" Cursor="Hand" VerticalAlignment="Center"
-                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
-                                Background="Transparent" BorderThickness="0"
-                                Foreground="{StaticResource KcapMutedBrush}">
+                                HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
                             <views:AppIcon Kind="X" Size="14" />
                         </Button>
                     </StackPanel>

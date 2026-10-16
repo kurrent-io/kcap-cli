@@ -1237,6 +1237,8 @@ public partial class App : Application {
     internal static Window BuildStartupErrorWindow(Exception ex) =>
         new() {
             Title = "Kurrent Capacitor — startup failed",
+            Background = Current?.FindResource("KcapCanvasBrush") as IBrush,
+            Foreground = Current?.FindResource("KcapTextBrush") as IBrush,
             Icon = ProductIcon.WindowIcon,
             Width = 640,
             Height = 400,
@@ -1767,16 +1769,17 @@ public partial class App : Application {
     // button also resolves false — TrySetResult is idempotent, so whichever path runs first wins
     // and the other is a no-op.
     internal static Window BuildConfirmForceStopWindow(string label, TaskCompletionSource<bool> tcs) {
-        var cancelButton = new Button { Content = "Cancel", IsCancel = true };
+        var cancelButton = new Button { Classes = { "kcapChip" }, Content = "Cancel", IsCancel = true };
         var stopButton = new Button {
             Content = "Stop anyway",
             IsDefault = true,
-            Background = new SolidColorBrush(Color.Parse("#D32F2F")),
-            Foreground = Brushes.White,
+            Classes = { "kcapDangerPrimary" },
         };
 
         var window = new Window {
             Title = "Stop review participant?",
+            Background = Current?.FindResource("KcapCanvasBrush") as IBrush,
+            Foreground = Current?.FindResource("KcapTextBrush") as IBrush,
             Icon = ProductIcon.WindowIcon,
             Width = 420,
             SizeToContent = SizeToContent.Height,

@@ -50,7 +50,7 @@
                                 <TextBlock x:Name="NameErrorText" Classes="kcapHint" Text="{Binding NameError}"
                                            TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
                                            IsVisible="{Binding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Button x:Name="RenameButton" Classes="kcapPrimary" Content="Rename"
+                                <Button x:Name="RenameButton" Classes="kcapChip" Content="Rename"
                                         Command="{Binding RenameCommand}" HorizontalAlignment="Left"
                                         ToolTip.Tip="{Binding RenameHint}"
                                         ToolTip.ShowOnDisabled="True" />
@@ -72,7 +72,7 @@
                                 <TextBlock x:Name="CapacityErrorText" Classes="kcapHint" Text="{Binding CapacityError}"
                                            TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
                                            IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Button x:Name="SaveButton" Classes="kcapPrimary" Content="Save" Command="{Binding SaveCommand}"
+                                <Button x:Name="SaveButton" Classes="kcapChip" Content="Save" Command="{Binding SaveCommand}"
                                         HorizontalAlignment="Left" />
                             </StackPanel>
                         </Border>
