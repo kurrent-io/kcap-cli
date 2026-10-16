@@ -780,6 +780,23 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
     }
 
     [Test]
+    public async Task BuildProcessStartInfo_marks_a_participant_with_its_kind_and_role() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), ReviewContext() with { FlowRole = "reviewer" });
+
+        await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("flow_participant");
+        await Assert.That(psi.Environment["KCAP_FLOW_ROLE"]).IsEqualTo("reviewer");
+    }
+
+    [Test]
+    public async Task BuildProcessStartInfo_marks_an_interactive_launch_as_a_hosted_agent() {
+        var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, new DaemonConfig(), MakeContext("agent-1"));
+
+        await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
+    }
+
+    [Test]
     public async Task BuildProcessStartInfo_CursorReviewFlow_UsesCursorZeroPromptFlags() {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Cursor,

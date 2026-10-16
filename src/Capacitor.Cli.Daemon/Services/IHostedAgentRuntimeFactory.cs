@@ -274,5 +274,8 @@ internal sealed record RuntimeStartContext(
         PolicySnapshot?     PolicySnapshot = null,
         // The launch's transcript journal, unopened. An envelope-emitting factory opens it before
         // constructing its runtime and hands it to the constructor; a PTY factory ignores it.
-        TranscriptJournal?  Journal = null
+        TranscriptJournal?  Journal = null,
+        // The flow role the server named for a review-flow launch, exported as the participant's
+        // role marker. Null for every other launch.
+        string?             FlowRole = null
     );

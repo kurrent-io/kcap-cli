@@ -282,10 +282,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     /// The queue matches the daemon's attachment trailer. The chat shows the command that was typed.
     static string WithoutAttachmentTrailer(string command) {
-        var split = command.LastIndexOf("\n\n", StringComparison.Ordinal);
-        if (split <= 0) return command;
-        if (!command.AsSpan(split + 2).StartsWith(AttachmentTrailer.Prefix, StringComparison.Ordinal)) return command;
-        var typed = command[..split].TrimEnd();
+        var typed = AttachmentTrailer.Strip(command);
         return typed.Length == 0 ? command : typed;
     }
 

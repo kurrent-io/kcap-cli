@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
@@ -15,6 +16,7 @@ using WireMock.Server;
 
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Plans;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
@@ -31,6 +33,9 @@ public class ClaudeHookCommandTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     const string Sid = "9dc2775376454e4691ecc2d69973c152";
+
+    /// <summary>What a fresh session-start hook may spend before its safety reserve.</summary>
+    static readonly int SessionStartWorkMs = (int)(ClaudeHookCommand.SessionStartCeiling - HookBudget.Safety).TotalMilliseconds;
 
     /// <summary>A hook clock frozen <paramref name="elapsed"/> into its ceiling, so a near-exhausted
     /// budget can be asserted without sleeping into it. Only for the paths that give up on the
@@ -396,6 +401,109 @@ public class ClaudeHookCommandTests {
         await Assert.That(stdout).Contains("Team memory");
     }
 
+    // ── What a hosted session and a flow participant are given ─────────────────────────────
+
+    const string FullAck =
+        """{"top_clusters":[{"text":"seal secrets","category":"safety"}],"coordination_notices":[{"text":"Sam is also on AUTH-12"}],"version":"999.999.999"}""";
+
+    static HostedAgent Participant => new("agent-1", true, DaemonBridge.None) { Kind = HostedSessionKind.FlowParticipant };
+
+    static HostedAgent HostedNonParticipant => new("agent-1", true, DaemonBridge.None) { Kind = HostedSessionKind.HostedAgent };
+
+    async Task<(string Context, Fixture Fx)> StartSessionAsync(HostedAgent hosted, string ack = FullAck) {
+        var fx = new Fixture(Config.Root) {
+            RespondJson     = ack,
+            MemoryIndexBody     = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""",
+            FlowDefinitionsBody = ProactiveCatalog,
+            Hosted              = hosted
+        };
+        fx.RegisterClaudeMcpServer("kcap-workitems", "kcap-plans", "kcap-flows");
+        new FirstRunNoticeStore(Config.Root).Arm();
+
+        var sid = Guid.NewGuid().ToString("N");
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        return (JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>(), fx);
+    }
+
+    /// <summary>The control the two tests below are measured against: the same fixture gives an
+    /// interactive session every fragment.</summary>
+    [Test, NotInParallel]
+    public async Task an_interactive_session_gets_every_fragment() {
+        var (ctx, fx) = await StartSessionAsync(HostedAgent.Terminal);
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("seal secrets");
+        await Assert.That(ctx).Contains("## Coordination notices");
+        await Assert.That(ctx).Contains("newer kcap version");
+        await Assert.That(ctx).Contains("Team memory");
+        await Assert.That(ctx).Contains("## Work items");
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).Contains("Flows you may offer");
+        await Assert.That(ctx).Contains("## Kurrent Capacitor is set up");
+    }
+
+    [Test, NotInParallel]
+    public async Task a_flow_participant_gets_only_the_guidelines_and_coordination_notices() {
+        var (ctx, fx) = await StartSessionAsync(Participant);
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("seal secrets");
+        await Assert.That(ctx).Contains("## Coordination notices");
+        await Assert.That(ctx).DoesNotContain("newer kcap version");
+        await Assert.That(ctx).DoesNotContain("Team memory");
+        await Assert.That(ctx).DoesNotContain("## Work items");
+        await Assert.That(ctx).DoesNotContain("## Plans");
+        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("Flows you may offer");
+        await Assert.That(fx.MemoryIndexRequested).IsFalse();
+        await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
+
+        var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
+        await Assert.That(JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!["next_work"]).IsNull();
+    }
+
+    /// <summary>A hosted agent drives its own work, so it keeps the driver guidance its loaded
+    /// servers support, and loses only what is meant for a person's first session.</summary>
+    [Test, NotInParallel]
+    public async Task a_hosted_agent_keeps_the_driver_guidance_and_loses_the_onboarding() {
+        var (ctx, fx) = await StartSessionAsync(HostedNonParticipant);
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("Team memory");
+        await Assert.That(ctx).Contains("## Work items");
+        await Assert.That(ctx).Contains("## Plans");
+        await Assert.That(ctx).DoesNotContain("newer kcap version");
+        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+    }
+
+    /// <summary>Withholding the notice must not spend it: it belongs to the person's next session.</summary>
+    [Test, NotInParallel]
+    public async Task a_hosted_session_leaves_the_first_run_notice_armed() {
+        var (_, fx) = await StartSessionAsync(HostedNonParticipant);
+        using var __ = fx;
+
+        await Assert.That(new FirstRunNoticeStore(Config.Root).TryClaim()).IsTrue();
+    }
+
+    /// <summary>A launch the daemon did not mark still narrows on the kind the server resolved.</summary>
+    [Test, NotInParallel]
+    public async Task a_participant_named_only_by_the_ack_loses_the_same_fragments() {
+        var (ctx, fx) = await StartSessionAsync(HostedAgent.Terminal,
+            """{"top_clusters":[{"text":"seal secrets","category":"safety"}],"version":"999.999.999","session_kind":"flow_participant","flow_role":"reviewer"}""");
+        using var _ = fx;
+
+        await Assert.That(ctx).Contains("seal secrets");
+        await Assert.That(ctx).DoesNotContain("newer kcap version");
+        await Assert.That(ctx).DoesNotContain("Team memory");
+        await Assert.That(ctx).DoesNotContain("## Work items");
+        await Assert.That(ctx).DoesNotContain("## Plans");
+        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+    }
+
     const string ProactiveCatalog = """{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}""";
 
     [Test, NotInParallel]
@@ -553,14 +661,10 @@ public class ClaudeHookCommandTests {
         // already carries.
         using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
-        fx.MemoryIndexDelay = TimeSpan.FromSeconds(10); // twice the asserted ceiling; teardown waits out this server delay
+        // Past the ceiling, so only the budget can end the wait; teardown waits out this server delay.
+        fx.MemoryIndexDelay = ClaudeHookCommand.SessionStartCeiling + TimeSpan.FromSeconds(3);
         fx.RespondJson = """{"top_clusters":[{"text":"seal secrets","category":"safety"}]}""";
 
-        // A fresh budget, exactly like this file's other hung-server tests
-        // (e.g. subagent_stop_against_hung_server_is_spooled_within_budget) — the full ~3.5s of
-        // session-start's usable budget (5s ceiling minus the 1.5s safety margin) is comfortably
-        // enough for watcher-start + repo enrichment + the fast, undelayed POST, but far short of
-        // the 10s memory-index delay above.
         var sid = Guid.NewGuid().ToString("N");
         var sw  = System.Diagnostics.Stopwatch.StartNew();
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -569,7 +673,7 @@ public class ClaudeHookCommandTests {
         sw.Stop();
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5)); // did not wait out the 10s delay
+        await Assert.That(sw.Elapsed).IsLessThan(ClaudeHookCommand.SessionStartCeiling);
         await Assert.That(stdout).Contains("## Known patterns"); // lessons fragment still injected
         await Assert.That(stdout).DoesNotContain("Team memory"); // memory fragment never joined in time
     }
@@ -587,7 +691,7 @@ public class ClaudeHookCommandTests {
         var sid = Guid.NewGuid().ToString("N");
         var exit = await fx.HandleAsync(
             $$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"/tmp","source":"startup"}""",
-            elapsed: TimeSpan.FromSeconds(4));
+            elapsed: ClaudeHookCommand.SessionStartCeiling - HookBudget.Safety);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(fx.MemoryIndexRequested).IsFalse();
@@ -777,6 +881,130 @@ public class ClaudeHookCommandTests {
         await Assert.That(PlanReadPosts(fx)).IsEqualTo(0);
     }
 
+    static string PlanEditPayload(string sid, string tool, string path) =>
+        new JsonObject {
+            ["hook_event_name"] = "PostToolUse", ["session_id"] = sid, ["cwd"] = "/repo", ["tool_name"] = tool,
+            ["tool_input"]      = new JsonObject { ["file_path"] = path },
+        }.ToJsonString();
+
+    static List<JsonNode> DocumentPosts(Fixture fx) =>
+        [.. fx.Sent.Where(s => s.StartsWith("/api/plans/documents|", StringComparison.Ordinal)).Select(s => JsonNode.Parse(s.Split('|', 2)[1])!)];
+
+    /// <summary>A repo holding a spec the session declared as arguing from a design, recorded in the
+    /// ledger the way the plans MCP server records it.</summary>
+    (string Sid, string Spec) DeclaredSpec(string serverUrl) {
+        var root = Tmp.CreateDir("repo");
+        root.CreateDir(".git");
+        var spec = root.CreateFile(["docs", "spec.md"], "# Spec\n");
+        root.CreateFile(["docs", "design.md"], "# Design\n");
+        var sid = Guid.NewGuid().ToString();
+        var canonical = sid.Replace("-", "");
+        var declared = McpPlansServer.BuildDeclaration(
+            new JsonObject { ["session_id"] = canonical, ["kind"] = "spec", ["path"] = "docs/spec.md", ["argues_from"] = "docs/design.md", ["work_item_id"] = "wi-1" },
+            root, root);
+        new DeclaredDocumentLedger(Config.Root, TimeProvider.System).Record(canonical, declared.Document, serverUrl);
+        return (sid, spec);
+    }
+
+    [Test]
+    [Arguments("Write")]
+    [Arguments("Edit")]
+    [Arguments("MultiEdit")]
+    public async Task plan_edit_declares_a_declared_document_again_with_its_current_text(string tool) {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+        File.WriteAllText(spec, "# Spec, revised\n");
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, tool, spec));
+
+        var posted = DocumentPosts(fx).Single();
+        await Assert.That(posted["session_id"]!.GetValue<string>()).IsEqualTo(sid.Replace("-", ""));
+        await Assert.That(posted["kind"]!.GetValue<string>()).IsEqualTo("spec");
+        await Assert.That(posted["path"]!.GetValue<string>()).IsEqualTo("docs/spec.md");
+        await Assert.That(posted["argues_from"]!.GetValue<string>()).IsEqualTo("docs/design.md");
+        await Assert.That(posted["work_item_id"]!.GetValue<string>()).IsEqualTo("wi-1");
+        await Assert.That(posted["content"]!.GetValue<string>()).IsEqualTo("# Spec, revised\n");
+    }
+
+    [Test]
+    public async Task plan_edit_leaves_a_file_the_session_never_declared_alone() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, _) = DeclaredSpec(fx.MemoryServerUrl);
+        var other = Tmp.CreateFile(["repo", "docs", "notes.md"], "# Notes\n");
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", other));
+        await fx.PlanEditAsync(PlanEditPayload(Guid.NewGuid().ToString(), "Edit", Tmp.PathTo("repo", "docs", "spec.md")));
+
+        await Assert.That(DocumentPosts(fx)).IsEmpty();
+    }
+
+    [Test]
+    public async Task plan_edit_ignores_a_tool_that_does_not_write_the_file() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Read", spec));
+
+        await Assert.That(DocumentPosts(fx)).IsEmpty();
+    }
+
+    [Test]
+    public async Task plan_edit_reads_the_document_only_once_it_holds_it() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+        var held = await new DeclaredDocumentLedger(Config.Root, TimeProvider.System).LockAsync(sid.Replace("-", ""), spec, TimeSpan.Zero);
+        File.WriteAllText(spec, "# Spec, first\n");
+
+        var refresh = fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+        await Task.Delay(200);
+        File.WriteAllText(spec, "# Spec, second\n");
+        held!.Dispose();
+        await refresh;
+
+        await Assert.That(DocumentPosts(fx).Single()["content"]!.GetValue<string>()).IsEqualTo("# Spec, second\n");
+    }
+
+    [Test]
+    public async Task plan_edit_replays_the_declaration_recorded_while_it_waited() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+        var canonical = sid.Replace("-", "");
+        var ledger = new DeclaredDocumentLedger(Config.Root, TimeProvider.System);
+        var held = await ledger.LockAsync(canonical, spec, TimeSpan.Zero);
+
+        var refresh = fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+        await Task.Delay(200);
+        ledger.Record(canonical, ledger.Find(canonical, spec, fx.MemoryServerUrl)! with { Kind = "plan", ArguesFrom = null, WorkItemId = "wi-2" }, fx.MemoryServerUrl);
+        held!.Dispose();
+        await refresh;
+
+        var posted = DocumentPosts(fx).Single();
+        await Assert.That(posted["kind"]!.GetValue<string>()).IsEqualTo("plan");
+        await Assert.That(posted["work_item_id"]!.GetValue<string>()).IsEqualTo("wi-2");
+        await Assert.That(posted.AsObject().ContainsKey("argues_from")).IsFalse();
+    }
+
+    [Test]
+    public async Task plan_edit_never_sends_a_document_to_a_server_that_did_not_accept_it() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec("https://other.example");
+
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+
+        await Assert.That(DocumentPosts(fx)).IsEmpty();
+    }
+
+    [Test]
+    public async Task a_resumed_session_still_refreshes_what_it_declared_before_it_ended() {
+        using var fx = new Fixture(Config.Root);
+        var (sid, spec) = DeclaredSpec(fx.MemoryServerUrl);
+
+        await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{sid}}","cwd":"/repo","reason":"exit"}""");
+        await fx.PlanEditAsync(PlanEditPayload(sid, "Edit", spec));
+
+        await Assert.That(DocumentPosts(fx).Count).IsEqualTo(1);
+    }
+
     static string TaskListPayload(string sid, string tool, JsonObject? input = null) =>
         new JsonObject {
             ["hook_event_name"] = "PostToolUse", ["session_id"] = sid, ["cwd"] = "/repo", ["tool_name"] = tool,
@@ -910,7 +1138,7 @@ public class ClaudeHookCommandTests {
         var posted     = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var postedBody = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
         await Assert.That(postedBody["next_work"]?.GetValue<string>()).IsEqualTo("v1");
-        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2500);
+        await Assert.That(postedBody["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(SessionStartWorkMs - 1000);
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("1. Review PR #42 — Priya is waiting");
@@ -967,11 +1195,11 @@ public class ClaudeHookCommandTests {
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
             elapsed: TimeSpan.FromMilliseconds(500));
 
-        // 5s ceiling − 500ms elapsed − 1.5s hook safety = 3000ms remaining; less the 1000ms reserve.
+        // Ceiling − 500ms elapsed − hook safety, less the POST's 1000ms reserve.
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
         await Assert.That(body["next_work"]?.GetValue<string>()).IsEqualTo("v1");
-        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(2000);
+        await Assert.That(body["next_work_budget_ms"]!.GetValue<int>()).IsEqualTo(SessionStartWorkMs - 500 - 1000);
     }
 
     /// <summary>Below reserve + the server's default feed budget neither field is sent, so a server
@@ -982,9 +1210,9 @@ public class ClaudeHookCommandTests {
         using var fx = new Fixture(Config.Root, HttpStatusCode.InternalServerError);
         fx.RegisterClaudeMcpServer("kcap-workitems");
 
-        // 3500 − 1001 = 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
+        // 2499ms remaining, one short of the 1000ms reserve + 1500ms default.
         await fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{Sid}}","transcript_path":"/none","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}""",
-            elapsed: TimeSpan.FromMilliseconds(1001));
+            elapsed: TimeSpan.FromMilliseconds(SessionStartWorkMs - 2499));
 
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-start|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..])!;
@@ -1805,6 +2033,9 @@ public class ClaudeHookCommandTests {
         public TimeSpan       MemoryIndexDelay  { get; set; } = TimeSpan.Zero;
 
         public string FlowDefinitionsBody { get; set; } = """{"definitions":[]}""";
+
+        /// <summary>What the daemon exported into the session, as the hook reads it.</summary>
+        public HostedAgent Hosted { get; set; } = HostedAgent.Terminal;
         public int FlowDefinitionsRequestCount => _memoryServer.LogEntries.Count(e => e.RequestMessage.Path == "/api/flows/definitions");
 
         /// <summary>Every request the stub server saw, for a test asserting that none arrived.</summary>
@@ -1859,7 +2090,7 @@ public class ClaudeHookCommandTests {
             clock ??= elapsed == TimeSpan.Zero ? new HookClock(TimeProvider.System) : Aged(elapsed);
             _clock = clock;
 
-            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
+            return new ClaudeHookCommand(Config, Profiles, clock, _home, TestHarnesses.Under(_home), Hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None).HandleCore(
                 Client, AuthStatus.Ok, Spool, new StringReader(stdin), stdout);
         }
 
@@ -1869,6 +2100,11 @@ public class ClaudeHookCommandTests {
             return new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
                 .HandlePlanReadCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client), stdout);
         }
+
+        /// <summary>One plan-edit hook invocation, posting through the stub client.</summary>
+        public Task<int> PlanEditAsync(string stdin) =>
+            new ClaudeHookCommand(Config, Profiles, new HookClock(TimeProvider.System), _home, TestHarnesses.Under(_home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config, Profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
+                .HandlePlanEditCore(new StringReader(stdin), _ => Task.FromResult<HttpClient?>(Client));
 
         /// <summary>One task-list hook invocation.</summary>
         public Task<int> TaskListAsync(string stdin, TextWriter stdout) =>
@@ -1896,13 +2132,14 @@ public class ClaudeHookCommandTests {
         }
 
         /// <summary>Installs the kcap plugin under the fixture's home with a bundled .mcp.json naming
-        /// <paramref name="serverName"/>, which is what makes that server registered for Claude.</summary>
-        public void RegisterClaudeMcpServer(string serverName) {
+        /// <paramref name="serverNames"/>, which is what makes those servers registered for Claude.</summary>
+        public void RegisterClaudeMcpServer(params string[] serverNames) {
             var claude      = Path.Combine(_tmpHome, ".claude");
             var installPath = Path.Combine(claude, "plugins", "cache", "kcap", "kcap", "1.0.0");
             Directory.CreateDirectory(installPath);
             File.WriteAllText(Path.Combine(installPath, ".mcp.json"),
-                """{"mcpServers":{""" + System.Text.Json.JsonSerializer.Serialize(serverName) + """:{"command":"kcap","args":["mcp"]}}}""");
+                """{"mcpServers":{""" + string.Join(",", serverNames.Select(n =>
+                    System.Text.Json.JsonSerializer.Serialize(n) + """:{"command":"kcap","args":["mcp"]}""")) + "}}");
             File.WriteAllText(Path.Combine(claude, "plugins", "installed_plugins.json"),
                 "{ \"plugins\": { \"kcap@kcap\": [ { \"scope\": \"user\", \"installPath\": " +
                 System.Text.Json.JsonSerializer.Serialize(installPath) + ", \"version\": \"1.0.0\" } ] } }");
@@ -1960,5 +2197,23 @@ public class ClaudeHookCommandTests {
 
     sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> impl) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct) => impl(r, ct);
+    }
+
+    /// <summary>Claude kills the hook at the manifest's timeout, so a longer ceiling would be cut off mid-write
+    /// and a shorter one would waste budget the session-start context needs.</summary>
+    [Test]
+    public async Task The_session_start_ceiling_is_the_manifest_timeout() {
+        var manifest = JsonNode.Parse(File.ReadAllText(Path.Combine(RepoRoot(), "kcap", "hooks", "hooks.json")))!;
+        var timeout  = manifest["hooks"]!["SessionStart"]![0]!["hooks"]![0]!["timeout"]!.GetValue<int>();
+
+        await Assert.That(TimeSpan.FromSeconds(timeout)).IsEqualTo(ClaudeHookCommand.SessionStartCeiling);
+    }
+
+    static string RepoRoot([CallerFilePath] string here = "") {
+        var dir = Path.GetDirectoryName(here);
+        while (dir is not null && !File.Exists(Path.Combine(dir, "Capacitor.slnx")))
+            dir = Path.GetDirectoryName(dir);
+
+        return dir ?? throw new InvalidOperationException($"Could not locate repo root walking up from {here}");
     }
 }

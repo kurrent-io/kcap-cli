@@ -7,36 +7,61 @@ using Capacitor.Cli.Core.WorkItems;
 namespace Capacitor.Cli.SessionStartMemory;
 
 /// <summary>The flows lane of the composite SessionStart context: the catalogue flows an operator marked
-/// <c>offer: proactive</c>, each with when to offer it. Marker-less, like the guidelines lane.</summary>
-internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpClient>> client, TimeProvider time) {
+/// <c>offer: proactive</c>, each with when to offer it. Marker-less, like the guidelines lane. A listing that
+/// cannot be fetched in time falls back to the last one the server returned.</summary>
+internal sealed class SessionStartFlowsLane(Func<CancellationToken, Task<HttpClient>> client, TimeProvider time, SessionStartFlowsCatalogCache cache) {
     public const int MaxDescribed     = 10;
     public const int MaxFragmentChars = 2048;
     const int WhenToUseCap = 300;
     const int IdCap        = 64;
 
-    public const string Header = "Flows you may offer (ask first; never start unprompted):";
+    public const string Header = "Flows you may offer. When one fits what you just finished, offer it unprompted, and start it only after the user says yes:";
     public const string Footer = "Before starting one, call get_flow_definition(<id>) and follow its guide.";
 
     public async Task<SessionStartMemoryContextResult> FetchAsync(SessionStartMemoryContextRequest request, CancellationToken ct) {
-        var outcome = await SessionStartContextFetch.FetchAsync(
-            await client(ct), request.BaseUrl.TrimEnd('/') + "/api/flows/definitions", time, ct);
+        SessionStartFetchOutcome outcome;
+        try {
+            outcome = await SessionStartContextFetch.FetchAsync(
+                await client(ct), request.BaseUrl.TrimEnd('/') + "/api/flows/definitions", time, ct);
+        } catch (Exception ex) when (ex is HttpRequestException or IOException or OperationCanceledException or InvalidDataException) {
+            return FromCache(request.BaseUrl) ?? SessionStartMemoryContextResult.Retry;
+        }
 
-        // A server older than the listing has nothing to offer, now or on a retry.
-        if (outcome.Status == HttpStatusCode.NotFound) return SessionStartMemoryContextResult.Empty;
-        if (outcome.Body is null)
-            return new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
+        if (outcome.Body is null) {
+            // A server older than the listing has nothing to offer, now or on a retry; a denied caller
+            // must not be offered what it can no longer start.
+            if (outcome.Status is HttpStatusCode.NotFound or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                cache.Delete(request.BaseUrl);
+            if (outcome.Status == HttpStatusCode.NotFound) return SessionStartMemoryContextResult.Empty;
+
+            var retry = new SessionStartMemoryContextResult(SessionStartMemoryDisposition.RetryableFailure, RetryAfter: outcome.RetryAfter);
+
+            // Only a server that could not answer is stood in for; one that refused the listing, such as a
+            // catalogue still catching up, may have withdrawn a cached flow.
+            return Unavailable(outcome.Status) ? FromCache(request.BaseUrl) ?? retry : retry;
+        }
 
         JsonNode? root;
         try {
             root = JsonNode.Parse(outcome.Body);
         } catch (JsonException) {
-            return SessionStartMemoryContextResult.Empty;
+            root = null;
         }
 
-        return BuildFragment(root) is { } fragment
+        cache.Write(request.BaseUrl, root);
+
+        return Result(root);
+    }
+
+    static bool Unavailable(HttpStatusCode status) =>
+        status is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int)status >= 500;
+
+    SessionStartMemoryContextResult? FromCache(string baseUrl) => cache.Read(baseUrl) is { } cached ? Result(cached) : null;
+
+    static SessionStartMemoryContextResult Result(JsonNode? root) =>
+        BuildFragment(root) is { } fragment
             ? new SessionStartMemoryContextResult(SessionStartMemoryDisposition.Ready, fragment)
             : SessionStartMemoryContextResult.Empty;
-    }
 
     public static string? BuildFragment(JsonNode? root) {
         if (root is not JsonObject { } obj || obj["definitions"] is not JsonArray definitions) return null;

@@ -15,7 +15,7 @@ static class McpReviewContextServer {
     internal const string UrlEnvVar = "KCAP_REVIEW_CONTEXT_URL";
     internal const string ToolName = KcapMcpRegistry.ReviewContextTool;
     const string RouteSuffix = "/review-context/workspace-mcp-configs";
-    const string Instructions =
+    internal const string Instructions =
         "Call get_branch_authored_mcp_configs before concluding a borrowed review is clean. " +
         "It returns the staged/committed Git index versions of workspace MCP configuration, not " +
         "working-tree bytes; unstaged and untracked config is deliberately omitted. Every returned " +

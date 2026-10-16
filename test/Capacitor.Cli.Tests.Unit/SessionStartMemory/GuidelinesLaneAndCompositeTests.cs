@@ -11,6 +11,8 @@ namespace Capacitor.Cli.Tests.Unit.SessionStartMemory;
 /// orchestrator/lease/policy are covered by SessionStartMemoryFoundationTests.
 /// </summary>
 public class GuidelinesLaneAndCompositeTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     /// The lanes resolve their client inside the fetch, so a test hands them one already built.
     static Func<CancellationToken, Task<HttpClient>> Lazy(HttpClient client) => _ => Task.FromResult(client);
 
@@ -101,7 +103,7 @@ public class GuidelinesLaneAndCompositeTests {
 
     // ---- Composite ----
 
-    static SessionStartCompositeContextProvider Composite(
+    SessionStartCompositeContextProvider Composite(
             (HttpStatusCode status, string body, TimeSpan? retryAfter) memory,
             (HttpStatusCode status, string body, TimeSpan? retryAfter) guidelines,
             Handler? memoryHandler = null, Handler? guidelinesHandler = null) {
@@ -113,7 +115,8 @@ public class GuidelinesLaneAndCompositeTests {
         var time     = new FakeTimeProvider();
         var memory2  = new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(memH)), time);
         var guide2   = new SessionStartGuidelinesLane(Lazy(new HttpClient(guideH)), time);
-        var flows    = new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NotFound, "", null))), time);
+        var flows    = new SessionStartFlowsLane(Lazy(new HttpClient(new Handler(HttpStatusCode.NotFound, "", null))), time,
+                                                 new SessionStartFlowsCatalogCache(Tmp.PathTo("flows-cache")));
         return new SessionStartCompositeContextProvider(scope, memory2, guide2, flows, time);
     }
 
