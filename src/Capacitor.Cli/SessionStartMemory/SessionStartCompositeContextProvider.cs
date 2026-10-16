@@ -2,9 +2,10 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.SessionStartMemory;
 
-/// <summary>The eight non-Claude harnesses' SessionStart context provider: one fragment from the memory,
-/// guidelines and flows lanes, the memory marker first. Scope is resolved once and the enabled lanes run in
-/// parallel under one budget; a disabled lane contributes nothing and never blocks commit.</summary>
+/// <summary>Every harness's SessionStart context provider: one fragment from the memory, guidelines and flows
+/// lanes, the memory marker first; Claude's hook response carries its guidelines, so it runs without that
+/// lane. Scope is resolved once and the enabled lanes run in parallel under one budget; a disabled lane
+/// contributes nothing and never blocks commit.</summary>
 internal sealed class SessionStartCompositeContextProvider(
     ISessionStartMemoryScopeResolver scopeResolver,
     SessionStartMemoryContextProvider memory,
@@ -73,12 +74,12 @@ internal sealed class SessionStartCompositeContextProvider(
         var flowsFragment      = Fragment(flowsResult);
 
         if (memoryFragment is not null || guidelinesFragment is not null)
-            return Committed(Compose(memoryFragment, [guidelinesFragment, flowsFragment]));
+            return Committed(Compose(memoryFragment, guidelinesFragment, flowsFragment));
 
         if (IsRetry(memoryResult) || IsRetry(guidelinesResult))
-            return Retry([memoryResult, guidelinesResult, flowsResult]) with { Fragment = flowsFragment is null ? null : Compose(null, [flowsFragment]) };
+            return Retry([memoryResult, guidelinesResult, flowsResult]) with { Fragment = flowsFragment is null ? null : Compose(null, null, flowsFragment) };
 
-        if (flowsFragment is not null) return Committed(Compose(null, [flowsFragment]));
+        if (flowsFragment is not null) return Committed(Compose(null, null, flowsFragment));
         if (IsRetry(flowsResult)) return Retry([flowsResult]);
 
         return SessionStartMemoryContextResult.Empty;
@@ -95,13 +96,15 @@ internal sealed class SessionStartCompositeContextProvider(
     }
 
     /// <summary>Marker first: Pi and OpenCode capture stdout only when it opens with it, and only the memory
-    /// fragment carries it.</summary>
-    static string Compose(string? memoryFragment, IReadOnlyList<string?> others) {
-        var present = others.OfType<string>().ToList();
-        var rest    = string.Join("\n\n", present);
-        if (memoryFragment is null) return MemoryIndexEmitter.FragmentMarker + "\n" + rest;
+    /// fragment carries it. Flows come straight after it, because a harness that caps its context cuts from
+    /// the tail, and a long memory index must be what is cut rather than the offer.</summary>
+    static string Compose(string? memoryFragment, string? guidelinesFragment, string? flowsFragment) {
+        var memoryBody = memoryFragment is null ? null
+            : memoryFragment.StartsWith(MemoryIndexEmitter.FragmentMarker, StringComparison.Ordinal)
+                ? memoryFragment[MemoryIndexEmitter.FragmentMarker.Length..].TrimStart('\n')
+                : memoryFragment;
 
-        return present.Count == 0 ? memoryFragment : memoryFragment + "\n\n" + rest;
+        return MemoryIndexEmitter.FragmentMarker + "\n" + string.Join("\n\n", new[] { flowsFragment, memoryBody, guidelinesFragment }.Where(p => !string.IsNullOrEmpty(p)));
     }
 
     static readonly TimeSpan LaneReserve = TimeSpan.FromMilliseconds(250);

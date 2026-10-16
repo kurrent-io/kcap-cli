@@ -191,16 +191,17 @@ public class FlowsLaneTests {
         await Assert.That(withFlows.Fragment).IsEqualTo(withoutFlows.Fragment);
     }
 
+    /// <summary>A harness that caps its context cuts from the tail, so the offer goes ahead of a memory index
+    /// that can run past the cap on its own; the marker stays a single copy at the head.</summary>
     [Test]
-    public async Task Memory_comes_first_then_flows() {
-        const string memoryBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
-
-        var result = await Composite(memory: (HttpStatusCode.OK, memoryBody), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.OK, Catalog))
+    public async Task Flows_come_straight_after_the_marker_ahead_of_memory() {
+        var result = await Composite(memory: (HttpStatusCode.OK, MemoryBody), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.OK, Catalog))
             .GetAsync(Req(memory: true, flows: true));
 
         var fragment = result.Fragment!;
-        await Assert.That(fragment.IndexOf(MemoryIndexEmitter.FragmentMarker, StringComparison.Ordinal)).IsEqualTo(0);
-        await Assert.That(fragment.IndexOf(SessionStartFlowsLane.Header, StringComparison.Ordinal)).IsGreaterThan(0);
+        await Assert.That(fragment).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);
+        await Assert.That(fragment).Contains("## Team memory");
+        await Assert.That(fragment.Split(MemoryIndexEmitter.FragmentMarker).Length).IsEqualTo(2);
     }
 
     sealed class ThrowingScope : ISessionStartMemoryScopeResolver {

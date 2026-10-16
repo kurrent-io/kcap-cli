@@ -749,11 +749,11 @@ public class ClaudeHookCommandTests {
     }
 
     /// <summary>Pins that a memory index far past Claude Code's context cap is what gets trimmed, not
-    /// the plans nudge: the index alone must exceed the cap, otherwise this proves nothing.</summary>
+    /// the plans nudge or the flows offer: the index alone must exceed the cap, otherwise this proves nothing.</summary>
     [Test, NotInParallel]
-    public async Task session_start_keeps_the_plans_nudge_when_the_memory_index_overflows_the_context_cap() {
-        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
-        fx.RegisterClaudeMcpServer("kcap-plans");
+    public async Task session_start_keeps_the_plans_nudge_and_the_flows_offer_when_the_memory_index_overflows_the_context_cap() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+        fx.RegisterClaudeMcpServer("kcap-plans", "kcap-flows");
         var entries = Enumerable.Range(0, 150).Select(i => new JsonObject {
             ["memory_id"] = $"m{i}", ["slug"] = $"slug-{i}", ["audience"] = "team",
             ["description"] = new string('d', 200), ["kind"] = "project",
@@ -773,6 +773,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("## Team memory");
         await Assert.That(ctx.IndexOf("## Plans", StringComparison.Ordinal))
             .IsLessThan(ctx.IndexOf("## Team memory", StringComparison.Ordinal));
+        await Assert.That(ctx).Contains("- code-review: After a change is complete.");
     }
 
     /// <summary>Pins that guidelines rendered ahead of the plans nudge cannot crowd it out, and that
@@ -1237,6 +1238,23 @@ public class ClaudeHookCommandTests {
         var postTimeout = time.TimerAtSend!.Value;
         await Assert.That(body["next_work_budget_ms"]!.GetValue<int>())
             .IsEqualTo((int)Math.Floor((postTimeout - NextWorkEmitter.FeedRequestReserve).TotalMilliseconds));
+    }
+
+    /// <summary>A start whose feed sent no list (out of time, or nothing to list) still carries the
+    /// completion guidance, which otherwise rides only on the list.</summary>
+    [Test, NotInParallel]
+    public async Task an_ack_without_a_next_work_list_still_carries_the_completion_guidance() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"top_clusters":[{"text":"Run the fast suite first","category":"pattern"}]}""" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains(NextWorkEmitter.InstructionOnly);
+        await Assert.That(ctx).DoesNotContain("<next-work-data>");
     }
 
     [Test, NotInParallel]

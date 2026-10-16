@@ -900,12 +900,15 @@ public sealed class ClaudeHookCommand(
 
             // The feed budget comes from the same snapshot the POST is bounded by, so it can never
             // promise the server more time than the POST will wait.
-            var postBody = body;
+            var postBody         = body;
+            var nextWorkWithheld = false;
             if (capabilityNode is not null) {
                 try {
                     if (!nextWorkDisabled && NextWorkEmitter.FeedBudgetMs(remaining) is { } feedBudgetMs) {
                         capabilityNode["next_work"]           = AotJsonString(NextWorkEmitter.CapabilityVersion);
                         capabilityNode["next_work_budget_ms"] = feedBudgetMs;
+                    } else {
+                        nextWorkWithheld = !nextWorkDisabled;
                     }
                     postBody = capabilityNode.ToJsonString();
                 } catch {
@@ -922,6 +925,10 @@ public sealed class ClaudeHookCommand(
                     resp = await client.PostOnceAsync($"{Url}/hooks/session-start", content, clock.Time, remaining, CancellationToken.None);
                 }
             } catch { resp = null; }
+
+            // Written after the POST, so a stalled stderr can neither spend the POST's time nor cost the body its capabilities.
+            if (nextWorkWithheld)
+                TryWriteDiagnostic($"session-start next-work list not requested: {remaining.TotalMilliseconds:F0}ms left of the hook budget");
 
             if (resp is null || !resp.IsSuccessStatusCode) {
                 var code      = resp is null ? 0 : (int)resp.StatusCode;
@@ -978,7 +985,7 @@ public sealed class ClaudeHookCommand(
                     var disabled        = activeProfile?.DisableSessionGuidelines is true;
                     var lessonsFragment = SessionGuidelinesEmitter.BuildFragment(responseNode, disabled);
                     audience = audience.WithAck(responseNode);
-                    var nextWorkFragment = NextWorkEmitter.BuildFragment(responseNode, nextWorkDisabled || !audience.GetsDriverGuidance);
+                    var nextWorkFragment = NextWorkEmitter.BuildFragmentOrInstruction(responseNode, nextWorkDisabled || !audience.GetsDriverGuidance);
                     // update_check=false opts out of ALL kcap update nudging, including the
                     // in-agent one — skip emission entirely rather than let a server that still
                     // sends `version` sneak the fragment past a locally-disabled preference.
@@ -1006,15 +1013,15 @@ public sealed class ClaudeHookCommand(
 
                     // Short instructions are funded first so the server-sized lists absorb the cap.
                     envelope = SessionStartAdditionalContext.BuildRankedEnvelope([
-                        new(lessonsFragment, Rank: 2, Trimmable: true),
-                        new(nextWorkFragment, Rank: 1),
-                        new(nudgeFragment),
-                        new(coordinationFragment, Rank: 2, Trimmable: true),
-                        new(sessionNudges),
-                        new(harnessNudge),
-                        new(firstRunNotice),
-                        new(memoryFragment, Rank: 3, Trimmable: true),
-                    ]);
+                        new(lessonsFragment, Rank: 2, Trimmable: true, Name: "guidelines"),
+                        new(nextWorkFragment, Rank: 1, Name: "next work"),
+                        new(nudgeFragment, Name: "version nudge"),
+                        new(coordinationFragment, Rank: 2, Trimmable: true, Name: "coordination notices"),
+                        new(sessionNudges, Name: "session nudges"),
+                        new(harnessNudge, Name: "harness nudge"),
+                        new(firstRunNotice, Name: "first-run notice"),
+                        new(memoryFragment, Rank: 3, Trimmable: true, Name: "memory and flows"),
+                    ], TryWriteDiagnostic);
                 } catch {
                     // Best effort — never break session capture for hook output emission.
                 }
@@ -1246,6 +1253,11 @@ public sealed class ClaudeHookCommand(
             // Best effort — a policy hiccup never fails the hook.
             return null;
         }
+    }
+
+    /// <summary>A diagnostic that fails to write is dropped: it must never cost the session its context.</summary>
+    static void TryWriteDiagnostic(string message) {
+        try { Console.Error.WriteLine($"[kcap] {message}"); } catch { /* stderr unavailable */ }
     }
 
     /// <summary>
