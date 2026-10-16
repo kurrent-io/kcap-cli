@@ -12,8 +12,11 @@ public sealed class UpdateCoordinator {
     internal static readonly TimeSpan DefaultInitialDelay = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan DefaultInterval = TimeSpan.FromHours(4);
     internal const string CheckLabel = "Check for Updates…";
-    internal const string ReadyDisclosure =
-        "Restart Kurrent Capacitor to finish installing the update. Running agents keep running; the daemon restarts on its own once it is idle.";
+    // Velopack's updater on Windows kills every process running from the install folder, and the
+    // app's daemon runs from there.
+    internal static string ReadyDisclosure(bool windows) => windows
+        ? "Restart Kurrent Capacitor to finish installing the update. Installing stops the daemon, which ends any running agents."
+        : "Restart Kurrent Capacitor to finish installing the update. Running agents keep running; the daemon restarts on its own once it is idle.";
 
     readonly IAppUpdater _updater;
     readonly ILifecycleSurface _surface;
@@ -154,7 +157,7 @@ public sealed class UpdateCoordinator {
 
             var prompt = new LifecyclePrompt(
                 LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
-                ReadyDisclosure);
+                ReadyDisclosure(OperatingSystem.IsWindows()));
             var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
             ConsumeManual(manual);
             if (accepted) RequestRestart(candidate);

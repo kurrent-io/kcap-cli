@@ -211,4 +211,13 @@ public class UpdateCoordinatorTests {
 
         await Assert.That(UpdateCoordinator.TryApplyPendingAtStartup(updater, updateRelaunch: false)).IsFalse();
     }
+
+    /// Velopack kills the daemon when it applies an update on Windows, so the prompt must not
+    /// promise that running agents survive there.
+    [Test]
+    public async Task Ready_disclosure_warns_on_Windows_that_installing_ends_running_agents() {
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).Contains("ends any running agents");
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).DoesNotContain("keep running");
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: false)).Contains("Running agents keep running");
+    }
 }

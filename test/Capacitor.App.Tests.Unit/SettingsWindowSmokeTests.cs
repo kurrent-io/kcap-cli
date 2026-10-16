@@ -220,7 +220,7 @@ public class SettingsWindowSmokeTests {
             var notice = window.FindControl<Border>("NotificationAccessNotice")!;
             var button = window.FindControl<Button>("NotificationAccessButton")!;
             await WaitUntilAsync(() => notice.IsEffectivelyVisible);
-            await Assert.That(button.Content).IsEqualTo("Open System Settings");
+            await Assert.That(button.Content).IsEqualTo($"Open {SettingsViewModel.SystemSettingsName}");
 
             Click(window, button);
 

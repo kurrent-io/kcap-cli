@@ -6,6 +6,16 @@ namespace Capacitor.Cli.Services;
 /// <summary>Pure rendering + command vectors for a per-user Windows logon Scheduled Task.</summary>
 static class WindowsTaskUnit {
     const string Prefix = "kcap-daemon-";
+    const string ActionCommand = "conhost.exe";
+    const string ActionArgumentsPrefix = "--headless cmd.exe /d /s /v:off /c \"\"";
+
+    /// <summary>Every action a kcap release has registered, newest first. Tasks installed by an older
+    /// release keep theirs until reinstalled, so each must still lead to its wrapper.</summary>
+    static readonly (string Command, string Prefix, string Suffix)[] KnownActions = [
+        (ActionCommand, ActionArgumentsPrefix, "\"\""),
+        ("cmd.exe", "/d /s /v:off /c \"\"", "\"\""),
+        ("cmd.exe", "/c \"", "\""),
+    ];
 
     public static string TaskName(string id) => Prefix + id;
 
@@ -242,8 +252,8 @@ static class WindowsTaskUnit {
           </Settings>
           <Actions Context="Author">
             <Exec>
-              <Command>conhost.exe</Command>
-              <Arguments>--headless cmd.exe /d /s /v:off /c ""{Guarded("the wrapper path", wrapperPath)}""</Arguments>
+              <Command>{ActionCommand}</Command>
+              <Arguments>{ActionArgumentsPrefix}{Guarded("the wrapper path", wrapperPath)}""</Arguments>
             </Exec>
           </Actions>
         </Task>
@@ -292,6 +302,37 @@ static class WindowsTaskUnit {
     public static string[] RunArgs(string id)                    => ["/Run", "/TN", TaskName(id)];
     public static string[] EndArgs(string id)                    => ["/End", "/TN", TaskName(id)];
     public static string[] QueryArgs(string id)                  => ["/Query", "/TN", TaskName(id), "/FO", "LIST"];
+    public static string[] QueryXmlArgs(string id)               => ["/Query", "/TN", TaskName(id), "/XML"];
+
+    /// <summary>The wrapper a task's action runs, read from <c>schtasks /Query /XML</c>, or null unless the
+    /// action is exactly one a kcap release wrote: a path from any other action names a file the task does
+    /// not run.</summary>
+    public static string? WrapperFromTaskXml(string xml) {
+        IEnumerable<System.Xml.Linq.XElement> execs;
+        try {
+            execs = [.. System.Xml.Linq.XDocument.Parse(xml).Descendants().Where(e => e.Name.LocalName == "Exec")];
+        } catch (System.Xml.XmlException) {
+            return null;
+        }
+
+        foreach (var exec in execs) {
+            var command   = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Command")?.Value.Trim();
+            var arguments = exec.Elements().FirstOrDefault(e => e.Name.LocalName == "Arguments")?.Value.Trim();
+            if (command is null || arguments is null) continue;
+
+            foreach (var (knownCommand, prefix, suffix) in KnownActions) {
+                if (!string.Equals(command, knownCommand, StringComparison.OrdinalIgnoreCase)
+                    || !arguments.StartsWith(prefix, StringComparison.Ordinal)
+                    || !arguments.EndsWith(suffix, StringComparison.Ordinal)
+                    || arguments.Length <= prefix.Length + suffix.Length) continue;
+
+                var path = arguments[prefix.Length..^suffix.Length];
+                if (!path.Contains('"')) return path;
+            }
+        }
+
+        return null;
+    }
 
     public static ServiceState StatusFromQuery(int exitCode, string stdout) {
         if (exitCode != 0) return ServiceState.NotInstalled;

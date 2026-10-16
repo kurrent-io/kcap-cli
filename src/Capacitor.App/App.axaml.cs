@@ -237,6 +237,19 @@ public partial class App : Application {
             var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => windowLifecycle.Dispose();
+            if (OperatingSystem.IsWindows())
+                Program.Instance?.OnShowRequested(() => Dispatcher.UIThread.Post(() => {
+                    if (_shutdownStarted) return;
+                    if (MainWindowAction(_coordinator) is { } showMain) {
+                        showMain();
+                        return;
+                    }
+                    // Onboarding and the startup screens come before the main window exists.
+                    var startup = _wizardWindow is { IsVisible: true } wizard ? wizard : desktop.Windows.FirstOrDefault(w => w.IsVisible);
+                    if (startup is null) return;
+                    if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
+                    startup.Activate();
+                }));
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
             _menuBar.Install();
@@ -761,6 +774,7 @@ public partial class App : Application {
             if (Path.GetFileNameWithoutExtension(executable) == "dotnet")
                 start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
             start.ArgumentList.Add("--setup");
+            if (OperatingSystem.IsWindows()) start.ArgumentList.Add(SingleInstanceGuard.RelaunchArg);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}"); }
@@ -863,15 +877,17 @@ public partial class App : Application {
 
     static async Task<bool> RelaunchForSettingsAsync(
             IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
-        // Windows has no bundle to reopen: a second copy of this executable is the relaunch, as
-        // `open -n` starts a second instance on macOS.
+        // Windows has no bundle to reopen, so the relaunch is a new copy of this executable. It
+        // starts on Exit, once teardown is over: shutdown can outlast the new copy's wait for the
+        // single-instance lock.
         if (OperatingSystem.IsWindows()) {
-            if (Environment.ProcessPath is not { } exe) return false;
-            try {
-                using var next = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
-            } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
-                return false;
-            }
+            // Checked before shutting down: past that point a start that fails leaves nothing running.
+            if (Environment.ProcessPath is not { } exe || !File.Exists(exe)) return false;
+            var start = new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false };
+            desktop.Exit += (_, _) => {
+                try { Process.Start(start)?.Dispose(); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not relaunch: {ex.Message}"); }
+            };
             desktop.TryShutdown();
             return true;
         }

@@ -126,16 +126,19 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ProfilesSettingsViewModel? Profiles { get; }
 
+    /// What the OS calls the app that holds its notification switches.
+    internal static string SystemSettingsName { get; } = OperatingSystem.IsWindows() ? "Windows Settings" : "System Settings";
+
     public string? NotificationAccessText => _access switch {
         DesktopNotificationAccess.Denied =>
-            "Notifications from Kurrent Capacitor are turned off in System Settings, so none of these will appear.",
+            $"Notifications from Kurrent Capacitor are turned off in {SystemSettingsName}, so none of these will appear.",
         DesktopNotificationAccess.NotDetermined =>
             "Kurrent Capacitor has not been allowed to send notifications yet.",
         _ => null,
     };
 
     public string? NotificationAccessAction => _access switch {
-        DesktopNotificationAccess.Denied => "Open System Settings",
+        DesktopNotificationAccess.Denied => $"Open {SystemSettingsName}",
         DesktopNotificationAccess.NotDetermined => "Allow notifications",
         _ => null,
     };

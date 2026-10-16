@@ -30,6 +30,20 @@ public partial class SessionRailView : UserControl {
         e.Handled = true;
     }
 
+    AboutWindow? _about;
+
+    void OnAboutClick(object? sender, RoutedEventArgs e) {
+        RailHelpButton.Flyout?.Hide();
+        if (_about is { } open) {
+            open.Activate();
+            return;
+        }
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        _about = new AboutWindow { DataContext = DataContext };
+        _about.Closed += (_, _) => _about = null;
+        _about.Show(owner);
+    }
+
     void OnPullRequestClick(object? sender, RoutedEventArgs e) {
         if (sender is not Button { DataContext: RailSessionViewModel vm } anchor
             || !vm.HasMultiplePullRequests || vm.PullRequest is not { } summary) return;

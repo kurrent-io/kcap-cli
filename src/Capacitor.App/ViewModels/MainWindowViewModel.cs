@@ -206,6 +206,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
 
+    /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
+    /// flyout opens the app's own.
+    public bool ShowsAbout { get; } = OperatingSystem.IsWindows();
+
     /// Opens the bug/feedback window for one category; inert without an action to route it to.
     public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
 

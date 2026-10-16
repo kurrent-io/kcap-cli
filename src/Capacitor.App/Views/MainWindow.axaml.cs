@@ -1,6 +1,7 @@
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
 using Capacitor.App.Services;
@@ -59,6 +60,9 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     public MainWindow() {
         InitializeComponent();
         BindRefreshShortcuts();
+        BindSettingsShortcut();
+        KeepContentClearOfCaptionButtons();
+        BindFullScreenShortcut();
         Closing += (_, e) => {
             if (CloseInterceptor?.Invoke() == true) e.Cancel = true;
         };
@@ -121,6 +125,45 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             bindings.Add(binding);
             KeyBindings.Add(binding);
         }
+    }
+
+    // Windows draws its caption buttons over the top-right of the extended client area, so the
+    // content pane starts below the title bar there.
+    void KeepContentClearOfCaptionButtons() {
+        if (!OperatingSystem.IsWindows()) return;
+        this.GetObservable(WindowDecorationMarginProperty)
+            .Subscribe(margin => ContentPane.Margin = new Thickness(0, margin.Top, 0, 0));
+    }
+
+    // F11 is the Windows convention for full screen; Win+Up and Win+Down already maximize and
+    // minimize, which the macOS Window menu has to provide itself.
+    void BindFullScreenShortcut() {
+        if (!OperatingSystem.IsWindows()) return;
+        KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.F11), Command = ReactiveCommand.Create(ToggleFullScreen) });
+    }
+
+    WindowState _beforeFullScreen = WindowState.Normal;
+
+    internal void ToggleFullScreen() {
+        if (WindowState == WindowState.FullScreen) {
+            WindowState = _beforeFullScreen;
+            return;
+        }
+        _beforeFullScreen = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
+        WindowState = WindowState.FullScreen;
+    }
+
+    // macOS takes ⌘, from the native app menu, which Windows does not draw.
+    void BindSettingsShortcut() {
+        if (!OperatingSystem.IsWindows()) return;
+        var binding = new KeyBinding { Gesture = new KeyGesture(Key.OemComma, KeyModifiers.Control) };
+        KeyBindings.Add(binding);
+
+        void Apply() {
+            if ((DataContext as MainWindowViewModel)?.OpenSettingsCommand is { } command) binding.Command = command;
+        }
+        Apply();
+        DataContextChanged += (_, _) => Apply();
     }
 
     // A toast fired before Loaded, or while the window is hidden (Hide() suspends rendering

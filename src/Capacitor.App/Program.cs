@@ -13,15 +13,32 @@ internal static class Program
     /// OnRestarted hook, which fires on a failed apply too, so it means "relaunched", not "updated".
     public static bool UpdateRelaunch { get; private set; }
 
+    /// Held for the life of the process on Windows; null elsewhere.
+    public static SingleInstanceGuard? Instance { get; private set; }
+
+    // A relaunch starts once the old copy's teardown is over, so this covers only its process exit.
+    // Past it, that copy is taken to be still running and is asked to show itself instead.
+    static readonly TimeSpan RelaunchWait = TimeSpan.FromSeconds(30);
+
     [STAThread]
     public static void Main(string[] args) {
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
         // during those operations. Auto-apply stays off: pending packages are applied by
         // UpdateCoordinator after the install-location guard and the prerelease rule.
-        VelopackApp.Build()
+        var velopack = VelopackApp.Build()
             .SetAutoApplyOnStartup(false)
-            .OnRestarted(_ => UpdateRelaunch = true)
-            .Run();
+            .OnRestarted(_ => UpdateRelaunch = true);
+        if (OperatingSystem.IsWindows())
+            velopack = velopack.OnBeforeUninstallFastCallback(_ => {
+                if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory);
+            });
+        velopack.Run();
+
+        if (OperatingSystem.IsWindows() && Environment.ProcessPath is { } exe) {
+            var relaunch = UpdateRelaunch || args.Contains(SingleInstanceGuard.RelaunchArg, StringComparer.Ordinal);
+            Instance = SingleInstanceGuard.TryAcquire(SingleInstanceGuard.NameFor(exe), relaunch ? RelaunchWait : TimeSpan.Zero);
+            if (Instance is null) return;
+        }
 
         var crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => {

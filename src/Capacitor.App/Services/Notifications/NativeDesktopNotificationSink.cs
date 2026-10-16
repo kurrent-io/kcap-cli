@@ -6,13 +6,18 @@ using Avalonia.Threading;
 namespace Capacitor.App.Services.Notifications;
 
 public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink, IDesktopNotificationAccess {
+    const string AppUserModelId = "io.kurrent.capacitor";
+
     static bool _labsAvailable;
     readonly IDesktopNotificationSink _backend;
+    readonly IDesktopNotificationAccess? _access;
 
     public NativeDesktopNotificationSink() {
         _backend = OperatingSystem.IsMacOS()
             ? new MacOsDesktopNotificationSink()
             : new LabsSink(_labsAvailable ? NativeNotificationManager.Current : null, a => Dispatcher.UIThread.Post(a), OperatingSystem.IsWindows());
+        _access = _backend as IDesktopNotificationAccess
+            ?? (OperatingSystem.IsWindows() ? new WindowsDesktopNotificationAccess(AppUserModelId) : null);
     }
 
     internal NativeDesktopNotificationSink(INativeNotificationManager manager, Action<Action> dispatch, bool windows) =>
@@ -23,10 +28,10 @@ public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink, ID
     public void Dispose() => _backend.Dispose();
 
     public Task<DesktopNotificationAccess> GetAsync() =>
-        (_backend as IDesktopNotificationAccess)?.GetAsync() ?? Task.FromResult(DesktopNotificationAccess.Unknown);
+        _access?.GetAsync() ?? Task.FromResult(DesktopNotificationAccess.Unknown);
     public Task<DesktopNotificationAccess> RequestAsync() =>
-        (_backend as IDesktopNotificationAccess)?.RequestAsync() ?? Task.FromResult(DesktopNotificationAccess.Unknown);
-    public void OpenSystemSettings() => (_backend as IDesktopNotificationAccess)?.OpenSystemSettings();
+        _access?.RequestAsync() ?? Task.FromResult(DesktopNotificationAccess.Unknown);
+    public void OpenSystemSettings() => _access?.OpenSystemSettings();
 
     public static AppBuilder Configure(AppBuilder builder) {
         // Labs' macOS implementation has async-void authorization failures and only withdraws
@@ -39,7 +44,7 @@ public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink, ID
             var registration = AppBuilder.Configure<Application>().WithAppNotifications(new AppNotificationOptions {
                 Channels = [new NotificationChannel("attention", "Agent attention", NotificationPriority.High)],
                 ClearOnAppClose = true,
-                AppUserModelId = "io.kurrent.capacitor",
+                AppUserModelId = AppUserModelId,
                 AppName = "Kurrent Capacitor",
             });
             return builder.AfterSetup(app => {
