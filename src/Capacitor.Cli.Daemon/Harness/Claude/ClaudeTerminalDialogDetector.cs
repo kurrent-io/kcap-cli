@@ -2,15 +2,12 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Daemon.Harness.Claude;
 
-/// Reads Claude Code's select dialogs off the live screen by their layout, not their wording, so a
-/// dialog no hook reports (workspace trust, a new project MCP server) still reaches Chat. A dialog
-/// is a rule, then its text, then the footer as the last line on screen: the prompt box and status
-/// line always sit below ordinary output, so a transcript that merely quotes the footer never
-/// ends the screen. The options are the rows around the one row carrying the cursor. When the rows
-/// cannot be read as a single-choice list the dialog still comes back, with no options, so a
-/// surface can point at the terminal instead of guessing keys.
+/// Reads Claude Code's dialogs from the live screen. The footer must end the screen: ordinary
+/// output has the prompt box below it. Forms and unreadable lists return no choices so clients
+/// show the screen and direct the user to Terminal.
 internal static class ClaudeTerminalDialogDetector {
-    const string Footer = "Enter to confirm · Esc to cancel";
+    const string SelectFooter = "Enter to confirm · Esc to cancel";
+    const string FormFooter = "←/→ to change · Enter to continue · Esc to cancel";
     const char   Cursor = '❯';
 
     /// <param name="cols">The width the screen was drawn at, which decides where a label wrapped.</param>
@@ -21,13 +18,19 @@ internal static class ClaudeTerminalDialogDetector {
     internal static (TerminalDialogDto? Dialog, bool IncompleteRedraw) Read(string screen, int cols) {
         var lines  = screen.Split('\n');
         var footer = Array.FindLastIndex(lines, l => l.Trim().Length > 0);
-        if (footer < 0 || !lines[footer].Trim().StartsWith(Footer, StringComparison.Ordinal)) return (null, false);
+        if (footer < 0) return (null, false);
+        var footerText = lines[footer].Trim();
+        var select = footerText.StartsWith(SelectFooter, StringComparison.Ordinal);
+        if (!select && !footerText.StartsWith(FormFooter, StringComparison.Ordinal)) return (null, false);
 
         var border = Array.FindLastIndex(lines, footer, IsRule);
         if (border < 0) return (null, false);
         var region = lines[(border + 1)..footer];
 
-        var (options, selected, firstRow, incomplete) = ReadOptions(region, cols);
+        // Forms edit individual settings; moving the cursor and pressing Enter is not one answer.
+        (List<string> options, int selected, int firstRow, bool incomplete) = select
+            ? ReadOptions(region, cols)
+            : ([], -1, region.Length, false);
         var paragraphs = Paragraphs(region[..firstRow].Select(l => l.Trim()));
         var heading = paragraphs.FirstOrDefault() ?? "";
         var body = string.Join('\n', paragraphs.Skip(1));
@@ -36,10 +39,8 @@ internal static class ClaudeTerminalDialogDetector {
         return (new TerminalDialogDto(heading, body, options, selected, shown), incomplete);
     }
 
-    /// Options share the text column of the cursor row. A row continues the option above it when it
-    /// is indented deeper, or when its first word could not have fit on that option's row: Claude
-    /// wraps a long label at the label's own column. A checkbox list is multi-select, which arrows
-    /// and Enter cannot answer.
+    /// Same-column rows that could wrap are also possible choices. Guessing that boundary can
+    /// merge a decline choice into an approval, so ambiguous lists use the screen-only fallback.
     static (List<string> Options, int Selected, int FirstRow, bool Incomplete) ReadOptions(string[] region, int cols) {
         var cursorRows = Enumerable.Range(0, region.Length).Where(i => region[i].TrimStart().StartsWith(Cursor)).ToList();
         if (cursorRows.Count != 1) return ([], -1, region.Length, true);
@@ -57,10 +58,12 @@ internal static class ClaudeTerminalDialogDetector {
         var selected = -1;
         for (var i = first; i <= last; i++) {
             var line = i == cursor ? region[i][(mark + 1)..] : region[i];
-            if (i != cursor && options.Count > 0 && (Indent(line) > column || Wrapped(region[i - 1], line, cols))) {
+            if (i != cursor && options.Count > 0 && Indent(line) > column) {
                 options[^1] += " " + line.Trim();
                 continue;
             }
+            if (i != cursor && options.Count > 0 && CouldWrap(region[i - 1], line, cols))
+                return ([], -1, first, false);
             if (i == cursor) selected = options.Count;
             options.Add(StripNumber(line.Trim()));
         }
@@ -69,7 +72,7 @@ internal static class ClaudeTerminalDialogDetector {
         return (options, selected, first, false);
     }
 
-    static bool Wrapped(string above, string line, int cols) {
+    static bool CouldWrap(string above, string line, int cols) {
         var word = line.Trim().Split(' ')[0];
         return above.TrimEnd().Length + 1 + word.Length > cols;
     }

@@ -4,10 +4,7 @@ using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Claude;
 
-/// Pins the layout match for Claude's select dialogs against the bytes Claude Code writes for its
-/// new-MCP-server dialog: heading, body and choices read without knowing the wording, the cursor
-/// followed across an arrow key, the dialog gone once erased, a checkbox list left unanswered, and
-/// labels Claude wrapped in a narrow terminal read whole.
+/// Pins dialog detection and the screen-only fallback when keystrokes cannot be inferred safely.
 public class ClaudeTerminalDialogDetectorTests {
     // The first render, word by word at absolute columns as Claude Code draws it.
     static readonly string Dialog =
@@ -58,6 +55,45 @@ public class ClaudeTerminalDialogDetectorTests {
         "\r\u001b[2C\u001b[1B\u001b[39m \u001b[5GContinue without using this MCP\u001b[K\r\u001b[4C\u001b[1Bserver\r\r\n\r\n\r\n\u001b[2C\u001b[6A";
 
     static byte[] Utf8(string text) => Encoding.UTF8.GetBytes(text);
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(1)]
+    [Arguments(2)]
+    [Arguments(3)]
+    public async Task An_auto_mode_settings_form_has_a_screen_but_no_single_choice_answers(int selected) {
+        string[] settings = [
+            "How you use Claude here     Mixed",
+            "Also scan shell history     true",
+            "Also scan your other repos  false",
+        ];
+        var form = string.Join('\n', new[] {
+            new string('─', 120),
+            "  Teach auto mode about your environment?",
+            "",
+            "  Claude Code reads this project, your recent Claude sessions, and optionally your shell history and other repositories.",
+            "  Claude analyzes this data and customizes auto mode to make better decisions.",
+            "",
+        }.Concat(settings.Select((setting, i) => (selected == i ? "  ❯ " : "    ") + setting)).Concat([
+            "",
+            (selected == 3 ? "  ❯ " : "    ") + "Continue",
+            "",
+            "  ←/→ to change · Enter to continue · Esc to cancel",
+        ]));
+        var screen = new ClaudeScreenWatcher();
+        var split = form.IndexOf("Enter to continue", StringComparison.Ordinal);
+        await Assert.That(screen.Observe(Utf8(form[..split])).Dialog).IsNull();
+
+        var dialog = screen.Observe(Utf8(form[split..])).Dialog;
+
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Heading).IsEqualTo("Teach auto mode about your environment?");
+        await Assert.That(dialog.Options).IsEmpty();
+        await Assert.That(dialog.Selected).IsEqualTo(-1);
+        await Assert.That(dialog.Screen).Contains("Also scan shell history     true");
+        await Assert.That(dialog.Screen).Contains("Continue");
+        await Assert.That(screen.Observe(Utf8("\x1b[2Jready\r\n")).Dialog).IsNull();
+    }
 
     [Test]
     public async Task A_dialog_is_read_by_its_layout_with_the_cursor_on_the_default() {
@@ -144,7 +180,7 @@ public class ClaudeTerminalDialogDetectorTests {
     }
 
     [Test]
-    public async Task Labels_wrapped_at_the_terminal_width_are_one_choice_each() {
+    public async Task Same_column_wrapping_uses_the_screen_instead_of_guessing_choice_boundaries() {
         var screen = new ClaudeScreenWatcher(40, 40);
 
         var dialog = screen.Observe(Utf8(Narrow)).Dialog;
@@ -152,44 +188,70 @@ public class ClaudeTerminalDialogDetectorTests {
         await Assert.That(dialog).IsNotNull();
         await Assert.That(dialog!.Heading).StartsWith("New MCP server found in this project: a-server-with-a-rather-long");
         await Assert.That(dialog.Body).StartsWith("MCP servers may execute code or access system resources.");
-        await Assert.That(dialog.Options.ToArray()).IsEquivalentTo(new[] {
+        await Assert.That(dialog.Options).IsEmpty();
+        await Assert.That(dialog.Selected).IsEqualTo(-1);
+        await Assert.That(dialog.Screen).Contains("in this project");
+        await Assert.That(dialog.Screen).Contains("Continue without using this MCP");
+        await Assert.That(screen.Observe(Utf8(NarrowCursorUpDrawn)).Dialog!.Options).IsEmpty();
+        await Assert.That(screen.Observe(Utf8(NarrowCursorUpErased)).Dialog!.Options).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(60, 0, 0)]
+    [Arguments(60, 1, 0)]
+    [Arguments(60, 2, 3)]
+    [Arguments(120, 0, 3)]
+    [Arguments(120, 1, 3)]
+    [Arguments(120, 2, 3)]
+    public async Task An_ambiguous_row_never_merges_the_decline_choice_into_an_approval(int cols, int selected, int count) {
+        string[] labels = [
             "Use this MCP server",
             "Use this and all future MCP servers in this project",
             "Continue without using this MCP server",
-        }, CollectionOrdering.Matching);
-        await Assert.That(dialog.Selected).IsEqualTo(2);
-    }
-
-    /// The PTY follows whichever viewer attached, so the copy is resized with it; read at a width
-    /// other than the one Claude drew for, a wrapped label would count as a choice of its own.
-    [Test]
-    public async Task A_resized_screen_reads_the_dialog_at_its_new_width() {
+        ];
+        string Menu(int cursor) => string.Join('\n', new[] {
+            new string('─', cols),
+            "  New MCP server found in this project: docs",
+            "",
+        }.Concat(labels.Select((label, i) => (cursor == i ? "  ❯ " : "    ") + label)).Concat([
+            "", "  Enter to confirm · Esc to cancel",
+        ]));
         var screen = new ClaudeScreenWatcher();
-        screen.Resize(40, 40);
+        screen.Resize(cols, 40);
+        await Assert.That(screen.Observe(Utf8(Menu(2))).Dialog!.Options).Count().IsEqualTo(3);
 
-        var dialog = screen.Observe(Utf8(Narrow)).Dialog;
+        var dialog = screen.Observe(Utf8("\x1b[2J" + Menu(selected))).Dialog;
 
-        await Assert.That(dialog!.Options).Count().IsEqualTo(3);
+        await Assert.That(dialog).IsNotNull();
+        await Assert.That(dialog!.Options).Count().IsEqualTo(count);
+        await Assert.That(dialog.Selected).IsEqualTo(count == 0 ? -1 : selected);
+        await Assert.That(dialog.Screen).Contains(labels[1] + "\n");
+        await Assert.That(dialog.Screen).Contains(labels[2]);
+        if (count > 0)
+            await Assert.That(dialog.Options.ToArray()).IsEquivalentTo(labels, CollectionOrdering.Matching);
     }
 
     [Test]
     public async Task A_chunk_that_ends_mid_redraw_keeps_the_readable_choices() {
-        var screen = new ClaudeScreenWatcher(40, 40);
-        screen.Observe(Utf8(Narrow));
+        var screen = new ClaudeScreenWatcher();
+        screen.Observe(Utf8(Dialog));
+        var split = CursorUp.IndexOf("\r\x1b[2C\x1b[1B", StringComparison.Ordinal);
 
-        var midway = screen.Observe(Utf8(NarrowCursorUpDrawn)).Dialog;
+        var midway = screen.Observe(Utf8(CursorUp[..split])).Dialog;
         await Assert.That(midway!.Options).Count().IsEqualTo(3);
         await Assert.That(midway.Selected).IsEqualTo(2);
 
-        await Assert.That(screen.Observe(Utf8(NarrowCursorUpErased)).Dialog?.Selected).IsEqualTo(1);
+        await Assert.That(screen.Observe(Utf8(CursorUp[split..])).Dialog?.Selected).IsEqualTo(1);
     }
 
     [Test]
-    public async Task Output_that_quotes_the_footer_is_not_a_dialog() {
+    [Arguments("Enter to confirm · Esc to cancel")]
+    [Arguments("←/→ to change · Enter to continue · Esc to cancel")]
+    public async Task Output_that_quotes_the_footer_is_not_a_dialog(string footer) {
         var quoted = string.Join('\n',
             new string('─', 40),
             "  The footer reads:",
-            "  Enter to confirm · Esc to cancel",
+            "  " + footer,
             "",
             new string('─', 40),
             "❯ ",
@@ -200,8 +262,10 @@ public class ClaudeTerminalDialogDetectorTests {
     }
 
     [Test]
-    public async Task A_footer_with_no_rule_above_it_is_not_a_dialog() {
-        var screen = string.Join('\n', "  Use this one", "  ❯ Or this one", "", "  Enter to confirm · Esc to cancel");
+    [Arguments("Enter to confirm · Esc to cancel")]
+    [Arguments("←/→ to change · Enter to continue · Esc to cancel")]
+    public async Task A_footer_with_no_rule_above_it_is_not_a_dialog(string footer) {
+        var screen = string.Join('\n', "  Use this one", "  ❯ Or this one", "", "  " + footer);
 
         await Assert.That(ClaudeTerminalDialogDetector.Parse(screen, 120)).IsNull();
     }
