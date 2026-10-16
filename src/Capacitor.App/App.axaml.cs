@@ -881,7 +881,8 @@ public partial class App : Application {
         // starts on Exit, once teardown is over: shutdown can outlast the new copy's wait for the
         // single-instance lock.
         if (OperatingSystem.IsWindows()) {
-            if (Environment.ProcessPath is not { } exe) return false;
+            // Checked before shutting down: past that point a start that fails leaves nothing running.
+            if (Environment.ProcessPath is not { } exe || !File.Exists(exe)) return false;
             var start = new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false };
             desktop.Exit += (_, _) => {
                 try { Process.Start(start)?.Dispose(); }
