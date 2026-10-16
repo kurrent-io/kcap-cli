@@ -12,10 +12,12 @@ namespace Capacitor.Cli.Core.Skills;
 /// and its target takes the content. A caller that refuses links passes <c>followLink: false</c>, so
 /// a link planted after its check is replaced rather than written through.</para></summary>
 public static class AtomicFile {
-    public static void Replace(string path, string contents, UnixFileMode? mode = null, bool followLink = true) =>
-        Replace(path, Encoding.UTF8.GetBytes(contents), mode, followLink);
+    public static void Replace(string path, string contents, UnixFileMode? mode = null, bool followLink = true, bool durable = false) =>
+        Replace(path, Encoding.UTF8.GetBytes(contents), mode, followLink, durable);
 
-    public static void Replace(string path, byte[] contents, UnixFileMode? mode = null, bool followLink = true) {
+    /// <param name="durable">Flush the temporary to the device before the rename, so a crash cannot
+    /// publish a name whose content never reached the disk.</param>
+    public static void Replace(string path, byte[] contents, UnixFileMode? mode = null, bool followLink = true, bool durable = false) {
         var destination = followLink ? Destination(path) : path;
         var tmp         = $"{destination}.{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}.tmp";
         var created     = false;
@@ -32,6 +34,7 @@ public static class AtomicFile {
                 // UnixCreateMode is filtered by the umask; set the exact mode before writing.
                 if (target is { } exact && !OperatingSystem.IsWindows()) File.SetUnixFileMode(tmp, exact);
                 stream.Write(contents);
+                if (durable) stream.Flush(flushToDisk: true);
             }
 
             File.Move(tmp, destination, overwrite: true);

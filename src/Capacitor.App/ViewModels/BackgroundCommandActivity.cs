@@ -4,17 +4,24 @@ using System.Reactive.Subjects;
 
 namespace Capacitor.App.ViewModels;
 
-/// Running background commands per source-scoped row key ("local:{id}" / "remote:{id}"), as the
-/// open sessions read them from their transcripts. No hook reports a command to the daemon, so
-/// its subagent count never covers one, and a session that is not open is absent here. An
-/// unproven twin pair shares an id across lanes, which is why the key carries the lane. Every
-/// call is made on the UI thread.
-public sealed class BackgroundCommandActivity {
+/// Running commands by source-scoped row key. Closing a workspace hands its live commands to a
+/// transcript monitor until the session ends or the workspace reopens. Every call is on the UI thread.
+public sealed class BackgroundCommandActivity(
+        Func<string, Action<int>, Action, IDisposable>? watch = null) : IDisposable {
     readonly BehaviorSubject<IReadOnlyDictionary<string, int>> _running = new(FrozenDictionary<string, int>.Empty);
     readonly Dictionary<string, List<Registration>> _byKey = new(StringComparer.Ordinal);
+    bool _disposed;
 
-    sealed class Registration {
+    sealed class Registration : IDisposable {
         public int Count;
+        public bool Detached;
+        public readonly SerialDisposable Watch = new();
+        public IDisposable Tracking = Disposable.Empty;
+
+        public void Dispose() {
+            Tracking.Dispose();
+            Watch.Dispose();
+        }
     }
 
     public IObservable<IReadOnlyDictionary<string, int>> Running => _running;
@@ -22,21 +29,42 @@ public sealed class BackgroundCommandActivity {
     /// The newest registration for a key is the one counted: a reopened session's workspace is
     /// built before the outgoing one is torn down, and that teardown drops only its own entry.
     public IDisposable Track(string rowKey, SessionRuns runs) {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         var registration = new Registration();
         if (!_byKey.TryGetValue(rowKey, out var registrations)) _byKey[rowKey] = registrations = [];
+        foreach (var previous in registrations.Where(r => r.Detached).ToArray()) {
+            previous.Dispose();
+            registrations.Remove(previous);
+        }
         registrations.Add(registration);
         void Changed() {
             registration.Count = runs.RunningCommandCount;
             Publish();
         }
         runs.Changed += Changed;
+        registration.Tracking = Disposable.Create(() => runs.Changed -= Changed);
         Changed();
         return Disposable.Create(() => {
-            runs.Changed -= Changed;
-            registrations.Remove(registration);
+            registration.Tracking.Dispose();
+            if (_disposed) return;
+            if (watch is not null && ReferenceEquals(registrations[^1], registration)) {
+                registration.Detached = true;
+                registration.Watch.Disposable = watch(rowKey, count => {
+                    if (_disposed || !registrations.Contains(registration)) return;
+                    registration.Count = count;
+                    Publish();
+                }, Remove);
+                return;
+            }
+            Remove();
+        });
+
+        void Remove() {
+            if (!registrations.Remove(registration)) return;
+            registration.Dispose();
             if (registrations.Count == 0) _byKey.Remove(rowKey);
             Publish();
-        });
+        }
     }
 
     void Publish() {
@@ -46,5 +74,14 @@ public sealed class BackgroundCommandActivity {
         var current = _running.Value;
         if (next.Count == current.Count && next.All(pair => current.GetValueOrDefault(pair.Key) == pair.Value)) return;
         _running.OnNext(next.Count == 0 ? FrozenDictionary<string, int>.Empty : next);
+    }
+
+    public void Dispose() {
+        if (_disposed) return;
+        _disposed = true;
+        foreach (var registration in _byKey.Values.SelectMany(registrations => registrations))
+            registration.Dispose();
+        _byKey.Clear();
+        Publish();
     }
 }

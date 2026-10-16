@@ -105,7 +105,7 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
     readonly Func<ProcessStartInfo, CancellationToken, Task<IAgyTurnProcess>> _turnSource =
         turnSource ?? ((psi, _) => Task.FromResult<IAgyTurnProcess>(
-            new AgyTurnProcess(psi, loggerFactory.CreateLogger<AgyTurnProcess>(), time)));
+            new AgyTurnProcess(WindowsLaunchCommand.Apply(psi, config.Binaries), loggerFactory.CreateLogger<AgyTurnProcess>(), time)));
 
     readonly Func<string, bool> _binaryExists =
         binaryExists ?? (path => config.Binaries.Finds(path));
@@ -122,7 +122,9 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
 
     public string CliPath => config.AntigravityPath;
 
-    public bool IsAvailable() => _binaryExists(config.AntigravityPath);
+    // A Windows host refuses every launch (LaunchRefusal's platform arm), so offering it there would
+    // put a vendor in the launcher that can only fail.
+    public bool IsAvailable() => _posixHost && _binaryExists(config.AntigravityPath);
 
     public bool SupportsUnattended => DescribeUnattendedSupport().Supported;
 

@@ -40,18 +40,53 @@ sealed class WindowsScheduledTaskServiceManager(
 
     static string TaskXmlTempPath(ConfigRoot config, string id) => config.Path($"daemon-service-{id}.task.xml");
 
-    public IReadOnlyList<string> ListInstalled() {
-        var (code, stdout, _) = ServiceProcess.Run("schtasks", "/Query", "/FO", "LIST");
-        if (code != 0) return [];
+    public IReadOnlyList<string> ListInstalled() => TryListInstalled() ?? [];
+
+    // schtasks names a task by its folder path, `\kcap-daemon-x`; the split is explicit because
+    // Path.GetFileName only treats a backslash as a separator on Windows.
+    static string LeafTaskName(string taskPath) => taskPath[(taskPath.LastIndexOf('\\') + 1)..];
+
+    public IReadOnlyList<string>? TryListInstalled() {
+        var (code, stdout, _) = _schtasks(["/Query", "/FO", "LIST"]);
+        if (code != 0) return null;
         return [.. stdout.Split('\n')
             .Where(l => l.TrimStart().StartsWith("TaskName:", StringComparison.OrdinalIgnoreCase))
-            .Select(l => WindowsTaskUnit.IdFromTaskName(Path.GetFileName(l.Split(':', 2)[1].Trim())))
+            .Select(l => WindowsTaskUnit.IdFromTaskName(LeafTaskName(l.Split(':', 2)[1].Trim())))
             .Where(id => id is not null).Select(id => id!).Distinct().Order()];
     }
 
+    /// <summary>
+    /// The wrapper an installed task runs, read from the task's own definition: one installed under another
+    /// <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has it elsewhere, and a file left under this root is not
+    /// necessarily the task's. The path under this root stands only for a task that is gone. An installed
+    /// task whose definition cannot be read, or whose action no kcap release wrote, throws: without its
+    /// wrapper, nothing says which daemon it runs.
+    /// </summary>
+    string WrapperOf(string serviceId, bool taskExists) {
+        var local = WindowsTaskUnit.WrapperPath(config, serviceId);
+        if (!taskExists) return local;
+
+        var (code, xml, err) = _schtasks(WindowsTaskUnit.QueryXmlArgs(serviceId));
+        if (code != 0)
+            throw new InvalidOperationException(
+                $"Could not read the definition of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
+
+        return WindowsTaskUnit.WrapperFromTaskXml(xml)
+            ?? throw new InvalidOperationException(
+                $"Scheduled task {WindowsTaskUnit.TaskName(serviceId)} runs an action kcap did not write; it is left as it is.");
+    }
+
+    /// <summary>A failed query of one task proves nothing about it: only a listing that succeeds and leaves
+    /// it out says it is gone.</summary>
+    bool ConfirmedAbsent(string serviceId) => TryListInstalled() is { } installed && !installed.Contains(serviceId);
+
     public ServiceStatus Status(string serviceId) {
-        var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        var (code, stdout, err) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        if (code != 0 && !ConfirmedAbsent(serviceId))
+            throw new InvalidOperationException(
+                $"Could not read the state of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
+
+        var wrapper = WrapperOf(serviceId, taskExists: code == 0);
         // Report the daemon binary baked inside the wrapper (not the wrapper itself)
         // so doctor catches a moved kcap-daemon.exe even when the wrapper still exists.
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
@@ -60,7 +95,7 @@ sealed class WindowsScheduledTaskServiceManager(
 
     public ServiceQuery Query(string serviceId) {
         var (code, stdout, _) = ServiceProcess.Run("schtasks", WindowsTaskUnit.QueryArgs(serviceId));
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        var wrapper = WrapperOf(serviceId, taskExists: code == 0);
         var bin = File.Exists(wrapper) ? WindowsTaskUnit.BinaryFromWrapper(File.ReadAllText(wrapper)) : null;
         var state = WindowsTaskUnit.StatusFromQuery(code, stdout);
         var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
@@ -110,15 +145,47 @@ sealed class WindowsScheduledTaskServiceManager(
     // same "removed means stopped" launchd and systemd give. A daemon that survives keeps the task and
     // wrapper, so it is still reported and a retry can stop it.
     public bool Uninstall(string serviceId, out string? error) {
+        // Resolved before anything is stopped: a same-named task kcap did not write is left running.
+        var query = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        var taskExists = query.ExitCode == 0;
+        if (!taskExists && !ConfirmedAbsent(serviceId)) {
+            error = $"Could not confirm that scheduled task {WindowsTaskUnit.TaskName(serviceId)} is absent (exit {query.ExitCode}): {query.StdErr.Trim()}";
+            return false;
+        }
+
+        string wrapper;
+        try {
+            wrapper = WrapperOf(serviceId, taskExists);
+        } catch (InvalidOperationException ex) {
+            error = ex.Message;
+            return false;
+        }
+
         var owned = TaskOwnedDaemon(serviceId);
-        _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        var (endCode, _, endErr) = _schtasks(WindowsTaskUnit.EndArgs(serviceId));
+        // /End fails for a task that is not running. Going ahead takes a query that succeeds and shows it
+        // stopped: one still running, or one that cannot be read, keeps its registration and wrapper.
+        if (endCode != 0) {
+            var (stateCode, state, _) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+            if (stateCode != 0 || WindowsTaskUnit.StatusFromQuery(stateCode, state) == ServiceState.Running) {
+                error = $"schtasks /End failed (exit {endCode}): {endErr.Trim()}";
+                return false;
+            }
+        }
+
         if (owned is { } pid && _killTree(pid) is { } killError) {
             error = killError;
             return false;
         }
 
-        _schtasks(WindowsTaskUnit.DeleteArgs(serviceId));
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        var (code, _, err) = _schtasks(WindowsTaskUnit.DeleteArgs(serviceId));
+        // A failed delete counts as done only when a listing shows the task gone; one that cannot be read
+        // keeps the wrapper, which the task still needs at the next sign-in.
+        if (code != 0 && (TryListInstalled() is not { } listed || listed.Contains(serviceId))) {
+            error = $"schtasks /Delete failed (exit {code}): {err.Trim()}";
+            return false;
+        }
+
         if (File.Exists(wrapper)) File.Delete(wrapper);
         error = null;
         return true;

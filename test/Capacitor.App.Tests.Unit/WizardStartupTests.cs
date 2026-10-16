@@ -1277,7 +1277,7 @@ public class WizardStartupResolutionTests {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
 
         var (before, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
         // What a committed wizard sign-in leaves behind: a real server plus its provider stamp.
         WriteConfig(SingleProfileConfig(new Profile {
@@ -1286,7 +1286,7 @@ public class WizardStartupResolutionTests {
         }));
 
         var (after, afterProfiles) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
         await Assert.That(before).IsTypeOf<GateResult.Incomplete>();
         await Assert.That(((GateResult.Incomplete)before).Reason).IsEqualTo(GateReason.InvalidServerUrl);
@@ -1302,7 +1302,7 @@ public class WizardStartupResolutionTests {
     public async Task ResolveWizardIdentity_unreadable_config_is_null() {
         File.WriteAllText(ConfigPath, "{ this is not valid json");
 
-        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None);
+        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root);
 
         await Assert.That(identity).IsNull();
     }
@@ -1311,7 +1311,7 @@ public class WizardStartupResolutionTests {
     public async Task ResolveWizardIdentity_a_profile_with_an_invalid_server_is_null() {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "file:///tmp/x" }));
 
-        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None);
+        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root);
 
         await Assert.That(identity).IsNull();
     }
@@ -1323,7 +1323,7 @@ public class WizardStartupResolutionTests {
             Daemon    = new DaemonSettings { Name = "acme-daemon" },
         }));
 
-        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None);
+        var identity = AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root);
 
         await Assert.That(identity).IsNotNull();
         await Assert.That(identity!.Value.Profile).IsEqualTo(ProfileName);
@@ -1341,7 +1341,7 @@ public class WizardStartupResolutionTests {
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
                 new AuthResult.Committed("default", "https://acme.example:443", AuthProvider.None, "someone", []));
 
-            var options = harness.Options() with { ResolveIdentity = () => AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None) };
+            var options = harness.Options() with { ResolveIdentity = () => AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root) };
             var graph  = WizardComposition.BuildGraph(options);
             var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
@@ -1379,7 +1379,7 @@ public class WizardStartupResolutionTests {
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
             await Assert.That(harness.Lane.Requests).IsEmpty();
             await Assert.That(harness.Ops.GetCalls).IsEqualTo(0);
@@ -1420,7 +1420,7 @@ public class WizardStartupResolutionTests {
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             var (gate, _) = await AppUnderTest.ResolveAndEvaluateGateAsync(
-                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, TimeProvider.System, CancellationToken.None);
+                Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System, CancellationToken.None);
 
             await Assert.That(await attempt.Result).IsTypeOf<AuthResult.Cancelled>();
             await Assert.That(await File.ReadAllTextAsync(ConfigPath)).IsEqualTo(configBefore);

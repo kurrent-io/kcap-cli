@@ -366,7 +366,7 @@ public class SettingsViewModelTests {
 
         await WaitUntilAsync(() => vm.NotificationAccessText is not null);
         await Assert.That(vm.NotificationAccessText!).Contains("turned off");
-        await Assert.That(vm.NotificationAccessAction).IsEqualTo("Open System Settings");
+        await Assert.That(vm.NotificationAccessAction).IsEqualTo($"Open {SettingsViewModel.SystemSettingsName}");
 
         await vm.NotificationAccessCommand.Execute();
 

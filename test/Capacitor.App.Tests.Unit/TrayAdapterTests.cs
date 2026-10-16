@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -456,20 +457,15 @@ public class TrayAdapterTests {
 
     // ---- TrayIconManager wiring ----
     //
-    // NativeMenu.NeedsUpdate can only be RAISED through INativeMenuExporterEventsImplBridge, whose
-    // Raise* members are `internal` in Avalonia.Controls's reference assembly, and the headless
-    // platform's CreateTrayIcon() returns null, so nothing here can drive the event. The
-    // NeedsUpdate-only rebuild and its pause-state refresh kick (NeedsUpdate because macOS
-    // status-item menus never raise NativeMenu.Opening) are proven at the TrayMenuSync/
-    // TrayMenuBuilder unit level above; what's left testable here is TrayIconManager's own
-    // construction/disposal behavior. The edge-triggered on-Connected kick is covered directly on
-    // TrayViewModel in TrayViewModelTests.
+    // Nothing here can raise NativeMenu.NeedsUpdate or click the icon: the bridge that raises it is
+    // internal to Avalonia, and the headless platform has no tray. The lazy path is proven on
+    // TrayMenuSync above; these pin which path each backend gets.
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Construction_sets_the_icon_and_tooltip_but_leaves_the_menu_empty_until_NeedsUpdate() {
+    public async Task Lazy_cadence_leaves_the_menu_empty_and_the_click_unbound_until_NeedsUpdate() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var (icon, tooltip, itemCountBeforeNeedsUpdate) = await AvaloniaSession.DispatchAsync(() => {
+            var (icon, tooltip, itemCountBeforeNeedsUpdate, command) = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var pause = new FakePauseController();
                 var consent = new FakeConsentService();
@@ -478,15 +474,89 @@ public class TrayAdapterTests {
                 service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", active: 2));
 
                 var app = Application.Current!;
-                using var manager = new TrayIconManager(app, vm);
+                using var manager = new TrayIconManager(app, vm, rebuildEagerly: false);
                 var trayIcon = TrayIcon.GetIcons(app)!.Single();
 
-                return (trayIcon.Icon, trayIcon.ToolTipText, trayIcon.Menu!.Items.Count);
+                return (trayIcon.Icon, trayIcon.ToolTipText, trayIcon.Menu!.Items.Count, trayIcon.Command);
             });
 
             await Assert.That(icon).IsNotNull();
             await Assert.That(tooltip).IsEqualTo("Kurrent Capacitor");
             await Assert.That(itemCountBeforeNeedsUpdate).IsEqualTo(0);
+            await Assert.That(command).IsNull();
+        });
+    }
+
+    /// Windows shows no menu at all while it has no items, so the menu must be full before the
+    /// first right-click.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Eager_cadence_populates_the_menu_at_construction_and_opens_the_window_on_click() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (labels, commandIsOpen) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var pause = new FakePauseController();
+                var consent = new FakeConsentService();
+                using var vm = new TrayViewModel(service, pause, NewActions(service), consent);
+
+                var app = Application.Current!;
+                using var manager = new TrayIconManager(app, vm, rebuildEagerly: true);
+                var trayIcon = TrayIcon.GetIcons(app)!.Single();
+
+                var items = trayIcon.Menu!.Items.OfType<NativeMenuItem>().Select(i => i.Header).ToList();
+                return (items, ReferenceEquals(trayIcon.Command, vm.OpenMainWindowCommand));
+            });
+
+            await Assert.That(labels).Contains("Open Kurrent Capacitor");
+            await Assert.That(labels).Contains("Quit");
+            await Assert.That(commandIsOpen).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Eager_cadence_refreshes_the_pause_state_without_a_click() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var pause = new FakePauseController();
+                var consent = new FakeConsentService();
+                using var vm = new TrayViewModel(service, pause, NewActions(service), consent);
+                var time = new FakeTimeProvider();
+
+                using var manager = new TrayIconManager(Application.Current!, vm, rebuildEagerly: true, time);
+                var initial = pause.RefreshCount;
+                time.Advance(TimeSpan.FromSeconds(30));
+                return (initial, pause.RefreshCount);
+            });
+
+            await Assert.That(after).IsEqualTo(before + 1);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Eager_cadence_rebuilds_the_menu_on_every_model_change() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (before, after) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var pause = new FakePauseController();
+                var consent = new FakeConsentService();
+                using var vm = new TrayViewModel(service, pause, NewActions(service), consent);
+
+                var app = Application.Current!;
+                using var manager = new TrayIconManager(app, vm, rebuildEagerly: true);
+                var menu = TrayIcon.GetIcons(app)!.Single().Menu!;
+                var header = () => ((NativeMenuItem)menu.Items[0]).Header;
+                var initial = header();
+
+                service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, []));
+                service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", active: 3));
+
+                return (initial, header());
+            });
+
+            await Assert.That(after).IsNotEqualTo(before);
         });
     }
 

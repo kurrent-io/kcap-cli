@@ -24,6 +24,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
@@ -56,6 +57,10 @@ public partial class App : Application {
     readonly MachineAuth      _machineEnv = MachineAuth.FromEnvironment();
     readonly AuthEndpoints    _endpoints  = AuthEndpoints.FromEnvironment();
     readonly UserHome   _userHome = UserHome.FromEnvironment();
+
+    // And its one read of KCAP_LOCAL_ROOT. The registry under it is read again at each resolution:
+    // the wizard can create an installation while the app runs.
+    readonly LocalRoot _localRoot = LocalRoot.FromEnvironment(UserHome.FromEnvironment());
 
     // The app's one clock, named here because App is the composition root. A field initializer
     // cannot read another instance field, so the fields below name it again rather than take it.
@@ -150,6 +155,7 @@ public partial class App : Application {
     // last, since its transitions are what the feed subscribes to.
     ServerPermissionFeed? _permissionFeed;
     SessionAttentionTracker? _attention;
+    BackgroundCommandActivity? _commands;
     SessionAccessService? _sessionAccess;
     PullRequestToneCache? _pullRequestTones;
     ConsentPromptCoordinator? _promptCoordinator;
@@ -237,6 +243,19 @@ public partial class App : Application {
             var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => windowLifecycle.Dispose();
+            if (OperatingSystem.IsWindows())
+                Program.Instance?.OnShowRequested(() => Dispatcher.UIThread.Post(() => {
+                    if (_shutdownStarted) return;
+                    if (MainWindowAction(_coordinator) is { } showMain) {
+                        showMain();
+                        return;
+                    }
+                    // Onboarding and the startup screens come before the main window exists.
+                    var startup = _wizardWindow is { IsVisible: true } wizard ? wizard : desktop.Windows.FirstOrDefault(w => w.IsVisible);
+                    if (startup is null) return;
+                    if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
+                    startup.Activate();
+                }));
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
             _menuBar.Install();
@@ -274,7 +293,7 @@ public partial class App : Application {
                 _time);
             _lane = lane;
 
-            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _time, _shutdown.Token);
+            var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token);
             // A graph built while the lane still owns a live action must not also drive automatic
             // ones — only the wizard's own handoff can answer this with anything but true.
             var laneQuiesced = true;
@@ -286,7 +305,7 @@ public partial class App : Application {
                 laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles,
                     alreadyAuthenticated: gate is GateResult.Complete);
                 if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
-                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _time, _shutdown.Token);
+                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token);
             }
 
             BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);
@@ -317,7 +336,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
@@ -338,6 +357,7 @@ public partial class App : Application {
             _notificationSettings = null;
             _permissionFeed = null;
             _attention = null;
+            _commands = null;
             _permissions = null;
             _sessionAccess = null;
             _pullRequestTones = null;
@@ -426,9 +446,9 @@ public partial class App : Application {
     // cannot be read off a second one, and the post-wizard build re-runs this rather than reusing a
     // startup value the wizard may have invalidated.
     internal static Task<(GateResult Gate, ProfileContext? Profiles)> ResolveAndEvaluateGateAsync(
-            ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, TimeProvider time,
+            ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, LocalRoot local, TimeProvider time,
             CancellationToken ct) =>
-        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env, time).EvaluateAsync, ct);
+        EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env, local, time).EvaluateAsync, ct);
 
     internal static bool ShouldShowWizard(GateResult gate, string[]? args) =>
         gate is GateResult.Incomplete || args?.Contains("--setup", StringComparer.Ordinal) == true;
@@ -635,7 +655,9 @@ public partial class App : Application {
             : category => OpenFeedback(feedbackApi, feedbackTrailer, requestSignIn, category);
         _menuBar?.SetFeedbackAction(openFeedback);
 
-        var commands = new BackgroundCommandActivity();
+        var commands = new BackgroundCommandActivity((key, report, ended) =>
+            new BackgroundCommandMonitor(key, report, ended, service, directory, sessionAccess, readDetail, serverLane, _time));
+        _commands = commands;
         Action linkGitHub = () => {
             if (profiles?.Resolution.ServerUrl is { Length: > 0 } url)
                 LinkPolicy.Open(opener, url.TrimEnd('/') + "/auth/github-link/start");
@@ -761,6 +783,7 @@ public partial class App : Application {
             if (Path.GetFileNameWithoutExtension(executable) == "dotnet")
                 start.ArgumentList.Add(Environment.GetCommandLineArgs()[0]);
             start.ArgumentList.Add("--setup");
+            if (OperatingSystem.IsWindows()) start.ArgumentList.Add(SingleInstanceGuard.RelaunchArg);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}"); }
@@ -792,7 +815,7 @@ public partial class App : Application {
         try {
             var tokenStore = _foreignHttp.GetRequiredService<TokenStore>();
             profilesVm = new ProfilesSettingsViewModel(
-                _config, tokenStore, new OnboardingGate(_config, tokenStore, _serverEnv, _time), settings.ProfileName,
+                _config, tokenStore, new OnboardingGate(_config, tokenStore, _serverEnv, _localRoot, _time), settings.ProfileName,
                 openSignIn: (profile, serverUrl, _) => {
                     OpenSignInDialog(profile, serverUrl, refreshAppState: profile == settings.ProfileName);
                     return Task.CompletedTask;
@@ -863,15 +886,17 @@ public partial class App : Application {
 
     static async Task<bool> RelaunchForSettingsAsync(
             IClassicDesktopStyleApplicationLifetime desktop, TimeProvider time, CancellationToken ct) {
-        // Windows has no bundle to reopen: a second copy of this executable is the relaunch, as
-        // `open -n` starts a second instance on macOS.
+        // Windows has no bundle to reopen, so the relaunch is a new copy of this executable. It
+        // starts on Exit, once teardown is over: shutdown can outlast the new copy's wait for the
+        // single-instance lock.
         if (OperatingSystem.IsWindows()) {
-            if (Environment.ProcessPath is not { } exe) return false;
-            try {
-                using var next = Process.Start(new ProcessStartInfo(exe) { UseShellExecute = false });
-            } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) {
-                return false;
-            }
+            // Checked before shutting down: past that point a start that fails leaves nothing running.
+            if (Environment.ProcessPath is not { } exe || !File.Exists(exe)) return false;
+            var start = new ProcessStartInfo(exe, [SingleInstanceGuard.RelaunchArg]) { UseShellExecute = false };
+            desktop.Exit += (_, _) => {
+                try { Process.Start(start)?.Dispose(); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not relaunch: {ex.Message}"); }
+            };
             desktop.TryShutdown();
             return true;
         }
@@ -998,10 +1023,10 @@ public partial class App : Application {
             bridges,
             WizardComposition.NewOperation,
             surface,
-            ResolveCli: () => NewWizardCli(_config, _serverEnv, runner, cliPath, probe),
+            ResolveCli: () => NewWizardCli(_config, _serverEnv, _localRoot, runner, cliPath, probe),
             ResolveOps: name => new LocalControlOps(_daemonStore, name, _time),
-            ResolveIdentity: () => ResolveWizardIdentity(_config, _serverEnv),
-            ResolveConsentFlipIdentity: () => ResolveConsentFlipIdentity(_config),
+            ResolveIdentity: () => ResolveWizardIdentity(_config, _serverEnv, _localRoot),
+            ResolveConsentFlipIdentity: () => ResolveConsentFlipIdentity(_config, _localRoot),
             RunMutation: lane.RunAsync,
             Observation: new OneShotObservation(_daemonStore, _time, OneShotProbeTimeout),
             AppState: _appState,
@@ -1012,7 +1037,7 @@ public partial class App : Application {
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,
-            DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv)?.DaemonName,
+            DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv, _localRoot)?.DaemonName,
             Time: _time,
             ShutdownToken: _shutdown.Token,
             AlreadyAuthenticated: alreadyAuthenticated));
@@ -1071,8 +1096,8 @@ public partial class App : Application {
     // Rebuilt per call (LateBoundKcapCli): the wizard writes the profile, server and daemon name
     // while its steps run, so a binding pinned at composition time would query the wrong service.
     internal static IKcapCli NewWizardCli(
-            ConfigRoot config, ProfileOverrides env, IProcessRunner runner, string? cliPath, ILoginShellProbe probe) {
-        var identity = ResolveWizardIdentity(config, env);
+            ConfigRoot config, ProfileOverrides env, LocalRoot local, IProcessRunner runner, string? cliPath, ILoginShellProbe probe) {
+        var identity = ResolveWizardIdentity(config, env, local);
 
         return new KcapCli(
             runner, cliPath, identity?.DaemonName ?? "daemon", identity?.Profile ?? ProfileConfig.DefaultName,
@@ -1391,7 +1416,7 @@ public partial class App : Application {
         // lock this delegate then reads under.
         var consentFlip = new ConsentFlipCoordinator(
             service, ops, new ConsentFlipClaims(_config),
-            () => ResolveConsentFlipIdentity(_config), surface, _appState, _shutdown.Token);
+            () => ResolveConsentFlipIdentity(_config, _localRoot), surface, _appState, _shutdown.Token);
 
         return (lifecycle, shimOffer, consentFlip, surface, probe);
     }
@@ -1401,12 +1426,13 @@ public partial class App : Application {
     // rather than throwing inside the two-lock section.
     // Deliberately literal ActiveProfile (no KCAP_PROFILE layering) — a divergence there is fail-safe
     // via the daemon's own identity-conditional ack.
-    internal static (string Profile, string Server, string DaemonName) ResolveConsentFlipIdentity(ConfigRoot root) {
+    internal static (string Profile, string Server, string DaemonName) ResolveConsentFlipIdentity(ConfigRoot root, LocalRoot local) {
         if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var config)) return ("", "", "");
 
         var profileName = config.ActiveProfile;
         var profile     = config.Profiles.GetValueOrDefault(profileName);
-        var server      = ServerIdentity.Canonicalize(profile?.ServerUrl) ?? profile?.ServerUrl ?? "";
+        var serverUrl   = LocalEndpoints.Read(local).Canonicalize(profile?.ServerUrl);
+        var server      = ServerIdentity.Canonicalize(serverUrl) ?? serverUrl ?? "";
         var daemonName  = DaemonNameResolver.Resolve([], profile?.Daemon?.Name);
         return (profileName, server, daemonName);
     }
@@ -1417,12 +1443,12 @@ public partial class App : Application {
     /// the resolution the gate was evaluated on, and side-effect-free. Null — never
     /// an empty-string sentinel — when nothing resolves, which is what keeps its factories fail-closed.
     /// </summary>
-    internal static (string Profile, string Server, string DaemonName)? ResolveWizardIdentity(ConfigRoot root, ProfileOverrides env) {
+    internal static (string Profile, string Server, string DaemonName)? ResolveWizardIdentity(ConfigRoot root, ProfileOverrides env, LocalRoot local) {
         if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var config)) return null;
 
         var resolved = new ProfileResolver(
             config, cliServerUrl: null, env.Url, env.Profile,
-            repoConfig: null, repoRemoteUrls: [], repoPath: null).Resolve();
+            repoConfig: null, repoRemoteUrls: [], repoPath: null, LocalEndpoints.Read(local)).Resolve();
 
         if (resolved.ProfileName is not { Length: > 0 } profileName) return null;
 
@@ -1898,7 +1924,7 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });

@@ -63,6 +63,7 @@ public class WizardSimpleStepsTests {
         string? _value;
         public string? Read() => _value;
         public void Append(string directory) => _value = directory;
+        public void Replace(string path) => _value = path;
     }
 
     // ── Shim: install / claim / outcome mapping ─────────────────────────────

@@ -32,15 +32,30 @@ public sealed class WindowsUserPathInstaller(IUserPathStore store, ILoginShellPr
         };
     }
 
+    /// Takes the CLI's folder back off the user PATH, keeping every other entry byte for byte.
+    /// False when it was not there.
+    public bool Remove(string target) {
+        if (CliDirectory(target) is not { } dir || Without(store.Read(), dir) is not { } next) return false;
+        store.Replace(next);
+        return true;
+    }
+
+    internal static string? Without(string? rawPath, string dir) {
+        if (string.IsNullOrEmpty(rawPath)) return null;
+        var entries = rawPath.Split(';');
+        var kept = entries.Where(entry => !Matches(entry, dir)).ToArray();
+        return kept.Length == entries.Length ? null : string.Join(';', kept);
+    }
+
     static string? CliDirectory(string target) =>
         Path.IsPathFullyQualified(target) ? Path.GetDirectoryName(Path.GetFullPath(target)) : null;
 
-    internal static bool Contains(string? rawPath, string dir) {
-        if (string.IsNullOrEmpty(rawPath)) return false;
-        var wanted = Normalize(dir);
-        return rawPath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(entry => string.Equals(Normalize(Environment.ExpandEnvironmentVariables(entry.Trim('"'))), wanted, StringComparison.OrdinalIgnoreCase));
-    }
+    internal static bool Contains(string? rawPath, string dir) =>
+        !string.IsNullOrEmpty(rawPath) && rawPath.Split(';').Any(entry => Matches(entry, dir));
+
+    static bool Matches(string entry, string dir) =>
+        entry.Trim().Length > 0
+        && string.Equals(Normalize(Environment.ExpandEnvironmentVariables(entry.Trim().Trim('"'))), Normalize(dir), StringComparison.OrdinalIgnoreCase);
 
     static string Normalize(string dir) => dir.TrimEnd('\\', '/');
 }

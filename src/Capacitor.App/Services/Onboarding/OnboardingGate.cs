@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services.Onboarding;
 
@@ -22,7 +23,7 @@ public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBind
 /// here mirrors a specific TokenStore rule rather than inventing its own.
 /// </summary>
 public sealed class OnboardingGate(
-        ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, TimeProvider time) {
+        ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, LocalRoot local, TimeProvider time) {
     /// <summary>
     /// The ONE shared validator for "is this usable as a server identity" — also used by
     /// <c>App.ValidProfileName</c> so the gate and the lifecycle-controller precondition can
@@ -38,7 +39,7 @@ public sealed class OnboardingGate(
     /// different profiles.
     public async Task<(GateResult Result, ProfileContext Profiles)> EvaluateAsync(CancellationToken ct) {
         // Daemon-style resolution — no repo/git discovery: the gate is local.
-        var profiles = await AppConfig.ResolveActiveProfile([], config, env);
+        var profiles = await AppConfig.ResolveActiveProfile([], config, env, LocalEndpoints.Read(local));
         GateResult result;
         try {
             result = await EvaluateResolvedAsync(profiles.Resolution.ProfileName, profiles.Resolution.Profile, ct);

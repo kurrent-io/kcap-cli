@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
@@ -23,6 +24,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -103,7 +105,7 @@ public static partial class DaemonRunner {
         // honors --server-url, KCAP_URL, KCAP_PROFILE.
         var serverEnv  = ProfileOverrides.FromEnvironment();
         var machineEnv = MachineAuth.FromEnvironment();
-        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv);
+        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv, LocalEndpoints.Read(LocalRoot.FromEnvironment(userHome)));
         config.Profiles  = profiles;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
@@ -1703,13 +1705,13 @@ public static partial class DaemonRunner {
     static string? ProbeCliVersionOnce(string cliPath, int timeoutMs) {
         Process? process = null;
         try {
-            process = Process.Start(new ProcessStartInfo {
+            process = Process.Start(WindowsLaunchCommand.Apply(new ProcessStartInfo {
                 FileName = cliPath,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 ArgumentList = { "--version" }
-            });
+            }, BinaryProbe.FromEnvironment()));
             if (process is null) return null;
 
             // Drain both pipes WHILE the child runs. A --version that writes more than the OS pipe
