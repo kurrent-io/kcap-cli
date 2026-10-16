@@ -1619,6 +1619,10 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             var rail = window.FindDescendantOfType<SessionRailView>()!;
+            // Opened first: the flyout's rows only bind once they join a tree.
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            ((Flyout)help.Flyout!).ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
             var about = rail.FindControl<Button>("RailHelpAboutButton")!;
             await Assert.That(about.IsVisible).IsEqualTo(OperatingSystem.IsWindows());
             if (!OperatingSystem.IsWindows()) return;
