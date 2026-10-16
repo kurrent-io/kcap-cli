@@ -1,0 +1,46 @@
+namespace Capacitor.Cli.Core.LocalEdition;
+
+/// <summary>
+/// The local installation's root and the lifecycle files directly under it.
+///
+/// <para>A fixed location under the home directory that ignores <c>KCAP_CONFIG_DIR</c>, as
+/// <see cref="DaemonStore"/> does: two config roots must not see two installations, or each would
+/// install its own stack for the same user. The server resolves the same default and the same
+/// override, so the two always agree on where the journal is.</para>
+/// </summary>
+public sealed class LocalRoot(string directory) {
+    /// <summary>Read only by <see cref="FromEnvironment"/>, at a process entry point, and by the server's
+    /// bootstrap.</summary>
+    public const string EnvVar = "KCAP_LOCAL_ROOT";
+
+    const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    public string Directory { get; } = directory;
+
+    public string RegistryPath => Path.Combine(Directory, "install.json");
+    public string LockPath     => Path.Combine(Directory, "lifecycle.lock");
+    public string JournalPath  => Path.Combine(Directory, "journal.json");
+
+    /// <summary>The root for this process. Call once, in <c>Main</c> or the composition root.</summary>
+    public static LocalRoot FromEnvironment(UserHome home) => Resolve(Environment.GetEnvironmentVariable(EnvVar), home);
+
+    public static LocalRoot Resolve(string? configured, UserHome home) =>
+        string.IsNullOrWhiteSpace(configured)
+            ? new(Path.Combine(home.Path, ".config", "kcap", "local"))
+            : new(Path.TrimEndingDirectorySeparator(Path.GetFullPath(configured)));
+
+    /// <summary>Creates the root owner-only, or makes an existing one so. A symlinked root is refused:
+    /// the lock and the registry would live wherever the link points.</summary>
+    public void EnsureCreated() {
+        if (new DirectoryInfo(Directory).LinkTarget is not null)
+            throw new LocalLifecycleException($"{Directory} is a symlink; the local installation's root must be a real directory.");
+
+        if (OperatingSystem.IsWindows()) {
+            System.IO.Directory.CreateDirectory(Directory);
+            return;
+        }
+
+        System.IO.Directory.CreateDirectory(Directory, OwnerOnly);
+        File.SetUnixFileMode(Directory, OwnerOnly);
+    }
+}
