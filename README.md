@@ -1746,7 +1746,7 @@ kcap setup --server-url <url> --no-prompt --skip-cursor-hooks
 
 #### Daemon config settings
 
-Use `kcap config set` to configure the binary paths used by the daemon. The values are stored in the active profile and take effect the next time the daemon starts.
+Use `kcap config set` to configure the daemon. The values are stored in the active profile. The binary paths take effect the next time the daemon starts; `daemon.max_agents` is also applied to the running daemon.
 
 ```bash
 kcap config set daemon.claude_path /opt/claude/bin/claude
@@ -1757,7 +1757,7 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
-| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents`, the `KCAP_MAX_AGENTS` env var, or the desktop app's **Settings…**; a running daemon applies a change without a restart. |
+| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents` or the `KCAP_MAX_AGENTS` env var, which take precedence at startup. `kcap config set daemon.max_agents` and the desktop app's **Settings…** hand the value to the running daemon, which applies it without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
 
