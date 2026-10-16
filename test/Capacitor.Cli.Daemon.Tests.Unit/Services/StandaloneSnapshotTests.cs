@@ -89,18 +89,18 @@ public class StandaloneSnapshotTests {
 
     }
 
-    /// <summary>A folder with nothing to commit must not surface as a bare <c>git commit</c> line.
-    /// That command exits 1 with the reason on stdout and stderr empty.</summary>
+    /// <summary>An empty folder is a greenfield start: the snapshot still gets a HEAD via an
+    /// empty initial commit, so the agent can add the first files.</summary>
     [Test]
-    public async Task Empty_folder_is_refused_before_the_snapshot_commit() {
+    public async Task Empty_folder_gets_an_empty_initial_commit() {
         using var root = new TempDir("standalone");
         var source     = root.CreateDir("proj");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => NewManager().CreateAsync(source, "empty"));
+        var worktree = await NewManager().CreateAsync(source, "empty");
 
-        await Assert.That(ex.Message).IsEqualTo(WorktreeManager.EmptySnapshotFailure);
-        await Assert.That(IsPresent(Path.Combine(source, ".capacitor", "worktrees", "empty"))).IsFalse();
+        await Assert.That(worktree.IsStandalone).IsTrue();
+        await Assert.That(CommitCount(worktree.Path)).IsEqualTo("1");
+        await Assert.That(CommittedPaths(worktree.Path)).IsEmpty();
     }
 
     // ---- 2/3: outside links are not materialised ----------------------------------------------------

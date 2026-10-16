@@ -1401,7 +1401,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         }
     }
 
-    /// Shown when a folder has no commits and nothing the snapshot can commit.
+    /// Shown when an older daemon still refuses an empty standalone snapshot. Current daemons
+    /// commit an empty tree instead so a greenfield folder can launch.
     internal const string EmptyFolderStartMessage =
         "This folder isn't a git repository, and there's nothing in it to start from.";
 

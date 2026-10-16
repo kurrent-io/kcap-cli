@@ -437,23 +437,26 @@ public partial class WorktreeManager(
         // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
         await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. standaloneOverrides], "add", "-A");
-        // An empty index makes commit exit 1 with the reason on stdout and stderr empty, so the
-        // launcher would show a bare git command. Refuse before that.
+        // Exit 0 = empty index (greenfield: nothing to copy). Exit 1 = staged content.
+        // Any other code is a real git failure — without this check, commit --allow-empty would
+        // hide it behind a successful empty tree.
         var staged = await RunGitCaptureResult(
             worktreePath, GitTimeout, time, sourceReadOnly: false,
             [.. noHooks, .. standaloneOverrides],
             "diff", "--cached", "--quiet");
-        if (staged.ExitCode == 0)
-            throw new InvalidOperationException(EmptySnapshotFailure);
-        if (staged.ExitCode != 1)
+        if (staged.ExitCode is not (0 or 1))
             throw new InvalidOperationException(
                 $"git diff --cached --quiet failed: {GitFailureDetail(staged.Stderr, staged.Stdout)}");
         // Bookkeeping commit. Identity is explicit: a host with no user.email fails with
-        // "Author identity unknown".
+        // "Author identity unknown". An empty folder is a valid start — commit an empty tree
+        // so the agent has a real HEAD to build on.
+        var commitArgs = staged.ExitCode == 0
+            ? new[] { "commit", "--allow-empty", "-m", "Initial snapshot" }
+            : new[] { "commit", "-m", "Initial snapshot" };
         await RunGit(worktreePath, GitTimeout,
             time,
             [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
-            "commit", "-m", "Initial snapshot");
+            commitArgs);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }
@@ -1589,8 +1592,8 @@ public partial class WorktreeManager(
     static string GitFailureDetail(string stderr, string stdout) =>
         (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim();
 
-    /// <summary>A standalone snapshot whose index is empty. The desktop launcher maps this prefix
-    /// to a sentence; the text after the colon is what any other surface shows.</summary>
+    /// <summary>Legacy refusal from daemons that rejected an empty standalone snapshot. The
+    /// launcher still maps this prefix for rolling upgrades; current builds commit an empty tree.</summary>
     internal const string EmptySnapshotFailure =
         "standalone_snapshot_empty: This folder isn't a git repository, and there's nothing in it to start from.";
 
