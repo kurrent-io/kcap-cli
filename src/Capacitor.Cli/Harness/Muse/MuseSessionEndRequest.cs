@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Harness.Muse;
 /// Whoever posts it claims it first by renaming it, an atomic step only one party can win, so the
 /// hook and the watcher can never both post the same end.
 /// </summary>
-public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, DateTimeOffset ClaimedAt) {
+public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, DateTimeOffset HandedAt) {
     public static string PathFor(WatcherPaths paths, string sessionId) =>
         Path.Combine(paths.Directory, $"{sessionId}.muse-end-requested");
 
@@ -32,7 +32,7 @@ public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, D
 
     /// <summary>Takes the request for <paramref name="owner"/>, or null when there is none or another party
     /// took it first. An empty request is discarded rather than claimed.</summary>
-    public static MuseSessionEndRequest? TryClaim(WatcherPaths paths, string sessionId, string owner, TimeProvider time) {
+    public static MuseSessionEndRequest? TryClaim(WatcherPaths paths, string sessionId, string owner) {
         var source  = PathFor(paths, sessionId);
         var claimed = $"{source}.{owner}.claimed";
 
@@ -48,23 +48,26 @@ public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, D
             return null;
         }
 
-        string payload;
+        string   payload;
+        DateTime handedAt;
         try {
-            payload = File.ReadAllText(claimed);
+            payload  = File.ReadAllText(claimed);
+            handedAt = File.GetLastWriteTimeUtc(claimed);
         } catch (IOException) {
             return null;
         } catch (UnauthorizedAccessException) {
             return null;
         }
 
-        if (!string.IsNullOrWhiteSpace(payload)) return new MuseSessionEndRequest(payload, claimed, time.GetUtcNow());
+        // The rename keeps the write time, which is when the hook handed the end over.
+        if (!string.IsNullOrWhiteSpace(payload)) return new MuseSessionEndRequest(payload, claimed, new DateTimeOffset(handedAt, TimeSpan.Zero));
 
         Release(claimed);
         return null;
     }
 
-    /// <summary>Records that the session carried on after its end was handed over, so a claim taken
-    /// before this moment is posted no more: the end it carries is older than the session's new life.</summary>
+    /// <summary>Records that the session carried on, so an end handed over before this moment is posted no
+    /// more, whoever holds it: it is older than the session's new life.</summary>
     public static void MarkResumed(WatcherPaths paths, string sessionId) {
         try {
             Directory.CreateDirectory(paths.Directory);
@@ -74,15 +77,32 @@ public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, D
         }
     }
 
-    /// <summary>Whether the session was marked resumed after <paramref name="claimedAt"/>.</summary>
-    public static bool ResumedSince(WatcherPaths paths, string sessionId, DateTimeOffset claimedAt) {
+    /// <summary>Whether the session was marked resumed at or after <paramref name="handedAt"/>.</summary>
+    public static bool ResumedSince(WatcherPaths paths, string sessionId, DateTimeOffset handedAt) {
         try {
             var marker = ResumedPathFor(paths, sessionId);
-            return File.Exists(marker) && File.GetLastWriteTimeUtc(marker) >= claimedAt.UtcDateTime;
+            return File.Exists(marker) && File.GetLastWriteTimeUtc(marker) >= handedAt.UtcDateTime;
         } catch (IOException) {
             return false;
         } catch (UnauthorizedAccessException) {
             return false;
+        }
+    }
+
+    /// <summary>Puts a claimed request back for the next taker when its end could not be sent, unless a
+    /// newer request has been handed over since, which supersedes it.</summary>
+    public static void Unclaim(WatcherPaths paths, string sessionId, MuseSessionEndRequest request) {
+        var source = PathFor(paths, sessionId);
+
+        try {
+            if (File.Exists(source)) {
+                File.Delete(request.ClaimedPath);
+                return;
+            }
+
+            File.Move(request.ClaimedPath, source);
+        } catch (IOException) {
+        } catch (UnauthorizedAccessException) {
         }
     }
 

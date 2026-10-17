@@ -753,7 +753,15 @@ partial class WatchCommand(
 
                 if (ClaimHandedMuseEnd(sessionId) is { } handed) {
                     await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: vendor);
-                    await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed);
+
+                    switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed)) {
+                        case HandedEndOutcome.Dropped:
+                            await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor);
+                            break;
+                        case HandedEndOutcome.Failed:
+                            MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
+                            break;
+                    }
                 }
             }
 
@@ -1191,10 +1199,21 @@ partial class WatchCommand(
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
 
         if (museEndRequest is { } handedEnd) {
-            // A handed end that could be neither posted nor spooled keeps its claim on disk and is tried
-            // once more the way a parent exit is posted, which needs no spool.
-            if (!await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd))
-                await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, "hook_handed");
+            switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd)) {
+                // The session carried on, so this watcher's stop must not leave it unwatched.
+                case HandedEndOutcome.Dropped:
+                    await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor);
+                    break;
+
+                // Neither posted nor spooled: tried once more the way a parent exit is posted, which needs no
+                // spool, and otherwise put back for the next watcher to take.
+                case HandedEndOutcome.Failed:
+                    if (await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, "hook_handed"))
+                        MuseSessionEndRequest.Release(handedEnd.ClaimedPath);
+                    else
+                        MuseSessionEndRequest.Unclaim(_paths, sessionId, handedEnd);
+                    break;
+            }
         } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
@@ -2098,7 +2117,7 @@ partial class WatchCommand(
         }
     }
 
-    internal async Task PostSessionEndOnParentExitAsync(
+    internal async Task<bool> PostSessionEndOnParentExitAsync(
             string             sessionId,
             string             transcriptPath,
             string?            cwd,
@@ -2108,7 +2127,7 @@ partial class WatchCommand(
         ) {
         if (!KnownVendors.Contains(vendor)) {
             Log(time, $"Parent-exit session-end skipped: unknown vendor '{vendor}'");
-            return;
+            return false;
         }
 
         // Gemini fires no subagent-stop hook and the child watchers spawned in ScanGeminiSubagents
@@ -2203,7 +2222,7 @@ partial class WatchCommand(
             ["ended_at"]        = time.GetUtcNow().ToString("O"),
         };
 
-        await PostSessionEndPayloadAsync(sessionId, vendor, endHook, repository, "Parent-exit");
+        return await PostSessionEndPayloadAsync(sessionId, vendor, endHook, repository, "Parent-exit");
     }
 
     /// <summary>Only a Muse session watcher takes an end its SessionEnd hook handed over; a child watcher's
@@ -2211,24 +2230,37 @@ partial class WatchCommand(
     internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
 
     MuseSessionEndRequest? ClaimHandedMuseEnd(string sessionId) =>
-        MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), time);
+        MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    internal enum HandedEndOutcome { Posted, Dropped, Failed }
+
+    /// <summary>Spawns the watcher a resumed session is left without once this one, which took its stale
+    /// end, exits; this watcher's pid file is already retired, so the spawn sees no live watcher.</summary>
+    async Task ArmSuccessorAsync(string sessionId, string transcriptPath, string? cwd, string vendor) {
+        try {
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: vendor);
+            Log(time, "Armed a successor watcher for the resumed session");
+        } catch (Exception ex) {
+            Log(time, $"Arming a successor watcher failed: {ex.Message}");
+        }
+    }
 
     /// <summary>Posts the end the hook would have, the way the hook would have: behind any spooled backlog
-    /// for the session, and into the spool on a failure, so an outage never drops it. True once it is
-    /// posted or durably spooled, or dropped because the session carried on after the end was handed
-    /// over; false keeps the claim on disk.</summary>
-    async Task<bool> PostHandedSessionEndAsync(
+    /// for the session, and into the spool on a failure, so an outage never drops it. Posted once it is
+    /// posted or durably spooled; Dropped when the session carried on after the end was handed over;
+    /// Failed keeps the claim on disk.</summary>
+    async Task<HandedEndOutcome> PostHandedSessionEndAsync(
             string                sessionId,
             string                transcriptPath,
             string                vendor,
             RepositoryPayload?    repository,
             MuseSessionEndRequest request
         ) {
-        if (MuseSessionEndRequest.ResumedSince(_paths, sessionId, request.ClaimedAt)) {
+        if (MuseSessionEndRequest.ResumedSince(_paths, sessionId, request.HandedAt)) {
             Log(time, "Handed session-end dropped: the session was resumed after its end was handed over");
             MuseSessionEndRequest.Release(request.ClaimedPath);
 
-            return true;
+            return HandedEndOutcome.Dropped;
         }
 
         JsonObject endHook;
@@ -2259,13 +2291,14 @@ partial class WatchCommand(
 
         Log(time, $"Handed session-end {outcome}");
 
-        if (outcome is not (HookPostOutcome.Posted or HookPostOutcome.Spooled)) return false;
+        if (outcome is not (HookPostOutcome.Posted or HookPostOutcome.Spooled)) return HandedEndOutcome.Failed;
 
         MuseSessionEndRequest.Release(request.ClaimedPath);
-        return true;
+        return HandedEndOutcome.Posted;
     }
 
-    async Task PostSessionEndPayloadAsync(string sessionId, string vendor, JsonObject endHook, RepositoryPayload? repository, string what) {
+    /// <summary>True when the server accepted the end.</summary>
+    async Task<bool> PostSessionEndPayloadAsync(string sessionId, string vendor, JsonObject endHook, RepositoryPayload? repository, string what) {
         using var budgetCts = new CancellationTokenSource(ParentExitPostBudget, time);
 
         try {
@@ -2283,7 +2316,7 @@ partial class WatchCommand(
 
             if (!response.IsSuccessStatusCode) {
                 Log(time, $"{what} session-end POST returned HTTP {(int)response.StatusCode}");
-                return;
+                return false;
             }
 
             Log(time, $"{what} session-end POST succeeded");
@@ -2298,11 +2331,15 @@ partial class WatchCommand(
             } catch (Exception ex) {
                 Log(time, $"{what} session-end response parse failed: {ex.Message}");
             }
+
+            return true;
         } catch (OperationCanceledException) {
             Log(time, $"{what} session-end POST timed out after {ParentExitPostBudget.TotalSeconds:F0}s");
         } catch (Exception ex) {
             Log(time, $"{what} session-end POST failed: {ex.Message}");
         }
+
+        return false;
     }
 
     static readonly Regex CommandNameRegex = CommandNameRx();

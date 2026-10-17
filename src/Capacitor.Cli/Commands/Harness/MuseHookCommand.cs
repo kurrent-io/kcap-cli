@@ -134,7 +134,7 @@ sealed class MuseHookCommand(
         // Spawn before the POST, as Claude does: a hook Muse kills mid-POST must not take capture with it.
         var log = Paths.ResolveSessionLog(session.ToString("D"), today);
         if (log is not null && HookHttp.IsPostable(Url)) {
-            if (!watchers.IsWatcherAlive(sessionId)) DiscardHandedEnd(sessionId);
+            DiscardHandedEnd(sessionId);
             await watchers.EnsureWatcherRunning(sessionId, log,
                 agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: Vendor);
         }
@@ -185,25 +185,28 @@ sealed class MuseHookCommand(
     /// turn ending after a SessionStart that was killed or found no log.</summary>
     async Task Rearm(Guid session, string? cwd, Profile? activeProfile, HookBudget budget, DateOnly today) {
         var sessionId = session.ToString("N");
-        if (DisabledSessions.IsDisabled(sessionId, config) || !HookHttp.IsPostable(Url) || watchers.IsWatcherAlive(sessionId)) return;
+        if (DisabledSessions.IsDisabled(sessionId, config) || !HookHttp.IsPostable(Url)) return;
+
+        // Marked whatever the watcher's state: the one still alive may be leaving with the old end.
+        DiscardHandedEnd(sessionId);
+        if (watchers.IsWatcherAlive(sessionId)) return;
 
         if (Paths.ResolveSessionLog(session.ToString("D"), today) is not { } log) return;
         if (await IsRepoExcludedAsync(sessionId, cwd, activeProfile, budget)) return;
 
-        DiscardHandedEnd(sessionId);
         await watchers.EnsureWatcherRunning(sessionId, log,
             agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
     }
 
-    /// <summary>A handed end still unclaimed when the session carries on would end the watcher armed for it
-    /// on its first tick. It is taken through the same claim a watcher uses, so a watcher already on its
-    /// way out with it keeps it; that watcher then finds the session marked resumed and drops it too.</summary>
+    /// <summary>A session carrying on makes any end handed over before now stale. The mark covers a claim a
+    /// watcher already holds, which it drops before posting and arms a successor; the claim here takes an
+    /// end nobody has, so it cannot end the watcher armed next.</summary>
     void DiscardHandedEnd(string sessionId) {
         var paths = WatcherPaths.FromEnvironment(config);
 
         MuseSessionEndRequest.MarkResumed(paths, sessionId);
 
-        if (MuseSessionEndRequest.TryClaim(paths, sessionId, "rearm", clock.Time) is { } stale)
+        if (MuseSessionEndRequest.TryClaim(paths, sessionId, "rearm") is { } stale)
             MuseSessionEndRequest.Release(stale.ClaimedPath);
     }
 
