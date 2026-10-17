@@ -1,11 +1,10 @@
 using System.Net;
-using Capacitor.Cli.Commands;
-using Capacitor.Cli.Core;
+using System.Collections.Frozen;
 
-namespace Capacitor.Cli.Tests.Unit.Commands;
+namespace Capacitor.Cli.Core.Tests.Unit;
 
-/// <summary>Setup refuses a daemon name another machine's daemon already holds on the account, which
-/// the server would otherwise only refuse once the daemon starts.</summary>
+/// <summary>Setup offers only a daemon name no other machine's daemon holds on the account, which the
+/// server would otherwise only refuse once the daemon starts.</summary>
 public class DaemonNameHolderTests {
     const string Server = "https://kcap.example";
 
@@ -20,7 +19,9 @@ public class DaemonNameHolderTests {
     async Task<string?> HolderPlatformAsync(string body, string name, HttpStatusCode status = HttpStatusCode.OK) {
         using var http = new HttpClient(new SequencedHttpScript(SequencedHttpScript.Reply(status, body)));
 
-        return (await DaemonNameHolder.FindElsewhereAsync(http, Server, name, Config.Root))?.Platform;
+        var held = await DaemonNameHolder.HeldElsewhereAsync(http, Server, Config.Root);
+
+        return held.TryGetValue(name, out var holding) ? holding.Platform : null;
     }
 
     [Test]
@@ -76,5 +77,20 @@ public class DaemonNameHolderTests {
             await Assert.That(new MachineId(Config.Root).ReadPersisted()).IsNull();
             await Assert.That(await HolderPlatformAsync(Daemons(("agent", "mach-office", true)), "agent")).IsNull();
         }
+    }
+
+    [Test]
+    public async Task A_free_name_is_offered_as_it_is() =>
+        await Assert.That(DaemonNameHolder.FirstFree("studio", FrozenDictionary<string, DaemonNameHolding>.Empty)).IsEqualTo("studio");
+
+    [Test]
+    public async Task A_held_name_gets_the_first_free_numbered_suffix() {
+        var held = new Dictionary<string, DaemonNameHolding> {
+            ["studio"]   = new("linux x64", null),
+            ["studio-1"] = new("linux x64", null),
+            ["studio-3"] = new("linux x64", null),
+        };
+
+        await Assert.That(DaemonNameHolder.FirstFree("studio", held)).IsEqualTo("studio-2");
     }
 }

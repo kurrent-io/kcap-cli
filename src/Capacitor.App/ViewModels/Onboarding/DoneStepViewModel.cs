@@ -95,7 +95,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string DaemonLine => _current.DaemonRunning
         ? $"Running as a service on {_current.MachineName}. It is reachable now, and after a restart."
-        : "The daemon is not running yet. Reopen setup from Help and support, or run kcap setup in your terminal.";
+        : $"The daemon is being set up as a service on {_current.MachineName}. The app keeps it running from here.";
 
     public bool WorkspaceVisible => !string.IsNullOrEmpty(_current.WorkspaceUrl);
 

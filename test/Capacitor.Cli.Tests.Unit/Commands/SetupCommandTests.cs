@@ -657,8 +657,8 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
-    /// <summary>A service the browser's request put in place replaces the start-it-yourself advice, which
-    /// would otherwise start a second daemon beside it.</summary>
+    /// <summary>A service in place replaces the start-it-yourself advice, which would otherwise start a
+    /// second daemon beside it.</summary>
     [Test]
     [Arguments(FirstRunMachineActionOutcomes.Enabled)]
     [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
@@ -670,12 +670,15 @@ public class SetupCommandTests {
         await Assert.That(line).Contains("background service");
     }
 
-    /// <summary>No request, or one that did not end in a service, keeps the optional start hint.</summary>
+    /// <summary>A failed ensure is retried as a service; only a platform without one gets the plain start.</summary>
     [Test]
-    public async Task DaemonClosingLine_keeps_the_start_hint_without_a_service() {
-        await Assert.That(SetupCommand.DaemonClosingLine(null)).Contains("kcap daemon start -d");
+    public async Task DaemonClosingLine_offers_a_plain_start_only_without_a_service_manager() {
         await Assert.That(SetupCommand.DaemonClosingLine(
                 new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon service ensure");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(
+                    FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform)))
             .Contains("kcap daemon start -d");
     }
 
@@ -695,15 +698,6 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
         await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
         await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
-    }
-
-    /// <summary>The browser path cannot fall back to a prompt, so its fallbacks must be finite.</summary>
-    [Test]
-    public async Task BrowserDaemonNameFallbacks_start_with_the_prompt_s_suggestion_and_stop() {
-        var names = SetupCommand.BrowserDaemonNameFallbacks("tony", "mbp").ToList();
-
-        await Assert.That(names[0]).IsEqualTo("tony-mbp");
-        await Assert.That(names).IsEquivalentTo(["tony-mbp", "tony-mbp-2", "tony-mbp-3", "tony-mbp-4"]);
     }
 
     [Test]

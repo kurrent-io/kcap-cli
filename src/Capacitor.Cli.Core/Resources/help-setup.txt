@@ -32,8 +32,9 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
-  --daemon-name <name>        Daemon name, used with --no-prompt and after a
-                              browser answer (the terminal prompt asks otherwise)
+  --daemon-name <name>        Daemon name. With --no-prompt, a name another
+                              machine's daemon holds exits 1; otherwise it is the
+                              prompt's suggestion, moved to a free variant if held
   --default-visibility <vis>  Default visibility: private, project, org_public, public
   --org <name>                Organization name for a workspace to create, instead
                               of being prompted for it. Requires --slug.
@@ -201,16 +202,16 @@ is never overridden. Answering "Not now" installs nothing. The audience chosen
 on that screen becomes your default visibility, and the Import screen's answer
 runs the import from this machine, so the terminal does not ask either again.
 
-After a browser answer the terminal asks nothing more. The daemon takes
---daemon-name if given, else this profile's name (your user name on a first
-run). If another machine holds it, setup tries the name suffixed with this
-machine's, then numbered variants of that, and ends with an error naming
---daemon-name if all of them are taken. The provider API key
-setting is kept as it is; change it with
-`kcap config set use_provider_api_key true|false`. When the browser's Done
-screen ran the daemon as a service, setup says so instead of suggesting
-`kcap daemon start -d`. A finished browser flow with no import answer skips
-the import prompt and names `kcap import --all` for later.
+The daemon step asks only for a name. It suggests --daemon-name, else
+KCAP_DAEMON_NAME, else this profile's name, else this machine's name, and when
+a daemon on another machine of your account already holds it, the first free
+of name-1, name-2, and so on. Setup then installs the daemon as a background
+service and starts it, so it runs after a restart and the service manager
+restarts it if it dies. After a browser answer the terminal asks nothing more:
+the suggested name is used as it is. The provider API key setting is kept as
+it is; change it with `kcap config set use_provider_api_key true|false`. A
+finished browser flow with no import answer skips the import prompt and names
+`kcap import --all` for later.
 
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
 asks how to continue: create one for you (organization name, workspace slug and

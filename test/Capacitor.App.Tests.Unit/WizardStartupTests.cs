@@ -56,7 +56,7 @@ static class WizardFixtures {
         }
     }
 
-    /// A fixed-answer observation, for driving the daemon step past ClassifyLiveDaemonAsync's
+    /// A fixed-answer observation, for driving the daemon enabler past ClassifyLiveDaemonAsync's
     /// owned+matched branch (the only path that actually dials the ops factory).
     internal sealed class FixedObservation(ObservedEvidence? evidence) : IDaemonObservation {
         public Task<ObservedEvidence?> ObserveAsync(MutationRequest request, CancellationToken ct) =>
@@ -94,7 +94,7 @@ static class WizardFixtures {
     }
 
     /// The whole wizard graph over fakes: every daemon touchpoint is a counting factory, so "the
-    /// wizard built no daemon graph" and "the daemon step's ops/CLI are late-bound" are both
+    /// wizard built no daemon graph" and "the daemon enabler's ops/CLI are late-bound" are both
     /// directly observable.
     internal sealed class GraphHarness : IDisposable {
         readonly TempConfigRoot _config = new();
@@ -140,6 +140,8 @@ static class WizardFixtures {
         public string? ShimTarget = "/opt/kcap/bin/kcap";
         public IReadOnlySet<HarnessId> Detected = VendorDetection.Build("claude");
         public TimeProvider Time = TimeProvider.System;
+        // Matches DefaultDaemonName, so a sign-in keeps the name and writes no config of its own.
+        public Func<string?> ConfiguredDaemonName = () => "daemon-a";
 
         public GraphHarness(ConfigRoot root) {
             Root    = root;
@@ -198,7 +200,8 @@ static class WizardFixtures {
             ShimTarget: ShimTarget,
             DefaultDaemonName: "daemon-a",
             Time: Time,
-            ShutdownToken: CancellationToken.None);
+            ShutdownToken: CancellationToken.None,
+            ConfiguredDaemonName: ConfiguredDaemonName);
 
         public void Dispose() => _config.Dispose();
     }
@@ -632,7 +635,7 @@ public class WizardStartupTests {
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
                 WizardStepId.Welcome, WizardStepId.SignIn,
-                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Daemon, WizardStepId.Done,
+                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
             await Assert.That(harness.Lane.Requests).IsEmpty();
@@ -694,7 +697,7 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task The_daemon_step_reads_status_through_a_freshly_resolved_cli() {
+    public async Task The_daemon_enabler_reads_status_through_a_freshly_resolved_cli() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
@@ -702,15 +705,14 @@ public class WizardStartupTests {
             harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(null);
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5)); // the row's own precondition
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await graph.Daemon.EnsureAsync(CancellationToken.None);
             var afterFirst = harness.CliFactoryCalls;
-            await daemon.RefreshAsync(CancellationToken.None);
+            await graph.Daemon.EnsureAsync(CancellationToken.None);
 
-            // Every status read rebinds — a name written by the Defaults step lands on the next one.
+            // Every status read rebinds — a name saved since the last one lands on the next.
             await Assert.That(afterFirst).IsGreaterThan(0);
             await Assert.That(harness.CliFactoryCalls).IsGreaterThan(afterFirst);
 
@@ -719,30 +721,32 @@ public class WizardStartupTests {
     }
 
     [Test]
-    public async Task The_daemon_step_requires_a_committed_sign_in_before_it_resolves_an_identity() {
+    public async Task The_daemon_enabler_requires_a_committed_sign_in_and_installs_once_it_lands() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
                 new AuthResult.Committed("default", "https://acme.example:443", AuthProvider.None, "someone", []));
+            harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+                new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
 
             var graph = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var connect = graph.Connect;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
 
-            await daemon.RefreshAsync(CancellationToken.None);
-            var beforeSignIn = daemon.Row;
+            await daemon.EnsureAsync(CancellationToken.None);
+            var beforeSignIn = (daemon.Row, harness.Cli.StatusCallCount, harness.Lane.Requests.Count);
 
             connect.Choice = ConnectChoice.Paste;
             connect.ServerInputText = "https://acme.example";
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
-                new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None); // waits out the ensure sign-in kicked
 
-            await Assert.That(beforeSignIn).IsEqualTo(DaemonRow.RequiresSignIn);
+            await Assert.That(beforeSignIn).IsEqualTo((DaemonRow.RequiresSignIn, 0, 0));
             await Assert.That(signIn.Satisfied).IsTrue();
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.NotInstalled);
+            await Assert.That(harness.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+            await Assert.That(daemon.Satisfied).IsTrue();
 
             return true;
         });
@@ -936,7 +940,7 @@ public class WizardStartupTests {
         }).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
-    // ── late binding (the adapters the daemon step is composed over) ──────────
+    // ── late binding (the adapters the daemon enabler is composed over) ──────────
 
     [Test]
     public async Task Late_bound_ops_resolve_a_fresh_socket_per_call() {
@@ -1043,16 +1047,16 @@ public class WizardStartupTests {
         });
 
         await Assert.That(rendered.Text).IsEqualTo("a daemon mutation needs attention (some_token)");
-        // Welcome has no daemon action, so the bound line stays hidden.
+        // The line shows only on Done, so it stays hidden on Welcome.
         await Assert.That(rendered.IsVisible).IsFalse();
     }
 
     [Test]
-    public async Task The_attention_line_shows_on_the_daemon_step_and_hides_after_back() {
-        var (onDaemon, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task The_attention_line_shows_on_the_Done_step_and_hides_after_back() {
+        var (onDone, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
             var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
             var wizard = new OnboardingViewModel(
-                [new FakeWizardStep(WizardStepId.Import), new FakeWizardStep(WizardStepId.Daemon)],
+                [new FakeWizardStep(WizardStepId.Import), new FakeWizardStep(WizardStepId.Done)],
                 surface: surface);
             var window = new MainWindow { Onboarding = wizard };
             window.Show();
@@ -1078,7 +1082,7 @@ public class WizardStartupTests {
             return (shown, hidden);
         });
 
-        await Assert.That(onDaemon).IsTrue();
+        await Assert.That(onDone).IsTrue();
         await Assert.That(afterBack).IsFalse();
     }
 
@@ -1171,11 +1175,11 @@ public class WizardStartupTests {
         }).WaitAsync(TimeSpan.FromSeconds(20));
     }
 
-    // ── the daemon step's row/ops identity derives from ResolveIdentity, never the claims
+    // ── the daemon enabler's row/ops identity derives from ResolveIdentity, never the claims
     // ── identity (ResolveConsentFlipIdentity stays literal, for TryConsume only) ──────
 
     [Test]
-    public async Task The_daemon_steps_row_reflects_ResolveIdentity_not_the_claims_identity() {
+    public async Task The_daemon_enablers_row_reflects_ResolveIdentity_not_the_claims_identity() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
             harness.Operation = (_, _) => Task.FromResult<AuthResult>(
@@ -1187,11 +1191,11 @@ public class WizardStartupTests {
             harness.ConsentFlipIdentity = ("claims-profile", "https://claims.example", "claims-daemon");
 
             var graph  = WizardComposition.BuildGraph(harness.Options());
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None);
 
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.NoServerConfigured);
             await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0); // refused before any status read
@@ -1223,11 +1227,11 @@ public class WizardStartupTests {
             harness.Claims.Arm(new ConsentFlipClaim("row-profile", canonical));
 
             var graph  = WizardComposition.BuildGraph(options);
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None);
             await WizardFixtures.WaitUntilAsync(() => harness.Ops.PutV2Calls > 0, what: "the claim to apply");
 
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.AlreadyEnabled);
@@ -1333,7 +1337,7 @@ public class WizardStartupResolutionTests {
 
     // An empty-name sentinel would dial the sanitized DEFAULT daemon socket — unreadable config must yield null.
     [Test]
-    public async Task Unreadable_config_shows_the_daemon_steps_not_ready_state_and_makes_no_status_or_ops_call() {
+    public async Task Unreadable_config_shows_the_daemon_enablers_not_ready_state_and_makes_no_status_or_ops_call() {
         File.WriteAllText(ConfigPath, "{ this is not valid json");
 
         await AvaloniaSession.DispatchAsync(async () => {
@@ -1343,12 +1347,12 @@ public class WizardStartupResolutionTests {
 
             var options = harness.Options() with { ResolveIdentity = () => AppUnderTest.ResolveWizardIdentity(Config.Root, ProfileOverrides.None, NoLocalInstallation.Root) };
             var graph  = WizardComposition.BuildGraph(options);
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
+            var daemon = graph.Daemon;
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
             await Assert.That(signIn.Satisfied).IsTrue(); // sign-in itself doesn't touch config.json
 
-            await daemon.RefreshAsync(CancellationToken.None);
+            await daemon.EnsureAsync(CancellationToken.None);
 
             await Assert.That(daemon.Row).IsEqualTo(DaemonRow.RequiresSignIn);
             await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
