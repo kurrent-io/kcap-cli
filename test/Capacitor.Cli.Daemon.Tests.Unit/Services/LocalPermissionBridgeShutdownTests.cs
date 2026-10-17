@@ -14,12 +14,18 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class LocalPermissionBridgeShutdownTests {
     const string Session = "6ba7b8109dad11d180b400c04fd430c8";
 
-    static (LocalPermissionBridge bridge, FakeServerConnection server, PermissionPromptBroker broker, TempDir tmp) Build() {
+    /// Real timers on a wall clock that never moves, so the shutdown drain's deadline is never reached.
+    sealed class FrozenWallClock : TimeProvider {
+        readonly DateTimeOffset _now = System.GetUtcNow();
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    static (LocalPermissionBridge bridge, FakeServerConnection server, PermissionPromptBroker broker, TempDir tmp) Build(TimeProvider? time = null) {
         var server = new FakeServerConnection(respond: null);
         var broker = new PermissionPromptBroker();
         var tmp    = new TempDir();
         var log    = new PermissionDecisionLog(tmp.Path, NullLogger.Instance);
-        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, broker, log) {
+        var bridge = new LocalPermissionBridge(server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, time ?? TimeProvider.System, broker, log) {
             AttributeHandler = _ => new AttributedAgent("agent-1"),
         };
         server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
@@ -101,7 +107,8 @@ public class LocalPermissionBridgeShutdownTests {
 
     [Test, NotInParallel(nameof(LocalPermissionBridgeShutdownTests))]
     public async Task Admitted_handler_held_before_entry_is_drained_with_the_token_already_cancelled() {
-        var (bridge, _, broker, tmp) = Build();
+        // The drain cannot expire, so a handler it failed to count would lose its response to the listener closing.
+        var (bridge, _, broker, tmp) = Build(new FrozenWallClock());
         try {
             var hold = new TaskCompletionSource();
             var entered = new TaskCompletionSource();
@@ -112,13 +119,11 @@ public class LocalPermissionBridgeShutdownTests {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
             await Assert.That(bridge.InFlightHandlersForTest).IsEqualTo(1);
 
-            var started = DateTime.UtcNow;
             var stop = bridge.StopAsync(CancellationToken.None);
             hold.SetResult();                       // the delegate runs despite the cancelled token
             await Assert.That(await BehaviorOf(await response)).IsEqualTo("deny");
             await stop;
             await Assert.That(bridge.InFlightHandlersForTest).IsEqualTo(0);
-            await Assert.That(DateTime.UtcNow - started < LocalPermissionBridge.ShutdownDrain).IsTrue().Because("the drain must not expire");
             await bridge.DisposeAsync();
         } finally {
             tmp.Dispose();
