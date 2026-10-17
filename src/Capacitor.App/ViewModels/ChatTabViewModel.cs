@@ -54,8 +54,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
     /// The row an idle resend dropped, paired with the replacement that took its place.
     /// A line from before that replacement was sent belongs to the dropped row. The replacement's
-    /// own echo settles the replacement, and a later copy of the same text is absorbed here.
+    /// own echo settles the replacement. A later copy is absorbed only when no send made since
+    /// the replacement can claim it.
     readonly List<(QueuedChatMessage Old, QueuedChatMessage Replacement)> _superseded = new();
+    int _nextSendOrder;
     /// The send the channel has not answered yet. It is tracked like a queued message but kept out
     /// of the strip: the composer still holds its text, and one prompt must not show in both.
     QueuedChatMessage? _sending;
@@ -752,9 +754,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     message.Text, includeTray: false, bypassRecall: true, ownsDraft: false,
                     onQueued: row => _superseded.Add((message, row)));
             } finally {
-                _queuedSendBusy.OnNext(false);
-                RefreshQueuedSend();
+                // Teardown disposes this subject after cancelling the send. The await can resume
+                // once that has happened, and OnNext on a disposed subject throws.
+                if (!_lifetimeToken.IsCancellationRequested) {
+                    _queuedSendBusy.OnNext(false);
+                    RefreshQueuedSend();
+                }
             }
+            if (_lifetimeToken.IsCancellationRequested) return;
             if (_lastSendOutcome is null or ChatSendOutcome.Rejected) {
                 _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message));
                 RestoreQueuedRow(message);
@@ -967,8 +974,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     // A line from before the replacement was sent can only be the dropped row. The first line
-    // the replacement can match is its echo. Once that row has settled, a later copy of the
-    // same text belongs to the dropped row, so it does not settle a different one.
+    // the replacement can match is its echo. After that, a further copy is absorbed only when
+    // no send made since the replacement can claim it. One of those owns the line instead.
     bool TakeSupersededEcho(string text, long offset) {
         for (var i = 0; i < _superseded.Count; i++) {
             var (old, replacement) = _superseded[i];
@@ -982,11 +989,26 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 return true;
             }
             if (replacement.Acknowledged) {
+                if (ClaimEchoForLaterSend(replacement, text, offset)) return true;
                 AbsorbSuperseded(old);
                 return true;
             }
         }
         return false;
+    }
+
+    // The earliest send handed to the channel after the replacement owns this line.
+    // A row already queued before that resend keeps waiting.
+    bool ClaimEchoForLaterSend(QueuedChatMessage replacement, string text, long offset) {
+        QueuedChatMessage? earliest = null;
+        foreach (var queued in Tracked) {
+            if (queued.Acknowledged || queued.IsForeign || queued.SendOrder <= replacement.SendOrder) continue;
+            if (!queued.Matches(text, _inputGeneration, offset)) continue;
+            if (earliest is null || queued.SendOrder < earliest.SendOrder) earliest = queued;
+        }
+        if (earliest is null) return false;
+        Acknowledge(earliest);
+        return true;
     }
 
     void AbsorbSuperseded(QueuedChatMessage old) {
@@ -1040,7 +1062,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // that menu, so the draft and the chips stay where they are.
         if (HasTerminalMenu) return;
         var chipIds = files.Select(f => f.Id).ToList();
-        var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds);
+        var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds) {
+            SendOrder = ++_nextSendOrder,
+        };
         if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
         _lastSent = queued;
         _sending = queued;

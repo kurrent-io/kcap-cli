@@ -1755,6 +1755,55 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A send made after the resend has echoed owns that echo. The dropped row does not take it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_send_after_a_resent_row_echoed_is_retired_by_its_own_echo() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+
+            h.Chat.ComposerText = "look";
+            var again = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await again;
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// Teardown disposes the busy signal while the queued send is still awaiting the channel.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Teardown_during_a_queued_send_does_not_touch_the_disposed_busy_signal() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput { HonoursCancellation = false };
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            await WaitUntilAsync(() => input.Pending is not null, what: "the queued send reaching the channel");
+            await h.TeardownAsync();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+        });
+    }
+
     /// A send still uploading keeps CanAcceptText true; the busy gate hides row Send until it ends.
     [Test]
     [NotInParallel("AvaloniaSession")]
