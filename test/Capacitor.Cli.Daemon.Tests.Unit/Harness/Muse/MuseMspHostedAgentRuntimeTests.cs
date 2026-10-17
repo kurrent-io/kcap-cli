@@ -377,6 +377,29 @@ public class MuseMspHostedAgentRuntimeTests {
         await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
     }
 
+    /// <summary>A next turn announced before the steered turn's completion arrives must not hide that
+    /// completion from the steer: the old turn ending is still the steered turn ending.</summary>
+    [Test]
+    public async Task A_dropped_steer_is_seen_when_the_next_turn_starts_before_the_steered_turn_completes() {
+        await using var rig = await ReadyRig();
+
+        await rig.Runtime.SendUserInputAndWaitForWriteAsync("first").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        rig.Process.Push(EchoedUserMessage(rig));
+        await rig.Host.SyncAsync();
+
+        var second = rig.Runtime.SendUserInputAndWaitForWriteAsync("again");
+        await rig.Host.WaitForWriteAsync("turn/steer");
+        await rig.Host.SyncAsync();
+        await Assert.That(second.IsCompleted).IsFalse();
+
+        rig.Process.Push(MuseMspWire.TurnStarted.Replace(MuseMspWire.WireTurnId, "01a13695-3333-7000-8000-000000000003"));
+        rig.Process.Push(MuseMspWire.TurnCompleted);
+        await second.WaitAsync(HangGuard);
+
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
+    }
+
     /// <summary>The user-message item a <c>turn/start</c> produces, naming the start's command.</summary>
     static string EchoedUserMessage(Rig rig) {
         var starts = rig.Host.WritesOf("turn/start");

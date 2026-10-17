@@ -76,6 +76,9 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
 
     readonly Lock                       _turnGate    = new();
     readonly List<TaskCompletionSource> _idleWaiters = [];
+
+    /// <summary>Woken on every change of the running turn, a start included, unlike the idle waiters.</summary>
+    readonly List<TaskCompletionSource> _turnChangeWaiters = [];
     string? _runningTurnId;
     string? _lastCompletedTurnId;
 
@@ -566,31 +569,50 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     /// <summary>Ignored after terminal: nothing would clear a turn marked running then, and an idle waiter
     /// would park forever.</summary>
     void SetRunningTurn(string turnId) {
+        TaskCompletionSource[] changed;
+
         lock (_turnGate) {
             if (Volatile.Read(ref _terminal) != 0) return;
             _runningTurnId = turnId;
+            changed        = TakeTurnChangeWaiters();
         }
 
         ActivityClock?.SetTurnInFlight(true);
+
+        foreach (var waiter in changed) waiter.TrySetResult();
+    }
+
+    TaskCompletionSource[] TakeTurnChangeWaiters() {
+        var waiters = _turnChangeWaiters.ToArray();
+        _turnChangeWaiters.Clear();
+        return waiters;
     }
 
     /// <summary>Clears the running turn when it is <paramref name="onlyIf"/> (any turn when null) and releases
     /// idle waiters.</summary>
     void ClearRunningTurn(string? onlyIf) {
         TaskCompletionSource[] release;
+        TaskCompletionSource[] changed;
         bool                   wasRunning;
 
         lock (_turnGate) {
-            if (onlyIf is not null && _runningTurnId is { } running && running != onlyIf) return;
+            // A turn ending behind the current one is still a change for a waiter on that turn.
+            changed = TakeTurnChangeWaiters();
 
-            wasRunning     = _runningTurnId is not null;
-            _runningTurnId = null;
-            release        = [.. _idleWaiters];
-            _idleWaiters.Clear();
+            if (onlyIf is not null && _runningTurnId is { } running && running != onlyIf) {
+                release    = [];
+                wasRunning = false;
+            } else {
+                wasRunning     = _runningTurnId is not null;
+                _runningTurnId = null;
+                release        = [.. _idleWaiters];
+                _idleWaiters.Clear();
+            }
         }
 
         if (wasRunning) ActivityClock?.SetTurnInFlight(false);
 
+        foreach (var waiter in changed) waiter.TrySetResult();
         foreach (var waiter in release) waiter.TrySetResult();
     }
 
@@ -759,10 +781,15 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
                 if (_runningTurnId != turnId || Volatile.Read(ref _terminal) != 0) return;
 
                 waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _idleWaiters.Add(waiter);
+                _turnChangeWaiters.Add(waiter);
             }
 
-            await AwaitTurnIdleAsync(waiter, ct).ConfigureAwait(false);
+            try {
+                await waiter.Task.WaitAsync(ct).ConfigureAwait(false);
+            } catch (OperationCanceledException) {
+                lock (_turnGate) _turnChangeWaiters.Remove(waiter);
+                throw;
+            }
         }
     }
 
