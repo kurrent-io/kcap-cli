@@ -113,8 +113,15 @@ internal sealed partial class AgentRunEventQueue(
         var response = await http.SendAsync(request, ct);
 
         // Rotated here so the next attempt sends a replacement rather than the bearer just refused.
-        if (response.StatusCode == HttpStatusCode.Unauthorized && credential.Bearer is not null)
-            await credentials.RotateAsync(credential.Bearer, ct);
+        if (response.StatusCode == HttpStatusCode.Unauthorized && credential.Bearer is not null) {
+            try {
+                await credentials.RotateAsync(credential.Bearer, ct);
+            } catch {
+                response.Dispose();
+
+                throw;
+            }
+        }
 
         return response;
     }
