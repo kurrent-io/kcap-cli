@@ -617,6 +617,12 @@ sealed class SetupCommand(
             return 1;
         }
 
+        if (DaemonNameArgumentError(args) is { } daemonNameError) {
+            await Console.Error.WriteLineAsync($"  {daemonNameError}");
+
+            return 1;
+        }
+
         var (requestedWorkspace, workspaceArgError) = ParseRequestedWorkspace(args, serverUrlGiven);
 
         if (workspaceArgError is not null) {
@@ -2803,6 +2809,16 @@ sealed class SetupCommand(
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
           + $"  {how} to begin streaming; a session that was already\n"
           + "  running when you ran setup isn't being recorded yet.";
+    }
+
+    /// <summary>Refuses a <c>--daemon-name</c> with no usable value before anything is written: the
+    /// next token would otherwise be saved as the name, a following flag included.</summary>
+    internal static string? DaemonNameArgumentError(string[] args) {
+        if (!args.Contains("--daemon-name")) return null;
+
+        return GetArg(args, "--daemon-name") is { } name && !string.IsNullOrWhiteSpace(name) && !name.StartsWith('-')
+            ? null
+            : "--daemon-name requires a value (e.g. --daemon-name laptop).";
     }
 
     static string? GetArg(string[] args, string name) {

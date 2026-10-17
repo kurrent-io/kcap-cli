@@ -682,6 +682,21 @@ public class SetupCommandTests {
             .Contains("kcap daemon start -d");
     }
 
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments(" ")]
+    [Arguments("--no-prompt")]
+    public async Task DaemonNameArgumentError_refuses_a_flag_with_no_usable_value(string? value) =>
+        await Assert.That(SetupCommand.DaemonNameArgumentError(
+            value is null ? ["setup", "--daemon-name"] : ["setup", "--daemon-name", value])).IsNotNull();
+
+    [Test]
+    public async Task DaemonNameArgumentError_accepts_a_name_or_no_flag() {
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--daemon-name", "laptop"])).IsNull();
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--no-prompt"])).IsNull();
+    }
+
     /// <summary>A refusal no retry can change says why instead of sending the user to the same refusal.</summary>
     [Test]
     [Arguments(FirstRunMachineActionReasons.NotConfigured)]
