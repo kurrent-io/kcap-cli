@@ -29,7 +29,7 @@ public static class TestBundles {
 
     public static (string Name, TarEntryType Type, string? Content, string? LinkName) Dir(string name) => (name, TarEntryType.Directory, null, null);
 
-    public static (string Name, TarEntryType Type, string? Content, string? LinkName) File_(string name, string content) =>
+    public static (string Name, TarEntryType Type, string? Content, string? LinkName) RegularFile(string name, string content) =>
         (name, TarEntryType.RegularFile, content, null);
 
     public static (string Name, TarEntryType Type, string? Content, string? LinkName) Symlink(string name, string target) =>

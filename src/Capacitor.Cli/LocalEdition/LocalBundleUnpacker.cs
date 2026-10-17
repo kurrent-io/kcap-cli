@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
@@ -26,67 +27,49 @@ public static class LocalBundleUnpacker {
         }
     }
 
+    // Symlinks are created only after every directory and file exists, so nothing is written or
+    // chmodded through a link, and case or Unicode aliasing on the volume can only alias paths
+    // inside the tree.
     static async Task Extract(string archive, string root, CancellationToken ct) {
         MakeDir(root);
 
         var directories = new List<string> { root };
         var knownDirs   = new HashSet<string>(StringComparer.Ordinal) { root };
-        var symlinks    = new HashSet<string>(StringComparer.Ordinal);
-        var files       = new Dictionary<string, string>(StringComparer.Ordinal);
+        var files       = new HashSet<string>(StringComparer.Ordinal);
+        var symlinks    = new List<(string Name, string Full, string Target)>();
 
         await using (var gzip = new GZipStream(File.OpenRead(archive), CompressionMode.Decompress))
         using (var reader = new TarReader(gzip)) {
             while (await reader.GetNextEntryAsync(copyData: false, ct) is { } entry) {
-                var relative = Normalize(entry.Name);
-
-                if (relative.Length == 0) {
-                    if (entry.EntryType != TarEntryType.Directory) throw Refuse(entry.Name, "the tree root must be a directory");
-
-                    continue;
+                try {
+                    await Process(entry, root, directories, knownDirs, files, symlinks, ct);
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    throw new LocalBundleException(LocalInstallFailureCode.VerificationFailed, $"{entry.Name}: {ex.Message}", ex);
                 }
+            }
+        }
 
-                var full = Path.GetFullPath(Path.Combine(root, relative));
+        foreach (var (name, full, target) in symlinks) {
+            try {
+                File.CreateSymbolicLink(full, target);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                throw new LocalBundleException(LocalInstallFailureCode.VerificationFailed, $"{name}: {ex.Message}", ex);
+            }
+        }
 
-                EnsureParents(root, full, entry.Name, knownDirs, directories, symlinks);
+        if (symlinks.Count > 0) {
+            if (!CanonicalPath.TryResolve(root, out var canonicalRoot))
+                throw Refuse(root, "the destination cannot be resolved");
 
-                switch (entry.EntryType) {
-                    case TarEntryType.Directory:
-                        if (symlinks.Contains(full)) throw Refuse(entry.Name, "replaces a symbolic link");
-
-                        if (knownDirs.Add(full)) {
-                            MakeDir(full);
-                            directories.Add(full);
-                        }
-
-                        break;
-
-                    case TarEntryType.RegularFile or TarEntryType.V7RegularFile:
-                        await WriteFile(entry, full, ct);
-                        files[full] = full;
-
-                        break;
-
-                    case TarEntryType.SymbolicLink:
-                        CreateSymlink(entry, full, root);
-                        symlinks.Add(full);
-
-                        break;
-
-                    case TarEntryType.HardLink:
-                        await CopyHardLink(entry, full, root, files, ct);
-                        files[full] = full;
-
-                        break;
-
-                    default:
-                        throw Refuse(entry.Name, $"entry type {entry.EntryType} is not allowed");
-                }
+            foreach (var (name, full, _) in symlinks) {
+                if (!CanonicalPath.TryResolve(full, out var resolved) || !IsWithin(resolved, canonicalRoot))
+                    throw Refuse(name, "symbolic link leaves the tree");
             }
         }
 
         var server = Path.Combine(root, ServerName);
 
-        if (!files.ContainsKey(server)
+        if (!files.Contains(server)
          || (!OperatingSystem.IsWindows() && !File.GetUnixFileMode(server).HasFlag(UnixFileMode.UserExecute)))
             throw Refuse(ServerName, "the bundle has no executable kcap-server at its root");
 
@@ -95,7 +78,59 @@ public static class LocalBundleUnpacker {
         DurableDirectory.Sync(Path.GetDirectoryName(root)!);
     }
 
+    static async Task Process(TarEntry entry, string root, List<string> directories, HashSet<string> knownDirs, HashSet<string> files,
+        List<(string Name, string Full, string Target)> symlinks, CancellationToken ct) {
+        var relative = Normalize(entry.Name);
+
+        if (relative.Length == 0) {
+            if (entry.EntryType != TarEntryType.Directory) throw Refuse(entry.Name, "the tree root must be a directory");
+
+            return;
+        }
+
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+
+        EnsureParents(root, full, knownDirs, directories);
+
+        switch (entry.EntryType) {
+            case TarEntryType.Directory:
+                EnsureDir(full, knownDirs, directories);
+
+                break;
+
+            case TarEntryType.RegularFile or TarEntryType.V7RegularFile:
+                await WriteFile(entry, full, ct);
+                files.Add(full);
+
+                break;
+
+            case TarEntryType.SymbolicLink:
+                var target = entry.LinkName;
+
+                if (string.IsNullOrEmpty(target) || target.Contains('\0') || target.StartsWith('/') || Path.IsPathRooted(target))
+                    throw Refuse(entry.Name, "symbolic link target is absolute or empty");
+
+                symlinks.Add((entry.Name, full, target));
+
+                break;
+
+            case TarEntryType.HardLink:
+                await CopyHardLink(entry, full, root, files, ct);
+                files.Add(full);
+
+                break;
+
+            default:
+                throw Refuse(entry.Name, $"entry type {entry.EntryType} is not allowed");
+        }
+    }
+
+    static bool IsWithin(string path, string boundary) =>
+        path == boundary || path.StartsWith(boundary + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+
     static string Normalize(string name) {
+        if (name.Contains('\0')) throw Refuse(name, "invalid name");
+
         var rest = name;
 
         while (rest.StartsWith("./", StringComparison.Ordinal)) rest = rest[2..];
@@ -109,21 +144,21 @@ public static class LocalBundleUnpacker {
         return string.Join('/', parts);
     }
 
-    static void EnsureParents(string root, string full, string entryName, HashSet<string> knownDirs, List<string> directories, HashSet<string> symlinks) {
+    static void EnsureParents(string root, string full, HashSet<string> knownDirs, List<string> directories) {
         var missing = new Stack<string>();
 
-        for (var dir = Path.GetDirectoryName(full)!; dir != root; dir = Path.GetDirectoryName(dir)!) {
-            if (symlinks.Contains(dir)) throw Refuse(entryName, "parent is a symbolic link");
-
+        for (var dir = Path.GetDirectoryName(full)!; dir != root; dir = Path.GetDirectoryName(dir)!)
             if (!knownDirs.Contains(dir)) missing.Push(dir);
-        }
 
-        while (missing.Count > 0) {
-            var dir = missing.Pop();
-            MakeDir(dir);
-            knownDirs.Add(dir);
-            directories.Add(dir);
-        }
+        while (missing.Count > 0) EnsureDir(missing.Pop(), knownDirs, directories);
+    }
+
+    static void EnsureDir(string dir, HashSet<string> knownDirs, List<string> directories) {
+        if (!knownDirs.Add(dir)) return;
+
+        directories.Add(dir);
+
+        if (!Directory.Exists(dir)) MakeDir(dir);
     }
 
     static async Task WriteFile(TarEntry entry, string full, CancellationToken ct) {
@@ -139,14 +174,14 @@ public static class LocalBundleUnpacker {
         SetMode(full, mode);
     }
 
-    static async Task CopyHardLink(TarEntry entry, string full, string root, Dictionary<string, string> files, CancellationToken ct) {
+    static async Task CopyHardLink(TarEntry entry, string full, string root, HashSet<string> files, CancellationToken ct) {
         var target = Path.GetFullPath(Path.Combine(root, Normalize(entry.LinkName)));
 
-        if (!files.TryGetValue(target, out var source)) throw Refuse(entry.Name, "hard link target is not an earlier file");
+        if (!files.Contains(target)) throw Refuse(entry.Name, "hard link target is not an earlier file");
 
         var mode = FileMode(entry);
 
-        await using (var from = new FileStream(source, System.IO.FileMode.Open, FileAccess.Read, FileShare.Read))
+        await using (var from = new FileStream(target, System.IO.FileMode.Open, FileAccess.Read, FileShare.Read))
         await using (var to = Create(full, mode)) {
             await from.CopyToAsync(to, ct);
             FaultPoints.Hit($"flush:{full}");
@@ -154,20 +189,6 @@ public static class LocalBundleUnpacker {
         }
 
         SetMode(full, mode);
-    }
-
-    static void CreateSymlink(TarEntry entry, string full, string root) {
-        var target = entry.LinkName;
-
-        if (string.IsNullOrEmpty(target) || target.StartsWith('/') || Path.IsPathRooted(target))
-            throw Refuse(entry.Name, "symbolic link target is absolute or empty");
-
-        var resolved = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(full)!, target));
-        var inside   = resolved == root || resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal);
-
-        if (!inside) throw Refuse(entry.Name, "symbolic link leaves the tree");
-
-        File.CreateSymbolicLink(full, target);
     }
 
     static FileStream Create(string path, UnixFileMode mode) {

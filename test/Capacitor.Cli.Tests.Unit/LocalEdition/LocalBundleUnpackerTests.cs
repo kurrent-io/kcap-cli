@@ -19,11 +19,11 @@ public class LocalBundleUnpackerTests {
         await Assert.That(ex.Message).Contains(entryFragment);
     }
 
-    static (string Name, TarEntryType Type, string? Content, string? LinkName) Server => File_("./kcap-server", "#!/bin/sh\n");
+    static (string Name, TarEntryType Type, string? Content, string? LinkName) Server => RegularFile("./kcap-server", "#!/bin/sh\n");
 
     [Test]
     public async Task A_dot_prefixed_tree_with_a_hard_link_unpacks() {
-        Write(Archive, Dir("."), Server, Dir("./postgres"), Dir("./postgres/bin"), File_("./postgres/bin/postgres", "pg"),
+        Write(Archive, Dir("."), Server, Dir("./postgres"), Dir("./postgres/bin"), RegularFile("./postgres/bin/postgres", "pg"),
             Hardlink("./postgres/bin/pg", "./postgres/bin/postgres"));
 
         await Unpack();
@@ -39,7 +39,7 @@ public class LocalBundleUnpackerTests {
 
     [Test]
     public async Task An_in_tree_symlink_unpacks() {
-        Write(Archive, Server, Dir("./lib"), File_("./lib/libx.so.1", "x"), Symlink("./lib/libx.so", "libx.so.1"));
+        Write(Archive, Server, Dir("./lib"), RegularFile("./lib/libx.so.1", "x"), Symlink("./lib/libx.so", "libx.so.1"));
 
         await Unpack();
 
@@ -48,13 +48,13 @@ public class LocalBundleUnpackerTests {
 
     [Test]
     public async Task A_parent_component_is_refused() {
-        Write(Archive, Server, File_("./a/../../evil", "x"));
+        Write(Archive, Server, RegularFile("./a/../../evil", "x"));
         await AssertRefused("evil");
     }
 
     [Test]
     public async Task An_absolute_name_is_refused() {
-        Write(Archive, Server, File_("/etc/evil", "x"));
+        Write(Archive, Server, RegularFile("/etc/evil", "x"));
         await AssertRefused("/etc/evil");
     }
 
@@ -72,9 +72,40 @@ public class LocalBundleUnpackerTests {
 
     [Test]
     public async Task A_file_cannot_be_written_through_an_earlier_symlink() {
-        Write(Archive, Server, Dir("./real"), Symlink("./link", "real"), File_("./link/f", "x"));
-        await AssertRefused("link/f");
+        Write(Archive, Server, Dir("./real"), Symlink("./link", "real"), RegularFile("./link/f", "x"));
+        await AssertRefused("link");
+        await Assert.That(File.Exists(Path.Combine(Dest, "real", "f"))).IsFalse();
     }
+
+    [Test]
+    public async Task A_case_aliased_symlink_chain_cannot_write_beside_the_destination() {
+        Write(Archive, Server, Symlink("./a", "."), Symlink("./A/b", ".."), RegularFile("./B/evil", "x"));
+        var before = Names();
+
+        await AssertRefused("");
+
+        await Assert.That(Names()).IsEquivalentTo(before);
+    }
+
+    [Test]
+    public async Task A_chained_symlink_leaving_the_tree_is_refused() {
+        Write(Archive, Server, Dir("./d"), Symlink("./d/up", ".."), Symlink("./e", "d/up/.."));
+        await AssertRefused("");
+    }
+
+    [Test]
+    public async Task A_chained_symlink_listed_before_its_hop_is_refused() {
+        Write(Archive, Server, Symlink("./e", "d/up/.."), Dir("./d"), Symlink("./d/up", ".."));
+        await AssertRefused("");
+    }
+
+    [Test]
+    public async Task A_name_with_a_nul_is_refused() {
+        Write(Archive, Server, RegularFile("./a\0b", "x"));
+        await AssertRefused("invalid name");
+    }
+
+    string[] Names() => Directory.GetFileSystemEntries(Tmp.Path).Select(Path.GetFileName).Where(n => n != "out").Order().ToArray()!;
 
     [Test]
     public async Task A_hard_link_out_of_the_tree_is_refused() {
@@ -84,7 +115,7 @@ public class LocalBundleUnpackerTests {
 
     [Test]
     public async Task A_hard_link_to_a_later_entry_is_refused() {
-        Write(Archive, Server, Hardlink("./h", "./later"), File_("./later", "x"));
+        Write(Archive, Server, Hardlink("./h", "./later"), RegularFile("./later", "x"));
         await AssertRefused("h");
     }
 
@@ -96,7 +127,7 @@ public class LocalBundleUnpackerTests {
 
     [Test]
     public async Task A_missing_kcap_server_is_refused() {
-        Write(Archive, Dir("./lib"), File_("./lib/x", "x"));
+        Write(Archive, Dir("./lib"), RegularFile("./lib/x", "x"));
         await AssertRefused("kcap-server");
     }
 
@@ -116,7 +147,7 @@ public class LocalBundleUnpackerTests {
 
     [Test]
     public async Task Every_directory_is_synced_after_its_files() {
-        Write(Archive, Server, Dir("./a"), File_("./a/f", "x"));
+        Write(Archive, Server, Dir("./a"), RegularFile("./a/f", "x"));
         var synced = new List<string>();
 
         using (FaultPoints.Arm(p => { if (p.StartsWith("sync:", StringComparison.Ordinal)) synced.Add(p["sync:".Length..]); }))
