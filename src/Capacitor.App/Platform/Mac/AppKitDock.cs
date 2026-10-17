@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Capacitor.App.Views;
+namespace Capacitor.App.Platform.Mac;
 
 public static partial class AppKitDock {
     const string ObjC = "/usr/lib/libobjc.A.dylib";

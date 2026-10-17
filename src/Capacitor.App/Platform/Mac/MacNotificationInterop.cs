@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
-namespace Capacitor.App.Services.Notifications;
+namespace Capacitor.App.Platform.Mac;
 
 [SupportedOSPlatform("macos")]
 internal static partial class MacNotificationInterop {

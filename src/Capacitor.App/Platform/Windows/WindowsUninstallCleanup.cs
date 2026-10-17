@@ -1,8 +1,9 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using Capacitor.App.Services;
 using Capacitor.Cli.Core.Setup;
 
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Windows;
 
 /// What uninstalling the app undoes on Windows: the Scheduled Tasks that run this install's daemon,
 /// whose wrapper would otherwise retry the deleted binary at every sign-in, and the user PATH entry

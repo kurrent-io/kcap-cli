@@ -1,4 +1,4 @@
-namespace Capacitor.App.Services;
+namespace Capacitor.App.Platform.Mac;
 
 /// <summary>
 /// Holds the launch until CoreVideo will hand out a display link. Avalonia.Native registers one

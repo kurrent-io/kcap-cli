@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Capacitor.App.Views;
+namespace Capacitor.App.Platform.Mac;
 
 /// The AppKit menu calls Avalonia does not make. It never hands its menus to the windowsMenu and
 /// helpMenu slots, and only a registered Window menu gets Move to a display, the tiling items and

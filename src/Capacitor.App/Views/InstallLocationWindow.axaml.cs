@@ -1,6 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
-using Capacitor.App.Services;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Views;
 

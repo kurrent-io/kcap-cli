@@ -1,5 +1,5 @@
 using System.Runtime.Versioning;
-using Capacitor.App.Services;
+using Capacitor.App.Platform.Windows;
 using TUnit.Core.Enums;
 
 namespace Capacitor.App.Tests.Unit;

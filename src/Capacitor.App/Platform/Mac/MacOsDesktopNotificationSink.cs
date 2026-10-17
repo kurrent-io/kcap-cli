@@ -4,9 +4,11 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Avalonia.Threading;
-using static Capacitor.App.Services.Notifications.MacNotificationInterop;
+using static Capacitor.App.Platform.Mac.MacNotificationInterop;
 
-namespace Capacitor.App.Services.Notifications;
+using Capacitor.App.Services.Notifications;
+
+namespace Capacitor.App.Platform.Mac;
 
 /// UserNotifications requires a real application bundle. A development `dotnet run` intentionally
 /// has no native sink; calling currentNotificationCenter from an unbundled process can abort it.
@@ -44,7 +46,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
             // Nothing from a previous process can still answer a live request.
             SendVoid(_center, Selector("removeAllPendingNotificationRequests"));
             SendVoid(_center, Selector("removeAllDeliveredNotifications"));
-        } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        } catch (Exception error) { DesktopNotifications.Report(error); }
     }
 
     public void Show(DesktopNotification notification, Action<string?> activated) {
@@ -61,7 +63,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
                     if (!IsCurrent(pending)) return;
                     if (!granted || failure is not null) {
                         Close(notification.Id);
-                        if (failure is not null) NativeDesktopNotificationSink.Report(failure);
+                        if (failure is not null) DesktopNotifications.Report(failure);
                         return;
                     }
                     Publish(pending);
@@ -70,7 +72,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
             SendVoid(_center, Selector("requestAuthorizationWithOptions:completionHandler:"), AlertOption, block.Handle);
         } catch (Exception error) {
             Close(notification.Id);
-            NativeDesktopNotificationSink.Report(error);
+            DesktopNotifications.Report(error);
         }
     }
 
@@ -86,13 +88,13 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
                         : Access(Send(settings, Selector("authorizationStatus"))));
                 } catch (Exception error) {
                     // The block swallows what escapes it, which would leave the caller waiting forever.
-                    NativeDesktopNotificationSink.Report(error);
+                    DesktopNotifications.Report(error);
                     result.TrySetResult(DesktopNotificationAccess.Unknown);
                 }
             });
             SendVoid(_center, Selector("getNotificationSettingsWithCompletionHandler:"), block.Handle);
         } catch (Exception error) {
-            NativeDesktopNotificationSink.Report(error);
+            DesktopNotifications.Report(error);
             result.TrySetResult(DesktopNotificationAccess.Unknown);
         }
         return result.Task;
@@ -106,7 +108,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
             using var block = MacNotificationBlock.Authorization((_, _) => answered.TrySetResult());
             SendVoid(_center, Selector("requestAuthorizationWithOptions:completionHandler:"), AlertOption, block.Handle);
         } catch (Exception error) {
-            NativeDesktopNotificationSink.Report(error);
+            DesktopNotifications.Report(error);
             return DesktopNotificationAccess.Unknown;
         }
         await answered.Task;
@@ -120,7 +122,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
                 ArgumentList = { "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=" + _bundleId },
                 UseShellExecute = false,
             });
-        } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        } catch (Exception error) { DesktopNotifications.Report(error); }
     }
 
     // UNAuthorizationStatus: provisional and ephemeral grants deliver too.
@@ -146,7 +148,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
                     if (!IsCurrent(pending)) { Withdraw(pending.NativeId); return; }
                     if (failure is null) return;
                     Close(pending.Source.Id);
-                    NativeDesktopNotificationSink.Report(failure);
+                    DesktopNotifications.Report(failure);
                 });
             });
             SendVoid(_center, Selector("addNotificationRequest:withCompletionHandler:"), request, block.Handle);
@@ -184,8 +186,8 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
 
     public void Close(string id) {
         if (!_pending.Remove(id, out var pending)) return;
-        try { Withdraw(pending.NativeId); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
-        try { _categories.Release(pending.Category); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        try { Withdraw(pending.NativeId); } catch (Exception error) { DesktopNotifications.Report(error); }
+        try { _categories.Release(pending.Category); } catch (Exception error) { DesktopNotifications.Report(error); }
     }
 
     void Withdraw(string nativeId) {
@@ -199,7 +201,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
         if (_disposed) return;
         _disposed = true;
         foreach (var id in _pending.Keys.ToArray()) Close(id);
-        try { _categories.Dispose(); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        try { _categories.Dispose(); } catch (Exception error) { DesktopNotifications.Report(error); }
         if (_delegate == 0) return;
         Delegates.TryRemove(_delegate, out _);
         if (Send(_center, Selector("delegate")) == _delegate) SendVoid(_center, Selector("setDelegate:"), 0);
@@ -209,9 +211,9 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
     static void Post(Action action) {
         try {
             Dispatcher.UIThread.Post(() => {
-                try { action(); } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+                try { action(); } catch (Exception error) { DesktopNotifications.Report(error); }
             });
-        } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        } catch (Exception error) { DesktopNotifications.Report(error); }
     }
 
     static unsafe nint DelegateClass() {
@@ -233,7 +235,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
         // macOS calls this only while our app is foreground. Suppress a notification whose
         // asynchronous authorization/delivery raced the user bringing the app forward.
         try { MacNotificationBlock.Present(completion, 0); }
-        catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        catch (Exception error) { DesktopNotifications.Report(error); }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -245,7 +247,7 @@ internal sealed class MacOsDesktopNotificationSink : IDesktopNotificationSink, I
             var id = Text(Send(request, Selector("identifier")));
             var action = Text(Send(response, Selector("actionIdentifier")));
             if (id is not null) Post(() => sink.Respond(id, action));
-        } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        } catch (Exception error) { DesktopNotifications.Report(error); }
         finally { MacNotificationBlock.Finish(completion); }
     }
 }
