@@ -196,7 +196,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
-    public async Task Resume_on_the_pty_route_no_longer_throws() {
+    public async Task Resume_on_the_pty_route_starts_the_pty_launcher() {
         using var wt = new TempDir();
         var pty = new RecordingPtyFactory();
         var factory = Factory(pty, appServerActive: false);
