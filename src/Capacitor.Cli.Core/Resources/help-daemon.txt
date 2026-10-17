@@ -41,8 +41,9 @@ Options for restart:
   (none)                  Restart now. Interactive agents are stopped and resumed
                           on the new daemon. Refused while an eval, a launch or a
                           flow participant's round is in progress.
-  --when-idle             Queue the restart; it applies once no eval, launch or
-                          flow round is in progress. Returns immediately.
+  --when-idle             Queue the restart; it applies once the daemon hosts no
+                          agents at all and no eval or launch is in progress.
+                          Returns immediately.
   --force                 Restart without waiting for a flow round: a flow
                           participant mid-round is parked or ended. An eval or a
                           launch in progress still holds the restart.

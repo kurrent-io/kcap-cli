@@ -181,6 +181,37 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
 
+    /// <summary>A when-idle request waits for no agents at all, mid-turn or not, while a now request
+    /// proceeds with the agent running.</summary>
+    [Test]
+    public async Task A_when_idle_request_waits_for_a_running_interactive_agent_and_now_does_not() {
+        var spy = new SpyStrategy();
+        await using var orch = BuildOrchestrator();
+        orch.SeedAgentForTest("interactive-1", status: "Running").ActivityClock.SetTurnInFlight(true);
+        var c = WiredCoordinator(spy, orch);
+
+        await Assert.That(c.RequestRestart(force: false, whenIdle: true)).IsEqualTo(RestartRequestResult.Queued);
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        await Assert.That(c.RequestRestart(force: false)).IsEqualTo(RestartRequestResult.Restarting);
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_when_idle_request_fires_once_the_last_agent_is_gone() {
+        var spy    = new SpyStrategy();
+        var agents = true;
+        var c      = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.HasAgents = () => agents;
+
+        c.RequestRestart(force: false, whenIdle: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        agents = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
     [Test]
     public async Task A_mid_round_flow_participant_blocks_an_explicit_restart_but_not_a_forced_one() {
         var spy = new SpyStrategy();

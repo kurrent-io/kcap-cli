@@ -21,8 +21,9 @@ internal enum RestartRequestResult {
 /// <summary>
 /// Polls the running binary; a size/mtime change queues a restart-after-update that
 /// fires the chosen <see cref="IRestartStrategy"/> the moment the daemon is idle
-/// (no in-flight eval, launch in admission or mid-turn flow participant, and interactive agents at a turn boundary). Also handles explicit requests from the
-/// control socket. Self-detection is macOS/Linux only (the poll is a no-op on Windows,
+/// (no in-flight eval, launch in admission or mid-turn flow participant, and interactive agents at a turn
+/// boundary). Also handles explicit requests from the control socket; a when-idle request waits for no
+/// agents at all. Self-detection is macOS/Linux only (the poll is a no-op on Windows,
 /// where a running binary can't be replaced); the explicit request path works anywhere.
 /// </summary>
 internal sealed partial class RestartCoordinator : BackgroundService {
@@ -37,6 +38,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal Func<bool>        IsBusy     = static () => false;
     // Busy for a forced restart: evals and launches in admission, not flow participants.
     internal Func<bool>        IsHardBusy = static () => false;
+    internal Func<bool>        HasAgents  = static () => false;
     internal Func<bool>        AtTurnBoundary = static () => true;
     internal TimeSpan          TurnWait   = TimeSpan.FromMinutes(5);
     internal IRestartStrategy  Strategy;
@@ -48,6 +50,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     BinaryStat?   _baseline;
     bool          _pending;
     bool          _force;
+    bool          _whenIdle;
     bool          _fired;
     bool          _selfDetected;
     DateTimeOffset _pendingSince;
@@ -85,6 +88,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         IsHardBusy     = () => evalCache.Count > 0 || orchestrator.LaunchesInAdmission > 0;
         IsBusy         = () => IsHardBusy() || orchestrator.FlowParticipantsMidRound > 0;
         AtTurnBoundary = () => orchestrator.InteractiveAgentsAtTurnBoundary;
+        HasAgents      = () => orchestrator.ActiveCount > 0;
     }
 
     /// <summary>Test factory with the production gate wiring over a real orchestrator.</summary>
@@ -121,14 +125,15 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
     /// <summary>
     /// Explicit restart request from the control socket. <paramref name="force"/> bypasses
-    /// the idle gate. Evaluates immediately (rather than waiting for the next poll tick) so
+    /// the idle gate; <paramref name="whenIdle"/> also waits for every agent to be gone. Evaluates immediately (rather than waiting for the next poll tick) so
     /// a manual restart of an already-idle daemon is prompt, and returns the result so the
     /// caller can ack honestly.
     /// </summary>
-    internal RestartRequestResult RequestRestart(bool force) {
+    internal RestartRequestResult RequestRestart(bool force, bool whenIdle = false) {
         lock (_gate) {
             _pending      = true;
             _selfDetected = false;
+            _whenIdle     = whenIdle;
             if (force) _force = true;
 
             if (!force) {
@@ -168,8 +173,8 @@ internal sealed partial class RestartCoordinator : BackgroundService {
             }
 
             var waitExpired = _selfDetected && _time.GetUtcNow() - _pendingSince >= TurnWait;
-            fire = RestartDecision.ShouldFire(
-                _pending, _force ? IsHardBusy() : IsBusy(), _force, _selfDetected, AtTurnBoundary(), waitExpired);
+            var busy = _force ? IsHardBusy() : _whenIdle ? IsHardBusy() || HasAgents() : IsBusy();
+            fire = RestartDecision.ShouldFire(_pending, busy, _force, _selfDetected, AtTurnBoundary(), waitExpired);
             if (fire) _fired = true; // claim before releasing the lock (single-fire)
         }
 

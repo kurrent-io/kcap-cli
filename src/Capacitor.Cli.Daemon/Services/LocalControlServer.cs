@@ -115,7 +115,7 @@ internal sealed partial class LocalControlServer(
 
         // RequestRestart evaluates immediately and reports what actually happened, so the
         // ack reflects reality (queued vs restarting vs failed vs manual-restart-required).
-        var reply = restart.RequestRestart(force) switch {
+        var reply = restart.RequestRestart(force, whenIdle: mode is "when-idle") switch {
             RestartRequestResult.Restarting     => LocalFrame.RestartAck("restarting"),
             RestartRequestResult.Queued         => LocalFrame.RestartAck("queued"),
             RestartRequestResult.Failed         => LocalFrame.Error("restart failed to start; the daemon will retry"),
