@@ -290,6 +290,31 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(factory.MaxInFlight).IsEqualTo(2);
     }
 
+    /// <summary>A web-UI stop names an agent this daemon is not running yet; it withdraws the candidate so
+    /// the lane never launches it.</summary>
+    [Test]
+    public async Task A_server_stop_of_a_waiting_candidate_withdraws_it_from_the_lane() {
+        var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var f = Build(factory, c => c.ResumeConcurrency = 1);
+        await using var _ = f.Orch;
+        Entry(f, "wait-1");
+        Entry(f, "wait-2");
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => factory.InFlight == 1);
+        var running = factory.Contexts.Single().AgentId;
+        var waiting = running == "wait-1" ? "wait-2" : "wait-1";
+
+        await f.Orch.HandleServerStopAgentForTest(waiting);
+        factory.Gate.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(factory.Contexts.Select(c => c.AgentId)).IsEquivalentTo([running]);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(waiting)).IsNull();
+        await Assert.That(f.Orch.ResumingClaims().Any(c => c.AgentId == waiting)).IsFalse();
+    }
+
     [Test]
     public async Task A_start_that_throws_tries_continue_once_then_interrupts_and_reports_resume_failed() {
         var f = Build(new ResumableFactory { ExitBeforeHandshake = true });

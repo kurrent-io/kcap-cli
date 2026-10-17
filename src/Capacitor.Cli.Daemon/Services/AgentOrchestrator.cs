@@ -956,9 +956,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para>The PID-record arm is load-bearing, not belt-and-braces: <see cref="HandleStopAgent"/> falls
     /// back to <see cref="TryStopByPidRecordAsync"/> for an id this incarnation never registered, which is
     /// how the server's registry-independent physical stop reaps a prior incarnation's survivor. Such a stop
-    /// is NOT the no-op that justifies dropping unknown targets, so admission has to see it.</para></summary>
+    /// is NOT the no-op that justifies dropping unknown targets, so admission has to see it.</para>
+    ///
+    /// <para>A resume-ledger entry is a target for the same reason: the stop withdraws it.</para></summary>
     bool IsKnownStopTarget(string agentId) =>
-        !string.IsNullOrEmpty(agentId) && (_agents.ContainsKey(agentId) || (_pidRecords?.Exists(agentId) ?? false));
+        !string.IsNullOrEmpty(agentId)
+     && (_agents.ContainsKey(agentId)
+      || (_pidRecords?.Exists(agentId) ?? false)
+      || _resumeCandidates.ContainsKey(agentId)
+      || (ResumeLedger is { } ledger && File.Exists(ledger.EntryPath(agentId))));
 
     /// <summary>§3.3: snapshot the processor and, when it is still null, RESERVE the inline slot in the SAME
     /// critical section publication uses. Returns null to mean "run inline, then call
@@ -3912,6 +3918,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// would let a parked consent prompt delay reviewer reaping — the exact inversion of its purpose.</summary>
     internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
+            // An agent a restart left resuming or interrupted has only its ledger entry; a private one is
+            // never the server's to stop.
+            if (TryReadLedger(agentId) is { Launch.IsPrivate: false }) TryDiscardResumeEntry(agentId);
+
             // Phase B (D4 §6.4(3)): no in-memory agent — this may be a survivor of a PRIOR
             // daemon incarnation the server is still trying to stop (S2). Fall back to the PID record:
             // reap by exact identity if a matching live process is still there.
