@@ -253,7 +253,7 @@ internal partial class AgentOrchestrator {
     /// the resolved worktree; no <see cref="AgentInstance"/> exists yet.
     ResumeLedgerEntry BuildPreStartLedgerEntry(
             LaunchAgentCommand cmd, string? prompt, string? model, string? effort, WorktreeInfo worktree,
-            WorkLocation work, LaunchConsentOutcome consent) {
+            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId) {
         var launch = new ResumeLaunchDescriptor(
             Prompt:           prompt,
             Model:            model,
@@ -279,7 +279,7 @@ internal partial class AgentOrchestrator {
             WorktreeIsStandalone: worktree.IsStandalone,
             WorktreeSourceRepo:   worktree.SourceRepo);
 
-        return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, null, launch, prior: null);
+        return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, pinnedSessionId, pinnedSessionId, launch, prior: null);
     }
 
     ResumeLedgerEntry NewRunningEntry(
@@ -306,6 +306,13 @@ internal partial class AgentOrchestrator {
             DaemonInstanceId:      _config.InstanceId);
     }
 
+    /// A Claude session is named by the daemon so the ledger holds it before the transcript exists;
+    /// only a launch that gets a ledger entry is pinned.
+    static string? MintPinnedSessionId(LaunchAgentCommand cmd) =>
+        cmd.Kind == LaunchKind.Default && string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase)
+            ? Guid.NewGuid().ToString()
+            : null;
+
     internal void WriteLedger(AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
         if (ResumeLedger is null || !IsInteractive(agent)) return;
 
@@ -317,13 +324,13 @@ internal partial class AgentOrchestrator {
 
     void WritePreStartLedger(
             LaunchAgentCommand cmd, string? prompt, string? model, string? effort, WorktreeInfo worktree,
-            WorkLocation work, LaunchConsentOutcome consent) {
+            WorkLocation work, LaunchConsentOutcome consent, string? pinnedSessionId) {
         if (ResumeLedger is null || cmd.Kind != LaunchKind.Default) return;
 
         lock (_ledgerLock) {
             // A live agent under this id owns the entry; a colliding launch must not overwrite it.
             if (_agents.ContainsKey(cmd.AgentId)) return;
-            TryWriteLedger(cmd.AgentId, () => BuildPreStartLedgerEntry(cmd, prompt, model, effort, worktree, work, consent));
+            TryWriteLedger(cmd.AgentId, () => BuildPreStartLedgerEntry(cmd, prompt, model, effort, worktree, work, consent, pinnedSessionId));
         }
     }
 

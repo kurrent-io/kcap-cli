@@ -79,7 +79,9 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             McpAllowlist = ctx.McpAllowlist,
             Work           = ctx.Work,
             CodexPosture   = ctx.CodexPosture,
-            PermissionMode = ctx.PermissionMode
+            PermissionMode = ctx.PermissionMode,
+            PinnedSessionId = ctx.PinnedSessionId,
+            ResumeSessionId = ctx.ResumeSessionId
         };
 
         try {

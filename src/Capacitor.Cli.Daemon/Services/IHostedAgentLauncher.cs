@@ -139,6 +139,13 @@ internal sealed record LauncherContext(
     /// <see cref="Services.PromptFile.Pointer"/> to this file in place of the prompt, and lets the agent
     /// read the file's directory.</summary>
     public string? PromptFile { get; init; }
+
+    /// <summary>The vendor session id a fresh interactive launch is told to use, so the daemon knows it
+    /// before the vendor writes anything. Null when the vendor or launch kind is not pinned.</summary>
+    public string? PinnedSessionId { get; init; }
+
+    /// <summary>The vendor session a restart resume reopens instead of starting a new one.</summary>
+    public string? ResumeSessionId { get; init; }
 }
 
 internal readonly record struct LaunchArgs(string[] Args, string? McpConfigPath);

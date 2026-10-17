@@ -2583,6 +2583,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger, _time);
 
+            var pinnedSessionId = resume is null ? MintPinnedSessionId(cmd) : null;
+
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
                 Vendor: cmd.Vendor,
@@ -2631,7 +2633,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 PolicySnapshot: policySnapshot,
                 Journal: journal,
                 FlowRole: isReviewFlow ? cmd.FlowRole : null,
-                IsPrivate: isPrivate
+                IsPrivate: isPrivate,
+                PinnedSessionId: pinnedSessionId
             );
 
             HostedRuntimeStart start;
@@ -2641,7 +2644,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent);
+            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId);
 
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
@@ -2742,8 +2745,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
-                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : null,
-                VendorSession       = start.Transcript?.AcpSessionId,
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : pinnedSessionId,
+                VendorSession       = start.Transcript?.AcpSessionId ?? pinnedSessionId,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,

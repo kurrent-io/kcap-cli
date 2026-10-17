@@ -284,5 +284,8 @@ internal sealed record RuntimeStartContext(
         // role marker. Null for every other launch.
         string?             FlowRole = null,
         // A private agent: nothing in the child's environment may link its session to the server.
-        bool                IsPrivate = false
+        bool                IsPrivate = false,
+        // The vendor session id minted for a fresh interactive launch of a vendor that accepts one up
+        // front. Null for every other launch.
+        string?             PinnedSessionId = null
     );
