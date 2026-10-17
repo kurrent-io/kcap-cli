@@ -8,9 +8,11 @@ public readonly record struct HostedSessionRepository(string Owner, string Name,
     /// <summary>Null outside a repository, or for one with no parseable origin, which the server could not
     /// name anyway.</summary>
     public static HostedSessionRepository? Read(string? cwd) {
-        if (string.IsNullOrEmpty(cwd) || GitRepository.FindRoot(cwd) is null) return null;
+        // The shared git directory holds the config for a main checkout, every linked worktree of it,
+        // and a submodule, whose own lives under the superproject's .git/modules/.
+        if (string.IsNullOrEmpty(cwd) || GitRepository.ResolveCommonDir(cwd) is not { } commonDir) return null;
 
-        if (GitRemoteReader.ReadOriginUrl(GitRepository.ResolveMainRepoRoot(cwd)) is not { Length: > 0 } url) return null;
+        if (GitRemoteReader.ReadOriginUrlFromConfig(Path.Combine(commonDir, "config")) is not { Length: > 0 } url) return null;
 
         var (owner, name) = GitUrlParser.ParseRemoteUrl(url);
         if (string.IsNullOrEmpty(owner) || string.IsNullOrEmpty(name)) return null;
