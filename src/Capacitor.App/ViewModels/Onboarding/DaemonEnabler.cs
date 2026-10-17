@@ -136,6 +136,15 @@ public sealed class DaemonEnabler : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _status, value);
     }
 
+    /// Completes once no <see cref="EnsureAsync"/> is in flight.
+    public async Task QuiescedAsync() {
+        await _single.WaitAsync().ConfigureAwait(false);
+        _single.Release();
+    }
+
+    /// What stopped the enabler short of a running service, or null while it runs or once it has.
+    public string? Problem => Satisfied || Busy ? null : Status ?? Message;
+
     /// Names, installs and starts the daemon. Single-flight: a call while one runs waits it out and
     /// then re-checks, so a sign-in that changed the identity mid-run is not missed.
     public async Task EnsureAsync(CancellationToken ct) {

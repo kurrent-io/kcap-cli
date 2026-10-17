@@ -1121,13 +1121,16 @@ sealed class SetupCommand(
 
         var held          = await HeldDaemonNamesAsync(serverUrl, loggedInto);
         var envName       = Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME");
-        var requestedName = GetArg(args, "--daemon-name") ?? (string.IsNullOrEmpty(envName) ? null : envName);
+        var requestedName = GetArg(args, "--daemon-name");
         // The profile's own name comes before the machine's so a re-run never renames a daemon in use.
         var offeredName   = DaemonNameHolder.FirstFree(
-            requestedName ?? selected?.Daemon?.Name ?? DaemonNameHolder.MachineDefault(), held);
+            requestedName ?? (string.IsNullOrEmpty(envName) ? null : envName)
+                          ?? selected?.Daemon?.Name ?? DaemonNameHolder.MachineDefault(),
+            held);
         string daemonName;
 
         if (noPrompt) {
+            // Only the flag is a demand; every other source is a suggestion that moves to a free name.
             if (requestedName is not null && held.TryGetValue(requestedName, out var holding)) {
                 AnsiConsole.MarkupLine(NameHeldLine(requestedName, holding));
                 await Console.Error.WriteLineAsync($"  Choose a different name with --daemon-name, such as '{offeredName}'.");
@@ -2704,7 +2707,8 @@ sealed class SetupCommand(
         : "  Use provider API key: no [dim](kept; turn on with[/] [cyan]kcap config set use_provider_api_key true[/][dim])[/]";
 
     /// <summary>The closing daemon line. Only a platform with no service manager is pointed at a plain
-    /// background start; anywhere else that would run a second daemon beside the service.</summary>
+    /// background start; anywhere else that would run a second daemon beside the service. A retry is
+    /// suggested only where one can change the answer.</summary>
     internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => (service?.Outcome, service?.Reason) switch {
         (FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled, _) =>
             "  [green]✓[/] The agent daemon runs as a background service.",
@@ -2712,6 +2716,10 @@ sealed class SetupCommand(
             "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
         (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform) =>
             "  [dim]This platform has no service manager kcap supports:[/] start the daemon with [cyan]kcap daemon start -d[/]",
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NotConfigured) =>
+            "  [yellow]![/] The agent daemon service was not set up: this profile has no usable server, or kcap has no daemon binary.",
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NeedsAttention) =>
+            "  [yellow]![/] The existing agent daemon service needs attention, so setup left it alone: see [cyan]kcap daemon service status[/]",
         _ => "  [yellow]![/] The agent daemon service is not running yet: retry with [cyan]kcap daemon service ensure[/]"
     };
 

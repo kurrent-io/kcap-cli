@@ -1060,7 +1060,7 @@ public partial class App : Application {
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
         var quiesced = await HandoffAfterWizardAsync(
-            graph.Auth, () => lane.QuiescedAsync(CancellationToken.None), QuiesceShutdownCap, channel, _time);
+            graph.Auth, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
         _wizardWindow = null;
@@ -1072,6 +1072,13 @@ public partial class App : Application {
         }
 
         return quiesced;
+    }
+
+    // The enabler first: its name save and status reads run outside the lane, and the mutation it
+    // ends in enters the lane only after them.
+    static async Task DaemonThenLaneQuiescedAsync(DaemonEnabler daemon, DaemonMutationLane lane) {
+        await daemon.QuiescedAsync().ConfigureAwait(false);
+        await lane.QuiescedAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     // Avoid a shell spawn when no PATH installer or absolute CLI path is available.

@@ -128,6 +128,21 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.AttentionMessages).IsEmpty();
     }
 
+    /// A live pid on an orphaned label could be another identity's daemon, which a replace would kill.
+    [Test]
+    public async Task Row3_orphan_label_with_a_live_pid_is_attention_only() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: false, state: "installed", daemonPid: 4242));
+        h.Start();
+
+        h.PushUnreachable();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count >= 1, what: "the needs-repair attention");
+        await h.Controller.PhaseClosed;
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+    }
+
     [Test]
     public async Task Row4_no_label_plist_present_daemonPid_null_starts_verified_bootstrap() {
         await using var h = new Harness();
@@ -438,6 +453,65 @@ public class DaemonLifecycleControllerTests {
 
         await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
         await Assert.That(h.Cli.StatusCallCount).IsEqualTo(statusCalls);
+    }
+
+    [Test]
+    public async Task A_deferred_recovery_is_skipped_when_the_daemon_came_back_incompatible() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the startup install");
+        await h.Controller.PhaseClosed;
+        var timersBefore = h.Time.TimersCreated;
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the deferred recovery's wait");
+        h.PushUnreachable(reason: "daemon_incompatible");
+        var statusCalls = h.Cli.StatusCallCount;
+
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await Task.Delay(50); // a negative: give the skipped recovery every chance to run
+
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(statusCalls);
+    }
+
+    /// Each ensure kicks a reattach whose failure is the next unreachable, so recoveries no connect
+    /// follows space out instead of repeating every interval.
+    [Test]
+    public async Task Recoveries_without_a_connect_between_them_back_off() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the startup install");
+        await h.Controller.PhaseClosed;
+
+        var timersBefore = h.Time.TimersCreated;
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the first recovery's wait");
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 2, what: "the first recovery");
+
+        timersBefore = h.Time.TimersCreated;
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the second recovery's wait");
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await Task.Delay(50); // a negative: one interval is no longer enough
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(2);
+
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 3, what: "the doubled recovery");
+    }
+
+    [Test]
+    public async Task The_recovery_interval_doubles_up_to_its_cap() {
+        await Assert.That(DaemonLifecycleController.CurrentRecoveryInterval(0)).IsEqualTo(DaemonLifecycleController.RecoveryInterval);
+        await Assert.That(DaemonLifecycleController.CurrentRecoveryInterval(2)).IsEqualTo(DaemonLifecycleController.RecoveryInterval * 4);
+        await Assert.That(DaemonLifecycleController.CurrentRecoveryInterval(100)).IsEqualTo(DaemonLifecycleController.MaxRecoveryInterval);
     }
 
     [Test]

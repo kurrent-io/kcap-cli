@@ -62,8 +62,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     /// The shortest gap between two recoveries, so a daemon that dies straight after every start
     /// cannot turn the attach loop into a reinstall loop. The service manager's own restart policy
-    /// covers a crash well inside it.
-    internal static readonly TimeSpan RecoveryInterval = TimeSpan.FromSeconds(30);
+    /// covers a crash well inside it. It doubles with every recovery that no connect follows, up to
+    /// <see cref="MaxRecoveryInterval"/>: each ensure kicks a reattach, whose failure is itself the
+    /// next unreachable.
+    internal static readonly TimeSpan RecoveryInterval    = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan MaxRecoveryInterval = TimeSpan.FromMinutes(30);
 
     readonly IDaemonClientService _client;
     readonly IKcapCli _cli;
@@ -105,6 +108,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool _armClaimed;
     DateTimeOffset? _lastRecovery; // under _lock
     bool _recoveryPending;         // under _lock
+    int _recoveriesSinceConnect;   // under _lock
     bool _disposed;
     int _generation;
     (AttachState State, string? Reason) _lastObserved = (AttachState.Connecting, null);
@@ -174,6 +178,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         lock (_lock) {
             _generation++;
             _lastObserved = (status.State, status.Reason);
+            if (status.State == AttachState.Connected) _recoveriesSinceConnect = 0;
 
             isFirstTerminalOutcome = status.State != AttachState.Connecting && !_armClaimed;
             if (isFirstTerminalOutcome) _armClaimed = true;
@@ -361,15 +366,16 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// A daemon that went away mid-run: the same ensure as at startup, at most once per
-    /// <see cref="RecoveryInterval"/>. One inside the interval is deferred to its end rather than
-    /// dropped, because the attach loop reports unreachable once per transition, not per retry.
+    /// <see cref="CurrentRecoveryInterval"/>. One inside the interval is deferred to its end rather
+    /// than dropped, because the attach loop reports unreachable once per transition, not per retry.
     async Task RunRecoveryAsync((AttachState State, string? Reason) triggering) {
         TimeSpan wait;
         lock (_lock) {
             if (_recoveryPending) return;
             _recoveryPending = true;
-            var since = _lastRecovery is { } last ? _time.GetUtcNow() - last : RecoveryInterval;
-            wait = since >= RecoveryInterval ? TimeSpan.Zero : RecoveryInterval - since;
+            var interval = CurrentRecoveryInterval(_recoveriesSinceConnect);
+            var since    = _lastRecovery is { } last ? _time.GetUtcNow() - last : interval;
+            wait = since >= interval ? TimeSpan.Zero : interval - since;
         }
 
         try {
@@ -381,12 +387,19 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         lock (_lock) {
             _recoveryPending = false;
-            // Came back on its own (a service manager restart) while this waited.
-            if (_lastObserved.State != AttachState.Unreachable) return;
+            // Came back on its own (a service manager restart) while this waited, or came back too
+            // new or too old for this app, which no ensure fixes.
+            if (_lastObserved.State != AttachState.Unreachable || _lastObserved.Reason == IncompatibleReason) return;
             _lastRecovery = _time.GetUtcNow();
+            _recoveriesSinceConnect++;
         }
 
         await RunStartupBranchAsync(triggering).ConfigureAwait(false);
+    }
+
+    internal static TimeSpan CurrentRecoveryInterval(int recoveriesSinceConnect) {
+        var doubled = RecoveryInterval * Math.Pow(2, Math.Min(recoveriesSinceConnect, 16));
+        return doubled < MaxRecoveryInterval ? doubled : MaxRecoveryInterval;
     }
 
     /// The ensure branch, at startup and on every recovery. Closes the startup phase only once this
@@ -419,6 +432,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                     if (snap is null || snap.TxnActive) return;
                 }
 
+                // A daemon that attached during the reads above needs nothing, whatever they saw.
+                if (IsCurrentlyAttached()) return;
+
                 await RunStartupMatrixAsync(snap, _lifetime.Token).ConfigureAwait(false);
             } finally {
                 _gate.Release();
@@ -447,6 +463,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (state == ServiceState.Installed) { // loaded, inactive
             if (!snap.UnitPresent) {
+                // A live pid could be another identity's daemon on this name, and a replace would kill it.
+                if (snap.DaemonPid is not null) {
+                    _surface.Attention("The daemon service label is loaded but its unit file is missing — needs repair.");
+                    return;
+                }
+
                 // Our own service, broken: repaired without asking, as setup would.
                 var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
                 if (missing is not null) _surface.Status(missing);

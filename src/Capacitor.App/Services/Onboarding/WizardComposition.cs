@@ -172,7 +172,8 @@ internal static class WizardComposition {
                 history.Run,
                 daemon.Satisfied,
                 machine,
-                signIn.Satisfied ? options.ResolveIdentity()?.Server : null);
+                signIn.Satisfied ? options.ResolveIdentity()?.Server : null,
+                daemon.Problem);
         }, options.UrlOpener);
         IWizardStep[] steps = [welcome, signIn, harnesses, history, done];
 

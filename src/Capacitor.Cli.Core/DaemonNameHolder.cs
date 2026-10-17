@@ -3,9 +3,6 @@ using System.Text.Json;
 
 namespace Capacitor.Cli.Core;
 
-/// <summary>A daemon connected under a name from another machine on this account.</summary>
-public readonly record struct DaemonNameHolding(string Platform, string? Version);
-
 /// <summary>Daemon names other machines on this account hold. The server refuses a second daemon with
 /// a held name, so setup offers only a free one. Best-effort: an unreachable server or an unreadable
 /// answer finds nothing held.

@@ -203,8 +203,8 @@ on that screen becomes your default visibility, and the Import screen's answer
 runs the import from this machine, so the terminal does not ask either again.
 
 The daemon step asks only for a name. It suggests --daemon-name, else
-KCAP_DAEMON_NAME, else this profile's name, else this machine's name, and when
-a daemon on another machine of your account already holds it, the first free
+KCAP_DAEMON_NAME, else the profile's daemon name, else this machine's name;
+when a daemon on another machine of your account holds it, the first free
 of name-1, name-2, and so on. Setup then installs the daemon as a background
 service and starts it, so it runs after a restart and the service manager
 restarts it if it dies. After a browser answer the terminal asks nothing more:

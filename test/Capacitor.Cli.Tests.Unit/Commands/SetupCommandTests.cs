@@ -682,6 +682,15 @@ public class SetupCommandTests {
             .Contains("kcap daemon start -d");
     }
 
+    /// <summary>A refusal no retry can change says why instead of sending the user to the same refusal.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionReasons.NotConfigured)]
+    [Arguments(FirstRunMachineActionReasons.NeedsAttention)]
+    public async Task DaemonClosingLine_suggests_no_retry_for_a_stable_refusal(string reason) =>
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Refused, reason)))
+            .DoesNotContain("retry");
+
     /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
     /// changes it, in the direction that would change it.</summary>
     [Test]

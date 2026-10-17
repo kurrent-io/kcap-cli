@@ -120,6 +120,31 @@ public class DaemonEnablerTests {
         }
     }
 
+    /// The wizard handoff waits on this: a status read is not lane work, so the lane alone looks idle.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Quiesced_waits_for_an_ensure_still_reading_status() {
+        var (beforeRead, afterRead) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var status = new TaskCompletionSource<ServiceSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Cli.StatusBehavior = _ => status.Task;
+
+            var ensure   = h.Ensure();
+            var quiesced = h.Vm.QuiescedAsync();
+            await Task.Delay(50); // a negative: give a premature quiesce every chance to complete
+            var beforeRead = quiesced.IsCompleted;
+
+            status.SetResult(Snap(state: "some_future_state"));
+            await ensure;
+            await quiesced;
+
+            return (beforeRead, quiesced.IsCompleted);
+        });
+
+        await Assert.That(beforeRead).IsFalse();
+        await Assert.That(afterRead).IsTrue();
+    }
+
     // ── gate / precondition rows ────────────────────────────────────────────
 
     [Test]
