@@ -759,7 +759,10 @@ partial class WatchCommand(
                             await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
                             break;
                         case HandedEndOutcome.Failed:
-                            MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
+                            if (await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, repository: null, "hook_handed"))
+                                MuseSessionEndRequest.Release(handed.ClaimedPath);
+                            else
+                                MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
                             break;
                     }
                 }
