@@ -29,7 +29,9 @@ public static class DurableDirectory {
         components.Reverse();
 
         foreach (var component in components) {
-            if (!Directory.Exists(component)) {
+            var existed = Directory.Exists(component);
+
+            if (!existed) {
                 if (mode is { } m) Directory.CreateDirectory(component, m);
                 else Directory.CreateDirectory(component);
 
@@ -39,7 +41,14 @@ public static class DurableDirectory {
                 FaultPoints.Hit($"mkdir:{component}");
             }
 
-            Sync(Path.GetDirectoryName(component)!);
+            var parent = Path.GetDirectoryName(component)!;
+
+            try {
+                Sync(parent);
+            } catch (DirectorySyncDeniedException) when (existed) {
+                // An ancestor that predates this call and that the caller may not read cannot be
+                // synced, and whoever created it was not this call.
+            }
         }
     }
 

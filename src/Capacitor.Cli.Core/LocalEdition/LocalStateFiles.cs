@@ -42,8 +42,6 @@ public static partial class LocalStateFiles {
     }
 
     static void Write(string path, byte[] bytes) {
-        FaultPoints.Hit($"rename:{path}");
-
         for (var attempt = 1; ; attempt++) {
             try {
                 AtomicFile.Replace(path, bytes, OperatingSystem.IsWindows() ? null : OwnerReadWrite, followLink: false, durable: true);
@@ -54,7 +52,6 @@ public static partial class LocalStateFiles {
             }
         }
 
-        FaultPoints.Hit($"renamed:{path}");
         DurableDirectory.Sync(Path.GetDirectoryName(path)!);
     }
 

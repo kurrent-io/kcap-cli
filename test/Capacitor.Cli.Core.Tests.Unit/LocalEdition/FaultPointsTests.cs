@@ -24,7 +24,7 @@ public class FaultPointsTests {
     }
 
     [Test]
-    public async Task A_state_write_hits_rename_renamed_then_sync_in_order() {
+    public async Task A_state_write_hits_flush_rename_renamed_then_sync_in_order() {
         var root = new LocalRoot(Tmp.PathTo("local"));
         using var lease = await LifecycleLease.AcquireAsync(root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
         var hits = new List<string>();
@@ -33,6 +33,6 @@ public class FaultPointsTests {
         lease.Begin("setup", "start", ServerStart.Deny);
 
         await Assert.That(string.Join("|", hits)).IsEqualTo(
-            $"rename:{root.JournalPath}|renamed:{root.JournalPath}|sync:{root.Directory}");
+            $"flush:{root.JournalPath}|rename:{root.JournalPath}|renamed:{root.JournalPath}|sync:{root.Directory}");
     }
 }
