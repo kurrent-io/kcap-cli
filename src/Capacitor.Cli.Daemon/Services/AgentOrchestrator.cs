@@ -68,7 +68,7 @@ internal record AgentInstance(
     public string?              VendorSession     { get; set; }
 
     /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
-    /// worktree, attachments, PID record and resume-ledger entry.
+    /// worktree, attachments, MCP config, vendor launcher state, PID record and resume-ledger entry.
     public bool                 ResumePending     { get; set; }
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
@@ -5490,7 +5490,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { await journal.CompleteAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "completing transcript journal", agentId); }
         }
 
-        if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
+        // The launcher's teardown deletes the MCP config and the vendor's project link, which a
+        // pending resume still needs.
+        if (!agent.ResumePending && _launchers.TryGetValue(agent.Vendor, out var launcher)) {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
         }
 

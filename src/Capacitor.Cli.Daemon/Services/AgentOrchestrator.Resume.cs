@@ -147,7 +147,7 @@ internal partial class AgentOrchestrator {
         lock (_ledgerLock) {
             try {
                 ledger.Delete(agentId);
-            } catch (IOException ex) {
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 LogResumeLedgerFailed(ex, "deleting", agentId);
             }
         }
@@ -156,7 +156,7 @@ internal partial class AgentOrchestrator {
     void TryWriteLedger(string agentId, Func<ResumeLedgerEntry> build) {
         try {
             ResumeLedger!.Write(build());
-        } catch (IOException ex) {
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogResumeLedgerFailed(ex, "writing", agentId);
         }
     }
@@ -164,7 +164,7 @@ internal partial class AgentOrchestrator {
     ResumeLedgerEntry? TryReadLedger(string agentId) {
         try {
             return ResumeLedger?.TryRead(agentId);
-        } catch (IOException ex) {
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogResumeLedgerFailed(ex, "reading", agentId);
             return null;
         }

@@ -115,8 +115,15 @@ public class AgentOrchestratorResumeLedgerTests {
 
     [Test]
     public async Task A_pending_resume_keeps_the_entry_and_the_pid_record() {
-        await using var orch = Build();
-        var agent = orch.SeedAgentForTest("ledger-pending");
+        var launchers = AgentOrchestratorHarness.Launcher("codex");
+        var launcher  = (SpyHostedAgentLauncher)launchers["codex"];
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), launchers);
+        using var tmp = new TempDir();
+        var worktree  = tmp.CreateDir("worktree");
+        var mcpConfig = tmp.CreateFile("mcp.json", "{}");
+        var agent = orch.SeedAgentForTest("ledger-pending", worktree: new WorktreeInfo(worktree, "b", "/repo"));
+        agent.McpConfigPath = mcpConfig;
         orch.WriteLedger(agent, cmd: null, origin: "local", consent: null);
         orch.WritePidRecordForTest(new AgentPidRecord(
             "ledger-pending", 999_999, "identity", PidIdentityKind.Present, "Default", "codex", null, null,
@@ -127,6 +134,36 @@ public class AgentOrchestratorResumeLedgerTests {
 
         await Assert.That(orch.ResumeLedger!.TryRead("ledger-pending")).IsNotNull();
         await Assert.That(orch.PidRecordsForTest().Any(r => r.AgentId == "ledger-pending")).IsTrue();
+        await Assert.That(Directory.Exists(worktree)).IsTrue();
+        await Assert.That(File.Exists(mcpConfig)).IsTrue();
+        await Assert.That(launcher.CleanupCalls).IsEqualTo(0);
+    }
+
+    /// The directory is left read-only, so the write fails with an access error rather than an
+    /// IOException; the launch must still complete.
+    [Test]
+    public async Task An_unwritable_ledger_does_not_fail_the_launch() {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var repoPath = GitRepo.CreateWithCommit();
+        var logger = new CapturingLogger<AgentOrchestrator>();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [new ObservingAcpFactory()], logger: logger);
+        var resumeDir = Path.GetDirectoryName(orch.ResumeLedger!.EntryPath("ledger-denied"))!;
+        Directory.CreateDirectory(resumeDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try {
+            await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("ledger-denied", repoPath));
+
+            await Assert.That(orch.GetAgentForTest("ledger-denied")).IsNotNull();
+            await Assert.That(orch.ResumeLedger!.TryRead("ledger-denied")).IsNull();
+            await Assert.That(logger.Entries.Any(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning
+                                                   && e.Message.Contains("Resume ledger")
+                                                   && e.Message.Contains("ledger-denied"))).IsTrue();
+        } finally {
+            File.SetUnixFileMode(resumeDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     [Test]
