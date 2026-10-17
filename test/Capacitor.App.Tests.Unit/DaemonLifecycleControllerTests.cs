@@ -1558,6 +1558,13 @@ sealed class FakeKcapCli : IKcapCli {
         return StatusBehavior(ct);
     }
 
+    public readonly List<string> NamedStatusReads = [];
+    public Func<string, Task<ServiceSnapshot?>> NamedStatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(null);
+    public Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) {
+        NamedStatusReads.Add(daemonName);
+        return NamedStatusBehavior(daemonName);
+    }
+
     public bool SupportsRetire = true;
     public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => Task.FromResult(SupportsRetire);
 

@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
+using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
 
@@ -21,27 +22,40 @@ static class SetupDaemonService {
     /// says it asked for ever. There is no next tick here to retry on, unlike the poll loop's.</summary>
     const int ReportAttempts = 3;
 
+    /// <param name="previousName">The daemon name the profile carried before this run saved its own.</param>
     /// <param name="ladder">Test seam for the ensure ladder; production resolves the real service
     /// manager. Null return means the platform has no service manager at all.</param>
-    public static async Task<FirstRunMachineActionResult> EnsureAsync(
-            ConfigRoot                      root,
-            ProfileContext                  saved,
-            UserHome                        home,
-            TimeProvider                    time,
-            Func<Task<ServiceEnsureJson?>>? ladder = null) {
+    /// <returns>What the ensure did, and a line naming the old daemon's service when a rename retired it
+    /// or left it installed.</returns>
+    public static async Task<(FirstRunMachineActionResult Result, string? RenameLine)> EnsureAsync(
+            ConfigRoot               root,
+            ProfileContext           saved,
+            UserHome                 home,
+            TimeProvider             time,
+            string?                  previousName = null,
+            Func<Task<FlowEnsure?>>? ladder       = null) {
         try {
-            var run = ladder ?? (() => DaemonServiceCommands.FlowEnsureAsync(root, saved, home, time));
+            var run = ladder ?? (() => DaemonServiceCommands.FlowEnsureAsync(root, saved, home, time, previousName));
 
             return await run() is { } outcome
-                ? EnsureFlowMap.Map(outcome)
-                : new FirstRunMachineActionResult(
-                      FirstRunMachineActionOutcomes.Refused,
-                      FirstRunMachineActionReasons.UnsupportedPlatform);
+                ? (EnsureFlowMap.Map(outcome.Result), RenameLine(outcome))
+                : (new FirstRunMachineActionResult(
+                       FirstRunMachineActionOutcomes.Refused,
+                       FirstRunMachineActionReasons.UnsupportedPlatform), null);
         } catch (Exception) {
             // Something was attempted, so this is a failure rather than a refusal.
-            return new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null);
+            return (new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null), null);
         }
     }
+
+    static string? RenameLine(FlowEnsure outcome) => outcome switch {
+        { Retired: { } retired } =>
+            $"  [dim]Removed the service for the daemon's previous name, {Markup.Escape(retired)}.[/]",
+        { LeftInstalled: { } left } =>
+            $"  [yellow]![/] The service for the daemon's previous name, {Markup.Escape(left)}, is still installed. "
+          + $"Remove it with [cyan]kcap daemon service uninstall --name {Markup.Escape(left)}[/]",
+        _ => null,
+    };
 
     /// <summary>Answers a daemon-service request the browser left outstanding with what
     /// <see cref="EnsureAsync"/> did. Nothing outstanding reports nothing.</summary>

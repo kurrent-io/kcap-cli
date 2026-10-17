@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalIpc;
 using ReactiveUI.Reactive;
@@ -66,6 +67,7 @@ public sealed class DaemonEnabler : ReactiveObject {
 
     MutationRequest? _request;
     ObservedEvidence? _evidence;
+    string? _replacedName;
 
     DaemonRow _row = DaemonRow.StatusUnknown;
     DaemonAffordance _affordance;
@@ -157,24 +159,7 @@ public sealed class DaemonEnabler : ReactiveObject {
             await ClassifyAsync(ct).ConfigureAwait(true);
             if (Satisfied) return;
 
-            switch (Affordance) {
-                case DaemonAffordance.Install:
-                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Start:
-                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Repair:
-                    await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Takeover when Row == DaemonRow.ManualIdentityMatch:
-                    // The same identity outside the service: adopting it changes no one else's daemon.
-                    await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Takeover:
-                    await RunConsentedReplaceAsync(ct).ConfigureAwait(true);
-                    break;
-            }
+            await RunAffordanceAsync(ct).ConfigureAwait(true);
         } catch (OperationCanceledException) {
             Status = DetachedMessage;
         } catch (Exception ex) {
@@ -186,11 +171,67 @@ public sealed class DaemonEnabler : ReactiveObject {
         }
     }
 
+    async Task RunAffordanceAsync(CancellationToken ct) {
+        switch (Affordance) {
+            case DaemonAffordance.Install:
+                await InstallAsync(ct).ConfigureAwait(true);
+                break;
+            case DaemonAffordance.Start:
+                await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(true);
+                break;
+            case DaemonAffordance.Repair:
+                await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
+                break;
+            case DaemonAffordance.Takeover when Row == DaemonRow.ManualIdentityMatch:
+                // The same identity outside the service: adopting it changes no one else's daemon.
+                await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
+                break;
+            case DaemonAffordance.Takeover:
+                await RunConsentedReplaceAsync(ct).ConfigureAwait(true);
+                break;
+        }
+    }
+
+    /// A name that replaced a configured one retires that name's installed service in the same
+    /// transaction. A refused retire changed nothing, so the matrix is read again and run without it:
+    /// the saved name still gets its daemon, and the lane presents the refusal with the old service id.
+    async Task InstallAsync(CancellationToken ct) {
+        if (await RetireTargetAsync(ct).ConfigureAwait(true) is not { } retiring) {
+            await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(true);
+            return;
+        }
+
+        var outcome = await RunMutationAsync(MutationVerb.Replace, ct, retiring).ConfigureAwait(true);
+        if (outcome is not MutationOutcome.Failed { ExitCode: VerifyExitCodes.RetireRefused }) return;
+
+        await ClassifyAsync(ct).ConfigureAwait(true);
+        if (!Satisfied) await RunAffordanceAsync(ct).ConfigureAwait(true);
+    }
+
+    /// The replaced name's service id, when its service is installed and the CLI can retire it. Asked
+    /// once per replaced name.
+    async Task<string?> RetireTargetAsync(CancellationToken ct) {
+        if (_replacedName is not { } replaced) return null;
+        _replacedName = null;
+
+        var retiring = DaemonStore.Sanitize(replaced);
+        if (retiring == DaemonStore.Sanitize(_request!.DaemonName)) return null;
+
+        if (await _cli.ServiceStatusAsync(replaced, ct).ConfigureAwait(true) is not { } old
+            || !(old.UnitPresent || ServiceStateClassifier.Parse(old.State) is ServiceState.Installed or ServiceState.Running))
+            return null;
+
+        return await _cli.SupportsServiceRetireAsync(ct).ConfigureAwait(true) ? retiring : null;
+    }
+
     async Task<bool> SaveNameAsync(CancellationToken ct) {
         if (_machine is null || await _pickName(ct).ConfigureAwait(true) is not { } name) return true;
 
         _machine.DaemonName = name;
-        if (await _machine.SaveAsync(ct).ConfigureAwait(true)) return true;
+        if (await _machine.SaveAsync(ct).ConfigureAwait(true)) {
+            _replacedName = _machine.ReplacedName ?? _replacedName;
+            return true;
+        }
 
         Status = _machine.Message;
         return false;
@@ -368,17 +409,19 @@ public sealed class DaemonEnabler : ReactiveObject {
         await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
     }
 
-    async Task RunMutationAsync(MutationVerb verb, CancellationToken ct) {
-        var request = _request! with { Verb = verb };
+    async Task<MutationOutcome> RunMutationAsync(MutationVerb verb, CancellationToken ct, string? retireServiceId = null) {
+        var request = _request! with { Verb = verb, RetireServiceId = retireServiceId };
         var outcome = await _runMutation(request, ct).ConfigureAwait(true);
 
         // The lane's own outcome IS the predicate — never a status snapshot read afterwards.
         Status = OutcomeStatus(verb, outcome);
-        if (outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) return;
+        if (outcome is not (MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout)) return outcome;
 
         Satisfied = true;
         _evidence = await _observation.ObserveAsync(request, ct).ConfigureAwait(true);
         if (IdentityMatches(_evidence, request)) await ApplyPendingClaimAsync(request, _evidence).ConfigureAwait(true);
+
+        return outcome;
     }
 
     /// Reads the live policy first because the put replaces it wholesale, and stays untokened so a

@@ -55,13 +55,20 @@ public class SetupDaemonServiceTests {
             })]
         };
 
-    static Task<FirstRunMachineActionResult> EnsureAsync(Func<Task<ServiceEnsureJson?>>? ladder = null) =>
+    static async Task<FirstRunMachineActionResult> EnsureAsync(Func<Task<FlowEnsure?>>? ladder = null) =>
+        (await EnsureWithLineAsync(ladder)).Result;
+
+    static Task<(FirstRunMachineActionResult Result, string? RenameLine)> EnsureWithLineAsync(
+            Func<Task<FlowEnsure?>>? ladder = null) =>
         SetupDaemonService.EnsureAsync(
             new ConfigRoot("/nonexistent-config-root"),
             new ProfileContext(new(ServerUrl, "default", null, null), new ProfileConfig()),
             new UserHome("/nonexistent-home"),
             TimeProvider.System,
-            ladder ?? (() => Task.FromResult<ServiceEnsureJson?>(null)));
+            previousName: null,
+            ladder ?? (() => Task.FromResult<FlowEnsure?>(null)));
+
+    static readonly ServiceEnsureJson Installed = new("kcap-1", "not_installed", "install", "installed", Verified: true);
 
     static Task ReportAsync(Channel channel, FirstRunMachineActionResult? result = null) =>
         SetupDaemonService.ReportAsync(
@@ -134,10 +141,35 @@ public class SetupDaemonServiceTests {
 
     [Test]
     public async Task The_ladder_outcome_is_returned_to_setup() {
-        var result = await EnsureAsync(() => Task.FromResult<ServiceEnsureJson?>(
-            new("kcap", "running", "none", "already_enabled")));
+        var result = await EnsureAsync(() => Task.FromResult<FlowEnsure?>(
+            new(new("kcap", "running", "none", "already_enabled"))));
 
         await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyEnabled);
+    }
+
+    [Test]
+    public async Task No_rename_says_nothing_about_an_old_service() {
+        var (_, line) = await EnsureWithLineAsync(() => Task.FromResult<FlowEnsure?>(new(Installed)));
+
+        await Assert.That(line).IsNull();
+    }
+
+    [Test]
+    public async Task A_retired_service_is_named() {
+        var (result, line) = await EnsureWithLineAsync(() => Task.FromResult<FlowEnsure?>(new(Installed, Retired: "kcap")));
+
+        await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Enabled);
+        await Assert.That(line).Contains("kcap");
+        await Assert.That(line).DoesNotContain("uninstall");
+    }
+
+    /// <summary>A service the rename could not retire still runs a second daemon, so the line says how to
+    /// remove it.</summary>
+    [Test]
+    public async Task A_service_left_installed_comes_with_its_uninstall_command() {
+        var (_, line) = await EnsureWithLineAsync(() => Task.FromResult<FlowEnsure?>(new(Installed, LeftInstalled: "kcap")));
+
+        await Assert.That(line).Contains("kcap daemon service uninstall --name kcap");
     }
 
     /// <summary>A refused report is retried, because there is no next tick here to retry on.</summary>
