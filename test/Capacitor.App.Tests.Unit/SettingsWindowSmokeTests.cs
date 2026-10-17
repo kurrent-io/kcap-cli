@@ -10,13 +10,59 @@ using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Setup;
+using NSubstitute;
 
 namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel("AvaloniaSession")]
 public class SettingsWindowSmokeTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
+    [Test]
+    public Task Sidebar_supports_mouse_keyboard_and_small_window_navigation() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example", Daemon = new DaemonSettings { Name = "daemon-a", MaxAgents = 5 } }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Settle(window);
+            var tabs = window.FindControl<TabControl>("SettingsTabs")!;
+            var daemon = window.FindControl<TabItem>("DaemonTab")!;
+            var profiles = window.FindControl<TabItem>("ProfilesTab")!;
+            var alerts = window.FindControl<TabItem>("NotificationsTab")!;
+            await Assert.That(window.CanResize).IsTrue();
+            await Assert.That(profiles.IsEffectivelyVisible).IsFalse();
+            var daemonPosition = daemon.TranslatePoint(default, window)!.Value;
+            var alertsPosition = alerts.TranslatePoint(default, window)!.Value;
+            await Assert.That(alertsPosition.X).IsEqualTo(daemonPosition.X);
+            await Assert.That(alertsPosition.Y).IsGreaterThan(daemonPosition.Y);
+
+            Click(window, alerts);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(alerts);
+            await Assert.That(window.FindControl<ToggleSwitch>("PermissionNotificationsToggle")!.IsEffectivelyVisible).IsTrue();
+            alerts.Focus(NavigationMethod.Tab);
+            window.KeyPressQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.ArrowUp, RawInputModifiers.None);
+            Settle(window);
+            await Assert.That(tabs.SelectedItem).IsEqualTo(daemon);
+
+            window.Width = window.MinWidth;
+            window.Height = window.MinHeight;
+            Settle(window);
+            Click(window, alerts);
+            var toggle = window.FindControl<ToggleSwitch>("IdleNotificationsToggle")!;
+            var bottom = toggle.TranslatePoint(new Point(toggle.Bounds.Width, toggle.Bounds.Height), window)!.Value;
+            await Assert.That(bottom.X).IsLessThan(window.ClientSize.Width);
+            await Assert.That(bottom.Y).IsLessThan(window.ClientSize.Height);
+        } finally { window.Close(); }
+    });
 
     [Test]
     public Task Window_binds_edits_status_and_command_gates() => AvaloniaSession.RunOnUiAsync(async () => {
@@ -62,8 +108,8 @@ public class SettingsWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(rename.IsEffectivelyEnabled).IsTrue();
             await Assert.That(window.Title).IsEqualTo("Kurrent Capacitor — Settings");
-            await Assert.That(window.Bounds.Width).IsEqualTo(540d);
-            await Assert.That(window.Bounds.Height).IsEqualTo(580d);
+            await Assert.That(window.Bounds.Width).IsEqualTo(860d);
+            await Assert.That(window.Bounds.Height).IsEqualTo(640d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);
             tabs.SelectedIndex = 2; // Daemon, Profiles (hidden — no profiles VM here), Notifications
             Dispatcher.UIThread.RunJobs();
@@ -231,7 +277,75 @@ public class SettingsWindowSmokeTests {
         } finally { window.Close(); }
     });
 
-    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null) {
+    [Test]
+    public Task Capture_page_saves_edited_visibility_and_scope_through_the_view() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications);
+        var window = new SettingsWindow { DataContext = vm, Width = 760, Height = 520 };
+        try {
+            window.Show();
+            Click(window, window.FindControl<TabItem>("CaptureTab")!);
+            var view = window.GetVisualDescendants().OfType<CaptureSettingsView>().Single();
+            var visibility = view.FindControl<ComboBox>("VisibilityInput")!;
+            visibility.SelectedValue = "private";
+            var repos = view.FindControl<TextBox>("AllowedReposInput")!;
+            repos.Text = "team/project";
+            Settle(window);
+            await Assert.That(vm.Capture.Visibility).IsEqualTo("private");
+            await Assert.That(vm.Capture.AllowedRepos).IsEqualTo("team/project");
+            var save = view.FindControl<Button>("SaveCaptureButton")!;
+            save.BringIntoView();
+            Settle(window);
+            Click(window, save);
+            await WaitUntilAsync(() => !vm.Capture.Busy && vm.Capture.Message?.Contains("saved") == true);
+            var saved = new SettingsProfileStore(Config.Root, "work", "https://work.example").LoadProfile();
+            await Assert.That(saved.DefaultVisibility).IsEqualTo("private");
+            await Assert.That(saved.AllowedRepos).IsEquivalentTo(new[] { "team/project" });
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Harness_page_routes_connect_and_rescan_buttons_and_blocks_rename_during_setup() => AvaloniaSession.RunOnUiAsync(async () => {
+        ConfigMutator.Mutate(Config.Root, c => c with { Profiles = new() {
+            ["work"] = new Profile { ServerUrl = "https://work.example" }
+        } });
+        var cli = Substitute.For<IKcapCli>();
+        var completion = new TaskCompletionSource<ProcessResult>();
+        cli.PluginInstallAsync(Arg.Any<string?>(), Arg.Any<CancellationToken>(), Arg.Any<IReadOnlyList<string>?>()).Returns(completion.Task);
+        var scans = 0;
+        var harnesses = new HarnessesSettingsViewModel(new SettingsProfileStore(Config.Root, "work", "https://work.example"), cli, _ => {
+            scans++;
+            return Task.FromResult<IReadOnlyDictionary<HarnessId, DetectedAgent>>(new Dictionary<HarnessId, DetectedAgent> {
+                [HarnessId.Codex] = new(true, false)
+            });
+        });
+        using var notifications = new NotificationSettingsService(Config.PathTo("notifications.json"));
+        using var vm = MakeViewModel(notifications, harnesses: harnesses);
+        var window = new SettingsWindow { DataContext = vm };
+        try {
+            window.Show();
+            Click(window, window.FindControl<TabItem>("HarnessesTab")!);
+            var view = window.GetVisualDescendants().OfType<HarnessesSettingsView>().Single();
+            Click(window, view.FindControl<Button>("RescanHarnessesButton")!);
+            await WaitUntilAsync(() => harnesses.Rows.Count == 1);
+            Settle(window);
+            var connect = view.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Content, "Connect"));
+            Click(window, connect);
+            await Assert.That(harnesses.Busy).IsTrue();
+            await Assert.That(vm.CanEdit).IsFalse();
+            await Assert.That(view.FindControl<Button>("RescanHarnessesButton")!.IsEffectivelyEnabled).IsFalse();
+            completion.SetResult(new ProcessResult(0, "", "", false));
+            await WaitUntilAsync(() => !harnesses.Busy);
+            await Assert.That(harnesses.Rows[0].Message!).Contains("Setup completed");
+            Click(window, view.FindControl<Button>("RescanHarnessesButton")!);
+            await WaitUntilAsync(() => scans == 2);
+        } finally { completion.TrySetResult(new ProcessResult(1, "", "canceled", false)); window.Close(); }
+    });
+
+    SettingsViewModel MakeViewModel(NotificationSettingsService notifications, IDesktopNotificationAccess? access = null, HarnessesSettingsViewModel? harnesses = null) {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["settings/1"]));
         service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
@@ -239,7 +353,7 @@ public class SettingsWindowSmokeTests {
             service, new ScriptedLocalControlOps(), (_, _) => Task.FromResult(false),
             (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded()),
             (_, _) => Task.FromResult(false), _ => Task.FromResult(false), true, Task.CompletedTask,
-            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access);
+            (_, _) => Task.FromResult(true), notificationSettings: notifications, notificationAccess: access, harnesses: harnesses);
     }
 
     static async Task WaitUntilAsync(Func<bool> ready) {
