@@ -74,7 +74,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. Press Start daemon to launch sessions.";
+        "The daemon isn't running. The app is starting its service; press Start daemon to try again now.";
     internal const string DaemonIncompatibleNotice =
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";

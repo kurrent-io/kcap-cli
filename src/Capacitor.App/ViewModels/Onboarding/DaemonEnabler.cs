@@ -1,6 +1,4 @@
 using System.ComponentModel;
-using System.Reactive;
-using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
@@ -10,34 +8,36 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// One classified row of the daemon step's matrix — the step's whole decision, named.
+/// One classified row of the daemon matrix — the enabler's whole decision, named.
 public enum DaemonRow {
     CliMissing, RequiresSignIn, NoServerConfigured, BinaryUnresolved, StatusUnknown, TransactionActive,
     AlreadyEnabled, OwnedIdentityMismatch, ManualIdentityMatch, ManualIdentityMismatch,
     OrphanLabel, StaleMarker, RunningUnconfirmed, Stopped, NotInstalled,
 }
 
-/// The single action a row offers, or None.
+/// The single action a row calls for, or None.
 public enum DaemonAffordance { None, Install, Start, Takeover, Repair }
 
-/// Daemon enablement over the lifecycle state matrix; mutations update this step's status only — dialogs/recovery are presented by the channel's single consumer.
-public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
-
-    internal const string CliMissingMessage    = "kcap isn't available on this machine. Install it, then check again.";
-    internal const string RequiresSignInMessage = "Go Back and sign in before the daemon can be enabled.";
-    internal const string NoServerMessage       = "No workspace is configured. Go Back to Sign in.";
-    internal const string BinaryUnresolvedMessage = "kcap can't find its daemon binary. Reinstall kcap, then check again.";
-    internal const string StatusUnknownMessage = "Couldn't read the daemon service. Check again.";
-    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state. Check again.";
+/// <summary>
+/// Setup's daemon: named, installed as a service and started once sign-in commits, without a question.
+/// Only a service that belongs to another server or profile is replaced on the user's word.
+/// Mutations go through the app lane; their outcomes are presented by the channel's single consumer.
+/// </summary>
+public sealed class DaemonEnabler : ReactiveObject {
+    internal const string CliMissingMessage    = "kcap isn't available on this machine.";
+    internal const string RequiresSignInMessage = "Sign in before the daemon can be enabled.";
+    internal const string NoServerMessage       = "No workspace is configured.";
+    internal const string BinaryUnresolvedMessage = "kcap can't find its daemon binary. Reinstall kcap.";
+    internal const string StatusUnknownMessage = "Couldn't read the daemon service.";
+    internal const string UnrecognizedStateMessage = "The daemon reported an unexpected state.";
     internal const string TxnWaitingMessage    = "Waiting for a daemon operation to finish…";
-    internal const string TxnActiveMessage     = "A daemon operation is still running. Check again in a moment.";
+    internal const string TxnActiveMessage     = "A daemon operation is still running.";
     internal const string AlreadyEnabledMessage = "The daemon is running and will start again after a reboot.";
-    internal const string StaleMarkerNote      = "A previous operation left a stale marker.";
     internal const string StaleMarkerMessage   = "A previous operation left the service incomplete.";
     internal const string OrphanLabelMessage   = "The service is registered but its files are missing.";
-    internal const string RunningUnconfirmedMessage = "The service started, but the daemon hasn't answered yet. Check again in a moment.";
+    internal const string RunningUnconfirmedMessage = "The service started, but the daemon hasn't answered yet.";
     internal const string StoppedMessage       = "The daemon is installed but not running.";
-    internal const string NotInstalledMessage  = "Installs the background service so hosted agents keep running after a reboot.";
+    internal const string NotInstalledMessage  = "The daemon service is not installed.";
     internal const string TakeoverDeclinedMessage = "Left as it is — the daemon service was not replaced.";
     internal const string DetachedMessage      = "kcap is still finishing this operation in the background.";
     internal const string ClaimMissingCapabilityMessage =
@@ -59,14 +59,13 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<(string Profile, string Server, string DaemonName)> _resolveIdentityUnderConfigLock;
     readonly ILifecycleSurface _surface;
     readonly Func<CancellationToken, Task<string?>> _terminalPathAsync;
+    readonly Func<CancellationToken, Task<string?>> _pickName;
+    readonly MachineNameViewModel? _machine;
     readonly TimeProvider _time;
+    readonly SemaphoreSlim _single = new(1, 1);
 
     MutationRequest? _request;
     ObservedEvidence? _evidence;
-    CancellationTokenSource? _classifyCts;
-    CancellationTokenSource? _actionCts;
-    Task? _classifyRun;
-    Task? _actionRun;
 
     DaemonRow _row = DaemonRow.StatusUnknown;
     DaemonAffordance _affordance;
@@ -74,9 +73,9 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
     bool _satisfied;
     string? _message;
     string? _status;
-    string? _quietFailure;
 
-    public DaemonStepViewModel(
+    /// <param name="pickName">The name to save before enabling, or null to keep the configured one.</param>
+    public DaemonEnabler(
             IKcapCli cli,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             Func<(string Profile, string Server, string DaemonName)?> resolveIdentity,
@@ -87,8 +86,8 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             ILifecycleSurface surface,
             Func<CancellationToken, Task<string?>> terminalPathAsync,
             TimeProvider time,
-            MachineNameViewModel? machine = null) {
-        Machine                         = machine;
+            MachineNameViewModel? machine = null,
+            Func<CancellationToken, Task<string?>>? pickName = null) {
         _cli                            = cli;
         _runMutation                    = runMutation;
         _resolveIdentity                = resolveIdentity;
@@ -99,94 +98,33 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         _surface                        = surface;
         _terminalPathAsync              = terminalPathAsync;
         _time                           = time;
-
-        var idle = this.WhenAnyValue(x => x.Busy, busy => !busy)
-            .ObserveOn(RxSchedulers.MainThreadScheduler);
-        ActionCommand  = ReactiveCommand.CreateFromTask(() => RunActionAsync(),
-            this.WhenAnyValue(x => x.Busy, x => x.Affordance, (busy, affordance) => !busy && affordance != DaemonAffordance.None)
-                .ObserveOn(RxSchedulers.MainThreadScheduler));
-        RefreshCommand = ReactiveCommand.CreateFromTask(() => RefreshAsync(CancellationToken.None), idle);
+        _machine                        = machine;
+        _pickName                       = pickName ?? (_ => Task.FromResult<string?>(null));
     }
-
-    internal const string RequiredMessage = "The daemon has to be running to finish setup.";
-
-    public WizardStepId Id         => WizardStepId.Daemon;
-    public string       Title      => "Run your agents on this machine from anywhere";
-    public string       Eyebrow    => "Your daemon";
-    public bool         Applicable => true;
-    public bool         Skippable  => false;
-    public string?      NextLabel  => "Continue";
-
-    public string Lede =>
-        "Start a run from another machine and have it land on this one, where your code is. The daemon runs as a " +
-        "background service and starts again after a restart.";
-
-    /// The machine's name, saved before the first enable so the service is installed under it.
-    public MachineNameViewModel? Machine { get; }
-
-    string? _savedName;
 
     /// Set ONLY by the lane's own success outcome or the already-enabled row, and never cleared —
     /// a later re-classification must not re-derive (or revoke) a mutation's success from a snapshot.
     public bool Satisfied {
         get => _satisfied;
-        private set {
-            this.RaiseAndSetIfChanged(ref _satisfied, value);
-            this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
-            this.RaisePropertyChanged(nameof(CanContinue));
-            this.RaisePropertyChanged(nameof(NameEditable));
-        }
+        private set => this.RaiseAndSetIfChanged(ref _satisfied, value);
     }
-
-    /// Enable / Start is the filled action until the service is running. Continue stays secondary.
-    public bool ShowsOwnPrimary => !Satisfied && ActionLabel is not null;
-    public bool CanContinue => Satisfied && !Busy;
-    public bool NameEditable => !Busy && !Satisfied;
 
     public DaemonRow Row {
         get => _row;
-        private set {
-            this.RaiseAndSetIfChanged(ref _row, value);
-            this.RaisePropertyChanged(nameof(RefreshVisible));
-        }
+        private set => this.RaiseAndSetIfChanged(ref _row, value);
     }
 
     public DaemonAffordance Affordance {
         get => _affordance;
-        private set {
-            this.RaiseAndSetIfChanged(ref _affordance, value);
-            this.RaisePropertyChanged(nameof(ActionLabel));
-            this.RaisePropertyChanged(nameof(RefreshVisible));
-            this.RaisePropertyChanged(nameof(ShowsOwnPrimary));
-        }
+        private set => this.RaiseAndSetIfChanged(ref _affordance, value);
     }
-
-    public string? ActionLabel => Affordance switch {
-        DaemonAffordance.Install  => "Enable daemon",
-        DaemonAffordance.Start    => "Start daemon",
-        DaemonAffordance.Takeover => "Replace daemon service",
-        DaemonAffordance.Repair   => "Repair daemon service",
-        _                         => null,
-    };
 
     public bool Busy {
         get => _busy;
-        private set {
-            this.RaiseAndSetIfChanged(ref _busy, value);
-            this.RaisePropertyChanged(nameof(RefreshVisible));
-            this.RaisePropertyChanged(nameof(CanContinue));
-            this.RaisePropertyChanged(nameof(NameEditable));
-        }
+        private set => this.RaiseAndSetIfChanged(ref _busy, value);
     }
 
-    /// Re-check only when the row can change without a mutation — never when the user already
-    /// has an action, is already done, or has to leave the step to make progress.
-    public bool RefreshVisible =>
-        !Busy && Affordance == DaemonAffordance.None && Row is
-            DaemonRow.CliMissing or DaemonRow.BinaryUnresolved or DaemonRow.StatusUnknown
-            or DaemonRow.TransactionActive or DaemonRow.RunningUnconfirmed;
-
-    /// What the current row found — the honest line, present on every row.
+    /// What the current row found.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
@@ -198,72 +136,72 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         private set => this.RaiseAndSetIfChanged(ref _status, value);
     }
 
-    public ReactiveCommand<Unit, Unit> ActionCommand  { get; }
-    public ReactiveCommand<Unit, Unit> RefreshCommand { get; }
-
-    public async Task OnEnterAsync(CancellationToken ct) {
-        await RefreshAsync(ct).ConfigureAwait(true);
-        if (_quietFailure is { } failure && !Satisfied && Status is null) Status = failure;
-        _quietFailure = null;
+    /// Completes once no <see cref="EnsureAsync"/> is in flight.
+    public async Task QuiescedAsync() {
+        await _single.WaitAsync().ConfigureAwait(false);
+        _single.Release();
     }
 
-    /// Already running, so forward navigation steps over this page.
-    public bool PassThrough => Satisfied;
+    /// What stopped the enabler short of a running service, or null while it runs or once it has.
+    public string? Problem => Satisfied || Busy ? null : Status ?? Message;
 
-    /// Installs or starts the daemon when neither needs consent. A row that would replace or
-    /// repair a service is left for this page to ask about.
-    public async Task EnableQuietlyAsync(CancellationToken ct) {
-        await RefreshAsync(ct).ConfigureAwait(true);
-        if (Satisfied || !IsQuiet(Affordance)) return;
-        await RunActionAsync(quiet: true).ConfigureAwait(true);
-        if (Satisfied || Status is not { } status) return;
+    /// Names, installs and starts the daemon. Single-flight: a call while one runs waits it out and
+    /// then re-checks, so a sign-in that changed the identity mid-run is not missed.
+    public async Task EnsureAsync(CancellationToken ct) {
+        await _single.WaitAsync(ct).ConfigureAwait(true);
+        Busy = true;
+        try {
+            if (Satisfied) return;
+            if (!await SaveNameAsync(ct).ConfigureAwait(true)) return;
 
-        _quietFailure = status;
-        Console.Error.WriteLine($"kcap: wizard quiet daemon enable did not finish: {status}");
-    }
+            await ClassifyAsync(ct).ConfigureAwait(true);
+            if (Satisfied) return;
 
-    static bool IsQuiet(DaemonAffordance affordance) => affordance is DaemonAffordance.Install or DaemonAffordance.Start;
-
-    /// Vetoes only moving forward without a running daemon. Back cancels, and a running mutation
-    /// belongs to the LANE, so cancelling detaches this waiter only. A running claim put is untokened and simply awaited (bounded by LocalControlOps).
-    public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
-        // Required: the app has nothing to run without it. A run in flight is left to finish.
-        if (direction != WizardNavigation.Back && !Satisfied) {
-            if (!Busy) Status = RequiredMessage;
-            return false;
+            switch (Affordance) {
+                case DaemonAffordance.Install:
+                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(true);
+                    break;
+                case DaemonAffordance.Start:
+                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(true);
+                    break;
+                case DaemonAffordance.Repair:
+                    await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
+                    break;
+                case DaemonAffordance.Takeover when Row == DaemonRow.ManualIdentityMatch:
+                    // The same identity outside the service: adopting it changes no one else's daemon.
+                    await RunMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(true);
+                    break;
+                case DaemonAffordance.Takeover:
+                    await RunConsentedReplaceAsync(ct).ConfigureAwait(true);
+                    break;
+            }
+        } catch (OperationCanceledException) {
+            Status = DetachedMessage;
+        } catch (Exception ex) {
+            Status = $"The daemon service operation failed unexpectedly: {ex.Message}";
+            Console.Error.WriteLine($"kcap: wizard daemon enable failed unexpectedly: {ex.Message}");
+        } finally {
+            Busy = false;
+            _single.Release();
         }
-
-        _classifyCts?.Cancel();
-        _actionCts?.Cancel();
-
-        await AwaitQuietlyAsync(_classifyRun).ConfigureAwait(true);
-        await AwaitQuietlyAsync(_actionRun).ConfigureAwait(true);
-
-        return true;
     }
 
-    static async Task AwaitQuietlyAsync(Task? task) {
-        if (task is null) return;
-        try { await task.ConfigureAwait(true); }
-        catch (OperationCanceledException) { /* leaving mid-work is not a failure */ }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: wizard daemon step failed unexpectedly: {ex.Message}"); }
-    }
+    async Task<bool> SaveNameAsync(CancellationToken ct) {
+        if (_machine is null || await _pickName(ct).ConfigureAwait(true) is not { } name) return true;
 
-    internal Task RefreshAsync(CancellationToken ct) {
-        if (Busy) return Task.CompletedTask;
+        _machine.DaemonName = name;
+        if (await _machine.SaveAsync(ct).ConfigureAwait(true)) return true;
 
-        _classifyCts?.Dispose();
-        _classifyCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        return _classifyRun = ClassifyAsync(_classifyCts.Token);
+        Status = _machine.Message;
+        return false;
     }
 
     async Task ClassifyAsync(CancellationToken ct) {
-        Busy = true;
-        try {
-            _request  = null;
-            _evidence = null;
-            Status    = null;
+        _request  = null;
+        _evidence = null;
+        Status    = null;
 
+        try {
             if (_cli.CliPath is null) {
                 Set(DaemonRow.CliMissing, CliMissingMessage, DaemonAffordance.None);
                 return;
@@ -279,7 +217,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
                     MutationVerb.StartVerified, identity.Profile, identity.Server, identity.DaemonName, out var request)
                 is MutationOutcome.Refused(var guardReason, _)) {
                 Set(DaemonRow.NoServerConfigured, NoServerMessage, DaemonAffordance.None);
-                Console.Error.WriteLine($"kcap: wizard daemon step refused before status: {guardReason}");
+                Console.Error.WriteLine($"kcap: wizard daemon enable refused before status: {guardReason}");
                 return;
             }
 
@@ -287,21 +225,19 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
             var snapshot = await ReadStatusAsync(ct).ConfigureAwait(true);
             await ClassifySnapshotAsync(snapshot, ct).ConfigureAwait(true);
             WithdrawUnitWritingOfferWithoutBinary(snapshot);
-        } catch (OperationCanceledException) {
-            // left the step (or shutting down) mid-classification — nothing to surface
         } catch (Win32Exception ex) when (ex.NativeErrorCode == 2) {
             // A bare "kcap" that is not on PATH throws here. That is a missing CLI, not an unreadable service.
             Set(DaemonRow.CliMissing, CliMissingMessage, DaemonAffordance.None);
+        } catch (OperationCanceledException) {
+            throw;
         } catch (Exception ex) {
             Set(DaemonRow.StatusUnknown, StatusUnknownMessage, DaemonAffordance.None); // unknown, never a positive row
-            Console.Error.WriteLine($"kcap: wizard daemon step classification failed unexpectedly: {ex.Message}");
-        } finally {
-            Busy = false;
+            Console.Error.WriteLine($"kcap: wizard daemon classification failed unexpectedly: {ex.Message}");
         }
     }
 
     /// A held transaction is waited out, never mutated into. Bounded — an orphaned
-    /// grandchild that outlives a force-quit must not wedge the step forever.
+    /// grandchild that outlives a force-quit must not wedge setup forever.
     async Task<ServiceSnapshot?> ReadStatusAsync(CancellationToken ct) {
         for (var poll = 0; ; poll++) {
             var snapshot = await _cli.ServiceStatusAsync(ct).ConfigureAwait(true);
@@ -365,9 +301,7 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         var owned   = snapshot.JobPid is not null && snapshot.JobPid == snapshot.DaemonPid;
 
         if (owned && matched) {
-            Set(DaemonRow.AlreadyEnabled,
-                snapshot.TxnMarker ? $"{AlreadyEnabledMessage} {StaleMarkerNote}" : AlreadyEnabledMessage,
-                DaemonAffordance.None);
+            Set(DaemonRow.AlreadyEnabled, AlreadyEnabledMessage, DaemonAffordance.None);
             Satisfied = true;
             await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(true);
             return;
@@ -381,21 +315,20 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         }
 
         if (matched) {
-            // Not enablement: a manual daemon dies at logout and no later startup phase repairs it.
+            // Not enablement: a manual daemon dies at logout and nothing restarts it.
             Set(DaemonRow.ManualIdentityMatch,
-                $"A daemon is already running outside the service (PID {daemonPid}) — it stops at logout unless kcap manages it.",
+                $"A daemon is already running outside the service (PID {daemonPid}).",
                 DaemonAffordance.Takeover);
             return;
         }
 
         Set(DaemonRow.ManualIdentityMismatch,
-            $"{DescribeForeign(_evidence)} is already running under this name (PID {daemonPid}) — kcap changed nothing.",
+            $"{DescribeForeign(_evidence)} is already running under this name (PID {daemonPid}).",
             DaemonAffordance.Takeover);
     }
 
-    /// The install-only viability precondition: a unit-writing offer without a resolvable daemon
-    /// binary is a guaranteed coded failure, so it is withdrawn rather than offered. The start row
-    /// is exempt — starting an installed unit writes none.
+    /// A unit-writing action without a resolvable daemon binary is a guaranteed coded failure, so it
+    /// is not attempted. Starting an installed unit writes none.
     void WithdrawUnitWritingOfferWithoutBinary(ServiceSnapshot? snapshot) {
         if (snapshot?.InstallBinaryPath is not null) return;
         if (Affordance is not (DaemonAffordance.Install or DaemonAffordance.Takeover or DaemonAffordance.Repair)) return;
@@ -421,66 +354,14 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         Affordance = affordance;
     }
 
-    internal Task RunActionAsync(bool quiet = false) {
-        if (Busy) return Task.CompletedTask;
-
-        _actionCts?.Dispose();
-        _actionCts = new CancellationTokenSource();
-        return _actionRun = RunActionCoreAsync(quiet, _actionCts.Token);
-    }
-
-    async Task RunActionCoreAsync(bool quiet, CancellationToken ct) {
-        Busy = true;
-        try {
-            if (Machine is { } machine && machine.DaemonName != _savedName) {
-                var name = machine.DaemonName;
-                if (!await machine.SaveAsync(ct).ConfigureAwait(true)) {
-                    Status = machine.Message;
-                    return;
-                }
-
-                _savedName = name;
-                await ClassifyAsync(ct).ConfigureAwait(true);
-                if (Satisfied || Affordance == DaemonAffordance.None) return;
-                // Saving the name re-reads the service; a row that now needs consent stays for this page.
-                if (quiet && !IsQuiet(Affordance)) return;
-                Busy = true;
-            }
-            switch (Affordance) {
-                case DaemonAffordance.Install:
-                    await RunMutationAsync(MutationVerb.Install, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Start:
-                    await RunMutationAsync(MutationVerb.StartVerified, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Takeover:
-                    await RunConsentedReplaceAsync(LifecyclePrompt.KindTakeover, ct).ConfigureAwait(true);
-                    break;
-                case DaemonAffordance.Repair:
-                    await RunConsentedReplaceAsync(LifecyclePrompt.KindRepair, ct).ConfigureAwait(true);
-                    break;
-            }
-        } catch (OperationCanceledException) {
-            Status = DetachedMessage;
-        } catch (Exception ex) {
-            Status = $"The daemon service operation failed unexpectedly: {ex.Message}";
-        } finally {
-            Busy = false;
-        }
-    }
-
-    // The ONLY dialog this step opens: consent BEFORE a unit rewrite, with the takeover
-    // disclosure. Outcome presentation belongs to the channel consumer, never to this waiter.
-    async Task RunConsentedReplaceAsync(string kind, CancellationToken ct) {
+    // The ONLY dialog the enabler opens: replacing a service another server or profile owns.
+    async Task RunConsentedReplaceAsync(CancellationToken ct) {
         var pathDegraded = await _terminalPathAsync(ct).ConfigureAwait(true) is null;
         var prompt = new LifecyclePrompt(
-            kind, null, null, pathDegraded, DaemonLifecycleController.TakeoverDisclosure);
+            LifecyclePrompt.KindTakeover, null, null, pathDegraded, DaemonLifecycleController.TakeoverDisclosure);
 
         if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(true)) {
             Status = TakeoverDeclinedMessage;
-            // Decline leaves the step visibly incomplete — but the flip protects the owner
-            // regardless of which process hosts an identity-MATCHED daemon.
-            if (Row == DaemonRow.ManualIdentityMatch) await ApplyPendingClaimAsync(_request!, _evidence).ConfigureAwait(true);
             return;
         }
 
@@ -500,13 +381,14 @@ public sealed class DaemonStepViewModel : ReactiveObject, IWizardStep {
         if (IdentityMatches(_evidence, request)) await ApplyPendingClaimAsync(request, _evidence).ConfigureAwait(true);
     }
 
-    /// Reads the live policy first because the put replaces it wholesale, and stays untokened so leaving the step awaits rather than cancels mid-claim.
+    /// Reads the live policy first because the put replaces it wholesale, and stays untokened so a
+    /// shutdown awaits rather than cancels mid-claim.
     async Task ApplyPendingClaimAsync(MutationRequest request, ObservedEvidence? evidence) {
         try {
             await ApplyPendingClaimCoreAsync(request, evidence).ConfigureAwait(true);
         } catch (Exception ex) {
             Status = Append(Status, ClaimFailedMessage); // claim retained for the post-wizard coordinator
-            Console.Error.WriteLine($"kcap: wizard daemon step consent flip failed unexpectedly: {ex.Message}");
+            Console.Error.WriteLine($"kcap: wizard daemon consent flip failed unexpectedly: {ex.Message}");
         }
     }
 

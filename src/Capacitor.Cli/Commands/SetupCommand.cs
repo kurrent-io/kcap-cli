@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
@@ -616,6 +617,12 @@ sealed class SetupCommand(
             return 1;
         }
 
+        if (DaemonNameArgumentError(args) is { } daemonNameError) {
+            await Console.Error.WriteLineAsync($"  {daemonNameError}");
+
+            return 1;
+        }
+
         var (requestedWorkspace, workspaceArgError) = ParseRequestedWorkspace(args, serverUrlGiven);
 
         if (workspaceArgError is not null) {
@@ -1112,70 +1119,45 @@ sealed class SetupCommand(
         // Step 5: Daemon name + save
         AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
-        // The daemon resolves its name the same way, so the name written here is the one it runs under.
-        var    defaultName = DaemonNameResolver.Resolve([]);
-        string daemonName;
-
-        if (noPrompt) {
-            daemonName = GetArg(args, "--daemon-name") ?? defaultName;
-            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
-        } else if (browserAgents is not null) {
-            // Not asked: the browser has no daemon-name screen, and its service request waits on this
-            // name. The profile's own name comes before the default so a re-run never renames a daemon
-            // in use.
-            daemonName = GetArg(args, "--daemon-name") ?? DaemonNameResolver.Resolve([], selected?.Daemon?.Name);
-            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
-        } else {
-            daemonName = AnsiConsole.Prompt(
-                new TextPrompt<string>("Daemon name:")
-                    .DefaultValue(defaultName)
-                    .ShowDefaultValue());
-        }
-
         // Built from the profile login stored the token under: discovery may have switched it after startup.
         var snapshot   = await AppConfig.LoadProfileConfig(config);
         var loggedInto   = new ProfileContext(
             new ResolvedProfile(null, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null)
                 .Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), snapshot);
 
-        // The browser path cannot fall back to a prompt: the user is looking at the browser, and its
-        // service request waits on this name. So it walks a bounded list instead.
-        var browserFallbacks = browserAgents is null
-            ? null
-            : new Queue<string>(BrowserDaemonNameFallbacks(daemonName, MachineSlug()));
+        var held          = await HeldDaemonNamesAsync(serverUrl, loggedInto);
+        var envName       = Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME");
+        var requestedName = GetArg(args, "--daemon-name");
+        // The profile's own name comes before the machine's so a re-run never renames a daemon in use.
+        var offeredName   = DaemonNameHolder.FirstFree(
+            requestedName ?? (string.IsNullOrEmpty(envName) ? null : envName)
+                          ?? selected?.Daemon?.Name ?? DaemonNameHolder.MachineDefault(),
+            held);
+        string daemonName;
 
-        while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
-            AnsiConsole.MarkupLine(
-                $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
-              + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
-              + "The server refuses a second daemon with the same name.[/]");
-
-            if (noPrompt) {
-                await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+        if (noPrompt) {
+            // Only the flag is a demand; every other source is a suggestion that moves to a free name.
+            if (requestedName is not null && held.TryGetValue(requestedName, out var holding)) {
+                AnsiConsole.MarkupLine(NameHeldLine(requestedName, holding));
+                await Console.Error.WriteLineAsync($"  Choose a different name with --daemon-name, such as '{offeredName}'.");
                 ListChangedBeforeExit();
 
                 return 1;
             }
 
-            if (browserFallbacks is not null) {
-                if (!browserFallbacks.TryDequeue(out var next)) {
-                    await Console.Error.WriteLineAsync(
-                        "  Every fallback daemon name is taken too. Re-run `kcap setup --daemon-name <name>`.");
-                    ListChangedBeforeExit();
+            daemonName = offeredName;
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else if (browserAgents is not null) {
+            // Not asked: the user is looking at the browser, which has no daemon-name screen.
+            daemonName = offeredName;
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else {
+            daemonName = PromptDaemonName(offeredName);
 
-                    return 1;
-                }
-
-                daemonName = next;
-                await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
-
-                continue;
+            while (held.TryGetValue(daemonName, out var holding)) {
+                AnsiConsole.MarkupLine(NameHeldLine(daemonName, holding));
+                daemonName = PromptDaemonName(DaemonNameHolder.FirstFree(daemonName, held));
             }
-
-            daemonName = AnsiConsole.Prompt(
-                new TextPrompt<string>("Daemon name:")
-                    .DefaultValue($"{daemonName}-{MachineSlug()}")
-                    .ShowDefaultValue());
         }
 
         await Console.Out.WriteLineAsync();
@@ -1212,54 +1194,10 @@ sealed class SetupCommand(
         // carries what this run actually chose.
         FirstRunMachineActionResult? daemonService = null;
 
-        if (browserAnswers.FlowId is { } browserFlowId) {
-            try {
-                // Every flow route is authenticated, and a poll that 401s answers an empty body —
-                // indistinguishable from nothing having been asked — so an unusable client here
-                // enables nothing, silently.
-                await using var scoped = HttpForChosenServer(serverUrl, saved);
-
-                var (deferred, deferredAuth) =
-                    await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync();
-
-                using var _ = deferred;
-
-                // The beat holds its lane until a request finishes, so this client's timeout is how long a
-                // wedged connection can silence liveness. Left unset it is the 100s default; matched to the
-                // browser leg's so both halves of the flow answer for silence on the same scale.
-                deferred.Timeout = BrowserFlowHttpTimeout;
-
-                // The status is the point of the factory: it hands back a client either way, and an
-                // expired or missing token leaves one that cannot poll. Checked rather than assumed, or
-                // the silent path is exactly the one above with a better-looking constructor.
-                //
-                // NoAuthRequired runs it. That status means the client is usable as it stands, so
-                // skipping on it would leave the request outstanding on a server that would have
-                // answered — the browser leg skips there only because it has nothing left to do.
-                if (deferredAuth is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
-                    var channel = new FirstRunFlowClient(deferred, time);
-
-                    // The browser is holding the request this leg is about to perform, and enabling a
-                    // service can outlast any staleness window — so the beat has to span it. Only for a
-                    // flow that finished: every other ending already relinquished, and beating again
-                    // would take that back.
-                    using var beat = browserAnswers.FlowStillLive
-                        ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
-                        : null;
-
-                    daemonService = await SetupDaemonService.RunAsync(
-                        channel, serverUrl, browserFlowId, config, saved, home, time);
-                }
-                else
-                    AnsiConsole.MarkupLine(
-                        "  [dim]Did not finish the daemon service request: the stored token is not usable. "
-                      + "Run 'kcap login', then 'kcap daemon service ensure'.[/]");
-            } catch (Exception ex) when (ex is not OperationCanceledException) {
-                // Best-effort, as the rest of this leg is: the request stays outstanding and the screen
-                // goes on saying it asked, which is honest. Setup finishing matters more.
-                AnsiConsole.MarkupLine(
-                    $"  [yellow]![/] Could not finish the daemon service request: {Markup.Escape(ex.Message)}");
-            }
+        // The posture offers no harness, so there is nothing for a daemon to launch.
+        if (!museAssistant) {
+            AnsiConsole.MarkupLine("  Running the agent daemon as a background service, so this machine stays reachable…");
+            daemonService = await EnsureDaemonServiceAsync(serverUrl, saved, browserAnswers.FlowId, browserAnswers.FlowStillLive);
         }
 
         var finalTokens = await store.LoadAsync(activeName);
@@ -1818,23 +1756,67 @@ sealed class SetupCommand(
         }
     }
 
-    async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
-            string serverUrl, ProfileContext loggedInto, string daemonName) {
+    async Task<IReadOnlyDictionary<string, DaemonNameHolding>> HeldDaemonNamesAsync(string serverUrl, ProfileContext loggedInto) {
         try {
             await using var scoped = HttpForChosenServer(serverUrl, loggedInto);
             using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
 
-            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, config);
+            return await DaemonNameHolder.HeldElsewhereAsync(client, serverUrl, config);
         } catch (Exception) {
-            return null;
+            return FrozenDictionary<string, DaemonNameHolding>.Empty;
         }
     }
 
-    static string MachineSlug() {
-        var slug = new string(Environment.MachineName.ToLowerInvariant()
-            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+    static string PromptDaemonName(string offered) =>
+        AnsiConsole.Prompt(new TextPrompt<string>("Daemon name:").DefaultValue(offered).ShowDefaultValue());
 
-        return slug.Length > 0 ? slug : "2";
+    internal static string NameHeldLine(string name, DaemonNameHolding holding) =>
+        $"  [yellow]A daemon named '{Markup.Escape(name)}' is already connected to this account from another machine "
+      + $"({Markup.Escape(holding.Platform)}{(holding.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
+      + "The server refuses a second daemon with the same name.[/]";
+
+    /// <summary>Installs or starts the daemon service, and answers the browser when it asked for one. The
+    /// heartbeat spans the ensure, which can outlast the browser's staleness window.</summary>
+    async Task<FirstRunMachineActionResult> EnsureDaemonServiceAsync(
+            string serverUrl, ProfileContext saved, string? flowId, bool flowStillLive) {
+        if (flowId is null) return await SetupDaemonService.EnsureAsync(config, saved, home, time);
+
+        FirstRunMachineActionResult? result = null;
+
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl, saved);
+
+            var (deferred, deferredAuth) = await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync();
+
+            using var _ = deferred;
+
+            // The beat holds its lane until a request finishes, so this timeout bounds how long a wedged
+            // connection can silence liveness.
+            deferred.Timeout = BrowserFlowHttpTimeout;
+
+            // A poll that 401s answers an empty body, indistinguishable from nothing having been asked.
+            if (deferredAuth is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {
+                AnsiConsole.MarkupLine(
+                    "  [dim]Could not tell the browser about the daemon service: the stored token is not usable.[/]");
+
+                return await SetupDaemonService.EnsureAsync(config, saved, home, time);
+            }
+
+            var channel = new FirstRunFlowClient(deferred, time);
+
+            // Only for a flow that finished: every other ending already relinquished, and beating again
+            // would take that back.
+            using var beat = flowStillLive ? FirstRunHeartbeat.Start(channel, serverUrl, flowId, time) : null;
+
+            var ensured = await SetupDaemonService.EnsureAsync(config, saved, home, time);
+            result = ensured;
+            await SetupDaemonService.ReportAsync(channel, serverUrl, flowId, ensured);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]![/] Could not tell the browser about the daemon service: {Markup.Escape(ex.Message)}");
+        }
+
+        return result ?? await SetupDaemonService.EnsureAsync(config, saved, home, time);
     }
 
     /// <inheritdoc cref="ChosenServerHttp.For"/>
@@ -2730,16 +2712,21 @@ sealed class SetupCommand(
         ? "  Use provider API key: yes [dim](kept; turn off with[/] [cyan]kcap config set use_provider_api_key false[/][dim])[/]"
         : "  Use provider API key: no [dim](kept; turn on with[/] [cyan]kcap config set use_provider_api_key true[/][dim])[/]";
 
-    /// <summary>
-    /// The closing daemon line. Suggesting <c>kcap daemon start -d</c> after the browser's request put
-    /// the daemon under a service would start a second one beside it.
-    /// </summary>
-    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => service?.Outcome switch {
-        FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled =>
+    /// <summary>The closing daemon line. Only a platform with no service manager is pointed at a plain
+    /// background start; anywhere else that would run a second daemon beside the service. A retry is
+    /// suggested only where one can change the answer.</summary>
+    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => (service?.Outcome, service?.Reason) switch {
+        (FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled, _) =>
             "  [green]✓[/] The agent daemon runs as a background service.",
-        FirstRunMachineActionOutcomes.EnabledUnverified =>
+        (FirstRunMachineActionOutcomes.EnabledUnverified, _) =>
             "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
-        _ => "  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]"
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform) =>
+            "  [dim]This platform has no service manager kcap supports:[/] start the daemon with [cyan]kcap daemon start -d[/]",
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NotConfigured) =>
+            "  [yellow]![/] The agent daemon service was not set up: this profile has no usable server, or kcap has no daemon binary.",
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NeedsAttention) =>
+            "  [yellow]![/] The existing agent daemon service needs attention, so setup left it alone: see [cyan]kcap daemon service status[/]",
+        _ => "  [yellow]![/] The agent daemon service is not running yet: retry with [cyan]kcap daemon service ensure[/]"
     };
 
     /// <summary>
@@ -2767,18 +2754,6 @@ sealed class SetupCommand(
                     + "Muse hooks may look for sessions outside this shell's XDG roots.");
 
         return installed;
-    }
-
-    /// <summary>
-    /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the
-    /// machine-suffixed name the terminal prompt would offer, then numbered variants of it.
-    /// </summary>
-    internal static IEnumerable<string> BrowserDaemonNameFallbacks(string chosen, string machine) {
-        var suffixed = $"{chosen}-{machine}";
-
-        yield return suffixed;
-
-        for (var n = 2; n <= 4; n++) yield return $"{suffixed}-{n}";
     }
 
     /// <summary>
@@ -2834,6 +2809,16 @@ sealed class SetupCommand(
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
           + $"  {how} to begin streaming; a session that was already\n"
           + "  running when you ran setup isn't being recorded yet.";
+    }
+
+    /// <summary>Refuses a <c>--daemon-name</c> with no usable value before anything is written: the
+    /// next token would otherwise be saved as the name, a following flag included.</summary>
+    internal static string? DaemonNameArgumentError(string[] args) {
+        if (!args.Contains("--daemon-name")) return null;
+
+        return GetArg(args, "--daemon-name") is { } name && !string.IsNullOrWhiteSpace(name) && !name.StartsWith('-')
+            ? null
+            : "--daemon-name requires a value (e.g. --daemon-name laptop).";
     }
 
     static string? GetArg(string[] args, string name) {

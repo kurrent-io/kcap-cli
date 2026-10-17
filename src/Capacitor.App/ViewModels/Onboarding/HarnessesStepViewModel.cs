@@ -44,8 +44,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     string? _providerKeyNotice;
     string? _message;
     Task? _inFlight;
-    readonly Func<CancellationToken, Task>? _enableDaemon;
-    bool _daemonAttempted;
 
     public HarnessesStepViewModel(
             IKcapCli cli,
@@ -56,9 +54,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             PathFixViewModel? pathFix,
             Func<CancellationToken, Task<IReadOnlySet<string>?>> providerKeys,
             string machineName,
-            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default,
-            Func<CancellationToken, Task>? enableDaemon = null) {
-        _enableDaemon = enableDaemon;
+            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default) {
         _cli = cli;
         _detect = detect;
         _declined = declined;
@@ -259,14 +255,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         _stampOffered(Rows.Select(r => r.Id));
         if (direction == WizardNavigation.Skip) return true;
-        if (_installed || !CliAvailable) {
-            // A row retried into success after the first pass still owes the daemon.
-            if (_installed) await EnableDaemonOnceAsync(ct).ConfigureAwait(true);
-            return true;
-        }
+        if (_installed || !CliAvailable) return true;
 
         await (_inFlight = InstallSelectedAsync()).ConfigureAwait(true);
-        await EnableDaemonOnceAsync(ct).ConfigureAwait(true);
         _installed = true;
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(ChoicesEditable));
@@ -274,20 +265,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         // Stay only when a selected row failed, so its Retry is on screen. A clean install leaves.
         return Rows.All(r => !r.Selected || !r.Failed);
-    }
-
-    // Best effort: whatever the daemon could not do quietly, its own step still offers.
-    async Task EnableDaemonOnceAsync(CancellationToken ct) {
-        if (_enableDaemon is null || _daemonAttempted || !Rows.Any(r => r is { Selected: true, Succeeded: true })) return;
-        _daemonAttempted = true;
-        Busy = true;
-        try {
-            await _enableDaemon(ct).ConfigureAwait(true);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
-            Console.Error.WriteLine($"kcap: wizard quiet daemon enable failed unexpectedly: {ex.Message}");
-        } finally {
-            Busy = false;
-        }
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {

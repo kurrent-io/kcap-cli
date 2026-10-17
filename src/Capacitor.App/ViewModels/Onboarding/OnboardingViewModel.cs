@@ -63,12 +63,12 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     public bool NextIsSecondary => Current.ShowsOwnPrimary;
 
-    /// The outcome lines name the daemon step's own action. Other pages have no such button.
+    /// The daemon is enabled beside the steps; its outcome lines land on the page that closes setup.
     public bool ShowLifecycleStatus =>
-        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.StatusText);
+        Current.Id == WizardStepId.Done && !string.IsNullOrEmpty(Surface?.StatusText);
 
     public bool ShowLifecycleAttention =>
-        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.AttentionText);
+        Current.Id == WizardStepId.Done && !string.IsNullOrEmpty(Surface?.AttentionText);
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     internal bool Navigating {

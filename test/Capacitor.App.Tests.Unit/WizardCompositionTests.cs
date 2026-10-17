@@ -71,6 +71,67 @@ public class WizardCompositionHappyPathTests {
     }
 
     [Test]
+    public async Task Resuming_an_authenticated_setup_enables_the_daemon_without_a_step() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
+
+        var (requests, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
+            await graph.Daemon.EnsureAsync(CancellationToken.None); // waits out the ensure the build kicked
+
+            return (harness.Lane.Requests.ToList(), graph.Daemon.Satisfied);
+        });
+
+        await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    [Test]
+    public async Task A_configured_name_another_machine_holds_is_saved_as_its_free_variant_before_the_install() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig { ActiveProfile = "default", Profiles = new() { ["default"] = new Profile() } });
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
+        var options = harness.Options() with {
+            AlreadyAuthenticated = true,
+            HeldDaemonNames = _ => Task.FromResult<IReadOnlyDictionary<string, DaemonNameHolding>>(
+                new Dictionary<string, DaemonNameHolding> { ["daemon-a"] = new("linux", "1.0.0") }),
+        };
+
+        var installs = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(options);
+            await graph.Daemon.EnsureAsync(CancellationToken.None);
+
+            return harness.Lane.Requests.Count;
+        });
+
+        var config = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(config.Profiles["default"].Daemon?.Name).IsEqualTo("daemon-a-1");
+        await Assert.That(installs).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Without_a_sign_in_the_graph_never_reads_the_daemon_or_its_name() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var nameReads = 0;
+        harness.ConfiguredDaemonName = () => {
+            nameReads++;
+            return "daemon-a";
+        };
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+        });
+
+        await Assert.That(nameReads).IsEqualTo(0);
+        await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
+        await Assert.That(harness.Lane.Requests).IsEmpty();
+    }
+
+    [Test]
     public async Task Fresh_machine_paste_sign_in_reaches_a_correct_done_summary() {
         WizardCompositionFixtures.WriteConfig(Config.Root,
             new ProfileConfig { ActiveProfile = ProfileName, Profiles = new() { [ProfileName] = new Profile() } });
@@ -82,6 +143,7 @@ public class WizardCompositionHappyPathTests {
         harness.ShimApplicable = false;
         harness.Identity       = (ProfileName, ServerUrl, "daemon-a");
         harness.Profile        = ProfileName;
+        harness.ConfiguredDaemonName = () => null;
         using var authHandler = new WizardCompositionFixtures.NoneProviderAuthHandler();
 
         var options = harness.Options() with {
@@ -115,23 +177,22 @@ public class WizardCompositionHappyPathTests {
             await Assert.That(graph.ViewModel.CanGoNext).IsFalse();
             graph.Steps.OfType<HarnessesStepViewModel>().Single().Visibility = "private";
             await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> History (persists; no CLI, nothing installable)
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Daemon (nothing to import)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Done (nothing to import)
+            await graph.Daemon.EnsureAsync(CancellationToken.None); // waits out the ensure sign-in kicked
 
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
-            await Assert.That(daemon.Row).IsEqualTo(DaemonRow.CliMissing);
-
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // refused: the daemon is required
-
-            return (graph.ViewModel.Current.Id, daemon.Status);
+            return (graph.ViewModel.Current.Id, graph.Daemon.Row, graph.Daemon.Satisfied);
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
-        await Assert.That(summary.Id).IsEqualTo(WizardStepId.Daemon);
-        await Assert.That(summary.Status).IsEqualTo(DaemonStepViewModel.RequiredMessage);
+        await Assert.That(summary.Id).IsEqualTo(WizardStepId.Done);
+        await Assert.That(summary.Row).IsEqualTo(DaemonRow.CliMissing);
+        await Assert.That(summary.Satisfied).IsFalse();
 
         var config = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(config.Profiles[ProfileName].ServerUrl).IsEqualTo(ServerUrl);
         await Assert.That(config.Profiles[ProfileName].AuthProvider?.Provider).IsEqualTo(AuthProvider.None);
         await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("private");
+        // No name was ever saved, so the machine's own is.
+        await Assert.That(config.Profiles[ProfileName].Daemon?.Name).IsEqualTo(DaemonNameHolder.MachineDefault());
 
         // No daemon touchpoint reached with no CLI resolved: no lane traffic, no IPC, no CLI spawns.
         await Assert.That(harness.Lane.Requests).IsEmpty();
@@ -140,6 +201,43 @@ public class WizardCompositionHappyPathTests {
         await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
         await Assert.That(harness.Cli.PluginInstallCallCount).IsEqualTo(0);
         await Assert.That(harness.Cli.ImportCallCount).IsEqualTo(0);
+    }
+}
+
+/// The name the enabler saves before it installs: the configured one unless another machine holds it.
+public class WizardDaemonNamePickTests {
+    static Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>> Held(params string[] names) =>
+        _ => Task.FromResult<IReadOnlyDictionary<string, DaemonNameHolding>>(
+            names.ToDictionary(n => n, _ => new DaemonNameHolding("linux", "1.0.0")));
+
+    [Test]
+    public async Task A_configured_name_nobody_else_holds_is_kept() {
+        var picked = await WizardComposition.PickDaemonNameAsync("studio", Held("laptop"), CancellationToken.None);
+
+        await Assert.That(picked).IsNull();
+    }
+
+    [Test]
+    public async Task A_configured_name_another_machine_holds_moves_to_the_first_free_variant() {
+        var picked = await WizardComposition.PickDaemonNameAsync("studio", Held("studio", "studio-1"), CancellationToken.None);
+
+        await Assert.That(picked).IsEqualTo("studio-2");
+    }
+
+    [Test]
+    public async Task Without_a_configured_name_the_machines_own_is_picked() {
+        var picked = await WizardComposition.PickDaemonNameAsync(null, heldDaemonNames: null, CancellationToken.None);
+
+        await Assert.That(picked).IsEqualTo(DaemonNameHolder.MachineDefault());
+    }
+
+    [Test]
+    public async Task Without_a_configured_name_a_held_machine_name_moves_to_its_first_free_variant() {
+        var machine = DaemonNameHolder.MachineDefault();
+
+        var picked = await WizardComposition.PickDaemonNameAsync(" ", Held(machine), CancellationToken.None);
+
+        await Assert.That(picked).IsEqualTo($"{machine}-1");
     }
 }
 

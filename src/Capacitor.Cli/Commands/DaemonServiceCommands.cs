@@ -71,12 +71,13 @@ sealed class DaemonServiceCommands(
         return result;
     }
 
-    /// <summary>The flow's own resolution of the manager and the service id, matching
-    /// <see cref="DispatchAsync"/>'s with no command-line arguments to draw a daemon name from.</summary>
+    /// <summary>The flow's own resolution of the manager and the service id. The id is the name setup
+    /// just saved, ahead of <c>KCAP_DAEMON_NAME</c>: setup chose it to be free, and an environment name
+    /// it moved off would install a second service under the held one.</summary>
     static DaemonServiceCommands ForFlow(
             ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time) =>
         new(DaemonStore.FromEnvironment(), root, profiles, ServiceManagerFactory.ForCurrentOs(root, home, time),
-            DaemonStore.Sanitize(DaemonNameResolver.Resolve([], profiles.DaemonName)), home, time);
+            DaemonStore.Sanitize(profiles.DaemonName ?? DaemonNameResolver.Resolve([], null)), home, time);
 
     /// <summary>
     /// The <c>ExtraArgs</c> baked into a service unit, from the raw <c>--max-agents</c> flag value.
