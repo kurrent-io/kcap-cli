@@ -65,9 +65,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         _version   = DaemonRunner.ResolveDaemonVersion();
         _logger    = logger;
         Strategy   = strategy;
-        IsHardBusy = () => evalCache.Count > 0 || orchestrator.LaunchesInAdmission > 0;
-        IsBusy     = () => IsHardBusy() || orchestrator.FlowParticipantsMidRound > 0;
-        AtTurnBoundary = () => orchestrator.InteractiveAgentsAtTurnBoundary;
+        WireGate(orchestrator, evalCache);
         StatBinary = StatProcessBinary;
     }
 
@@ -82,6 +80,22 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal static RestartCoordinator ForTest(
             DaemonStore store, string daemonName, string version, IRestartStrategy strategy, TimeProvider time) =>
         new(store, daemonName, version, strategy, NullLogger.Instance, time);
+
+    void WireGate(AgentOrchestrator orchestrator, EvalContextCache evalCache) {
+        IsHardBusy     = () => evalCache.Count > 0 || orchestrator.LaunchesInAdmission > 0;
+        IsBusy         = () => IsHardBusy() || orchestrator.FlowParticipantsMidRound > 0;
+        AtTurnBoundary = () => orchestrator.InteractiveAgentsAtTurnBoundary;
+    }
+
+    /// <summary>Test factory with the production gate wiring over a real orchestrator.</summary>
+    internal static RestartCoordinator ForTest(
+            DaemonStore store, string daemonName, string version, IRestartStrategy strategy, TimeProvider time,
+            AgentOrchestrator orchestrator, EvalContextCache evalCache) {
+        var c = new RestartCoordinator(store, daemonName, version, strategy, NullLogger.Instance, time);
+        c.WireGate(orchestrator, evalCache);
+
+        return c;
+    }
 
     internal void PrimeBaseline() {
         lock (_gate) _baseline = StatBinary();

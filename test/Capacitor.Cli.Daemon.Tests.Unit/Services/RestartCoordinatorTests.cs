@@ -1,4 +1,6 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -158,12 +160,39 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
 
+    RestartCoordinator WiredCoordinator(SpyStrategy spy, AgentOrchestrator orch) =>
+        RestartCoordinator.ForTest(
+            Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System, orch, new EvalContextCache(TimeProvider.System));
+
+    static AgentOrchestrator BuildOrchestrator() =>
+        AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
     [Test]
     public async Task Running_interactive_agents_do_not_block_an_explicit_restart() {
         var spy = new SpyStrategy();
-        var c   = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
-        c.AtTurnBoundary = () => false;
+        await using var orch = BuildOrchestrator();
+        orch.SeedAgentForTest("interactive-1", status: "Running").ActivityClock.SetTurnInFlight(true);
+        var c = WiredCoordinator(spy, orch);
+
+        await Assert.That(orch.InteractiveAgentsAtTurnBoundary).IsFalse();
         c.RequestRestart(force: false);
+
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_mid_round_flow_participant_blocks_an_explicit_restart_but_not_a_forced_one() {
+        var spy = new SpyStrategy();
+        await using var orch = BuildOrchestrator();
+        orch.SeedAgentForTest("flow-1", LaunchKind.ReviewFlow, status: "Running", flowRunId: "run-1", flowRole: "reviewer")
+            .ActivityClock.SetTurnInFlight(true);
+        var c = WiredCoordinator(spy, orch);
+
+        await Assert.That(c.RequestRestart(force: false)).IsEqualTo(RestartRequestResult.Queued);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        c.RequestRestart(force: true);
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
 
