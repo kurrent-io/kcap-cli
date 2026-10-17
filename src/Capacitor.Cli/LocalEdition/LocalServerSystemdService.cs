@@ -19,11 +19,18 @@ sealed class LocalServerSystemdService(
     const int UnitNotLoadedExit = 5;
 
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _run = run ?? ServiceProcess.Run;
-    readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
 
     public string Describe => "systemd --user unit";
 
     public bool IsInstalled(LocalServerUnit unit) => File.Exists(LocalServerSystemdUnit.UnitPath(home, unit));
+
+    public UnitOwner Owner(LocalServerUnit unit) {
+        var (exit, stdout, stderr) = _run("systemctl", LocalServerSystemdUnit.ShowArgs(unit));
+
+        return new(LocalServerOwnerReader.FromShow(exit, stdout, stderr),
+            LocalServerOwnerReader.FromUnitFile(LocalServerSystemdUnit.UnitPath(home, unit)));
+    }
 
     public void Install(LocalServerUnit unit) {
         unit.PrepareLogDirectory();

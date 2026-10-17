@@ -1,4 +1,6 @@
 using System.Text;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Win32.SafeHandles;
 
 namespace Capacitor.Cli.Services;
@@ -28,13 +30,17 @@ static class ServiceFiles {
     /// <param name="tightenDirectory">Test seam. Production passes null and gets the real chmod; a test
     /// supplies a no-op one to prove the refusal, which is otherwise only reachable through a directory
     /// the current user does not own.</param>
+    /// <param name="durable">Flushes the content and the directory entry, so a power loss leaves the old unit or
+    /// the new one. Directories it creates are synced up to the home.</param>
+    /// <param name="home">Bounds the durable directory creation; without it the walk reaches the filesystem root.</param>
     public static void WriteOwnerOnly(
             string path, string content, Encoding? encoding = null, Action<string>? verifyFinal = null,
-            Action<string>? tightenDirectory = null) {
+            Action<string>? tightenDirectory = null, bool durable = false, UserHome? home = null) {
         var directory = Path.GetDirectoryName(path);
 
         if (!string.IsNullOrEmpty(directory)) {
-            CreateDirectory(directory);
+            if (durable) DurableDirectory.Ensure(directory, DurableDirectory.AnchorFor(directory, home), OwnerOnlyDir);
+            else CreateDirectory(directory);
             RequireNoSharedWrite(directory, tightenDirectory);
             RequireNoWorldWritableAncestor(directory);
         }
@@ -44,8 +50,11 @@ static class ServiceFiles {
         var staging = path + ".tmp-" + Guid.NewGuid().ToString("N");
 
         try {
-            WriteStaging(staging, content, encoding);
+            WriteStaging(staging, content, encoding, durable);
+            FaultPoints.Hit($"rename:{path}");
             File.Move(staging, path, overwrite: true);
+            FaultPoints.Hit($"renamed:{path}");
+            if (durable && !string.IsNullOrEmpty(directory)) DurableDirectory.Sync(directory);
         } catch (Exception) {
             TryDelete(staging);
 
@@ -61,7 +70,7 @@ static class ServiceFiles {
         }
     }
 
-    static void WriteStaging(string staging, string content, Encoding? encoding) {
+    static void WriteStaging(string staging, string content, Encoding? encoding, bool durable) {
         var options = new FileStreamOptions {
             Mode   = FileMode.CreateNew,       // never follow or truncate an existing entry
             Access = FileAccess.Write
@@ -78,6 +87,12 @@ static class ServiceFiles {
         using var writer = encoding is null ? new StreamWriter(stream) : new StreamWriter(stream, encoding);
 
         writer.Write(content);
+
+        if (!durable) return;
+
+        writer.Flush();
+        FaultPoints.Hit($"flush:{staging}");
+        stream.Flush(flushToDisk: true);
     }
 
     /// <summary>Creates the unit directory, and every ancestor it has to create, owner-only — so the umask

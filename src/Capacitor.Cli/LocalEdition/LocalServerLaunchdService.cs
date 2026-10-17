@@ -19,7 +19,7 @@ sealed partial class LocalServerLaunchdService(
     static readonly TimeSpan UnloadPollGap = TimeSpan.FromMilliseconds(250);
 
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _run = run ?? ServiceProcess.Run;
-    readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
     readonly int _uid = uid ?? (int)getuid();
 
     [LibraryImport("libc", EntryPoint = "getuid")]
@@ -28,6 +28,13 @@ sealed partial class LocalServerLaunchdService(
     public string Describe => "launchd LaunchAgent";
 
     public bool IsInstalled(LocalServerUnit unit) => File.Exists(LocalServerLaunchdUnit.PlistPath(home, unit));
+
+    public UnitOwner Owner(LocalServerUnit unit) {
+        var (exit, stdout, stderr) = _run("launchctl", LocalServerLaunchdUnit.PrintArgs(_uid, unit));
+
+        return new(LocalServerOwnerReader.FromPrint(exit, stdout, stderr),
+            LocalServerOwnerReader.FromPlist(LocalServerLaunchdUnit.PlistPath(home, unit)));
+    }
 
     public void Install(LocalServerUnit unit) {
         unit.PrepareLogDirectory();
@@ -71,7 +78,10 @@ sealed partial class LocalServerLaunchdService(
         await StopAsync(unit, ct);
 
         var plist = LocalServerLaunchdUnit.PlistPath(home, unit);
-        if (File.Exists(plist)) File.Delete(plist);
+        if (File.Exists(plist)) {
+            File.Delete(plist);
+            FaultPoints.Hit($"unlink:{plist}");
+        }
     }
 
     /// <summary>Done only when the label is confirmed unloaded, whatever bootout's exit code; a failed bootout

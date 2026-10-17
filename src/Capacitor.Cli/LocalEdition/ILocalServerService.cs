@@ -25,4 +25,8 @@ interface ILocalServerService {
     Task UninstallAsync(LocalServerUnit unit, CancellationToken ct);
 
     bool IsInstalled(LocalServerUnit unit);
+
+    /// <summary>The root the loaded job and the unit file each name; the unit is per user, so they may name
+    /// another installation's.</summary>
+    UnitOwner Owner(LocalServerUnit unit);
 }
