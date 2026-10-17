@@ -28,6 +28,7 @@ public class AgentOrchestratorResumeOnBootTests {
         public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
         public TaskCompletionSource? Gate { get; set; }
         public bool ExitBeforeHandshake { get; init; }
+        public bool PtyStyle { get; init; }
         public int? ExitImmediatelyWith { get; init; }
         public int InFlight => Volatile.Read(ref _inFlight);
         public int MaxInFlight => Volatile.Read(ref _maxInFlight);
@@ -47,6 +48,9 @@ public class AgentOrchestratorResumeOnBootTests {
 
                     return new HostedRuntimeStart(exited, McpConfigPath: null, Transcript: null);
                 }
+
+                if (PtyStyle)
+                    return new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null);
 
                 var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path };
 
@@ -144,6 +148,20 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(consentLog).Contains("\"agent_id\":\"resume-1\"");
         await Assert.That(consentLog).Contains("\"source\":\"resume\"");
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_resumed_pty_agent_publishes_the_ledgers_session_ids_before_any_discovery() {
+        var f = Build(new ResumableFactory { PtyStyle = true });
+        await using var _ = f.Orch;
+        Entry(f, "resume-pty");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-pty")!;
+        await Assert.That(agent.SessionId).IsEqualTo("session-resume-pty");
+        await Assert.That(agent.VendorSession).IsEqualTo("vendor-session-1");
     }
 
     [Test]
