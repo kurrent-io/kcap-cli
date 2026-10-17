@@ -11,37 +11,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    const string Unreadable = "<unreadable>";
-
-    sealed class RecordingManager(Dictionary<string, string?> binaries) : IServiceManager {
-        public readonly List<string> Uninstalled = [];
-        int _statusReads;
-        public int StatusReads => Volatile.Read(ref _statusReads);
-        public string Describe() => "fake";
-        public string UnitDirectory => "";
-        public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
-        public bool ListingFails;
-        public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
-        public IReadOnlyList<string>? TryListInstalled() => ListingFails ? null : ListInstalled();
-        public ServiceStatus Status(string serviceId) {
-            Interlocked.Increment(ref _statusReads);
-            return binaries[serviceId] == Unreadable
-                ? throw new IOException("unreadable wrapper")
-                : new(ServiceState.Installed, binaries[serviceId]);
-        }
-        public ServiceQuery Query(string serviceId) => new(LabelProbe.Loaded, true, ServiceState.Installed, binaries[serviceId], null);
-        public bool Install(ServiceSpec spec, bool startNow, out string? error) { error = null; return true; }
-        public void WriteAndBootstrap(ServiceSpec spec) { }
-
-        public bool Uninstall(string serviceId, out string? error) {
-            Uninstalled.Add(serviceId);
-            error = null;
-            return true;
-        }
-
-        public bool Start(string serviceId, out string? error) { error = null; return true; }
-        public bool Stop(string serviceId, out string? error) { error = null; return true; }
-    }
+    const string Unreadable = RecordingServiceManager.Unreadable;
 
     DaemonServiceCommands Commands(IServiceManager manager) =>
         new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "unused", Home, TimeProvider.System);
@@ -49,7 +19,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task Removes_only_units_whose_daemon_is_inside_the_folder() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() {
+        var manager = new RecordingServiceManager(new() {
             ["laptop"] = Path.Combine(app, "kcap-daemon.exe"),
             ["npm"]    = Path.GetFullPath("/npm/node_modules/@kurrent/kcap/bin/kcap-daemon.exe"),
             ["near"]   = Path.GetFullPath("/apps/KurrentCapacitor/current-old/kcap-daemon.exe"),
@@ -66,7 +36,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task A_unit_another_operation_holds_is_left_and_reported() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
         using var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
         using var console = ConsoleOutput.StartFullCapture();
 
@@ -81,7 +51,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     public async Task A_unit_repointed_while_the_lock_was_held_is_left_alone() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
         var binaries = new Dictionary<string, string?> { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") };
-        var manager = new RecordingManager(binaries);
+        var manager = new RecordingServiceManager(binaries);
         var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
         using var console = ConsoleOutput.StartFullCapture();
 
@@ -98,7 +68,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task A_unit_that_cannot_be_read_does_not_stop_the_others() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() {
+        var manager = new RecordingServiceManager(new() {
             ["broken"] = Unreadable,
             ["laptop"] = Path.Combine(app, "kcap-daemon.exe"),
         });
@@ -116,7 +86,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task A_listing_that_fails_is_reported_not_taken_as_no_units() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) { ListingFails = true };
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) { ListingFails = true };
         using var console = ConsoleOutput.StartFullCapture();
 
         var exit = await Commands(manager).UninstallUnder(app);

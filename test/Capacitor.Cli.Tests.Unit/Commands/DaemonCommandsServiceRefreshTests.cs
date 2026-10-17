@@ -214,17 +214,19 @@ public class DaemonCommandsServiceRefreshTests {
         return child;
     }
 
-    /// <summary>A daemon from before the shutdown frame refuses it; the reload asks it for a restart in
-    /// the old mode instead and reloads once it accepts.</summary>
+    /// <summary>A daemon from before the shutdown frame cannot decode it and closes the connection without
+    /// a reply; the reload asks it for a restart in the old mode instead and reloads once it accepts. An
+    /// explicit Error reply is treated the same.</summary>
     [Test]
-    [Arguments(false, "now")]
-    [Arguments(true, "force")]
-    public async Task A_daemon_that_refuses_shutdown_is_asked_for_a_restart_instead(bool force, string mode) {
+    [Arguments(false, "now", false)]
+    [Arguments(true, "force", false)]
+    [Arguments(false, "now", true)]
+    public async Task A_daemon_that_refuses_shutdown_is_asked_for_a_restart_instead(bool force, string mode, bool explicitError) {
         Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
         Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
         using var child = StartDaemon("a");
-        var received = FakeControlSocket.AnswerInOrder(Daemons.Store, "a",
-            [LocalFrame.Error("expected Spawn/Attach/List, got Shutdown"), LocalFrame.RestartAck("restarting")]);
+        var refusal  = explicitError ? LocalFrame.Error("expected Spawn/Attach/List, got Shutdown") : null;
+        var received = FakeControlSocket.AnswerInOrder(Daemons.Store, "a", [refusal, LocalFrame.RestartAck("restarting")]);
         var calls = new List<string[]>();
         using var console = ConsoleOutput.StartFullCapture();
 

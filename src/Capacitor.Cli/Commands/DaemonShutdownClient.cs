@@ -47,7 +47,7 @@ static class DaemonShutdownClient {
             return ShutdownOutcome.NoAnswer;
         }
 
-        if (reply is { Type: FrameType.Error }) return ShutdownOutcome.Refused;
+        if (reply is null or { Type: FrameType.Error }) return ShutdownOutcome.Refused;
         if (reply is not { Type: FrameType.ShutdownAck, Text: "stopping" or "queued" }) return ShutdownOutcome.NoAnswer;
 
         try {

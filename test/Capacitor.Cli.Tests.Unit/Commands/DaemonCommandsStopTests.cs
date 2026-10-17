@@ -97,6 +97,25 @@ public class DaemonCommandsStopTests {
         await Assert.That(entries.All(e => e is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" })).IsTrue();
     }
 
+    /// <summary>A daemon that predates the shutdown frame closes the connection without answering; the
+    /// stop falls back to the kill at once rather than waiting out the bound.</summary>
+    [Test]
+    public async Task Stop_falls_back_to_kill_when_the_daemon_closes_without_answering() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var identity = PidIdentity.Capture(child.Pid);
+        var ledger   = SeedLedger(("agent-1", ResumeState.Running, null));
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, reply: null);
+        using var console = ConsoleOutput.StartCapture();
+
+        var exit = await Commands(new FakeTimeProvider()).HandleAsync(["daemon", "stop", "--name", Name]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await PidIdentity.WaitUntilGoneAsync(child.Pid, identity, TimeSpan.FromSeconds(10));
+        await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
+    }
+
     [Test]
     public async Task Stop_falls_back_when_the_daemon_acks_but_never_exits() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");

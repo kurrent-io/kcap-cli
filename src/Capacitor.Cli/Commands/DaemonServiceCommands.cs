@@ -255,8 +255,8 @@ sealed class DaemonServiceCommands(
     /// Asks the daemon to exit with its agents kept for the reloaded daemon to resume. Once it has accepted,
     /// the reload goes ahead even when it is still exiting at the end of the wait: it marked its agents for
     /// resume when it began stopping, and the bootout ends what is left. A daemon that predates the shutdown
-    /// frame refuses it and is asked for a restart in <paramref name="legacyMode"/> instead; it keeps no resume
-    /// ledger to lose.
+    /// frame closes the connection unanswered; it is asked for a restart in <paramref name="legacyMode"/>
+    /// instead, and keeps no resume ledger to lose.
     /// </summary>
     ReloadStop StopForReload(string serviceId, string legacyMode) {
         if (ReloadStopper is { } stopper) return stopper(serviceId);
@@ -637,7 +637,7 @@ sealed class DaemonServiceCommands(
         return exit;
     }
 
-    async Task<int> Stop(string[] args) {
+    internal async Task<int> Stop(string[] args) {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {

@@ -6,8 +6,9 @@ enum ShutdownOutcome {
     Exited,
     /// <summary>It acknowledged and its process was still alive at the end of the wait.</summary>
     Overran,
-    /// <summary>It answered with an error frame: a daemon that predates the shutdown frame.</summary>
+    /// <summary>It answered with an error frame, or closed the connection without a reply as a daemon
+    /// that cannot decode the shutdown frame does.</summary>
     Refused,
-    /// <summary>No acknowledgement: unreachable, silent, or an unexpected reply.</summary>
+    /// <summary>No acknowledgement: unreachable, silent until the deadline, or an unexpected reply.</summary>
     NoAnswer,
 }
