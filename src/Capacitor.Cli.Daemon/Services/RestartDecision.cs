@@ -14,6 +14,10 @@ public static class RestartDecision {
     public static bool BinaryChanged(BinaryStat? baseline, BinaryStat? current) =>
         baseline is { } b && current is { } c && (b.Size != c.Size || b.MtimeTicks != c.MtimeTicks);
 
-    /// <summary>Restart fires only when one is queued AND (the daemon is idle OR the request forced it).</summary>
-    public static bool ShouldFire(bool pending, bool busy, bool force) => pending && (force || !busy);
+    /// <summary>
+    /// Fires when a restart is queued and the daemon is not busy. A self-detected restart also waits
+    /// for a turn boundary, up to the wait bound; an explicit or forced one never waits.
+    /// </summary>
+    public static bool ShouldFire(bool pending, bool busy, bool force, bool selfDetected, bool atTurnBoundary, bool waitExpired) =>
+        pending && !busy && (force || !selfDetected || atTurnBoundary || waitExpired);
 }

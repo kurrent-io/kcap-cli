@@ -11,6 +11,9 @@ public class DaemonConfig {
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
 
+    /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
+    public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);
+
     /// <summary>
     /// Absolute path of the native <c>kcap</c> CLI binary, resolved as the daemon's sibling
     /// (<see cref="Capacitor.Cli.Core.Mcp.KcapBinaryCommand.ResolveCliSibling"/>) — inside the

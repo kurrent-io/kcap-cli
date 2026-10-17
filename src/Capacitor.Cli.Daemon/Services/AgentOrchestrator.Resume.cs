@@ -18,6 +18,35 @@ internal partial class AgentOrchestrator {
 
     static bool IsInteractive(AgentInstance a) => a.Kind == LaunchKind.Default;
 
+    int _launchesInAdmission;
+
+    /// Launches the fence has admitted whose ledger entry is not yet written; a restart in that
+    /// window would lose the agent.
+    internal int LaunchesInAdmission => Volatile.Read(ref _launchesInAdmission);
+
+    /// Non-interactive agents (flow participants) in the middle of a turn.
+    internal int FlowParticipantsMidRound =>
+        _agents.Values.Count(a => !IsInteractive(a) && a.Status is "Starting" or "Running" && a.ActivityClock.TurnInFlight);
+
+    /// True when every live interactive agent is waiting on input, so a restart interrupts no turn.
+    internal bool InteractiveAgentsAtTurnBoundary =>
+        _agents.Values.Where(a => IsInteractive(a) && a.Status is "Starting" or "Running").All(a => a.ActivityClock.AwaitingInput);
+
+    LaunchHold BeginLaunchHold() {
+        Interlocked.Increment(ref _launchesInAdmission);
+
+        return new LaunchHold(this);
+    }
+
+    /// Releases its admission count exactly once, however many times it is disposed.
+    sealed class LaunchHold(AgentOrchestrator owner) : IDisposable {
+        int _released;
+
+        public void Dispose() {
+            if (Interlocked.Exchange(ref _released, 1) == 0) Interlocked.Decrement(ref owner._launchesInAdmission);
+        }
+    }
+
     internal static readonly byte[] RestartMarker = "\r\n── kcap daemon restarted; session resumed ──\r\n"u8.ToArray();
 
     internal ShutdownIntent ShutdownIntent { get; set; } = ShutdownIntent.KeepAgents;

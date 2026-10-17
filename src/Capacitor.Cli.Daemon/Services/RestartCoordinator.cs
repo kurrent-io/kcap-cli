@@ -21,7 +21,7 @@ internal enum RestartRequestResult {
 /// <summary>
 /// Polls the running binary; a size/mtime change queues a restart-after-update that
 /// fires the chosen <see cref="IRestartStrategy"/> the moment the daemon is idle
-/// (no hosted agents, no in-flight eval). Also handles explicit requests from the
+/// (no in-flight eval, launch in admission or mid-turn flow participant, and interactive agents at a turn boundary). Also handles explicit requests from the
 /// control socket. Self-detection is macOS/Linux only (the poll is a no-op on Windows,
 /// where a running binary can't be replaced); the explicit request path works anywhere.
 /// </summary>
@@ -35,6 +35,10 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<BinaryStat?> StatBinary = static () => null;
     internal Func<bool>        IsBusy     = static () => false;
+    // Busy for a forced restart: evals and launches in admission, not flow participants.
+    internal Func<bool>        IsHardBusy = static () => false;
+    internal Func<bool>        AtTurnBoundary = static () => true;
+    internal TimeSpan          TurnWait   = TimeSpan.FromMinutes(5);
     internal IRestartStrategy  Strategy;
 
     // _gate guards all mutable state below. RequestRestart runs on the control-socket
@@ -45,6 +49,8 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     bool          _pending;
     bool          _force;
     bool          _fired;
+    bool          _selfDetected;
+    DateTimeOffset _pendingSince;
 
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
 
@@ -53,12 +59,15 @@ internal sealed partial class RestartCoordinator : BackgroundService {
             DaemonConfig config, AgentOrchestrator orchestrator, EvalContextCache evalCache,
             IRestartStrategy strategy, ILogger<RestartCoordinator> logger, TimeProvider time) {
         _time      = time;
+        TurnWait   = config.RestartTurnWait;
         _store     = config.Store;
         _name      = config.Name;
         _version   = DaemonRunner.ResolveDaemonVersion();
         _logger    = logger;
         Strategy   = strategy;
-        IsBusy     = () => orchestrator.ActiveCount > 0 || evalCache.Count > 0;
+        IsHardBusy = () => evalCache.Count > 0 || orchestrator.LaunchesInAdmission > 0;
+        IsBusy     = () => IsHardBusy() || orchestrator.FlowParticipantsMidRound > 0;
+        AtTurnBoundary = () => orchestrator.InteractiveAgentsAtTurnBoundary;
         StatBinary = StatProcessBinary;
     }
 
@@ -104,7 +113,8 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     /// </summary>
     internal RestartRequestResult RequestRestart(bool force) {
         lock (_gate) {
-            _pending = true;
+            _pending      = true;
+            _selfDetected = false;
             if (force) _force = true;
 
             if (!force) {
@@ -134,14 +144,18 @@ internal sealed partial class RestartCoordinator : BackgroundService {
             if (!_pending) {
                 var current = StatBinary();
                 if (RestartDecision.BinaryChanged(_baseline, current)) {
-                    _pending  = true;
-                    _baseline = current;
+                    _pending      = true;
+                    _selfDetected = true;
+                    _pendingSince = _time.GetUtcNow();
+                    _baseline     = current;
                     DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "self-detected", _time.GetUtcNow()));
                     LogQueued(_logger, "self-detected");
                 }
             }
 
-            fire = RestartDecision.ShouldFire(_pending, IsBusy(), _force);
+            var waitExpired = _selfDetected && _time.GetUtcNow() - _pendingSince >= TurnWait;
+            fire = RestartDecision.ShouldFire(
+                _pending, _force ? IsHardBusy() : IsBusy(), _force, _selfDetected, AtTurnBoundary(), waitExpired);
             if (fire) _fired = true; // claim before releasing the lock (single-fire)
         }
 

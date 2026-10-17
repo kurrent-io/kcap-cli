@@ -2111,7 +2111,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
-        return await HandleAdmittedLaunchAsync(cmd);
+        using var hold = BeginLaunchHold();
+
+        return await HandleAdmittedLaunchAsync(cmd, hold);
     }
 
     /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
@@ -2124,7 +2126,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
     /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
     /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
-    async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd) {
+    async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd, LaunchHold hold) {
         var agentId       = cmd.AgentId;
         var prompt        = cmd.Prompt;
         var startTitle    = StartTitleOf(cmd);
@@ -2752,6 +2754,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             published = true;
             storeLease?.Keep();
             WriteLedger(agent, cmd, "server", consent);
+            hold.Dispose();
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after

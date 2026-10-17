@@ -1,4 +1,5 @@
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -117,6 +118,64 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(0);
 
         busy = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Binary_change_with_agents_mid_turn_waits_until_the_boundary() {
+        var spy      = new SpyStrategy();
+        var size     = 100L;
+        var boundary = false;
+        var c        = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.AtTurnBoundary = () => boundary;
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        boundary = true;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Binary_change_fires_at_the_bound_without_a_boundary() {
+        var spy  = new SpyStrategy();
+        var time = new FakeTimeProvider();
+        var size = 100L;
+        var c    = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, time);
+        c.IsBusy         = () => false;
+        c.AtTurnBoundary = () => false;
+        c.TurnWait       = TimeSpan.FromMinutes(5);
+        c.StatBinary     = () => new BinaryStat(size, 1);
+        c.PrimeBaseline();
+        size = 200;
+        c.Tick();
+        time.Advance(TimeSpan.FromMinutes(4));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        time.Advance(TimeSpan.FromMinutes(1));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Running_interactive_agents_do_not_block_an_explicit_restart() {
+        var spy = new SpyStrategy();
+        var c   = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.AtTurnBoundary = () => false;
+        c.RequestRestart(force: false);
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Force_ignores_busy_flow_participants_but_not_evals() {
+        var spy  = new SpyStrategy();
+        var hard = true;
+        var c    = NewCoordinator(spy, isBusy: () => true, stat: () => new BinaryStat(100, 1));
+        c.IsHardBusy = () => hard;
+        c.RequestRestart(force: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        hard = false;
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
