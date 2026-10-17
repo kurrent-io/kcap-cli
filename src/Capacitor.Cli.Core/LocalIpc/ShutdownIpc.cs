@@ -5,7 +5,9 @@ namespace Capacitor.Cli.Core.LocalIpc;
 
 /// <param name="Agents">"keep" leaves hosted agents running for the next daemon; "end" stops them.</param>
 /// <param name="Exit">"relaunch" exits for a supervisor to restart the daemon; "final" exits for good.</param>
-public sealed record ShutdownRequestDto(string Agents, string Exit);
+/// <param name="WhenIdle">True refuses with a <c>busy:</c> error while an eval or a launch in admission is
+/// in flight, rather than stopping; absent from a client that predates it.</param>
+public sealed record ShutdownRequestDto(string Agents, string Exit, bool WhenIdle = false);
 
 public static class ShutdownIpc {
     public static string Serialize(ShutdownRequestDto dto) =>

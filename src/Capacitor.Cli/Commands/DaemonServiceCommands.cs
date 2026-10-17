@@ -179,7 +179,7 @@ sealed class DaemonServiceCommands(
 
             ReloadStop? stop = null;
             var outcome = launchd.RefreshUnit(
-                serviceId, () => Proceeds((stop = StopForReload(serviceId, "now")).Value), TimeLeft, out var error, stabilize);
+                serviceId, () => Proceeds((stop = StopForReload(serviceId, "now", whenIdle: true)).Value), TimeLeft, out var error, stabilize);
 
             switch (outcome) {
                 case UnitRefresh.Reloaded:
@@ -215,7 +215,7 @@ sealed class DaemonServiceCommands(
             } else {
                 var started = time.GetTimestamp(); // the lock wait is not charged to the reload budget
                 outcome = launchd.RefreshUnit(
-                    id, () => Proceeds((stop = StopForReload(id, "force")).Value), () => RefreshDeadline - time.GetElapsedTime(started),
+                    id, () => Proceeds((stop = StopForReload(id, "force", whenIdle: false)).Value), () => RefreshDeadline - time.GetElapsedTime(started),
                     out error, stabilize, requirePositiveSpawnType: true);
             }
         } catch (Exception ex) {
@@ -256,19 +256,21 @@ sealed class DaemonServiceCommands(
     /// the reload goes ahead even when it is still exiting at the end of the wait: it marked its agents for
     /// resume when it began stopping, and the bootout ends what is left. A daemon that predates the shutdown
     /// frame closes the connection unanswered; it is asked for a restart in <paramref name="legacyMode"/>
-    /// instead, and keeps no resume ledger to lose.
+    /// instead, and keeps no resume ledger to lose. <paramref name="whenIdle"/> leaves a daemon running an
+    /// eval or admitting a launch alone.
     /// </summary>
-    ReloadStop StopForReload(string serviceId, string legacyMode) {
+    ReloadStop StopForReload(string serviceId, string legacyMode, bool whenIdle) {
         if (ReloadStopper is { } stopper) return stopper(serviceId);
 
         var outcome = DaemonShutdownClient.StopAsync(
-                store, serviceId, new ShutdownRequestDto("keep", "final"), LaunchdServiceManager.ReloadExitWait, time,
+                store, serviceId, new ShutdownRequestDto("keep", "final", whenIdle), LaunchdServiceManager.ReloadExitWait, time,
                 CancellationToken.None)
             .GetAwaiter().GetResult();
 
         return outcome switch {
             ShutdownOutcome.Exited  => ReloadStop.Exited,
             ShutdownOutcome.Overran => ReloadStop.Overran,
+            ShutdownOutcome.Busy    => ReloadStop.RestartRefused,
             ShutdownOutcome.Refused => RequestLegacyRestart(serviceId, legacyMode) ? ReloadStop.Restarting : ReloadStop.RestartRefused,
             _                       => ReloadStop.NoAnswer,
         };

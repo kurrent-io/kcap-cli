@@ -1073,8 +1073,8 @@ kcap daemon service stop --keep-agents     # stop it, keeping its agents for the
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
-kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; a reload stops the daemon with its agents kept and the reloaded daemon resumes them (runs after `kcap update`)
-kcap daemon service refresh --name N --force   # reload daemon N now; prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
+kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; a reload stops the daemon with its agents kept and the reloaded daemon resumes them, and waits for the next update while an eval or a launch is in progress (runs after `kcap update`)
+kcap daemon service refresh --name N --force   # reload daemon N now, even mid-eval; prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
 kcap daemon service uninstall              # stop and remove the service
 kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR
 ```

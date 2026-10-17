@@ -204,8 +204,44 @@ public class DaemonCommandsServiceRefreshTests {
 
         await Assert.That(exit).IsEqualTo(0);
         var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
-        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("keep", "final"));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("keep", "final", WhenIdle: true));
         await Assert.That(aliveAtBootout).IsEquivalentTo([false]);
+    }
+
+    /// <summary>The unattended pass asks the daemon to stop only when idle; a busy daemon keeps running
+    /// and its unit change waits.</summary>
+    [Test]
+    public async Task An_unattended_refresh_of_a_busy_daemon_defers() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
+        using var child = StartDaemon("a");
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "a", LocalFrame.Error("busy: an eval or a launch is in progress"));
+        var calls = new List<string[]>();
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(Manager(calls, new() { ["a"] = "adaptive (6)" }), "a", stopForReload: null).Refresh(stabilize: s => s);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)!.WhenIdle).IsTrue();
+        await Assert.That(calls.Any(c => c[0] == "bootout")).IsFalse();
+        await Assert.That(console.GetCapturedOutput()).Contains("is busy, so its service unit change waits");
+    }
+
+    [Test]
+    public async Task A_forced_refresh_stops_the_daemon_without_waiting_for_idle() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
+        using var child = StartDaemon("a");
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "a", LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => { child.Kill(); child.WaitForExit(); });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(Manager([], new() { ["a"] = "adaptive (6)" }), "a", stopForReload: null).Refresh(force: true, stabilize: s => s);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("keep", "final"));
     }
 
     DummyProcess StartDaemon(string id) {

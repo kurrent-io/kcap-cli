@@ -137,6 +137,31 @@ public class LocalControlShutdownTests {
             await Assert.That(spy.Calls).IsEqualTo(0);
         });
 
+    /// <summary>An unattended stop must not end an eval or lose a launch in admission; the intent stays
+    /// as it was because nothing stops.</summary>
+    [Test]
+    public async Task Shutdown_when_idle_while_busy_answers_busy_and_does_not_stop() =>
+        await RunAsync("sd-busy", () => true, async (orch, spy, lifetime, send) => {
+            orch.ShutdownIntent = ShutdownIntent.EndAgents;
+
+            var reply = await send(LocalFrame.Shutdown(new ShutdownRequestDto("keep", "final", WhenIdle: true)));
+
+            await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+            await Assert.That(reply.Text).StartsWith("busy:");
+            await Assert.That(orch.ShutdownIntent).IsEqualTo(ShutdownIntent.EndAgents);
+            await Assert.That(lifetime.StopCalls).IsEqualTo(0);
+            await Assert.That(spy.Calls).IsEqualTo(0);
+        });
+
+    [Test]
+    public async Task Shutdown_final_without_when_idle_stops_even_while_busy() =>
+        await RunAsync("sd-busy-now", () => true, async (orch, spy, lifetime, send) => {
+            var reply = await send(LocalFrame.Shutdown(new ShutdownRequestDto("keep", "final")));
+
+            await Assert.That(reply!.Type).IsEqualTo(FrameType.ShutdownAck);
+            await Assert.That(lifetime.StopCalls).IsEqualTo(1);
+        });
+
     [Test]
     public async Task Malformed_shutdown_answers_an_error() =>
         await RunAsync("sd-bad", null, async (orch, spy, lifetime, send) => {

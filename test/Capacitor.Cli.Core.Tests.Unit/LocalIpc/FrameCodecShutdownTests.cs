@@ -52,6 +52,16 @@ public class FrameCodecShutdownTests {
         }
     }
 
+    /// <summary>A request from a client that predates <c>when_idle</c> carries none and stops at once.</summary>
+    [Test]
+    public async Task When_idle_round_trips_and_reads_as_false_when_absent() {
+        var dto = new ShutdownRequestDto("keep", "final", WhenIdle: true);
+
+        await Assert.That(ShutdownIpc.Serialize(dto)).Contains("\"when_idle\":true");
+        await Assert.That(ShutdownIpc.Parse(ShutdownIpc.Serialize(dto))).IsEqualTo(dto);
+        await Assert.That(ShutdownIpc.Parse("""{"agents":"keep","exit":"final"}""")!.WhenIdle).IsFalse();
+    }
+
     [Test]
     public async Task Numeric_values_are_pinned() {
 #pragma warning disable TUnitAssertions0005
