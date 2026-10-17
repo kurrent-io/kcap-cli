@@ -246,9 +246,9 @@ setups under different `KCAP_LOCAL_ROOT`s therefore need two more things:
   - Rollback, recovery and reuse act on the unit only when every present reading names this root.
 - **Root identity.** "Names this root" is decided by filesystem identity, not spelling. On macOS, `/tmp/kcap-A`,
   `/private/tmp/kcap-A`, a case variant and a firmlinked `/System/Volumes/Data/...` path all reach one directory.
-  - If both paths resolve with `CanonicalPath.TryResolve` to an equal path under `PathComparison`, they are the same
-    root.
-  - Otherwise, a nonce probe. Holding the lifecycle lock, write `<root>/.identity-<random>`, durability not needed,
+  - If both paths resolve with `CanonicalPath.TryResolve` to *ordinally* equal paths, they are the same root.
+    `PathComparison` is not used: it ignores case on every Mac, including case-sensitive volumes.
+  - Any other difference, case-only included, goes to a nonce probe. Holding the lifecycle lock, write `<root>/.identity-<random>`, durability not needed,
     and test whether the same name exists under the other path. If it does, it is the same root. If the other path
     does not exist, it is a distinct root: it cannot alias one that exists. The nonce is deleted afterwards.
   - Any I/O error along the way makes the reading `Unknown`, never "another root".
@@ -458,6 +458,9 @@ Failure codes: `unsupported_platform`, `musl_unsupported`, `socket_path_too_long
 - **Root identity:** recovery through an ancestor alias (`/tmp/x` against `/private/tmp/x`), with the job between
   starts, treats the unit as ours and makes a verified unload before any deletion. A genuinely distinct root is
   treated as another root's. An I/O error in the probe is `Unknown`.
+  - Case-only spellings go to the probe. On a case-sensitive filesystem, a case sensitive disk image when the test
+    can create one and skipped otherwise, two roots differing only in case are distinct, and recovery leaves the
+    foreign unit and plist untouched. On a case-insensitive one, the probe recognises a case variant as the same root.
 - **Registry rename then crash:** the first run renames the registry and crashes before its directory sync. Recovery
   republishes it durably before `allow` becomes visible.
 - **Plist unlink then crash:** the first run unlinks the plist and crashes before syncing `LaunchAgents`. Recovery
