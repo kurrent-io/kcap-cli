@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
 
-namespace Capacitor.Cli.Continuation;
+namespace Capacitor.Cli.Core.Continuation;
 
-static class DeclaredPlanState {
+public static class DeclaredPlanState {
     /// <summary>The server's <c>progress.finished</c> when sent; otherwise derived, with
     /// total_known part of it because a plan with no declared task list also reads 0 of 0.</summary>
     public static bool IsFinished(JsonNode? plan) {

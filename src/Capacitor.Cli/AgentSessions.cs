@@ -1,5 +1,6 @@
 using System.Globalization;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 
 namespace Capacitor.Cli;
 
@@ -7,7 +8,7 @@ namespace Capacitor.Cli;
 /// Which session each coding-agent process is running, so a process below it can name the session.
 /// The session whose hook ran last owns the process.
 /// </summary>
-sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProvider? time = null) {
+sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProvider? time = null) : ISessionLivenessSource {
     const int MaxHops = 32;
 
     static readonly TimeSpan ExitRetention = TimeSpan.FromDays(30);

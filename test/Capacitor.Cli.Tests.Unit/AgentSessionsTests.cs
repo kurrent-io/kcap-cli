@@ -1,5 +1,6 @@
 using System.Globalization;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 
 namespace Capacitor.Cli.Tests.Unit;
 

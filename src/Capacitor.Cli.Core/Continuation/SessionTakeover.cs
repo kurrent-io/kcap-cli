@@ -3,14 +3,13 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.WorkItems;
 
-namespace Capacitor.Cli.Continuation;
+namespace Capacitor.Cli.Core.Continuation;
 
 /// <summary>A local exit record can authorize takeover even before the server observes the exit.
 /// Claim ownership is independently admitted by the server; force never bypasses that fence.</summary>
-sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
+public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider time) {
     /// <summary>The server's own threshold for treating an active session as stale.</summary>
     static readonly TimeSpan StaleAfter = TimeSpan.FromHours(1);
 
@@ -213,7 +212,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
                     return result;
                 }
                 if (code == "next_work_unavailable") result["status"] = JsonString("unavailable");
-                result["error"] = JsonString($"HTTP {(int)response.StatusCode}" + (code is not null && NextWorkEmitter.IsCode(code) ? $" — {code}" : ""));
+                result["error"] = JsonString($"HTTP {(int)response.StatusCode}" + (code is not null && NextWorkUntrustedText.IsCode(code) ? $" — {code}" : ""));
                 if (response.StatusCode == HttpStatusCode.Unauthorized) writes.Unauthorized = true;
             } else if (json?["results"] is JsonArray results) {
                 result["results"] = results.DeepClone();
