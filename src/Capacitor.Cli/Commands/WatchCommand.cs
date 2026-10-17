@@ -759,10 +759,7 @@ partial class WatchCommand(
                             await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
                             break;
                         case HandedEndOutcome.Failed:
-                            if (await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, repository: null, "hook_handed"))
-                                MuseSessionEndRequest.Release(handed.ClaimedPath);
-                            else
-                                MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
+                            await RetryOrUnclaimHandedEndAsync(sessionId, transcriptPath, cwd, vendor, repository: null, handed);
                             break;
                     }
                 }
@@ -1208,13 +1205,8 @@ partial class WatchCommand(
                     await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
                     break;
 
-                // Neither posted nor spooled: tried once more the way a parent exit is posted, which needs no
-                // spool, and otherwise put back for the next watcher to take.
                 case HandedEndOutcome.Failed:
-                    if (await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, "hook_handed"))
-                        MuseSessionEndRequest.Release(handedEnd.ClaimedPath);
-                    else
-                        MuseSessionEndRequest.Unclaim(_paths, sessionId, handedEnd);
+                    await RetryOrUnclaimHandedEndAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, handedEnd);
                     break;
             }
         } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
@@ -2254,6 +2246,28 @@ partial class WatchCommand(
         MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
     internal enum HandedEndOutcome { Posted, Dropped, Failed }
+
+    /// <summary>A handed end that could be neither posted nor spooled is tried once more the way a parent
+    /// exit is posted, which needs no spool, and otherwise put back for the next watcher. Not while the
+    /// session still has spooled hooks: a direct post would overtake them, ending the session before its
+    /// start replays.</summary>
+    async Task RetryOrUnclaimHandedEndAsync(
+            string                sessionId,
+            string                transcriptPath,
+            string?               cwd,
+            string                vendor,
+            RepositoryPayload?    repository,
+            MuseSessionEndRequest handed
+        ) {
+        if (!new HookSpool(config, time).HasBacklog(sessionId)
+         && await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, repository, "hook_handed")) {
+            MuseSessionEndRequest.Release(handed.ClaimedPath);
+
+            return;
+        }
+
+        MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
+    }
 
     /// <summary>Spawns the watcher a resumed session is left without once this one exits; this watcher's
     /// pid file is already retired, so the spawn sees no live watcher. The successor follows the resumed
