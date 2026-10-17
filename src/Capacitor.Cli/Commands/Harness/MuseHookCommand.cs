@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.PrDetection;
 using Capacitor.Cli.SessionStartMemory;
 
@@ -27,7 +28,8 @@ sealed class MuseHookCommand(
 
     const string Vendor = "muse";
 
-    // Muse kills a hook after 5 s, or 15 s on SessionEnd.
+    // Muse kills a hook after 5 s, or 15 s on SessionEnd in the TUI; `muse exec` gives SessionEnd well
+    // under a second, which is why that hook hands its end to the watcher instead of posting it.
     static readonly TimeSpan Ceiling           = TimeSpan.FromSeconds(5);
     static readonly TimeSpan SessionEndCeiling = TimeSpan.FromSeconds(15);
     static readonly TimeSpan PreHookDrainCap   = TimeSpan.FromSeconds(6);
@@ -132,9 +134,11 @@ sealed class MuseHookCommand(
 
         // Spawn before the POST, as Claude does: a hook Muse kills mid-POST must not take capture with it.
         var log = Paths.ResolveSessionLog(session.ToString("D"), today);
-        if (log is not null && HookHttp.IsPostable(Url))
+        if (log is not null && HookHttp.IsPostable(Url)) {
+            MuseSessionEndRequest.Delete(WatcherPaths.FromEnvironment(config), sessionId);
             await watchers.EnsureWatcherRunning(sessionId, log,
                 agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: Vendor);
+        }
 
         var forwarded = new JsonObject {
             ["hook_event_name"] = "SessionStart",
@@ -187,6 +191,8 @@ sealed class MuseHookCommand(
         if (Paths.ResolveSessionLog(session.ToString("D"), today) is not { } log) return;
         if (await IsRepoExcludedAsync(sessionId, cwd, activeProfile, budget)) return;
 
+        // A request an earlier incarnation never posted would end the new watcher on its first tick.
+        MuseSessionEndRequest.Delete(WatcherPaths.FromEnvironment(config), sessionId);
         await watchers.EnsureWatcherRunning(sessionId, log,
             agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
     }
@@ -203,6 +209,10 @@ sealed class MuseHookCommand(
         return true;
     }
 
+    /// <summary>Muse documents 15 s for SessionEnd but <c>muse exec</c> kills the hook inside a second, so
+    /// the end goes to the session's watcher whenever one is alive: the hook writes the request it would
+    /// have posted and exits, and the watcher drains the log and posts it. Only a session with no watcher
+    /// is drained and posted here.</summary>
     async Task HandleSessionEnd(JsonNode node, Guid session, string? cwd, DateOnly today) {
         var sessionId = session.ToString("N");
         var budget    = clock.Budget(SessionEndCeiling);
@@ -210,25 +220,6 @@ sealed class MuseHookCommand(
         if (DisabledSessions.IsDisabled(sessionId, config)) {
             DisabledSessions.RemoveMarker(sessionId, config);
             return;
-        }
-
-        if (Paths.ResolveSessionLog(session.ToString("D"), today) is { } log) {
-            var cap = budget.Remaining < PreHookDrainCap ? budget.Remaining : PreHookDrainCap;
-
-            try {
-                var drained = cap > TimeSpan.Zero && await TimeBudget.RunCappedAsync(
-                    async () => {
-                        await watchers.KillWatcher(sessionId);
-                        await watchers.InlineDrainAsync(sessionId, log, agentId: null, vendor: Vendor);
-                    },
-                    cap, clock.Time);
-
-                if (!drained)
-                    await Console.Error.WriteLineAsync(
-                        $"[kcap] muse session-end pre-drain cap ({cap.TotalSeconds:0.#}s) elapsed; proceeding to POST.");
-            } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-                await Console.Error.WriteLineAsync($"[kcap] muse session-end pre-hook failed: {ex.Message}");
-            }
         }
 
         var forwarded = new JsonObject {
@@ -242,6 +233,30 @@ sealed class MuseHookCommand(
         if (cwd is not null) forwarded["cwd"] = cwd;
         if ((hosted.AgentId ?? MuseHostedSessionMarker.TryRead(home, sessionId)?.AgentId) is { } agentHostId)
             forwarded["agent_host_id"] = agentHostId;
+
+        var log = Paths.ResolveSessionLog(session.ToString("D"), today);
+
+        if (log is not null && watchers.IsWatcherAlive(sessionId)) {
+            MuseSessionEndRequest.Write(WatcherPaths.FromEnvironment(config), sessionId, forwarded.ToJsonString());
+            MuseHostedSessionMarker.Delete(home, sessionId);
+            return;
+        }
+
+        if (log is not null) {
+            var cap = budget.Remaining < PreHookDrainCap ? budget.Remaining : PreHookDrainCap;
+
+            try {
+                var drained = cap > TimeSpan.Zero && await TimeBudget.RunCappedAsync(
+                    () => watchers.InlineDrainAsync(sessionId, log, agentId: null, vendor: Vendor),
+                    cap, clock.Time);
+
+                if (!drained)
+                    await Console.Error.WriteLineAsync(
+                        $"[kcap] muse session-end pre-drain cap ({cap.TotalSeconds:0.#}s) elapsed; proceeding to POST.");
+            } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
+                await Console.Error.WriteLineAsync($"[kcap] muse session-end pre-hook failed: {ex.Message}");
+            }
+        }
 
         await PostInOrderAsync("session-end/muse", forwarded.ToJsonString(), sessionId, budget);
         MuseHostedSessionMarker.Delete(home, sessionId);

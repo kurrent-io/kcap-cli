@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.PrDetection;
 using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
@@ -648,6 +649,37 @@ public class MuseHookCommandTests : IDisposable {
         var body = JsonDocument.Parse(posts[0]).RootElement;
         await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo(ParentDashless);
         await Assert.That(body.GetProperty("agent_type").GetString()).IsEqualTo("worker");
+    }
+
+    /// <summary>Muse gives a SessionEnd hook far less than its documented budget under <c>muse exec</c>,
+    /// so the end is handed to the detached watcher: the hook writes the request and posts nothing,
+    /// and the watcher it would otherwise have killed stays alive to drain and post it.</summary>
+    [Test]
+    public async Task SessionEnd_with_a_live_watcher_hands_the_end_to_the_watcher_and_posts_nothing() {
+        StubHooks();
+        StageParentLog();
+        MuseHostedSessionMarker.Write(Home,
+            new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
+        var paths = WatcherPaths.FromEnvironment(Config.Root);
+        Directory.CreateDirectory(paths.Directory);
+        await File.WriteAllTextAsync(paths.PidFile(ParentDashless), $"{Environment.ProcessId}\nown-token\n");
+
+        var exit = await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"SessionEnd","reason":"exit","session_id":"{{ParentId}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(HookPosts("/hooks/").Count).IsEqualTo(0);
+        await Assert.That(File.Exists(paths.PidFile(ParentDashless))).IsTrue();
+
+        var request = MuseSessionEndRequest.TryRead(paths, ParentDashless);
+        await Assert.That(request).IsNotNull();
+        var body = JsonDocument.Parse(request!.Payload).RootElement;
+        await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo(ParentDashless);
+        await Assert.That(body.GetProperty("reason").GetString()).IsEqualTo("exit");
+        await Assert.That(body.GetProperty("agent_host_id").GetString()).IsEqualTo("agent-from-marker");
+        await Assert.That(body.TryGetProperty("ended_at", out _)).IsTrue();
+        await Assert.That(MuseHostedSessionMarker.TryRead(Home, ParentId)).IsNull();
     }
 
     [Test]

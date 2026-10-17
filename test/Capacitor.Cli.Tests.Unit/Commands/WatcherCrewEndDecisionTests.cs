@@ -31,3 +31,13 @@ public class WatcherCrewEndDecisionTests {
         await Assert.That(WatchCommand.DecideEndReason(false, false, false, false)).IsNull();
     }
 }
+
+/// <summary>Which watcher posts the session-end a Muse SessionEnd hook hands over.</summary>
+public class WatcherMuseEndHandoffTests {
+    [Test]
+    [Arguments("muse", null, true)]
+    [Arguments("muse", "agent-1", false)]
+    [Arguments("claude", null, false)]
+    public async Task Only_a_muse_session_watcher_takes_a_handed_end(string vendor, string? agentId, bool expected) =>
+        await Assert.That(WatchCommand.TakesHandedMuseEnd(vendor, agentId)).IsEqualTo(expected);
+}
