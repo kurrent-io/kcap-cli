@@ -1217,6 +1217,8 @@ partial class WatchCommand(
             if (SessionRunsOnElsewhere(vendor, agentId, claimant)) {
                 Log(time, $"Not posting a {endReason} session-end: the session runs on in pid {claimant}");
                 await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, claimant);
+            } else if (HostedAgent.FromEnvironment() is { AgentId: { } resumingId } resuming && ResumeEndSuppression.ShouldSuppress(resuming)) {
+                Log(time, $"session end suppressed: agent {resumingId} is resuming");
             } else {
                 await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
             }

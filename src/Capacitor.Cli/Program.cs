@@ -147,6 +147,9 @@ if (isHook && args.Contains("--claude")) {
 
     ClaudeSessionEnv.Persist(claudeHookBody, Environment.GetEnvironmentVariable(ClaudeSessionEnv.EnvFileVar), Console.Error);
 
+    if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ResumeEndSuppression.ShouldSuppress(HostedAgent.FromEnvironment()))
+        return 0;
+
     if (ClaudeSessionEndHandoff.IsDetached(args)) {
         ClaudeSessionEndHandoff.EnterDetached(claudeHookBody, config);
     } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance)) {
