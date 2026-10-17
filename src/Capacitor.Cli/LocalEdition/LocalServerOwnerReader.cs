@@ -12,7 +12,7 @@ static class LocalServerOwnerReader {
     public static OwnerReading FromPrint(int exitCode, string stdout, string stderr) {
         switch (LaunchdUnit.ClassifyPrint(exitCode, stdout, stderr)) {
             case LabelProbe.Absent:  return OwnerReading.Absent.Instance;
-            case LabelProbe.Unknown: return new OwnerReading.Unreadable($"launchctl print failed (exit {exitCode})");
+            case LabelProbe.Unknown: return new OwnerReading.Unreadable($"launchctl print failed (exit {exitCode}): {stderr.Trim()}");
         }
 
         // Only the job's own block: launchd also prints "inherited environment", which is not this job's.
@@ -59,7 +59,12 @@ static class LocalServerOwnerReader {
         if (exitCode != 0) return new OwnerReading.Unreadable($"systemctl show failed (exit {exitCode}): {stderr.Trim()}");
 
         var lines = stdout.Split('\n', StringSplitOptions.TrimEntries);
-        if (lines.Contains("LoadState=not-found")) return OwnerReading.Absent.Instance;
+        if (lines.Contains("LoadState=not-found")) {
+            // A deleted unit file can still be running; only a unit that is not running is gone.
+            return lines.Contains("ActiveState=inactive") || lines.Contains("ActiveState=failed")
+                ? OwnerReading.Absent.Instance
+                : new OwnerReading.Unreadable("the unit is not found but is still active");
+        }
 
         var env = lines.FirstOrDefault(l => l.StartsWith("Environment=", StringComparison.Ordinal));
 
@@ -72,17 +77,22 @@ static class LocalServerOwnerReader {
             case LaunchdUnit.PlistRead.Unreadable: return new OwnerReading.Unreadable($"{path} could not be read");
         }
 
-        var assignments = content!.Split('\n', StringSplitOptions.TrimEntries)
-            .Where(l => l.StartsWith("Environment=", StringComparison.Ordinal))
-            .SelectMany(l => Assignments(l["Environment=".Length..]))
-            .Select(a => a.Replace("%%", "%"));
+        // systemd applies the lines in order: an empty one resets everything before it.
+        var assignments = new List<string>();
+        foreach (var line in content!.Split('\n', StringSplitOptions.TrimEntries)) {
+            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
+
+            var value = line["Environment=".Length..].Trim();
+            if (value.Length == 0) assignments.Clear();
+            else assignments.AddRange(Assignments(value).Select(a => a.Replace("%%", "%")));
+        }
 
         return RootIn(assignments, path);
     }
 
     static OwnerReading RootIn(IEnumerable<string> assignments, string what) {
         var prefix = LocalRoot.EnvVar + "=";
-        var match  = assignments.FirstOrDefault(a => a.StartsWith(prefix, StringComparison.Ordinal));
+        var match  = assignments.LastOrDefault(a => a.StartsWith(prefix, StringComparison.Ordinal));
 
         return match is null
             ? new OwnerReading.Unreadable($"{what} names no {LocalRoot.EnvVar}")

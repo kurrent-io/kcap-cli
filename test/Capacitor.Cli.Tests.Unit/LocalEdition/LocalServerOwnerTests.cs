@@ -123,7 +123,7 @@ public class LocalServerOwnerTests {
 
     [Test]
     public async Task A_not_found_unit_is_absent() {
-        var owner = Systemd(Scripted(0, "LoadState=not-found\nEnvironment=\n")).Owner(Unit);
+        var owner = Systemd(Scripted(0, "LoadState=not-found\nActiveState=inactive\nEnvironment=\n")).Owner(Unit);
 
         await Assert.That(owner.Loaded).IsEqualTo(OwnerReading.Absent.Instance);
     }
@@ -185,5 +185,62 @@ public class LocalServerOwnerTests {
             findLive: _ => null, uid: 501).UninstallAsync(Unit, CancellationToken.None);
 
         await Assert.That(points).Contains($"unlink:{Plist}");
+    }
+
+    [Test]
+    public async Task A_not_found_unit_that_is_still_active_is_unreadable() {
+        var owner = Systemd(Scripted(0, "LoadState=not-found\nActiveState=active\nEnvironment=\n")).Owner(Unit);
+
+        await Assert.That(owner.Loaded).IsTypeOf<OwnerReading.Unreadable>();
+    }
+
+    [Test]
+    public async Task The_last_assignment_in_the_unit_file_wins() {
+        Tmp.CreateFile(Path.GetRelativePath(Tmp.Path, UnitFile), "[Service]\nEnvironment=KCAP_LOCAL_ROOT=/first\nEnvironment=KCAP_LOCAL_ROOT=/second\n");
+
+        var owner = Systemd(Scripted(0, "LoadState=not-found\nActiveState=inactive\n")).Owner(Unit);
+
+        await Assert.That(owner.OnDisk).IsEqualTo(new OwnerReading.Root("/second"));
+    }
+
+    [Test]
+    public async Task An_empty_environment_line_resets_the_unit_file() {
+        Tmp.CreateFile(Path.GetRelativePath(Tmp.Path, UnitFile), "[Service]\nEnvironment=KCAP_LOCAL_ROOT=/first\nEnvironment=\n");
+
+        var owner = Systemd(Scripted(0, "LoadState=not-found\nActiveState=inactive\n")).Owner(Unit);
+
+        await Assert.That(owner.OnDisk).IsTypeOf<OwnerReading.Unreadable>();
+    }
+
+    [Test]
+    public async Task A_root_with_special_characters_round_trips_through_the_plist() {
+        var odd = new LocalServerUnit("/bin/x", new LocalRoot(Tmp.PathTo("a&b <c> \"q\"")), 1);
+        Tmp.CreateFile(Path.GetRelativePath(Tmp.Path, Plist), LocalServerLaunchdUnit.Plist(odd));
+
+        var owner = Launchd(Scripted(113, "", "Could not find service")).Owner(Unit);
+
+        await Assert.That(owner.OnDisk).IsEqualTo(new OwnerReading.Root(odd.Root.Directory));
+    }
+
+    [Test]
+    public async Task A_root_with_special_characters_round_trips_through_the_unit_file() {
+        var odd = new LocalServerUnit("/bin/x", new LocalRoot(Tmp.PathTo("a&b %c \"q\" \\d")), 1);
+        Tmp.CreateFile(Path.GetRelativePath(Tmp.Path, UnitFile), LocalServerSystemdUnit.Unit(odd));
+
+        var owner = Systemd(Scripted(0, "LoadState=not-found\nActiveState=inactive\n")).Owner(Unit);
+
+        await Assert.That(owner.OnDisk).IsEqualTo(new OwnerReading.Root(odd.Root.Directory));
+    }
+
+    [Test]
+    public async Task Systemd_uninstall_reports_the_unlink() {
+        Tmp.CreateFile(Path.GetRelativePath(Tmp.Path, UnitFile), "x");
+        var points = new List<string>();
+        using var _ = FaultPoints.Arm(points.Add);
+
+        await new LocalServerSystemdService(Home, TimeProvider.System, (_, _) => (0, "", ""), findLive: _ => null)
+            .UninstallAsync(Unit, CancellationToken.None);
+
+        await Assert.That(points).Contains($"unlink:{UnitFile}");
     }
 }

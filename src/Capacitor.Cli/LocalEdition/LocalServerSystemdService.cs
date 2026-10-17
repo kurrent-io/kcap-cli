@@ -65,6 +65,7 @@ sealed class LocalServerSystemdService(
         if (File.Exists(path)) {
             await StopAsync(unit, ct);
             File.Delete(path);
+            FaultPoints.Hit($"unlink:{path}");
         } else {
             // systemd can still run a unit whose file is gone; there is nothing left to disable, but it must stop.
             // Only "not loaded" means there was nothing to stop: a server that has not yet taken its lock would

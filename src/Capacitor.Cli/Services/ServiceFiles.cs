@@ -31,7 +31,7 @@ static class ServiceFiles {
     /// supplies a no-op one to prove the refusal, which is otherwise only reachable through a directory
     /// the current user does not own.</param>
     /// <param name="durable">Flushes the content and the directory entry, so a power loss leaves the old unit or
-    /// the new one. Directories it creates are synced up to the home.</param>
+    /// the new one. Every directory level below the home is synced.</param>
     /// <param name="home">Bounds the durable directory creation; without it the walk reaches the filesystem root.</param>
     public static void WriteOwnerOnly(
             string path, string content, Encoding? encoding = null, Action<string>? verifyFinal = null,
