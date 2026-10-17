@@ -109,15 +109,9 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
      && (ctx.IsReviewFlow
          || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
 
-    public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
-        // §2.7 B4: resume is app-server-only (thread/resume). A resume request routed to the PTY path can't
-        // be honored and would silently start a FRESH session — forking the transcript, breaking the
-        // never-silently-fork invariant — so fail the launch instead. (Server-side, resume must also be
-        // capability-gated to app-server-capable daemons before B6 activates parking.)
-        if (ctx.ResumeSessionId is not null && !UsesAppServer(ctx))
-            throw new InvalidOperationException(
-                "codex: a resume (ResumeSessionId set) requires the app-server route; refusing to start a fresh PTY session.");
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
 
+    public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         return UsesAppServer(ctx) ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
     }
 

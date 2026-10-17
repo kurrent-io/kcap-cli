@@ -109,6 +109,30 @@ public class CodexLauncherTests {
         await Assert.That(args).DoesNotContain("gpt-5.6-luna");
     }
 
+    [Test]
+    public async Task Resume_launch_uses_the_resume_subcommand_with_overrides_and_prompt() {
+        var ctx = NewCtx(prompt: "carry on", effort: "high") with { ResumeSessionId = "019a-thread" };
+
+        var args = NewLauncher().BuildArgs(ctx).Args;
+
+        await Assert.That(args).IsEquivalentTo(new[] {
+            "resume", "019a-thread",
+            "--cd", "/tmp/wt",
+            "--sandbox", "workspace-write",
+            "--ask-for-approval", "on-request",
+            "--dangerously-bypass-hook-trust",
+            "-m", "gpt-5.3-codex",
+            "-c", "model_reasoning_effort=\"high\"",
+            "--no-alt-screen",
+            "--", "carry on",
+        }, CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task Resume_is_supported() {
+        await Assert.That(NewLauncher().SupportsResume).IsTrue();
+    }
+
     void WriteCodexConfig(string toml) => Home.CreateFile([".codex", "config.toml"], toml);
 
     [Test]

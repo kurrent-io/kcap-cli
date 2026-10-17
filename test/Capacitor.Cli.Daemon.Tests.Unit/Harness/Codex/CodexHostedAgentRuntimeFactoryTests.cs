@@ -195,6 +195,46 @@ public class CodexHostedAgentRuntimeFactoryTests {
         await Assert.That(start.Runtime).IsTypeOf<StubRuntime>();
     }
 
+    [Test]
+    public async Task Resume_on_the_pty_route_no_longer_throws() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = Factory(pty, appServerActive: false);
+
+        await factory.StartAsync(Ctx(isReviewFlow: false, wt.Path) with { ResumeSessionId = "thread-1" }, CancellationToken.None);
+
+        await Assert.That(pty.StartCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("pty")]
+    [Arguments("appserver")]
+    public async Task Both_transports_support_a_restart_resume(string? transport) {
+        await Assert.That(((IHostedAgentRuntimeFactory)Factory(new RecordingPtyFactory(), appServerActive: false)).SupportsRestartResume(transport)).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task App_server_resume_still_sends_thread_resume() {
+        using var wt   = new TempDir();
+        WriteWorktreeHooks(wt);
+        await using var fake = new FakeCodexAppServer();
+
+        using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
+
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+            Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam);
+
+        var start = await factory.StartAsync(
+            Ctx(isReviewFlow: true, wt.Path) with { ResumeSessionId = "thread-parked-1" }, CancellationToken.None).WaitAsync(HangGuard);
+        await start.Runtime.DisposeAsync();
+
+        await Assert.That(fake.ReceivedMethods).Contains("thread/resume");
+        await Assert.That(fake.LastResumeThreadId).IsEqualTo("thread-parked-1");
+    }
+
     // ── App-server route (spawn seam; isolated HOME so TrustWorktree touches nothing real) ──────
     [Test]
     [NotInParallel]
