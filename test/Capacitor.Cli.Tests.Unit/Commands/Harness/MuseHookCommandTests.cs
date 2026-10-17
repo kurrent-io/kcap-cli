@@ -326,7 +326,6 @@ public class MuseHookCommandTests : IDisposable {
     [Test]
     public async Task SessionEnd_takes_agent_host_id_from_the_marker_then_deletes_it() {
         StubHooks();
-        StageParentLog();
         MuseHostedSessionMarker.Write(Home,
             new MuseHostedSessionMarker(ParentId, "agent-from-marker", "daemon-1", "epoch-1", DateTimeOffset.UtcNow));
 
@@ -671,6 +670,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(HookPosts("/hooks/").Count).IsEqualTo(0);
         await Assert.That(File.Exists(paths.PidFile(ParentDashless))).IsTrue();
+        await Assert.That(_spawner.Spawned.Count).IsEqualTo(0);
 
         var request = MuseSessionEndRequest.TryClaim(paths, ParentDashless, "test");
         await Assert.That(request).IsNotNull();
@@ -682,10 +682,49 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(MuseHostedSessionMarker.TryRead(Home, ParentId)).IsNull();
     }
 
+    /// <summary>A session whose watcher is gone still has a log to drain, so the end is handed to a watcher
+    /// armed for it rather than posted from a hook Muse may kill mid-drain.</summary>
+    [Test]
+    public async Task SessionEnd_without_a_watcher_arms_one_for_the_handed_end_and_posts_nothing() {
+        StubHooks();
+        var log = StageParentLog();
+
+        var exit = await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"SessionEnd","reason":"exit","session_id":"{{ParentId}}","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(HookPosts("/hooks/").Count).IsEqualTo(0);
+        await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
+        await Assert.That(_spawner.Spawned[0].TranscriptPath).IsEqualTo(log);
+        await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
+
+        var request = MuseSessionEndRequest.TryClaim(WatcherPaths.FromEnvironment(Config.Root), ParentDashless, "test");
+        await Assert.That(request).IsNotNull();
+        await Assert.That(JsonDocument.Parse(request!.Payload).RootElement.GetProperty("reason").GetString()).IsEqualTo("exit");
+    }
+
+    /// <summary>A session Stop re-arms after an unposted end was left behind: the end is discarded through
+    /// the same claim a watcher would take, so it cannot end the new watcher.</summary>
+    [Test]
+    public async Task Stop_rearm_discards_an_unclaimed_handed_end() {
+        StubHooks();
+        StageParentLog();
+        var paths = WatcherPaths.FromEnvironment(Config.Root);
+        MuseSessionEndRequest.Write(paths, ParentDashless, """{"reason":"stale"}""");
+
+        await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"done","session_id":"{{ParentId}}","turn_id":"3a75e7fd-2b07-401b-9446-6af740e7933d","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        await Assert.That(MuseSessionEndRequest.Exists(paths, ParentDashless)).IsFalse();
+        await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
+    }
+
+    /// <summary>With no log there is nothing to drain, so the end goes straight to the server.</summary>
     [Test]
     public async Task SessionEnd_posts_session_end_with_the_reason() {
         StubHooks();
-        StageParentLog();
         var stdout = new StringWriter();
 
         var exit = await Command().Handle(new StringReader(

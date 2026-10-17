@@ -32,7 +32,6 @@ sealed class MuseHookCommand(
     // under a second, which is why that hook hands its end to the watcher instead of posting it.
     static readonly TimeSpan Ceiling           = TimeSpan.FromSeconds(5);
     static readonly TimeSpan SessionEndCeiling = TimeSpan.FromSeconds(15);
-    static readonly TimeSpan PreHookDrainCap   = TimeSpan.FromSeconds(6);
 
     readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
 
@@ -135,7 +134,7 @@ sealed class MuseHookCommand(
         // Spawn before the POST, as Claude does: a hook Muse kills mid-POST must not take capture with it.
         var log = Paths.ResolveSessionLog(session.ToString("D"), today);
         if (log is not null && HookHttp.IsPostable(Url)) {
-            if (!watchers.IsWatcherAlive(sessionId)) MuseSessionEndRequest.DeleteAll(WatcherPaths.FromEnvironment(config), sessionId);
+            if (!watchers.IsWatcherAlive(sessionId)) DiscardHandedEnd(sessionId);
             await watchers.EnsureWatcherRunning(sessionId, log,
                 agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: Vendor);
         }
@@ -191,10 +190,17 @@ sealed class MuseHookCommand(
         if (Paths.ResolveSessionLog(session.ToString("D"), today) is not { } log) return;
         if (await IsRepoExcludedAsync(sessionId, cwd, activeProfile, budget)) return;
 
-        // A handed end nobody posted would end the watcher armed here on its first tick.
-        MuseSessionEndRequest.DeleteAll(WatcherPaths.FromEnvironment(config), sessionId);
+        DiscardHandedEnd(sessionId);
         await watchers.EnsureWatcherRunning(sessionId, log,
             agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
+    }
+
+    /// <summary>A handed end still unclaimed when the session carries on would end the watcher armed for it
+    /// on its first tick. It is taken through the same claim a watcher uses, so a watcher already on its
+    /// way out with it keeps it.</summary>
+    void DiscardHandedEnd(string sessionId) {
+        if (MuseSessionEndRequest.TryClaim(WatcherPaths.FromEnvironment(config), sessionId, "rearm") is { } stale)
+            MuseSessionEndRequest.Release(stale.ClaimedPath);
     }
 
     /// <summary>An out-of-scope repository disables the session, so its later hooks stop at the
@@ -210,9 +216,10 @@ sealed class MuseHookCommand(
     }
 
     /// <summary>Muse documents 15 s for SessionEnd but <c>muse exec</c> kills the hook inside a second, so
-    /// the end goes to the session's watcher whenever one is alive: the hook writes the request it would
-    /// have posted and exits, and the watcher drains the log and posts it. Only a session with no watcher
-    /// is drained and posted here.</summary>
+    /// a session with a log never has its end posted from here: the hook writes the request it would have
+    /// posted and makes sure a watcher is running to drain the log and post it. A hook killed while posting
+    /// would take the only copy of the end with it; a watcher is a detached process. Only a session with
+    /// no log, which has nothing to drain, is posted directly.</summary>
     async Task HandleSessionEnd(JsonNode node, Guid session, string? cwd, DateOnly today) {
         var sessionId = session.ToString("N");
         var budget    = clock.Budget(SessionEndCeiling);
@@ -234,40 +241,16 @@ sealed class MuseHookCommand(
         if ((hosted.AgentId ?? MuseHostedSessionMarker.TryRead(home, sessionId)?.AgentId) is { } agentHostId)
             forwarded["agent_host_id"] = agentHostId;
 
-        var log   = Paths.ResolveSessionLog(session.ToString("D"), today);
-        var paths = WatcherPaths.FromEnvironment(config);
+        if (Paths.ResolveSessionLog(session.ToString("D"), today) is { } log && HookHttp.IsPostable(Url)) {
+            MuseSessionEndRequest.Write(WatcherPaths.FromEnvironment(config), sessionId, forwarded.ToJsonString());
 
-        if (log is not null && watchers.IsWatcherAlive(sessionId)) {
-            MuseSessionEndRequest.Write(paths, sessionId, forwarded.ToJsonString());
+            // A watcher alive here takes the request on its next tick or on its last look, which it makes
+            // only after retiring its pid file; one that has gone is replaced by a watcher armed for it.
+            await watchers.EnsureWatcherRunning(sessionId, log,
+                agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
+            MuseHostedSessionMarker.Delete(home, sessionId);
 
-            // The watcher retires its pid file before its last look for a request, so a watcher still
-            // alive here will see this one. One that is gone may have claimed it on the way out; the
-            // claim settles who posts.
-            if (watchers.IsWatcherAlive(sessionId) || MuseSessionEndRequest.TryClaim(paths, sessionId, "hook") is not { } claimed) {
-                MuseHostedSessionMarker.Delete(home, sessionId);
-                return;
-            }
-
-            MuseSessionEndRequest.Release(claimed.ClaimedPath);
-        }
-
-        if (log is not null) {
-            var cap = budget.Remaining < PreHookDrainCap ? budget.Remaining : PreHookDrainCap;
-
-            try {
-                var drained = cap > TimeSpan.Zero && await TimeBudget.RunCappedAsync(
-                    async () => {
-                        await watchers.KillWatcher(sessionId);
-                        await watchers.InlineDrainAsync(sessionId, log, agentId: null, vendor: Vendor);
-                    },
-                    cap, clock.Time);
-
-                if (!drained)
-                    await Console.Error.WriteLineAsync(
-                        $"[kcap] muse session-end pre-drain cap ({cap.TotalSeconds:0.#}s) elapsed; proceeding to POST.");
-            } catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException) {
-                await Console.Error.WriteLineAsync($"[kcap] muse session-end pre-hook failed: {ex.Message}");
-            }
+            return;
         }
 
         await PostInOrderAsync("session-end/muse", forwarded.ToJsonString(), sessionId, budget);
