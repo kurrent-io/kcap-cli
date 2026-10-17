@@ -40,6 +40,8 @@ public class LocalServerUnitTests {
         await Assert.That(unit).Contains("Restart=on-failure\n");
         await Assert.That(unit).Contains("TimeoutStopSec=90\n");
         await Assert.That(unit).Contains("Environment=Local__Port=51234\n");
+        await Assert.That(unit).Contains($"StandardOutput=append:{Unit.OutputLog}\n");
+        await Assert.That(unit).Contains($"StandardError=append:{Unit.OutputLog}\n");
     }
 
     /// <summary>The daemon's service verbs list, refresh, replace and remove what they match by name; the local

@@ -5,7 +5,9 @@ namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>
 /// Whether anything of the stack is still alive under a root. The event store runs inside the server, so
-/// two checks cover it: the server's instance lock is free, and nothing accepts on Postgres's socket.
+/// the server's instance lock covers it. Postgres is alive while it accepts on its socket, and also while
+/// the postmaster its <c>postmaster.pid</c> names is running: a postmaster that is starting or recovering
+/// accepts nothing yet.
 ///
 /// <para>Only meaningful once the unit is stopped: probing the lock takes it for a moment, and a server
 /// starting in that moment would refuse to run.</para>
@@ -22,8 +24,35 @@ static class LocalStackProbe {
 
         if (LockHeld(Path.Combine(run, ServerLockName))) return "the server still holds its instance lock";
         if (Accepting(Path.Combine(run, PostgresSocketName))) return "Postgres still accepts connections on its socket";
+        if (PostmasterRunning(PostmasterPidPath(root)) is { } pid) return $"the Postgres postmaster (pid {pid}) is still running";
 
         return null;
+    }
+
+    public static string PostmasterPidPath(LocalRoot root) =>
+        Path.Combine(root.Directory, "data", "postgres", "18", "postmaster.pid");
+
+    /// <summary>The pid on the file's first line, when a process by that pid runs a postgres executable. A file a
+    /// killed postmaster left behind names a pid that is gone or reused by something else.</summary>
+    static int? PostmasterRunning(string pidFile) {
+        string? first;
+
+        try {
+            using var reader = new StreamReader(new FileStream(pidFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+            first = reader.ReadLine();
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return null;
+        }
+
+        if (!int.TryParse(first?.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid))
+            return null;
+
+        try {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            return !process.HasExited && process.ProcessName.StartsWith("postgres", StringComparison.Ordinal) ? pid : null;
+        } catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) {
+            return null;
+        }
     }
 
     public static async Task WaitUntilDownAsync(

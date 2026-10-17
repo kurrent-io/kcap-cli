@@ -21,9 +21,14 @@ public class LocalServerServiceTests {
         public List<string> Calls { get; } = [];
         public Dictionary<string, (int, string, string)> Results { get; } = [];
 
+        /// <summary>Consulted first, for a result that changes between calls.</summary>
+        public Func<string, (int, string, string)?>? Script { get; init; }
+
         public (int, string, string) Run(string file, string[] args) {
             var call = $"{file} {string.Join(' ', args)}";
             Calls.Add(call);
+
+            if (Script?.Invoke(call) is { } scripted) return scripted;
 
             foreach (var (prefix, result) in Results)
                 if (call.StartsWith(prefix, StringComparison.Ordinal)) return result;
@@ -60,11 +65,74 @@ public class LocalServerServiceTests {
 
     [Test]
     public async Task Reinstalling_over_a_loaded_unit_unloads_it_first() {
-        var commands = new Commands { Results = { [$"launchctl print"] = (0, "state = running", "") } };
+        var loaded   = true;
+        var commands = new Commands {
+            Script = call => call.StartsWith("launchctl print", StringComparison.Ordinal) && loaded ? (0, "state = running", "")
+                           : call.StartsWith("launchctl bootout", StringComparison.Ordinal) ? Unload()
+                           : null,
+        };
 
         Launchd(commands).Install(Unit);
 
         await Assert.That(commands.Calls[1]).IsEqualTo($"launchctl bootout gui/{Uid}/io.kurrent.kcap.local");
+        await Assert.That(commands.Calls[^1]).IsEqualTo($"launchctl bootstrap gui/{Uid} {Plist}");
+
+        return;
+
+        (int, string, string) Unload() {
+            loaded = false;
+            return (0, "", "");
+        }
+    }
+
+    [Test]
+    public async Task A_bootout_that_leaves_the_label_loaded_is_an_error_even_when_it_exits_zero() {
+        var time = new FakeTimeProvider();
+        // Each look moves the clock past the wait for the job to exit.
+        var commands = new Commands {
+            Script = call => {
+                if (!call.StartsWith("launchctl print", StringComparison.Ordinal)) return null;
+                time.Advance(TimeSpan.FromMinutes(5));
+                return (0, "state = running", "");
+            },
+        };
+
+        await Assert.That(() => Launchd(commands, time: time).StopAsync(Unit, CancellationToken.None))
+            .Throws<LocalLifecycleException>().WithMessageContaining("still Loaded");
+    }
+
+    /// <summary>bootout returns while the job is still exiting; the stop waits for launchd to drop the label.</summary>
+    [Test]
+    public async Task A_stop_waits_for_launchd_to_unload_the_exiting_job() {
+        var looks    = 0;
+        var commands = new Commands {
+            Script = call => call.StartsWith("launchctl print", StringComparison.Ordinal) && ++looks < 3 ? (0, "state = running", "") : null,
+        };
+
+        await Launchd(commands).StopAsync(Unit, CancellationToken.None);
+
+        await Assert.That(looks).IsEqualTo(3);
+    }
+
+    static readonly (int, string, string) PrintUnreadable = (5, "", "Bad request.");
+
+    [Test]
+    public async Task An_install_that_cannot_read_launchds_state_writes_nothing() {
+        var written  = false;
+        var commands = new Commands { Results = { ["launchctl print"] = PrintUnreadable } };
+        var service  = new LocalServerLaunchdService(Home, TimeProvider.System, commands.Run, (_, _, _) => written = true, _ => null, Uid);
+
+        await Assert.That(() => service.Install(Unit)).Throws<LocalLifecycleException>();
+        await Assert.That(written).IsFalse();
+    }
+
+    /// <summary>Enabling first would clear a persisted stop for a start that then does not happen.</summary>
+    [Test]
+    public async Task A_start_that_cannot_read_launchds_state_leaves_the_unit_disabled() {
+        var commands = new Commands { Results = { ["launchctl print"] = PrintUnreadable } };
+
+        await Assert.That(() => Launchd(commands).Start(Unit)).Throws<LocalLifecycleException>();
+        await AssertCalls(commands, [$"launchctl print gui/{Uid}/io.kurrent.kcap.local"]);
     }
 
     /// <summary>Disabling is what keeps a stopped stack stopped across a login, so a stop that cannot disable
@@ -88,6 +156,7 @@ public class LocalServerServiceTests {
         await AssertCalls(commands, [
             $"launchctl disable gui/{Uid}/io.kurrent.kcap.local",
             $"launchctl bootout gui/{Uid}/io.kurrent.kcap.local",
+            $"launchctl print gui/{Uid}/io.kurrent.kcap.local",
         ]);
         await Assert.That(probes).IsEqualTo(3);
     }
@@ -128,16 +197,44 @@ public class LocalServerServiceTests {
     }
 
     [Test]
-    public async Task A_systemd_install_reloads_enables_and_restarts_the_unit() {
+    public async Task A_systemd_install_starts_the_unit_exactly_once() {
         var commands = new Commands();
 
         Systemd(commands).Install(Unit);
 
         await AssertCalls(commands, [
             "systemctl --user daemon-reload",
-            "systemctl --user enable --now kcap-local.service",
+            "systemctl --user enable kcap-local.service",
+            "systemctl --user reset-failed kcap-local.service",
             "systemctl --user restart kcap-local.service",
         ]);
+    }
+
+    /// <summary>A unit that hit its start limit refuses every start until the limit is cleared.</summary>
+    [Test]
+    public async Task A_systemd_start_clears_a_hit_start_limit_first() {
+        var commands = new Commands { Results = { ["systemctl --user reset-failed"] = (1, "", "Unit kcap-local.service not loaded.") } };
+
+        Systemd(commands).Start(Unit);
+
+        await AssertCalls(commands, [
+            "systemctl --user reset-failed kcap-local.service",
+            "systemctl --user enable --now kcap-local.service",
+        ]);
+    }
+
+    [Test]
+    public async Task A_systemd_uninstall_still_stops_a_unit_whose_file_is_gone() {
+        var commands = new Commands();
+        var probed   = false;
+
+        await Systemd(commands, findLive: _ => { probed = true; return null; }).UninstallAsync(Unit, CancellationToken.None);
+
+        await AssertCalls(commands, [
+            "systemctl --user stop kcap-local.service",
+            "systemctl --user daemon-reload",
+        ]);
+        await Assert.That(probed).IsTrue();
     }
 
     [Test]

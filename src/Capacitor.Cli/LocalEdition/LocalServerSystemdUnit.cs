@@ -27,6 +27,11 @@ static class LocalServerSystemdUnit {
         }
 
         sb.Append($"ExecStart={SystemdUnit.QuoteArg(unit.ServerBinary)}\n");
+        // The rest of the line is the path, spaces included, with specifiers expanded.
+        ServiceText.RequireNoControlCharacters("the server log path", unit.OutputLog);
+        var log = ServiceText.SystemdValue(unit.OutputLog);
+        sb.Append($"StandardOutput=append:{log}\n");
+        sb.Append($"StandardError=append:{log}\n");
         sb.Append("Restart=on-failure\n");
         sb.Append("RestartSec=5\n");
         // SIGTERM reaches the server alone, which stops Postgres itself; whatever is left at the timeout is killed.
@@ -40,7 +45,10 @@ static class LocalServerSystemdUnit {
     }
 
     public static string[] DaemonReloadArgs()                    => ["--user", "daemon-reload"];
+    public static string[] EnableArgs(LocalServerUnit unit)      => ["--user", "enable", unit.SystemdName];
     public static string[] EnableNowArgs(LocalServerUnit unit)   => ["--user", "enable", "--now", unit.SystemdName];
+    public static string[] StopArgs(LocalServerUnit unit)        => ["--user", "stop", unit.SystemdName];
+    public static string[] ResetFailedArgs(LocalServerUnit unit) => ["--user", "reset-failed", unit.SystemdName];
     public static string[] DisableNowArgs(LocalServerUnit unit)  => ["--user", "disable", "--now", unit.SystemdName];
     public static string[] RestartArgs(LocalServerUnit unit)     => ["--user", "restart", unit.SystemdName];
     public static string[] IsActiveArgs(LocalServerUnit unit)    => ["--user", "is-active", unit.SystemdName];

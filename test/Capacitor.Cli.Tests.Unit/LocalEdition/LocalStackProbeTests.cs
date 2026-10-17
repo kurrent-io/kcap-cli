@@ -27,6 +27,20 @@ public class LocalStackProbeTests {
         await Assert.That(LocalStackProbe.FindLive(Root)).IsNull();
     }
 
+    /// <summary>A killed postmaster leaves its pid file behind, naming a pid that is gone or now some other
+    /// program; neither is a live Postgres.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_postmaster_pid_file_counts_only_while_a_postgres_runs_under_that_pid(bool pidOfThisProcess) {
+        if (OperatingSystem.IsWindows()) return;
+
+        var pid = pidOfThisProcess ? Environment.ProcessId : int.MaxValue;
+        Tmp.CreateFile(["data", "postgres", "18", "postmaster.pid"], $"{pid}\n/data\n");
+
+        await Assert.That(LocalStackProbe.FindLive(Root)).IsNull();
+    }
+
     /// <summary>A socket file left behind by a killed postmaster refuses connections, and is not a live
     /// Postgres.</summary>
     [Test]

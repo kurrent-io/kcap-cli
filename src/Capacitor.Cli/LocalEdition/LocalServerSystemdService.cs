@@ -27,12 +27,21 @@ sealed class LocalServerSystemdService(
         _writeUnit(LocalServerSystemdUnit.UnitPath(home, unit), LocalServerSystemdUnit.Unit(unit), null);
 
         Check(LocalServerSystemdUnit.DaemonReloadArgs());
-        Check(LocalServerSystemdUnit.EnableNowArgs(unit));
-        // A unit that was already running keeps its old definition until restarted.
+        Check(LocalServerSystemdUnit.EnableArgs(unit));
+        ResetFailed(unit);
+        // One start either way: a running unit keeps its old definition until restarted, and a fresh one is
+        // started by the same call rather than started and then interrupted.
         Check(LocalServerSystemdUnit.RestartArgs(unit));
     }
 
-    public void Start(LocalServerUnit unit) => Check(LocalServerSystemdUnit.EnableNowArgs(unit));
+    public void Start(LocalServerUnit unit) {
+        ResetFailed(unit);
+        Check(LocalServerSystemdUnit.EnableNowArgs(unit));
+    }
+
+    /// <summary>A unit that hit its start limit refuses every start until this clears it. Best effort: there is
+    /// nothing to clear on a unit that has not failed.</summary>
+    void ResetFailed(LocalServerUnit unit) => _run("systemctl", LocalServerSystemdUnit.ResetFailedArgs(unit));
 
     public async Task StopAsync(LocalServerUnit unit, CancellationToken ct) {
         Check(LocalServerSystemdUnit.DisableNowArgs(unit));
@@ -46,6 +55,10 @@ sealed class LocalServerSystemdService(
         if (File.Exists(path)) {
             await StopAsync(unit, ct);
             File.Delete(path);
+        } else {
+            // systemd can still run a unit whose file is gone; there is nothing left to disable, but it must stop.
+            _run("systemctl", LocalServerSystemdUnit.StopArgs(unit));
+            await LocalStackProbe.WaitUntilDownAsync(unit.Root, StopBudget, time, ct, findLive);
         }
 
         Check(LocalServerSystemdUnit.DaemonReloadArgs());

@@ -16,6 +16,8 @@ sealed partial class LocalServerLaunchdService(
     /// <summary>launchd's own SIGTERM-to-SIGKILL wait, then time for the probe to see the lock released.</summary>
     static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(LocalServerLaunchdUnit.ExitTimeoutSeconds + 15);
 
+    static readonly TimeSpan UnloadPollGap = TimeSpan.FromMilliseconds(250);
+
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _run = run ?? ServiceProcess.Run;
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
     readonly int _uid = uid ?? (int)getuid();
@@ -31,7 +33,10 @@ sealed partial class LocalServerLaunchdService(
         unit.PrepareLogDirectory();
 
         // launchd keeps the definition it loaded, so a rewritten plist takes effect only through a reload.
-        if (Probe(unit) == LabelProbe.Loaded) Bootout(unit);
+        switch (Probe(unit)) {
+            case LabelProbe.Loaded:  Bootout(unit); break;
+            case LabelProbe.Unknown: throw Unreadable(unit, "nothing was installed");
+        }
 
         var plist = LocalServerLaunchdUnit.PlistPath(home, unit);
         _writeUnit(plist, LocalServerLaunchdUnit.Plist(unit), null);
@@ -40,20 +45,20 @@ sealed partial class LocalServerLaunchdService(
         Check(LocalServerLaunchdUnit.BootstrapArgs(_uid, plist));
     }
 
+    /// <summary>Probes before enabling, so a start that cannot go ahead leaves a persisted stop in place.</summary>
     public void Start(LocalServerUnit unit) {
+        var state = Probe(unit);
+        if (state == LabelProbe.Unknown) throw Unreadable(unit, "nothing was started");
+
         Check(LocalServerLaunchdUnit.EnableArgs(_uid, unit));
 
-        switch (Probe(unit)) {
-            case LabelProbe.Absent:
-                Check(LocalServerLaunchdUnit.BootstrapArgs(_uid, LocalServerLaunchdUnit.PlistPath(home, unit)));
-                break;
-            case LabelProbe.Loaded:
-                Check(LocalServerLaunchdUnit.KickstartArgs(_uid, unit));
-                break;
-            default:
-                throw new LocalLifecycleException($"launchd's state for {unit.Label} could not be read; nothing was started.");
-        }
+        Check(state == LabelProbe.Loaded
+            ? LocalServerLaunchdUnit.KickstartArgs(_uid, unit)
+            : LocalServerLaunchdUnit.BootstrapArgs(_uid, LocalServerLaunchdUnit.PlistPath(home, unit)));
     }
+
+    static LocalLifecycleException Unreadable(LocalServerUnit unit, string consequence) =>
+        new($"launchd's state for {unit.Label} could not be read; {consequence}.");
 
     public async Task StopAsync(LocalServerUnit unit, CancellationToken ct) {
         Check(LocalServerLaunchdUnit.DisableArgs(_uid, unit));
@@ -69,15 +74,22 @@ sealed partial class LocalServerLaunchdService(
         if (File.Exists(plist)) File.Delete(plist);
     }
 
-    /// <summary>A failed bootout is fine when the label turns out not to be loaded at all.</summary>
+    /// <summary>Done only when the label is confirmed unloaded, whatever bootout's exit code; a failed bootout
+    /// is fine when the label was not loaded at all. bootout returns while the job is still exiting, and launchd
+    /// keeps the label loaded until it has, so the confirmation waits as long as launchd's own exit timeout.</summary>
     void Bootout(LocalServerUnit unit) {
         var (exit, _, err) = _run("launchctl", LocalServerLaunchdUnit.BootoutArgs(_uid, unit));
-        if (exit == 0) return;
+        var deadline       = time.GetUtcNow() + StopBudget;
 
         var after = Probe(unit);
+        while (exit == 0 && after == LabelProbe.Loaded && time.GetUtcNow() < deadline) {
+            Thread.Sleep(UnloadPollGap);
+            after = Probe(unit);
+        }
+
         if (after != LabelProbe.Absent)
             throw new LocalLifecycleException(
-                $"launchctl bootout of {unit.Label} failed (exit {exit}: {err.Trim()}) and the label is still {after}.");
+                $"launchctl bootout of {unit.Label} exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $" ({err.Trim()})")}, but the label is still {after}.");
     }
 
     LabelProbe Probe(LocalServerUnit unit) {

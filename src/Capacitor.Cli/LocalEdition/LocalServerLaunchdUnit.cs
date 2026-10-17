@@ -35,7 +35,7 @@ static class LocalServerLaunchdUnit {
         sb.Append("  <key>RunAtLoad</key><true/>\n");
         // Crash-only: the server exits nonzero when a store fails, and the whole stack restarts.
         sb.Append("  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n");
-        // Adaptive and Background let macOS hold the job at background priority under load.
+        // Standard, because Adaptive and Background let macOS hold the job at background priority under load.
         sb.Append("  <key>ProcessType</key><string>Standard</string>\n");
         sb.Append($"  <key>ExitTimeOut</key><integer>{ExitTimeoutSeconds}</integer>\n");
         var log = Guarded("the server log path", unit.OutputLog);
