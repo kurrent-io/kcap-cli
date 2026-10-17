@@ -110,10 +110,18 @@ Unlocked checks, in order, stopping at the first refusal (checks 4–6 are rerun
 5. **Profiles.** Any profile whose `server_url` is non-blank and does not classify as the active installation:
    `other_server` naming the profile and its server, and saying conversion arrives later. On the reuse path the active
    installation's own profile passes. Skipped on the recover hint, and rerun after recovery.
-6. **Leftover data** (install plan only). `<root>/data` existing is `unknown_data`, naming it, whatever the registry
-   says. Nothing is deleted. A registry with no active installation and retained data cannot arise: uninstall without
-   purge keeps the installation active, and a purge deletes the data. So an install never sits on data it did not
-   create, and its rollback never deletes such data.
+6. **An empty slot** (install plan only). Each of these refuses, with `leftover_state` naming what was found, and
+   nothing is deleted:
+   - any of `<root>/bin`, `<root>/data` or `<root>/run`;
+   - the server unit's plist, or its label loaded in launchd.
+
+   The label is fixed per user, not per root, so a unit owned by another `KCAP_LOCAL_ROOT` is refused here rather than
+   touched. A registry with no active installation and retained data cannot arise: uninstall without purge keeps the
+   installation active, and a purge deletes the data. What an install's rollback deletes is therefore only what that
+   attempt created.
+7. **Config.** The config is read strictly: an unreadable `config.json` is `config_unreadable`, never a fresh default.
+8. **Version.** The version to install must pass `ReleaseManifest.IsValidVersion`. That holds for the
+   `KCAP_LOCAL_BUNDLE_VERSION` override too: it becomes a path segment. A failure is `invalid_arguments`.
 
 The terminal asks its questions from the hint: on **install**, or on **recover**, which can still end in an install. A
 plan that changes under the lease is decided there. If it became reuse, nothing more is needed. If it became install
@@ -127,14 +135,19 @@ hold. Then:
 1. **Port.** 9473, the server's default, when it is free on both `127.0.0.1` and `::1` and not a retired port;
    otherwise an OS-assigned free loopback port that is not retired. Emits `port_chosen`.
 2. **Begin.** The journal records `operation: "setup"`, `phase: "pending"`, `server_start: "fenced"`, the new
-   installation id (32 hex characters), and details: `port`, `version`, `server_url`, `config_dir`, `profile` (the
-   active profile's name). It is begun before the download so that a crash during the download is cleaned up by
-   recovery like any other pending setup.
+   installation id (32 lowercase hex characters), and details:
+   - `port`, `version`, `server_url`;
+   - `config_dir`, as an absolute normalized path captured before `Begin`;
+   - `profile` (the active profile's name).
+
+   It is begun before the download, so a crash during the download is cleaned up by recovery like any other pending
+   setup.
 3. **Download and verify** (see "The bundle"). Emits `downloading`, `download_progress` (throttled), `verified`.
 4. **Unpack** into `bin/<version>/`, then point `bin/current` at it with the atomic relative-symlink switch
-   `ScriptUpdater.SwitchLink` already uses. Emits `unpacked`.
-5. **Install and start the unit** with `ILocalServerService.Install(LocalServerUnit.ForInstallation(root, port))`.
-   Emits `starting`.
+   `ScriptUpdater.SwitchLink` already uses. The tree is durable first (see "Durability"). Emits `unpacked`.
+5. **Install and start the unit.** First `Advance` to `phase: "unit"` (still `fenced`), so recovery knows a unit may
+   exist. Then `ILocalServerService.Install(LocalServerUnit.ForInstallation(root, port))`, with the plist written
+   durably. Emits `starting`.
 6. **Readiness.** `LocalServerReadiness.WaitAsync` on `/healthz/ready`, with the existing ten-minute budget. Emits
    `ready`.
 7. **Identity check.** `GET /auth/config` must answer `200` with provider `None` **and** `Kcap-Installation: pending`.
@@ -152,9 +165,20 @@ The order is the server contract's:
 1. **Point of no return.** `Advance` the journal to `phase: "committing"`, `server_start` still `fenced`. From here
    nothing deletes the installation, cancellation is ignored, and every failure leaves the journal for recovery to roll
    forward.
+
+   An `Advance` that throws is ambiguous. The rename may have landed while the directory sync failed. So the
+   in-process rollback eligibility ends when the `committing` write is *attempted*, not when it returns. On any
+   exception from that write the process deletes nothing and fails with `commit_failed`. The next recovery decides
+   from what is on disk: `pending` or `unit` rolls back, `committing` rolls forward.
 2. **Registry.** `PublishRegistry(registry.WithActive(installation))`. Skipped when the registry already names it.
-3. **Profile.** One config mutation through `CommitBoundary.CommitAsync`: the active profile's `server_url` set to the
-   canonical URL (`PointProfileAtServer`) and its stamp set to `None` on that URL. No token publication. Idempotent.
+3. **Profile.** One durable config mutation through `CommitBoundary.CommitAsync`: the active profile's `server_url`
+   set to the canonical URL (`PointProfileAtServer`) and its stamp set to `None` on that URL. No token publication.
+   Idempotent.
+   - It carries a precondition, `CommitPrecondition.OnlyServer(url)`, checked inside the config lock on a strict read:
+     every profile's `server_url` is blank or the installation's.
+   - An unreadable config or a conflicting profile fails with `commit_failed` and names it. The journal stays at
+     `committing`, so the next run retries once the user has removed or repointed that profile. That is never a
+     rollback, and never a silent overwrite.
 4. **Allow.** `Advance` to `phase: "allowed"`, `server_start: "allow"`.
 5. **Confirm the lift.** Poll `GET /auth/config` for up to ten seconds (the server polls every 250 ms). A `200` with
    provider `None` and no pending header proves it. Anything else (a 4xx, a redirect, a malformed body, a connection
@@ -168,26 +192,39 @@ being cleared" hold without exception.
 
 ### Rollback
 
-On a failure or cancellation before the point of no return:
+On a failure or cancellation before the point of no return, with a token and budgets of its own (the install's token
+is already cancelled):
 
-1. Unload the unit with `ILocalServerService.UninstallAsync`: a verified stop, so no restart policy or reboot can start
-   it and no store it owns is alive, then the plist removed. This runs even when `Install` failed partway; an absent
-   label is fine.
-2. Delete the installation: `bin/<version>`, `bin/current`, any `bin/current.new-*` left by an interrupted link switch,
-   any `bin/.staging-*`, `data/` and `run/`. `logs/` is kept,
-   because the failure message names the log to read.
-3. Clear the journal.
+1. At phase `unit`, unload the unit with `ILocalServerService.UninstallAsync`: a verified stop, so no restart policy
+   or reboot can start it and no store it owns is alive, then the plist removed. This runs even when `Install` failed
+   partway; an absent label is fine. At phase `pending` no unit was attempted, and the preflight proved none existed,
+   so this step is skipped.
+2. Delete the installation: `bin/`, `data/` and `run/` whole. The empty-slot precondition proved this attempt created
+   all three. `logs/` is kept, because the failure message names the log to read.
+3. Sync the root and `LaunchAgents` directories, so the removals are durable.
+4. Clear the journal.
 
 If step 1 fails, nothing is deleted and the journal stays at `pending`: the next lifecycle command retries the
 rollback. Emits `rolling_back`, then `rolled_back`, and the original failure is reported.
 
 ### Recovery
 
-`LocalSetupRecovery : ILifecycleRecovery` for operation `"setup"`, registered wherever `LocalLifecycle` is built:
+`LocalSetupRecovery : ILifecycleRecovery` for operation `"setup"`, registered wherever `LocalLifecycle` is built.
 
-- `pending` → the rollback above.
+Before it changes anything it validates the entry, and on any failure it changes nothing and fails with
+`recovery_failed`, naming the field:
+- the installation id is 32 lowercase hex characters;
+- `version` passes `IsValidVersion`;
+- `port` is 1–65535, and `server_url` is exactly `http://localhost:<port>`;
+- `config_dir` is fully qualified, and `profile` is a valid profile name;
+- the phase and `server_start` pair is one of `pending`/`fenced`, `unit`/`fenced`, `committing`/`fenced`,
+  `allowed`/`allow`.
+
+Then, by phase:
+- `pending` and `unit` → the rollback above.
 - `committing` → registry, profile (using the journal's `config_dir` and `profile`, not the current process's), allow,
-  confirm, complete.
+  confirm, complete. Before confirming, a missing `bin/current/kcap-server` is `recovery_failed`, and a missing plist
+  is reinstalled with `Install`.
 - `allowed` → confirm, complete.
 - Any other phase is unreadable to this build: it throws the "needs a newer kcap" error and changes nothing.
 
@@ -204,7 +241,10 @@ When the registry already has an active installation, the core skips the transac
 
 - Install the unit if it is missing, otherwise start it.
 - Wait for readiness.
-- Publish the profile (step 3 of the commit).
+- Require the lift proof: `GET /auth/config` answers `200` with provider `None` and no pending header. Without it the
+  outcome is `not_our_server`, and the profile is not touched. A readiness `200` alone could come from another
+  process holding the port.
+- Publish the profile (step 3 of the commit, with the same precondition).
 - Emit `reused`, with the installation's version. When that differs from this CLI's, say that upgrades arrive with
   `kcap local upgrade`.
 
@@ -213,17 +253,47 @@ A second setup therefore downloads nothing and takes no second port.
 ### Cancellation
 
 Today `InteractiveLifetime` turns Ctrl+C, SIGTERM, SIGHUP and the parent-death watchdog into `Environment.Exit(130)`,
-which runs no `finally`. The install core needs its rollback to run, so `InteractiveLifetime` gains a deferral scope.
-While the core holds one:
+which runs no `finally`. The install needs its rollback to run, so `InteractiveLifetime` gains a deferral scope.
 
-- An interrupt cancels the core's token and returns at once. Signal handlers share one dispatch thread, so a handler
-  that waited would block the next signal.
-- The process exits 130 when the scope ends.
+**Who holds it.** The front end holds the scope, not the core. It spans `InstallAsync` and the writing of the final
+event, so the terminal result is rendered and flushed before anything exits.
+
+**While it is held:**
+- An interrupt cancels the install's token and returns at once. Signal handlers share one dispatch thread, so a
+  handler that waited would block the next signal.
 - The watchdog's repeated calls only cancel again, so a dead wizard never cuts a rollback short.
-- A second Ctrl+C or SIGTERM exits at once. The journal covers that case.
+- A second Ctrl+C or SIGTERM exits 130 at once. The journal covers that case.
+- When the scope ends after an interrupt, the process exits 130.
 
-Before the point of no return, cancellation means rollback. After it, the commit runs to completion. The desktop
-wizard cancels with SIGTERM.
+**The contract:**
+- Before the point of no return, a cancellation rolls back. The last JSON line is then `failed` with code
+  `cancelled`, and the exit code is 130.
+- After it, a cancellation is ignored until the commit finishes. The last line is `committed` or `failed` as it
+  happened, and the exit code is 130 because an interrupt was received. The terminal front end does not continue to
+  the later steps.
+- The desktop wizard cancels with SIGTERM.
+
+## Durability
+
+The journal's phases describe files, and the files must be on disk when a phase says so. A file is durable when its
+data is flushed and its directory entry is synced.
+
+**Before `Advance` to `unit`:**
+- every file and directory of the unpacked tree, flushed as it is written;
+- the tree moved to `bin/<version>`, and `bin/` synced;
+- `bin/current` switched, and `bin/` synced again;
+- the root's entry in its parent synced, and each managed directory synced after it is created.
+  `LocalRoot.EnsureCreated` gains this.
+
+**The plist:** written through a durable variant of `ServiceFiles.WriteOwnerOnly`, which flushes the file and syncs
+`LaunchAgents`. It is written before `Install` returns, so it is on disk before `committing`.
+
+**The profile:** written through a durable `ConfigMutator` path, which flushes the temp file before the rename and
+syncs the config directory after it. The commit uses it, so `allowed` is never published ahead of the profile it
+depends on. `ConfigMutator` also flushes its temp file before every rename, durable or not. The later step-5 rewrite
+of the same file therefore cannot leave an empty `config.json` after a power loss.
+
+**Rollback:** the removals are synced before the journal is cleared.
 
 ## The bundle
 
@@ -255,7 +325,8 @@ URLs: `<base>/<rid>/kcap-local-<version>-<rid>.json`, `.json.sig` and `.tar.gz`.
 
    File modes are taken from the entry, masked to the owner. Then `kcap-server` must exist as an executable regular
    file at the tree's root, else `verification_failed`.
-6. Move the tree to `bin/<version>`, replacing a leftover one, and switch `bin/current`.
+6. Move the tree to `bin/<version>` and switch `bin/current`. Neither can pre-exist: the empty-slot precondition
+   refused any `bin/`.
 
 ## Journal: the third `server_start` value
 
@@ -287,7 +358,7 @@ The `event` names for JSON, and the typed records the terminal renders:
 | `failed` | `code`, `message` |
 
 Failure codes: `unsupported_platform`, `musl_unsupported`, `socket_path_too_long`, `unsafe_root`,
-`registry_unreadable`, `other_server`, `unknown_data`, `answer_required`, `invalid_arguments`, `lifecycle_busy`,
+`registry_unreadable`, `config_unreadable`, `other_server`, `leftover_state`, `answer_required`, `invalid_arguments`, `lifecycle_busy`,
 `bundle_not_published`, `download_failed`, `verification_failed`, `start_failed`, `not_our_server`, `commit_failed`,
 `recovery_failed`, `cancelled`.
 
@@ -307,6 +378,29 @@ Failure codes: `unsupported_platform`, `musl_unsupported`, `socket_path_too_long
   tar: `..`, an absolute path, a symlink out of the tree, a hard link out of the tree, a device entry, a missing
   `kcap-server`. A `./`-prefixed tree with a hard link inside it unpacks.
 - **Preflight vs recovery:** a pending journal with `data/` and no registry is recovered, not refused.
+- **Empty slot:** pre-existing `bin/`, `data/`, `run/`, a plist or a loaded label each refuse an install and survive
+  untouched. That includes a unit owned by another root.
+- **Validation:**
+  - An invalid `KCAP_LOCAL_BUNDLE_VERSION` (absolute, `..`, not semver) is refused before `Begin`.
+  - A malformed but parseable setup journal (bad id, version, port, URL, relative `config_dir`, or a mismatched
+    phase/`server_start` pair) leaves every file and the journal untouched.
+- **Ambiguous commit write:**
+  - Injection before the `committing` rename, after it, and at its directory sync: none deletes anything in process.
+  - Recovery then rolls back from `pending`/`unit`, or forward from `committing`.
+- **Durability:** a fault seam on the config writer. A profile flush failure keeps a `committing` journal, and
+  `allowed` is never written before the profile is durable.
+- **Profile precondition:**
+  - A profile repointed to a cloud server, or a corrupted config, between preflight and commit gives `commit_failed`
+    with the journal kept at `committing`.
+  - The same state before recovery: recovery refuses until it is fixed, then rolls forward.
+- **Relative config dir:** setup with a relative `KCAP_CONFIG_DIR` records an absolute `config_dir`. Recovery from
+  another working directory, under another config override, publishes to the original.
+- **Reuse proof:** readiness `200` followed by a foreign provider, a malformed or redirected `/auth/config`, or a
+  pending header gives `not_our_server` with no profile mutation.
+- **Cancellation contract:** `InteractiveLifetime` with an injected exit, covering the first interrupt, the watchdog
+  repeat, the second interrupt, an exit only after the scope ends, and the rollback's own token.
+  - A subprocess test, macOS only and opt-in like the service live test: SIGTERM while the manifest fetch stalls ends
+    with a `failed`/`cancelled` line, exit 130, a cleared journal and no `bin/`.
 - **Cancellation:** while a deferral scope is held, an interrupt cancels and returns; repeated watchdog calls do not
   exit; the exit follows the scope's end.
 - **Reuse:** no answers are required.
