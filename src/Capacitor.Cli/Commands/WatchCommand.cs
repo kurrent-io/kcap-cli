@@ -744,6 +744,14 @@ partial class WatchCommand(
 
         if (cts.Token.IsCancellationRequested) {
             await hubConnection.DisposeAsync();
+
+            // A watcher stopped before it connected is still the one the Muse hook may have handed an
+            // end to: it was alive when the hook looked.
+            if (TakesHandedMuseEnd(vendor, agentId)) {
+                watchers.RemoveOwnPidFile(sessionId, Environment.ProcessId);
+                await PostHandedMuseEndIfAnyAsync(sessionId, transcriptPath, vendor, repository: null, handed: null);
+            }
+
             await logWriter.DisposeAsync();
 
             return 0;
@@ -1175,12 +1183,10 @@ partial class WatchCommand(
         watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
 
-        if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= MuseSessionEndRequest.TryRead(_paths, sessionId);
+        var handedEndPosted = TakesHandedMuseEnd(vendor, agentId)
+            && await PostHandedMuseEndIfAnyAsync(sessionId, transcriptPath, vendor, state.Repository, museEndRequest);
 
-        if (museEndRequest is { } handedEnd) {
-            if (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd))
-                MuseSessionEndRequest.Delete(_paths, sessionId);
-        } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
+        if (!handedEndPosted && endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
 
@@ -2194,6 +2200,24 @@ partial class WatchCommand(
     /// <summary>Only a Muse session watcher takes an end its SessionEnd hook handed over; a child watcher's
     /// lifecycle belongs to its parent, and no other vendor's hook hands one.</summary>
     internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
+
+    /// <summary>Posts the end the Muse hook handed over, taking it from disk when this run did not already
+    /// read one, and removes the request once it is posted or spooled. False when there was none to post.</summary>
+    async Task<bool> PostHandedMuseEndIfAnyAsync(
+            string                 sessionId,
+            string                 transcriptPath,
+            string                 vendor,
+            RepositoryPayload?     repository,
+            MuseSessionEndRequest? handed
+        ) {
+        handed ??= MuseSessionEndRequest.TryRead(_paths, sessionId);
+        if (handed is null) return false;
+
+        if (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository, handed))
+            MuseSessionEndRequest.Delete(_paths, sessionId);
+
+        return true;
+    }
 
     /// <summary>Posts the end the hook would have, the way the hook would have: behind any spooled backlog
     /// for the session, and into the spool on a failure, so an outage never drops it. True once it is
