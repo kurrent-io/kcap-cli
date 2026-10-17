@@ -110,6 +110,29 @@ partial class WatchCommand(
         ParentAlreadyDead
     }
 
+    /// <summary>What a stopping watcher does with the session end it would post.</summary>
+    internal enum SessionEndAction {
+        Post,
+
+        /// <summary>The session's hooks claim a new process; the end belongs to that one.</summary>
+        RunsOnElsewhere,
+
+        /// <summary>The daemon is stopping the hosted agent for resume, which continues the session.</summary>
+        HeldForResume
+    }
+
+    internal static SessionEndAction DecideSessionEnd(bool runsOnElsewhere, HostedAgent? hosted, Func<HostedAgent, bool> resuming) =>
+        runsOnElsewhere                                     ? SessionEndAction.RunsOnElsewhere
+      : hosted is { AgentId: not null } && resuming(hosted) ? SessionEndAction.HeldForResume
+      :                                                       SessionEndAction.Post;
+
+    /// <summary>The hosted agent this watcher's process runs under, when a resume holds its session end.</summary>
+    static string? AgentHoldingEndForResume() =>
+        HostedAgent.FromEnvironment() is { AgentId: { } id } hosted
+     && DecideSessionEnd(runsOnElsewhere: false, hosted, ResumeEndSuppression.ShouldSuppress) == SessionEndAction.HeldForResume
+            ? id
+            : null;
+
     /// <summary>Whether a watcher also watches for Kiro Crew finishing with its session: a Kiro session
     /// watcher on a machine where Crew has run.</summary>
     internal static bool WatchesCrewEnd(string vendor, string? agentId, bool crewPresent) =>
@@ -754,7 +777,9 @@ partial class WatchCommand(
                 if (ClaimHandedMuseEnd(sessionId) is { } handed) {
                     await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: vendor);
 
-                    switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed)) {
+                    if (AgentHoldingEndForResume() is { } resumingId) {
+                        Log(time, $"session end suppressed: agent {resumingId} is resuming");
+                    } else switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed)) {
                         case HandedEndOutcome.Dropped:
                             await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
                             break;
@@ -1199,7 +1224,9 @@ partial class WatchCommand(
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
 
         if (museEndRequest is { } handedEnd) {
-            switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd)) {
+            if (AgentHoldingEndForResume() is { } resumingId) {
+                Log(time, $"session end suppressed: agent {resumingId} is resuming");
+            } else switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd)) {
                 // The session carried on, so this watcher's stop must not leave it unwatched.
                 case HandedEndOutcome.Dropped:
                     await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
@@ -1213,14 +1240,19 @@ partial class WatchCommand(
             // A resumed session's hooks claim its new process; the end of the one this watcher followed
             // is then not the session's end, and the new process is left without a watcher.
             var claimant = LiveClaimant(sessionId);
+            var hosted   = HostedAgent.FromEnvironment();
 
-            if (SessionRunsOnElsewhere(vendor, agentId, claimant)) {
-                Log(time, $"Not posting a {endReason} session-end: the session runs on in pid {claimant}");
-                await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, claimant);
-            } else if (HostedAgent.FromEnvironment() is { AgentId: { } resumingId } resuming && ResumeEndSuppression.ShouldSuppress(resuming)) {
-                Log(time, $"session end suppressed: agent {resumingId} is resuming");
-            } else {
-                await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
+            switch (DecideSessionEnd(SessionRunsOnElsewhere(vendor, agentId, claimant), hosted, ResumeEndSuppression.ShouldSuppress)) {
+                case SessionEndAction.RunsOnElsewhere:
+                    Log(time, $"Not posting a {endReason} session-end: the session runs on in pid {claimant}");
+                    await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, claimant);
+                    break;
+                case SessionEndAction.HeldForResume:
+                    Log(time, $"session end suppressed: agent {hosted?.AgentId} is resuming");
+                    break;
+                default:
+                    await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
+                    break;
             }
         }
 
