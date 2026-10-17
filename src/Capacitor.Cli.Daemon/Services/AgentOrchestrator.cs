@@ -898,6 +898,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
+        _server.GetResumingAgents = ResumingClaims;
 
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
@@ -1369,7 +1370,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Surface 3 (new-harness detection): the last cached machine inventory (null until the first
             // send refreshes it); the server raises the "installed but not configured" notification from it.
             HarnessInventory: CurrentHarnessInventory(),
-            EchoNonce: echoNonce);
+            EchoNonce: echoNonce,
+            ResumingAgents: ResumingClaims());
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
     /// roll-up. A blocked known-id candidate (pending_marker / legacy_unresolvable /
@@ -2127,25 +2129,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
     /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd, LaunchHold hold) {
-        var agentId       = cmd.AgentId;
-        var prompt        = cmd.Prompt;
-        var startTitle    = StartTitleOf(cmd);
-        var model         = cmd.Model;
-        // A protocol-v3 explicit-reviewer-model launch pins the server-resolved LaunchModel VERBATIM.
-        // Compute the effective model ONCE here so every site that records/reports the model this
-        // launch REQUESTS — the launch log and the runtime start context — reads the same value.
-        // (What the server sees registered is registeredModel below: for an ACP runtime the
-        // handshake-confirmed model narrows this request; PTY runtimes register it as-is.)
-        // Null block ⇒ legacy path, cmd.Model unchanged.
-        // Explicitly string?, not var: ModelSelectionLaunchPolicy below clears this when the selected
-        // runtime cannot apply a model, and "no model reported" must be representable in the type.
-        string? effectiveModel = cmd.ExplicitReviewerModel?.LaunchModel ?? model;
-        var effort        = cmd.Effort;
-        var repoPath      = cmd.RepoPath;
-        var tools         = cmd.Tools;
-        var attachmentIds = cmd.AttachmentIds;
-        var isReview      = cmd.Kind == LaunchKind.Review;
-        var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
+        var agentId = cmd.AgentId;
 
         // A caller-selected ACP permission preset is a pure, side-effect-free rejection (wrong-vendor /
         // non-interactive / borrowed / unknown token), validated BEFORE the consent gate: an ineligible
@@ -2181,6 +2165,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
+
+        return await LaunchAdmittedAsync(cmd, consent, hold);
+    }
+
+    /// <summary>The admitted launch after its consent decision. A <paramref name="resume"/> relaunches a
+    /// ledgered agent into its existing worktree; a failure before the agent publishes leaves both the
+    /// worktree and the ledger entry in place for the fallback.</summary>
+    async Task<CommandOutcome> LaunchAdmittedAsync(
+            LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null) {
+        var agentId       = cmd.AgentId;
+        var prompt        = cmd.Prompt;
+        var startTitle    = StartTitleOf(cmd);
+        var model         = cmd.Model;
+        // A protocol-v3 explicit-reviewer-model launch pins the server-resolved LaunchModel VERBATIM.
+        // Compute the effective model ONCE here so every site that records/reports the model this
+        // launch REQUESTS — the launch log and the runtime start context — reads the same value.
+        // (What the server sees registered is registeredModel below: for an ACP runtime the
+        // handshake-confirmed model narrows this request; PTY runtimes register it as-is.)
+        // Null block ⇒ legacy path, cmd.Model unchanged.
+        // Explicitly string?, not var: ModelSelectionLaunchPolicy below clears this when the selected
+        // runtime cannot apply a model, and "no model reported" must be representable in the type.
+        string? effectiveModel = cmd.ExplicitReviewerModel?.LaunchModel ?? model;
+        var effort        = cmd.Effort;
+        var repoPath      = cmd.RepoPath;
+        var tools         = cmd.Tools;
+        var attachmentIds = cmd.AttachmentIds;
+        var isReview      = cmd.Kind == LaunchKind.Review;
+        var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
 
         // Guard for a null/blank vendor before the dictionary lookup: LaunchAgentCommand crosses
         // the SignalR boundary where the non-null annotation isn't enforced, and Dictionary
@@ -2283,9 +2295,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
         var snapshotBorrow = cmd.Borrowed && runtimeFactory.BorrowedReviewRequiresIndependentSnapshot;
-        var work = cmd.Borrowed && !snapshotBorrow
-            ? WorkLocation.BorrowedCwd
-            : WorkLocation.OwnedWorktree;
+        var work = resume?.Work
+            ?? (cmd.Borrowed && !snapshotBorrow ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree);
         string? borrowedSnapshotSource = null;
 
         // The per-reviewer bridge token URL (if this is an unattended review-flow launch), hoisted to
@@ -2319,7 +2330,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
             }
 
-            if (!_config.IsRepoAllowed(repoPath)) {
+            // A local spawn was never held to the allowed-repo list, so neither is its resume.
+            if (resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
                 await _server.LaunchFailedAsync(agentId, $"Repo path not allowed: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2387,7 +2399,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? $"refs/pull/{reviewInfo.PrNumber}/head"
                 : cmd.BaseRef;
 
-            if (cmd.Borrowed) {
+            if (resume is not null) {
+                worktree = resume.Worktree;
+            } else if (cmd.Borrowed) {
                 // Defense-in-depth re-authorization: the server already probed this cwd, but the
                 // daemon NEVER borrows a path just because the server said so (TOCTOU-safe). The
                 // reason is surfaced verbatim to the server via the catch → LaunchFailedAsync below;
@@ -2622,7 +2636,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent);
+            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent);
 
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
@@ -2655,7 +2669,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Still need to clean up the worktree before returning — but ONLY if we own it.
                 // A borrowed cwd is the user's real checkout; removing it here would `git worktree
                 // remove` the user's tree (spec's top safety invariant; mirrors CleanupAgentAsync).
-                if (work == WorkLocation.OwnedWorktree) {
+                if (work == WorkLocation.OwnedWorktree && resume is null) {
                     try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
                         /* best-effort */
                     }
@@ -2664,7 +2678,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // No AgentInstance was created here either, so the journal is otherwise never
                 // completed or deleted — this arm returns before the outer catch below.
                 await DiscardFailedLaunchJournalAsync(journal, agentId);
-                DiscardFailedLaunchLedger(agentId);
+                if (resume is null) DiscardFailedLaunchLedger(agentId);
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
@@ -2748,12 +2762,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 RequesterUserId     = cmd.RequesterUserId,
                 RequesterDisplay    = cmd.RequesterDisplay,
                 InactivityBoundSeconds = cmd.InactivityBoundSeconds,
-                StartTitle          = startTitle
+                StartTitle          = startTitle,
+                IsPrivate           = resume?.IsPrivate ?? false
             };
+            if (resume is not null) ReplayPersistedRing(agent);
             PublishAgent(agent);
             published = true;
             storeLease?.Keep();
-            WriteLedger(agent, cmd, "server", consent);
+            if (resume is null) WriteLedger(agent, cmd, "server", consent);
+            else WriteResumedLedger(agent, resume.Entry);
             hold.Dispose();
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
@@ -2903,7 +2920,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // No AgentInstance owns the journal, so complete it here.
             await DiscardFailedLaunchJournalAsync(journal, agentId);
-            DiscardFailedLaunchLedger(agentId);
+            if (resume is null) DiscardFailedLaunchLedger(agentId);
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
@@ -2915,7 +2932,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // creates no worktree and no mirror here; its attachments, if its runtime places them in
             // the daemon store, are released by the lease in the finally below. StartAsync throwing
             // means mcpConfigPath was never assigned.
-            if (worktree != null && work == WorkLocation.OwnedWorktree) {
+            if (worktree != null && work == WorkLocation.OwnedWorktree && resume is null) {
                 if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
                     try {
                         // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup

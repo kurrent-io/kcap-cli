@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
@@ -367,6 +368,262 @@ internal partial class AgentOrchestrator {
             return null;
         }
     }
+
+    /// <summary>What a resume launch carries past an ordinary admitted launch.</summary>
+    internal sealed record ResumeLaunch(ResumeLedgerEntry Entry, WorktreeInfo Worktree) {
+        public WorkLocation Work      => Entry.Launch.Work;
+        public bool         IsPrivate => Entry.Launch.IsPrivate;
+        public string       Origin    => Entry.Launch.Origin;
+    }
+
+    const string NativeResumeUnsupported = "native_resume_unsupported";
+
+    readonly ConcurrentDictionary<string, ResumeLedgerEntry> _resumeCandidates = new(StringComparer.Ordinal);
+    readonly List<ResumeLedgerEntry> _resumeOrder = [];
+    readonly List<(ResumeLedgerEntry Entry, string Reason)> _interruptedAtBoot = [];
+    string[] _ledgerWorktrees = [];
+
+    /// <summary>The kcap continue fallback, tried when a native resume is unavailable or fails.</summary>
+    internal Func<ResumeLedgerEntry, string, CancellationToken, Task<ResumeOutcome>> ContinueEntry { get; set; } =
+        (_, _, _) => Task.FromResult(ResumeOutcome.Interrupted);
+
+    /// <summary>Sorts the predecessor's ledger into candidates and entries interrupted at boot. Runs
+    /// after the orphan reaper, whose unresolved records it reads, and before the server connect that
+    /// claims the candidates.</summary>
+    internal void LoadResumeLedger() {
+        if (ResumeLedger is not { } ledger) return;
+
+        IReadOnlyList<ResumeLedgerEntry> entries;
+
+        try {
+            entries = ledger.ReadAll();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeLedgerUnreadable(ex);
+            return;
+        }
+
+        var blocked = (_orphanReaper?.BlockedCandidates() ?? []).Select(c => c.AgentId).ToHashSet(StringComparer.Ordinal);
+        var beat    = DaemonHeartbeat.LastBeat(_config.Store, _config.Name);
+        var now     = _time.GetUtcNow();
+
+        _ledgerWorktrees = [.. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+
+        foreach (var entry in entries) {
+            if (entry.State == ResumeState.Interrupted) continue;
+
+            var reason = !_config.AutoResume                                 ? "auto_resume_off"
+                       : now - LastAlive(entry, beat) > _config.ResumeMaxAge ? "too_old"
+                       : blocked.Contains(entry.AgentId)                     ? "predecessor_process_unresolved"
+                       : !Directory.Exists(entry.Launch.WorktreePath)        ? "worktree_missing"
+                       :                                                       null;
+
+            if (reason is null) {
+                _resumeCandidates[entry.AgentId] = entry;
+                _resumeOrder.Add(entry);
+            } else {
+                InterruptEntry(entry.AgentId, reason);
+                _interruptedAtBoot.Add((entry, reason));
+            }
+        }
+    }
+
+    /// <summary>The later of the entry's resuming stamp and the predecessor's last heartbeat; an entry
+    /// with neither was last known alive when it was written.</summary>
+    static DateTimeOffset LastAlive(ResumeLedgerEntry entry, DateTimeOffset? beat) =>
+        (entry.ResumingAt, beat) switch {
+            ({ } resuming, { } b) => resuming > b ? resuming : b,
+            ({ } resuming, null)  => resuming,
+            (null, { } b)         => b,
+            _                     => entry.UpdatedAt
+        };
+
+    /// <summary>The candidates still waiting on their resume, private agents excluded.</summary>
+    internal ResumingAgentClaim[] ResumingClaims() => [
+        .. _resumeCandidates.Values
+            .Where(e => !e.Launch.IsPrivate)
+            .Select(e => new ResumingAgentClaim(e.AgentId, e.PredecessorInstanceId ?? "", e.SessionId))
+    ];
+
+    /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
+    /// resume needs its worktree as much as a boot candidate does.</summary>
+    internal IReadOnlyList<string> LedgerWorktreePaths() => _ledgerWorktrees;
+
+    /// <summary>The boot resume lane: reports the entries interrupted at boot, then resumes the
+    /// candidates at most <see cref="DaemonConfig.ResumeConcurrency"/> at a time. Never throws.</summary>
+    internal async Task ResumeOnBootAsync(CancellationToken ct) {
+        try {
+            foreach (var (entry, reason) in _interruptedAtBoot.Where(i => !i.Entry.Launch.IsPrivate))
+                await ReportResumeFailedAsync(entry, reason, ct);
+
+            using var lane = new SemaphoreSlim(Math.Max(1, _config.ResumeConcurrency));
+
+            await Task.WhenAll(_resumeOrder.Select(async entry => {
+                await lane.WaitAsync(ct);
+
+                try {
+                    await ResumeEntryAsync(entry, ct);
+                } catch (Exception ex) when (ex is not OperationCanceledException) {
+                    LogResumeFailed(ex, entry.AgentId);
+                } finally {
+                    _resumeCandidates.TryRemove(entry.AgentId, out _);
+                    lane.Release();
+                }
+            }));
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+        } catch (Exception ex) {
+            LogResumeLaneFailed(ex);
+        }
+    }
+
+    /// <summary>Native resume, then kcap continue, then interrupted.</summary>
+    internal async Task<ResumeOutcome> ResumeEntryAsync(ResumeLedgerEntry entry, CancellationToken ct) {
+        var native = entry.VendorSession is not null
+                  && _runtimeFactories.TryGetValue(entry.Vendor, out var factory)
+                  && factory.SupportsRestartResume(entry.Transport);
+
+        string reason;
+
+        if (native) {
+            if (await NativeResumeAsync(entry, ct) is not { } failure) return ResumeOutcome.Resumed;
+
+            reason = failure;
+            entry  = RecordFailedAttempt(entry, reason);
+        } else {
+            reason = NativeResumeUnsupported;
+        }
+
+        var outcome = await ContinueEntry(entry, reason, ct);
+        if (outcome != ResumeOutcome.Interrupted) return outcome;
+
+        InterruptEntry(entry.AgentId, reason);
+        if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, ct);
+
+        return ResumeOutcome.Interrupted;
+    }
+
+    /// <summary>Relaunches the entry under its own agent id; null when it registered, else why not.</summary>
+    async Task<string?> NativeResumeAsync(ResumeLedgerEntry entry, CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
+
+        using var admission = _admission.TryAdmit();
+        if (admission is null) return "daemon_renaming";
+
+        using var hold = BeginLaunchHold();
+
+        var input = new LaunchConsentInput(
+            entry.Launch.RequesterUserId, RequesterIsOwner: false, LaunchConsentEngine.KindToken(LaunchKind.Default),
+            entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
+        var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
+
+        var outcome = await LaunchAdmittedAsync(
+            BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, new ResumeLaunch(entry, ResumedWorktree(entry)));
+
+        return outcome.Kind switch {
+            CommandOutcomeKind.LaunchExecuted => null,
+            CommandOutcomeKind.LaunchRejected when outcome.RejectReason == CommandRejectedReason.DaemonCapacity => "daemon_capacity",
+            CommandOutcomeKind.LaunchRejected => "launch_rejected",
+            _                                 => "runtime_exited"
+        };
+    }
+
+    static LaunchAgentCommand BuildResumeCommand(ResumeLedgerEntry entry, DateTimeOffset interruptedAt) {
+        var launch = entry.Launch;
+
+        return new LaunchAgentCommand(
+            AgentId:             entry.AgentId,
+            Prompt:              ResumeNudge.Build(interruptedAt, launch.Prompt),
+            Model:               launch.Model ?? "",
+            Effort:              launch.Effort,
+            RepoPath:            launch.RepoPath,
+            Tools:               null,
+            AttachmentIds:       null,
+            Vendor:              entry.Vendor,
+            FlowRunId:           launch.FlowRunId,
+            FlowRole:            launch.FlowRole,
+            CodexPosture:        launch is { SandboxPolicy: { } sandbox, ApprovalPolicy: { } approval } ? new CodexLaunchPosture(sandbox, approval) : null,
+            RequesterUserId:     launch.RequesterUserId,
+            RequesterDisplay:    launch.RequesterDisplay,
+            AcpPermissionPreset: launch.PermissionPreset,
+            ResumeSessionId:     entry.VendorSession,
+            Title:               launch.Title);
+    }
+
+    /// <summary>The ledger's worktree as the launch path names it. A daemon-created worktree is either
+    /// linked, on its <c>capacitor/</c> branch, or a standalone copy with a repository of its own.</summary>
+    static WorktreeInfo ResumedWorktree(ResumeLedgerEntry entry) {
+        var path = entry.Launch.WorktreePath;
+
+        if (entry.Launch.Work == WorkLocation.BorrowedCwd) return WorktreeInfo.Borrowed(path);
+
+        return new WorktreeInfo(
+            path, $"capacitor/{Path.GetFileName(path)}", entry.Launch.RepoPath,
+            IsStandalone: Directory.Exists(Path.Combine(path, ".git"))) { GitRelativeCwd = entry.Launch.GitRelativeCwd };
+    }
+
+    /// <summary>Replays the predecessor's persisted ring into a resumed agent, then removes it.</summary>
+    void ReplayPersistedRing(AgentInstance agent) {
+        var path = ResumeLedger!.RingPath(agent.Id);
+        if (!File.Exists(path)) return;
+
+        try {
+            ReplayRing(agent, File.ReadAllBytes(path));
+            File.Delete(path);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeRingFailed(ex, agent.Id);
+        }
+    }
+
+    /// <summary>Rewrites a resumed agent's entry as running under this daemon, keeping the original
+    /// launch descriptor: the agent's own prompt is the nudge.</summary>
+    void WriteResumedLedger(AgentInstance agent, ResumeLedgerEntry entry) {
+        if (ResumeLedger is null) return;
+
+        lock (_ledgerLock) {
+            if (agent.IsCleanupStarted) return;
+
+            TryWriteLedger(agent.Id, () => entry with {
+                DaemonId              = _daemonId,
+                UpdatedAt             = _time.GetUtcNow(),
+                Transport             = agent.RuntimeTransport,
+                SessionId             = agent.SessionId ?? entry.SessionId,
+                VendorSession         = agent.VendorSession ?? entry.VendorSession,
+                State                 = ResumeState.Running,
+                LastError             = null,
+                PredecessorInstanceId = null,
+                ResumingAt            = null
+            });
+        }
+    }
+
+    ResumeLedgerEntry RecordFailedAttempt(ResumeLedgerEntry entry, string reason) {
+        var failed = entry with { Attempts = entry.Attempts + 1, LastError = reason, UpdatedAt = _time.GetUtcNow() };
+
+        lock (_ledgerLock) TryWriteLedger(entry.AgentId, () => failed);
+
+        return failed;
+    }
+
+    void InterruptEntry(string agentId, string reason) {
+        lock (_ledgerLock) {
+            try {
+                ResumeLedger?.MarkInterrupted(reason, e => e.AgentId == agentId);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                LogResumeLedgerFailed(ex, "interrupting", agentId);
+            }
+        }
+    }
+
+    Task ReportResumeFailedAsync(ResumeLedgerEntry entry, string reason, CancellationToken ct) =>
+        _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Failed", $"resume_failed:{reason}", null, ct);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Resume ledger: the ledger could not be read; nothing resumes")]
+    partial void LogResumeLedgerUnreadable(Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Resume: resuming agent {AgentId} failed")]
+    partial void LogResumeFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Resume: the boot resume lane failed")]
+    partial void LogResumeLaneFailed(Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Resume ledger: failed {Step} the entry for agent {AgentId}")]
     partial void LogResumeLedgerFailed(Exception ex, string step, string agentId);

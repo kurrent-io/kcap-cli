@@ -134,6 +134,9 @@ public static partial class DaemonRunner {
         // Phase B (D3): reviewer lifetime/idle backstop overrides from env (seconds; 0 disables).
         config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
         config.RestartTurnWait = ParseSecondsEnv("KCAP_RESTART_TURN_WAIT_SECONDS", config.RestartTurnWait);
+        config.ResumeMaxAge = ParseSecondsEnv("KCAP_RESUME_MAX_AGE_SECONDS", config.ResumeMaxAge);
+        if (int.TryParse(Environment.GetEnvironmentVariable("KCAP_RESUME_CONCURRENCY"), out var resumeConcurrency) && resumeConcurrency > 0)
+            config.ResumeConcurrency = resumeConcurrency;
         config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);
         config.ReviewerResumableIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_RESUMABLE_IDLE_TIMEOUT", config.ReviewerResumableIdleTimeout);
         // Task 12: daemon-local held-turn wedge ceiling override (seconds; 0 disables), independent
@@ -796,6 +799,7 @@ public static partial class DaemonRunner {
                 // handler. Under the daemon lock; best-effort (swallows its own faults).
                 orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
                 await orchestrator.ReapOrphansOnceAsync();
+                orchestrator.LoadResumeLedger();
 
                 await host.Services.GetRequiredService<TranscriptJournalSweep>().RunOnceAsync(lifetime.ApplicationStopping);
 
@@ -816,7 +820,8 @@ public static partial class DaemonRunner {
                 }
 
                 var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-                await worktreeManager.CleanupOrphanedAsync();
+                await worktreeManager.CleanupOrphanedAsync(orchestrator.LedgerWorktreePaths());
+                _ = orchestrator.ResumeOnBootAsync(lifetime.ApplicationStopping);
 
                 // Instantiate EvalRunner so it wires the per-phase eval handlers
                 // (PrepareEval / RunQuestion / FinalizeEval / CancelEval) on the

@@ -77,6 +77,13 @@ internal sealed class LaunchConsentGate(
         };
     }
 
+    /// <summary>Grants a resume of a launch the daemon's own ledger recorded as admitted, logging the
+    /// grant; the policy is not consulted, so an unattended boot never waits on a prompt.</summary>
+    public LaunchConsentOutcome GrantResume(string agentId, LaunchConsentInput input, string detail) =>
+        Done(agentId, input, allowed: true, source: ResumeSource, detail: detail);
+
+    public const string ResumeSource = "resume";
+
     LaunchConsentOutcome Done(string agentId, in LaunchConsentInput input, bool allowed, string source, string detail) {
         log.Record(new ConsentDecisionRecord(
             time.GetUtcNow().ToString("O"), agentId, input.RequesterUserId, input.RequesterIsOwner,

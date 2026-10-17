@@ -118,6 +118,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
+    /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
+    public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
     /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
     /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
@@ -684,7 +687,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             EvalProtocolVersion: 2,
             VendorModels: _config.VendorModels,
             SupportsRawInput: AdvertisesRawInput,
-            SupportsBranchBaseRef: true);
+            SupportsBranchBaseRef: true,
+            ResumingAgents: GetResumingAgents?.Invoke());
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";

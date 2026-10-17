@@ -1178,6 +1178,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
 [JsonSerializable(typeof(StatusReportRequest))]
+[JsonSerializable(typeof(ResumingAgentClaim))]
+[JsonSerializable(typeof(ResumingAgentClaim[]))]
 // Surface 3 (new-harness detection): per-machine coding-agent inventory carried on the status report.
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventory))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventoryEntry))]
@@ -1905,7 +1907,8 @@ public readonly record struct DaemonStatusReport(
         // Echo of the nonce from a server-sent StatusReportRequest (RequestStatusReport2), null on
         // every unsolicited report. The server's idle-marker coordinator confirms a claim only
         // against the report carrying ITS nonce — an unechoed report can never confirm one.
-        string?                       EchoNonce                     = null
+        string?                       EchoNonce                     = null,
+        ResumingAgentClaim[]?         ResumingAgents                = null
     );
 
 /// <summary>The server's correlated status-report request (hub method <c>RequestStatusReport2</c>,
@@ -2248,7 +2251,8 @@ public readonly record struct DaemonConnect(
         // A launch's base ref may name a local branch, which the daemon resolves on its own machine
         // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
         // cannot see a branch that exists only here.
-        bool                                        SupportsBranchBaseRef = false
+        bool                                        SupportsBranchBaseRef = false,
+        ResumingAgentClaim[]?                       ResumingAgents = null
     );
 
 public sealed record UnattendedVendorCapability(

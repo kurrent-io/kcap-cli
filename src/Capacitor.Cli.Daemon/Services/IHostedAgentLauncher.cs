@@ -52,6 +52,9 @@ internal interface IHostedAgentLauncher {
     /// <summary>Whether the launcher has a certified read-only borrowed-checkout review mode.</summary>
     bool SupportsBorrowedReviewFlow => false;
 
+    /// <summary>Whether <see cref="BuildArgs"/> resumes the vendor session a restart resume names.</summary>
+    bool SupportsResume => false;
+
     string? BorrowedReviewContainment => null;
 
     /// <summary>
