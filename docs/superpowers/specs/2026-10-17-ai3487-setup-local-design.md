@@ -199,28 +199,33 @@ being cleared" hold without exception.
 On a failure or cancellation before the point of no return, with a token and budgets of its own (the install's token
 is already cancelled):
 
-1. **Unit.** At phase `unit`, under the unit lock, decide who owns the unit:
-   - **Ours** (the plist names this root): unload it with `ILocalServerService.UninstallAsync`. That is a verified
-     stop, so no restart policy or reboot can start it and no store it owns is alive, and then the plist is removed.
-     This runs even when `Install` failed partway; an absent label is fine.
-   - **Another root's:** leave it untouched. That happens when this setup crashed before its `Install` and another
-     root has installed since.
-   - **Unprovable** (the label is loaded with no plist to read): leave it untouched, and continue only if step 2's
-     probe shows nothing of ours alive.
+1. **Unit.** At phase `unit`, under the unit lock, read the owner evidence (see "The per-user unit") for the loaded
+   job and for the on-disk unit separately, then decide:
+   - **Ours.** Every object that is present names this root. Unload with `ILocalServerService.UninstallAsync`: a
+     verified stop, so no restart policy or reboot can start it and no store it owns is alive, and then the plist is
+     removed. This runs even when `Install` failed partway; an absent label is fine.
+   - **Not ours.** Every object that is present positively names another root, or nothing is present. Leave it
+     untouched; nothing that exists can start this root. That happens when this setup crashed before its `Install`
+     and another root has installed since. A foreign job is never stopped to obtain proof.
+   - **Unknown.** Anything else: unreadable evidence, a loaded job and a plist naming different roots, or a loaded job
+     whose root cannot be read. Delete nothing, keep the journal, and fail with `recovery_failed` naming the label
+     and the plist. A probe that finds nothing alive is not enough here: a throttled or between-starts job can start
+     again a moment later.
 
    At phase `pending` no unit was attempted, and the preflight proved none existed, so this step is skipped.
-2. **Nothing alive.** `LocalStackProbe.FindLive(root)` must report nothing of this root's stack alive. Every deletion
-   waits on that, whatever step 1 decided.
+2. **Nothing alive.** After step 1 has excluded every restart, `LocalStackProbe.FindLive(root)` must report nothing of
+   this root's stack alive.
 3. **Delete** the installation: `bin/`, `data/` and `run/` whole. The empty-slot precondition proved this attempt
    created all three. `logs/` is kept, because the failure message names the log to read.
-4. **Sync** only the directories whose entries were removed: the root, and `LaunchAgents` only when a plist was
-   removed. An absent `LaunchAgents` that setup never touched needs no sync and is never created.
+4. **Sync** the root. At phase `unit`, also sync `LaunchAgents` whenever it exists, whether or not this process
+   removed the plist: an earlier attempt may have unlinked it and crashed before its sync. An absent `LaunchAgents`
+   needs no sync and is never created.
 5. **Clear** the journal.
 
-If step 1 or step 2 fails (the unload throws, the label stays loaded, a postmaster survives), nothing is deleted. The
-journal stays exactly as it was, `unit`/`fenced`, and `rolled_back` is not emitted. The next lifecycle command
-retries, with another verified unload before any deletion. Otherwise it emits `rolling_back`, then `rolled_back`, and
-reports the original failure.
+If step 1 or step 2 fails (the unload throws, the label stays loaded, a postmaster survives, or the owner is unknown),
+nothing is deleted. The journal stays exactly as it was, `unit`/`fenced`, and `rolled_back` is not emitted. The next
+lifecycle command retries, with another verified unload before any deletion. Otherwise it emits `rolling_back`, then
+`rolled_back`, and reports the original failure.
 
 ### The per-user unit
 
@@ -231,10 +236,12 @@ setups under different `KCAP_LOCAL_ROOT`s therefore need two more things:
   `KCAP_LOCAL_ROOT` and `KCAP_CONFIG_DIR`, as the daemons directory does. It is taken after the lifecycle lock and
   before any config lock. Every check of the unit, and every `Install`, unload or removal of it, holds it. Two roots
   can then never both pass the empty-slot check and replace each other's unit.
-- **An owner check.** A unit is ours when the `KCAP_LOCAL_ROOT` in its plist's `EnvironmentVariables` equals this
-  root. Rollback, recovery and reuse act on the unit only when it is ours. `ILocalServerService` gains
-  `OwnerRoot(unit)`, which reads that variable from the plist on launchd, or from the unit file's `Environment=` on
-  systemd, and returns null when there is no file or it cannot be read.
+- **Owner evidence.** `ILocalServerService` gains `Owner(unit)`. It returns two readings, one for the loaded job and
+  one for the on-disk unit, because launchd keeps the definition it loaded however the plist changes later.
+  - On launchd, the loaded job is read from `launchctl print`'s environment, and the plist is parsed with
+    `LaunchdUnit.TryReadPlist`. On systemd, `systemctl --user show -p Environment` and the unit file are read.
+  - Each reading is `Absent`, `Root(path)` or `Unreadable`.
+  - Rollback, recovery and reuse act on the unit only when every present reading names this root.
 
 ### Recovery
 
@@ -322,9 +329,13 @@ syncs the config directory after it. The commit uses it, so `allowed` is never p
 depends on. `ConfigMutator` also flushes its temp file before every rename, durable or not. The later step-5 rewrite
 of the same file therefore cannot leave an empty `config.json` after a power loss.
 
-**New directories:** every directory setup creates goes through one helper. It creates the components one at a time,
-from the first existing ancestor, owner-only where the layout requires it. After each one it syncs that component's
-parent, so a new directory's own entry is durable and not only its contents. The helper covers:
+**New directories:** every directory setup creates goes through one helper. It creates missing components one at a
+time, owner-only where the layout requires it.
+
+Existence is not proof of durability: an interrupted earlier attempt may have created a component and never synced
+its parent. So the helper syncs the parent of *every* component between a fixed anchor and the leaf, whether that
+component was created now or found existing. The anchor is the user's home for paths under it, else the filesystem
+root. The guarantee is therefore idempotent across attempts, at the cost of a few directory syncs. The helper covers:
 - the root and its managed directories;
 - a new config directory (`ConfigMutator` uses it);
 - a new `LaunchAgents` (the durable `ServiceFiles` variant uses it).
@@ -425,8 +436,17 @@ Failure codes: `unsupported_platform`, `musl_unsupported`, `socket_path_too_long
   - Setup A records `unit`, then crashes before `Install`. Setup B, under another root, commits. A's recovery then
     leaves B's unit loaded and its plist in place.
   - Two roots set up concurrently: exactly one passes the empty-slot check, and the other is refused.
-- **New directories:** ordered fault tests for a new multi-level config path and an absent `LaunchAgents`. Each new
-  component's parent is synced before the publication that depends on it.
+- **New directories:**
+  - Ordered fault tests for a new multi-level config path and an absent `LaunchAgents`. Each new component's parent
+    is synced before the publication that depends on it.
+  - A two-run fault test: the first run is interrupted after a mkdir and before its parent sync. Recovery against the
+    still-visible directory must make the missing parent sync before `allowed`.
+- **Owner evidence:** each of these deletes nothing of this root and keeps its journal:
+  - a loaded job with no readable plist and no live process at the moment;
+  - a loaded job and a plist naming different roots;
+  - an unreadable plist with an absent label.
+- **Plist unlink then crash:** the first run unlinks the plist and crashes before syncing `LaunchAgents`. Recovery
+  syncs `LaunchAgents` before it clears the journal.
 - **Fresh home:** a pending setup that fails at the manifest, or is cancelled, with no `~/Library/LaunchAgents`
   clears its journal and never creates that directory.
 - **Config vs recovery:** a corrupt current config does not block `pending` or `unit` recovery. A `committing`
