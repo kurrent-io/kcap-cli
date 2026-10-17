@@ -79,6 +79,9 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     string? _runningTurnId;
     string? _lastCompletedTurnId;
 
+    /// <summary>The steer awaiting proof that its turn took it: the user-message item carrying its command id.</summary>
+    (string CommandId, TaskCompletionSource Taken)? _pendingSteer;
+
     readonly ReapVerdictGate _gate;
 
     readonly Task _pumpTask;
@@ -455,6 +458,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     void Dispatch(string method, JsonElement p) {
         if (method.StartsWith("item/", StringComparison.Ordinal)) {
             ActivityClock?.Advance();
+            NoteSteeredItem(p);
             return;
         }
 
@@ -659,21 +663,8 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         try {
             var sessionId = _session!.SessionId;
 
-            if (RunningTurnId is { } turnId) {
-                using var steer = await RequestInputAsync(
-                    id => MuseMsp.TurnSteer(id, MuseMsp.NewId(), sessionId, turnId, text), "turn/steer", requireAnswer).ConfigureAwait(false);
-
-                if (steer is null || ErrorMessage(steer) is not { } refused) return;
-
-                _logger.LogInformation("Muse: steer into turn {TurnId} was refused ({Error}); starting a new turn (agentId={AgentId}).",
-                    turnId, refused, _agentId);
-
-                try {
-                    await WaitForTurnIdleAsync(_ownerToken).WaitAsync(SteerFallbackCap, _time).ConfigureAwait(false);
-                } catch (TimeoutException) {
-                    _logger.LogDebug("Muse: the refused steer's turn did not settle in time (agentId={AgentId}).", _agentId);
-                }
-            }
+            if (RunningTurnId is { } turnId && await SteerAsync(sessionId, turnId, text, requireAnswer).ConfigureAwait(false))
+                return;
 
             using var start = await RequestInputAsync(
                 id => MuseMsp.TurnStart(id, MuseMsp.NewId(), sessionId, text), "turn/start", requireAnswer, ApplyTurnStartAck).ConfigureAwait(false);
@@ -687,6 +678,71 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         } finally {
             _inputLock.Release();
         }
+    }
+
+    /// <summary>True once the turn has taken the steered input, or its fate cannot be confirmed; false when
+    /// the turn refused it or ended without taking it, so the caller starts a new turn with the same text.
+    /// The ack only admits a steer: a turn already winding down drops it afterwards, recording
+    /// <c>turn_submit.rejected</c> in its own log and telling the client nothing, so only the user-message
+    /// item carrying the steer's command id proves the input is in the turn.</summary>
+    async Task<bool> SteerAsync(string sessionId, string turnId, string text, bool requireAnswer) {
+        var commandId = MuseMsp.NewId();
+        var taken     = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        lock (_turnGate) _pendingSteer = (commandId, taken);
+
+        try {
+            using var steer = await RequestInputAsync(
+                id => MuseMsp.TurnSteer(id, commandId, sessionId, turnId, text), "turn/steer", requireAnswer).ConfigureAwait(false);
+
+            if (steer is null) return true;
+
+            if (ErrorMessage(steer) is { } refused) {
+                _logger.LogInformation("Muse: steer into turn {TurnId} was refused ({Error}); starting a new turn (agentId={AgentId}).",
+                    turnId, refused, _agentId);
+                await WaitForTurnToSettleAsync().ConfigureAwait(false);
+
+                return false;
+            }
+
+            var ended = WaitForTurnIdleAsync(_ownerToken);
+
+            try {
+                await Task.WhenAny(taken.Task, ended).WaitAsync(SteerFallbackCap, _time).ConfigureAwait(false);
+            } catch (TimeoutException) {
+                _logger.LogWarning("Muse: steer into turn {TurnId} was admitted but not seen in the turn within {Seconds}s; the input is "
+                                 + "reported delivered (agentId={AgentId}).", turnId, SteerFallbackCap.TotalSeconds, _agentId);
+                return true;
+            }
+
+            if (taken.Task.IsCompleted) return true;
+
+            _logger.LogInformation("Muse: turn {TurnId} ended without taking the steered input; starting a new turn (agentId={AgentId}).",
+                turnId, _agentId);
+
+            return false;
+        } finally {
+            lock (_turnGate) _pendingSteer = null;
+        }
+    }
+
+    async Task WaitForTurnToSettleAsync() {
+        try {
+            await WaitForTurnIdleAsync(_ownerToken).WaitAsync(SteerFallbackCap, _time).ConfigureAwait(false);
+        } catch (TimeoutException) {
+            _logger.LogDebug("Muse: the refused steer's turn did not settle in time (agentId={AgentId}).", _agentId);
+        }
+    }
+
+    void NoteSteeredItem(JsonElement p) {
+        if (p.Obj("item") is not { } item || item.Str("kind") != "userMessage" || item.Str("commandId") is not { } commandId) return;
+
+        TaskCompletionSource? taken = null;
+        lock (_turnGate) {
+            if (_pendingSteer is { } pending && pending.CommandId == commandId) taken = pending.Taken;
+        }
+
+        taken?.TrySetResult();
     }
 
     /// <summary>A fresh deadline for one request, so a host that never answers cannot hold the input lane

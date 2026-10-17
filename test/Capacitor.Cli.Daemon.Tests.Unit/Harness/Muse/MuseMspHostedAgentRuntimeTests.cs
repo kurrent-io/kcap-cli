@@ -248,16 +248,88 @@ public class MuseMspHostedAgentRuntimeTests {
         rig.Process.Push(MuseMspWire.TurnStarted);
         await rig.Host.SyncAsync();
 
-        await rig.Runtime.SendUserInputAndWaitForWriteAsync("second").WaitAsync(HangGuard);
+        var second = rig.Runtime.SendUserInputAndWaitForWriteAsync("second");
+        var steer  = Params(await rig.Host.WaitForWriteAsync("turn/steer"));
+        rig.Process.Push(SteeredUserMessage((string)steer["commandId"]!));
+        await second.WaitAsync(HangGuard);
 
         var start = Params(rig.Host.WritesOf("turn/start").Single());
         await Assert.That((string?)start["sessionId"]).IsEqualTo(MintedId);
         await Assert.That((string?)start["input"]![0]!["text"]).IsEqualTo("first");
 
-        var steer = Params(rig.Host.WritesOf("turn/steer").Single());
         await Assert.That((string?)steer["expectedTurnId"]).IsEqualTo(MuseMspWire.WireTurnId);
         await Assert.That((string?)steer["input"]![0]!["text"]).IsEqualTo("second");
     }
+
+    /// <summary>The host admits a steer into a turn that is already winding down and then drops it, telling
+    /// no one: the turn's end without a user-message item for the steer's command is the only signal.</summary>
+    [Test]
+    public async Task An_admitted_steer_the_turn_ends_without_taking_starts_a_new_turn() {
+        await using var rig = await ReadyRig();
+
+        await rig.Runtime.SendUserInputAndWaitForWriteAsync("first").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        await rig.Host.SyncAsync();
+
+        var second = rig.Runtime.SendUserInputAndWaitForWriteAsync("again");
+
+        await rig.Host.WaitForWriteAsync("turn/steer");
+        await rig.Host.SyncAsync();
+        await Assert.That(second.IsCompleted).IsFalse();
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(1);
+
+        rig.Process.Push(MuseMspWire.TurnCompleted);
+        await second.WaitAsync(HangGuard);
+
+        var starts = rig.Host.WritesOf("turn/start");
+        await Assert.That(starts).Count().IsEqualTo(2);
+        await Assert.That((string?)Params(starts[1])["input"]![0]!["text"]).IsEqualTo("again");
+    }
+
+    [Test]
+    public async Task A_steer_the_turn_took_starts_no_new_turn_when_the_turn_ends() {
+        await using var rig = await ReadyRig();
+
+        await rig.Runtime.SendUserInputAndWaitForWriteAsync("first").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        await rig.Host.SyncAsync();
+
+        var second = rig.Runtime.SendUserInputAndWaitForWriteAsync("again");
+        var steer  = Params(await rig.Host.WaitForWriteAsync("turn/steer"));
+        rig.Process.Push(SteeredUserMessage((string)steer["commandId"]!));
+        await second.WaitAsync(HangGuard);
+
+        rig.Process.Push(MuseMspWire.TurnCompleted);
+        await rig.Host.SyncAsync();
+
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(1);
+    }
+
+    /// <summary>A steered user message from another command is some other client's input, not ours.</summary>
+    [Test]
+    public async Task A_steered_item_for_another_command_is_not_the_steer_being_taken() {
+        await using var rig = await ReadyRig();
+
+        await rig.Runtime.SendUserInputAndWaitForWriteAsync("first").WaitAsync(HangGuard);
+        rig.Process.Push(MuseMspWire.TurnStarted);
+        await rig.Host.SyncAsync();
+
+        var second = rig.Runtime.SendUserInputAndWaitForWriteAsync("again");
+        await rig.Host.WaitForWriteAsync("turn/steer");
+        rig.Process.Push(SteeredUserMessage("01a13695-ffff-7000-8000-00000000beef"));
+        await rig.Host.SyncAsync();
+        await Assert.That(second.IsCompleted).IsFalse();
+
+        rig.Process.Push(MuseMspWire.TurnCompleted);
+        await second.WaitAsync(HangGuard);
+
+        await Assert.That(rig.Host.WritesOf("turn/start")).Count().IsEqualTo(2);
+    }
+
+    /// <summary>An <c>item/started</c> for the user message a steer injected mid-turn: its <c>commandId</c>
+    /// is the steer's and <c>steered</c> is set.</summary>
+    static string SteeredUserMessage(string commandId) =>
+        """{"jsonrpc":"2.0","method":"item/started","params":{"sessionId":"01a13695-0736-75d0-8f4e-f121585b8453","viewCursor":"v:01a13695-0736-75d0-8f4e-f121585b8453:40","item":{"itemId":"01a13695-2222-7000-8000-000000000002","kind":"userMessage","status":"completed","revision":1,"turnId":"01a13695-08e6-743d-8b85-cffc838ef5fc","commandId":"@0@","text":"again","steered":true}},"emittedAtMs":1791917110000}""".Replace("@0@", commandId);
 
     [Test]
     public async Task Stale_steer_falls_back_to_a_fresh_turn() {
