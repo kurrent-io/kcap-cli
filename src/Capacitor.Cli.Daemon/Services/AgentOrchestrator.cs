@@ -4817,7 +4817,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _time.GetUtcNow().ToString("O"),
             cwd: transcript.Cwd,
             model: transcript.ResolvedModel,
-            rawSessionId: transcript.AcpSessionId
+            rawSessionId: transcript.AcpSessionId,
+            repository: HostedSessionRepository.Read(transcript.Cwd)
         );
 
         var forwarder = new AcpTranscriptForwarder(

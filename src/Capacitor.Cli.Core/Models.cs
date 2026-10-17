@@ -1541,7 +1541,14 @@ public readonly record struct AcpEventEnvelope(
         long?   UsageCachedInputTokens = null,
         long?   UsageCacheWriteInputTokens = null,
         long?   UsageOutputTokens      = null,
-        long?   UsageReasoningTokens   = null
+        long?   UsageReasoningTokens   = null,
+
+        // session_started — the repository the hosted agent's worktree belongs to, which is how the
+        // server attributes a hosted session to it. Additive and nullable, so ContractVersion stays 1.
+        string? RepoOwner     = null,
+        string? RepoName      = null,
+        string? RepoRemoteUrl = null,
+        string? RepoBranch    = null
     );
 
 /// <summary>

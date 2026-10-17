@@ -69,6 +69,34 @@ public class AgentOrchestratorAcpForwardingTests {
 
     // ── Forwarding (design spec §2.2/§2.4) ──────────────────────────────────────────────────────
 
+    /// <summary>The server attributes a hosted session to a repository only from what session_started
+    /// names, since no hook runs inside a hosted agent.</summary>
+    [Test]
+    public async Task SessionStarted_names_the_repository_the_agent_runs_in() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        repoPath.Do("remote", "add", "origin", "https://github.com/kurrent-io/widgets.git");
+
+        var server        = new CaptureServerConnection();
+        var cursorFactory = new SpyAcpHostedAgentRuntimeFactory();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [cursorFactory]
+        );
+        orch.AcpFinalDrainBudget = TimeSpan.FromMilliseconds(200);
+
+        await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("agent-acp-repo", repoPath));
+        await server.AcpEventsCallSignal.Reader.ReadAsync().AsTask().WaitAsync(WaitHarness.AcpHangGuard);
+
+        var started = server.AcpEventsCalls[0].Envelopes[0];
+        await Assert.That(started.Kind).IsEqualTo(AcpEventKind.SessionStarted);
+        await Assert.That(started.RepoOwner).IsEqualTo("kurrent-io");
+        await Assert.That(started.RepoName).IsEqualTo("widgets");
+        await Assert.That(started.RepoRemoteUrl).IsEqualTo("https://github.com/kurrent-io/widgets.git");
+
+        await orch.HandleStopAgentForTest("agent-acp-repo");
+    }
+
     [Test]
     public async Task Cursor_launch_forwards_SessionStarted_first_then_subsequent_envelopes_with_monotonic_seq() {
         using var repoPath = GitRepo.CreateWithCommit();
