@@ -1868,7 +1868,10 @@ sealed class SetupCommand(
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
             new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
-            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time),
+            new GrokImportSource(
+                harnesses.Of<GrokHarness>().Paths,
+                cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false),
+                time),
             new MuseImportSource(harnesses.Of<MuseHarness>().Paths, WatcherPaths.FromEnvironment(config), time)
         ];
 
