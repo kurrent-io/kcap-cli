@@ -135,6 +135,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
     /// is exactly why a borrowed-ness predicate could not reach it.</summary>
     public bool ReviewFlowRedirectsHome => true;
 
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
+
     /// <summary>
     /// Advertisement keeps the FULL ladder, consent included, because advertising is specifically an
     /// offer to REVIEW unattended — the one thing the consent flag governs. A daemon that advertised
@@ -332,7 +334,8 @@ internal sealed partial class AntigravityHostedAgentRuntimeFactory(
             // caller's diff, source excerpts and findings. The daemon-epoch sweep is the crash
             // backstop, not the disposal path.
             onDisposed: () => AntigravityReviewerHome.Delete(home, stateDir, _logger),
-            journal: ctx.Journal);
+            journal: ctx.Journal,
+            resumeConversationId: ctx.ResumeSessionId);
 
         // MUST precede the first turn: a clock assigned later makes every stamp inside the launch a
         // silent no-op, and the reaper then judges this reviewer from an empty record.

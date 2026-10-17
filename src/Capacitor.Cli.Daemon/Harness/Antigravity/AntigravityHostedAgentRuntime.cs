@@ -344,8 +344,10 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             int?                                                           transcriptCapacity = null,
             int?                                                           pendingTurnsCapacity = null,
             Action?                                                        onDisposed = null,
-            TranscriptJournal?                                             journal = null
+            TranscriptJournal?                                             journal = null,
+            string?                                                        resumeConversationId = null
         ) {
+        _conversationId       = resumeConversationId;
         _spawnTurn            = spawnTurn;
         _logger               = logger;
         _agentId              = agentId;
@@ -901,23 +903,19 @@ internal sealed class AntigravityHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// so it must never trigger termination itself.</summary>
     bool HandleInit(AntigravityEvent evt) {
         if (evt.ConversationId is { Length: > 0 } cid) {
-            if (_conversationId is null) {
-                _conversationId = cid;
-
-                // Rule (e): the ONE place this ever completes successfully — unblocks any factory
-                // awaiting WaitForConversationIdAsync before it reads AcpSessionId.
-                _conversationIdResolved.TrySetResult();
-
-                // The handshake's second and last stamp — this is the moment the runtime has a
-                // conversation, the exec-per-turn analogue of an ACP `session/new` returning. Guarded
-                // by the same "id was null" branch, so it can fire at most once per runtime.
-                ActivityClock?.SetLaunchStage("session_created");
-            } else if (!string.Equals(_conversationId, cid, StringComparison.Ordinal)) {
+            if (_conversationId is not null && !string.Equals(_conversationId, cid, StringComparison.Ordinal)) {
                 _logger.LogError(
                     "Antigravity: conversation id changed from {Old} to {New} mid-session (agentId={AgentId}); entering Terminal.",
                     _conversationId, cid, _agentId);
                 return false;
             }
+
+            _conversationId = cid;
+
+            // Completes once even when the id was seeded at construction, so a factory awaiting
+            // WaitForConversationIdAsync is released by the first confirming init.
+            if (_conversationIdResolved.TrySetResult())
+                ActivityClock?.SetLaunchStage("session_created");
         }
 
         if (evt.Cwd is { Length: > 0 } cwd) _cwd = cwd;
