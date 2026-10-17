@@ -388,6 +388,8 @@ internal partial class AgentOrchestrator {
             return;
         }
 
+        WriteLedger(agent, cmd: null, "local", consent: null);
+
         // Register like a UI launch (no-op for --private). Best-effort: a registration hiccup
         // must not break the local terminal session.
         try { await RegisterAgentAsync(agent); }

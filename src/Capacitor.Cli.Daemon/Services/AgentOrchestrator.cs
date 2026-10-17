@@ -15,6 +15,7 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -62,6 +63,13 @@ internal record AgentInstance(
         CancellationTokenSource ReadCts
     ) {
     public string?              SessionId         { get; set; }
+
+    /// The vendor's own session id, the one a resume hands back to the vendor CLI.
+    public string?              VendorSession     { get; set; }
+
+    /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
+    /// worktree, attachments, PID record and resume-ledger entry.
+    public bool                 ResumePending     { get; set; }
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }
@@ -797,6 +805,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _attachmentFetcher = new AttachmentFetcher(
             httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        ResumeLedger = ResumeLedgerStore.For(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
@@ -2611,6 +2620,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
+            WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent);
+
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
@@ -2651,6 +2662,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // No AgentInstance was created here either, so the journal is otherwise never
                 // completed or deleted — this arm returns before the outer catch below.
                 await DiscardFailedLaunchJournalAsync(journal, agentId);
+                DiscardFailedLaunchLedger(agentId);
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
@@ -2710,6 +2722,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
                 SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : null,
+                VendorSession       = start.Transcript?.AcpSessionId,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,
@@ -2738,6 +2751,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PublishAgent(agent);
             published = true;
             storeLease?.Keep();
+            WriteLedger(agent, cmd, "server", consent);
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after
@@ -2886,6 +2900,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // No AgentInstance owns the journal, so complete it here.
             await DiscardFailedLaunchJournalAsync(journal, agentId);
+            DiscardFailedLaunchLedger(agentId);
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
@@ -5257,7 +5272,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // Mutation first, pulse second — and the pulse before any server call, which can
                     // stall on a reconnect and must never hold the app's status push hostage.
                     agent.SessionId ??= winner.SessionId;
+                    agent.VendorSession ??= winner.SessionId;
                     agent.TranscriptPath = winner.Path;
+                    UpdateLedgerSession(agent);
                     _statusNotifier.Pulse();
                     LogSessionIdDetected(agent.Id, winner.SessionId);
 
@@ -5481,11 +5498,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // user's own checkout (local in-place launch) — NEVER delete it or its branch:
         // RemoveAsync would Directory.Delete / `git worktree remove --force` + `branch -D`.
         // This is the spec's top safety invariant.
-        if (agent.Work == WorkLocation.OwnedWorktree) {
+        // A pending resume keeps everything the successor daemon resumes from.
+        if (agent.Work == WorkLocation.OwnedWorktree && !agent.ResumePending) {
             try { await WorktreeManager.RemoveAsync(agent.Worktree, _time); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
 
-        try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
+        if (!agent.ResumePending) {
+            try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
+        }
 
         // Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
         // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
@@ -5501,7 +5521,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // still matches (true) OR is uncomparable (null — unreadable/foreign token). Delete only on a
         // proven-gone pid: dead, a conclusive recycle (MatchesTri == false), or an agent that was never
         // identified. Collapsing the uncomparable case to "gone" would drop a live child's record.
-        if (agent.StartIdentity is { } startIdentity
+        if (agent.ResumePending) {
+            // The record stays for the successor daemon.
+        } else if (agent.StartIdentity is { } startIdentity
             && ProcessIdentity.IsAlive(pid)
             && ProcessIdentity.MatchesTri(pid, startIdentity) != false) {
             _quarantine?.Add(new AgentKillQuarantine.Entry(
@@ -5511,6 +5533,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } else {
             DeletePidRecord(agentId); // confirmed dead / conclusively recycled pid / never-identified
         }
+
+        if (!agent.ResumePending) DeleteLedger(agentId);
 
         // Now drop the agent from the live registry — after a surviving child is already in quarantine,
         // so a concurrent launch never sees EffectiveCount transiently under-count this agent.
