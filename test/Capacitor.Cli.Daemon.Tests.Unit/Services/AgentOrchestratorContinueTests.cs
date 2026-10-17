@@ -35,10 +35,20 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
         public ConcurrentQueue<(RuntimeStartContext Ctx, int ReportsBefore)> Starts { get; } = new();
 
+        public bool Fails { get; init; }
+
+        /// <summary>A terminal runtime: its session id is learned by discovery, not at publish.</summary>
+        public bool PtyStyle { get; init; }
+
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             int reports;
             lock (server.ShutdownReports) reports = server.ShutdownReports.Count;
             Starts.Enqueue((ctx, reports));
+
+            if (Fails) throw new InvalidOperationException("the agent exited before its handshake");
+
+            if (PtyStyle)
+                return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null));
 
             var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path, AcpSessionId = NewSession };
 
@@ -48,10 +58,10 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
     sealed record Fixture(AgentOrchestrator Orch, CaptureServerConnection Server, ContinueFactory Factory, DaemonConfig Config, string Repo);
 
-    Fixture Build(bool resumeSupported = false) {
+    Fixture Build(bool resumeSupported = false, bool fails = false, bool ptyStyle = false) {
         var repo   = Tmp.CreateDir("repo");
         var server = new CaptureServerConnection();
-        var factory = new ContinueFactory(server) { ResumeSupported = resumeSupported };
+        var factory = new ContinueFactory(server) { ResumeSupported = resumeSupported, Fails = fails, PtyStyle = ptyStyle };
         DaemonConfig? captured = null;
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
@@ -110,7 +120,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
     ];
 
     [Test]
-    public async Task Continue_ends_the_old_pair_as_superseded_then_launches_a_new_agent_id() {
+    public async Task Continue_launches_a_new_agent_id_then_ends_the_old_pair_as_superseded() {
         var f = Build();
         await using var _ = f.Orch;
         var entry = Entry(f);
@@ -122,7 +132,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
             .IsEquivalentTo(new[] { (OldAgent, "Completed", "superseded") });
 
         var (ctx, reportsBefore) = f.Factory.Starts.Single();
-        await Assert.That(reportsBefore).IsEqualTo(1);
+        await Assert.That(reportsBefore).IsEqualTo(0);
         await Assert.That(ctx.AgentId).IsNotEqualTo(OldAgent);
         await Assert.That(ctx.ResumeSessionId).IsNull();
         await Assert.That(ctx.Worktree.Path).IsEqualTo(entry.Launch.WorktreePath);
@@ -151,6 +161,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
         await Assert.That(f.Factory.Starts.Single().Ctx.Prompt).Contains("Wire the widget");
 
+        await WaitHarness.PollUntilAsync(() => Declares().Count > 0);
         var declare = Declares().Single();
         await Assert.That(declare["session_id"]!.GetValue<string>()).IsEqualTo(NewSession);
         await Assert.That(declare["work_item_id"]!.GetValue<string>()).IsEqualTo("w1");
@@ -185,6 +196,45 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(outcome).IsEqualTo(ResumeOutcome.Continued);
         await Assert.That(f.Server.ShutdownReports).IsEmpty();
         await Assert.That(f.Orch.GetAgentForTest(f.Factory.Starts.Single().Ctx.AgentId)!.IsPrivate).IsTrue();
+        await WaitHarness.PollUntilAsync(() => Declares().Count > 0);
+        await Assert.That(Declares().Single()["session_id"]!.GetValue<string>()).IsEqualTo(NewSession);
+    }
+
+    [Test]
+    public async Task A_failed_continue_ends_the_old_agent_once_as_a_failed_resume() {
+        var f = Build(fails: true);
+        await using var _ = f.Orch;
+        Entry(f);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Starts.Count).IsEqualTo(1);
+        await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
+            .IsEquivalentTo(new[] { (OldAgent, "Failed", "resume_failed:native_resume_unsupported") });
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)!.State).IsEqualTo(ResumeState.Interrupted);
+    }
+
+    /// <summary>The successor's session id arrives by discovery well after the readiness window, and
+    /// the takeover still runs once it does.</summary>
+    [Test]
+    public async Task A_session_learned_after_the_readiness_window_still_takes_over_the_old_work() {
+        ServeOldSession();
+        var f = Build(ptyStyle: true);
+        await using var _ = f.Orch;
+        var entry = Entry(f);
+
+        var outcome = await f.Orch.ContinueEntryAsync(entry, "native_resume_unsupported", CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(ResumeOutcome.Continued);
+
+        var agent = f.Orch.GetAgentForTest(f.Factory.Starts.Single().Ctx.AgentId)!;
+        await Assert.That(agent.SessionId).IsNull();
+        await Task.Delay(f.Config.ResumeReadinessWindow * 3);
+        await Assert.That(Declares()).IsEmpty();
+
+        await f.Orch.RunDiscoveryForTest(agent, _ => (NewSession, Tmp.PathTo("transcript.jsonl")));
+
+        await WaitHarness.PollUntilAsync(() => Declares().Count > 0);
         await Assert.That(Declares().Single()["session_id"]!.GetValue<string>()).IsEqualTo(NewSession);
     }
 }

@@ -591,15 +591,12 @@ internal partial class AgentOrchestrator {
 
     string ServerBase => _config.ServerUrl.TrimEnd('/');
 
-    /// <summary>Ends the entry's agent and session as superseded, then starts a fresh agent under a new
-    /// id in the same worktree, whose session takes over the old one's work items and plans.
-    /// <see cref="ResumeOutcome.Interrupted"/> when the fresh agent does not launch.</summary>
+    /// <summary>Starts a fresh agent under a new id in the entry's worktree, then ends the entry's agent
+    /// and session as superseded; the successor's session takes over the old one's work items and plans
+    /// once its id is known. <see cref="ResumeOutcome.Interrupted"/>, with nothing reported, when the
+    /// fresh agent does not launch: the lane's failed-resume report is then the old agent's only end.</summary>
     internal async Task<ResumeOutcome> ContinueEntryAsync(ResumeLedgerEntry entry, string reason, CancellationToken ct) {
         ct.ThrowIfCancellationRequested();
-
-        // A private agent was never registered, so the server holds no agent to end.
-        if (!entry.Launch.IsPrivate)
-            await _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
 
         var summary = await ReadPreviousSummaryAsync(entry.SessionId, ct);
         var prompt  = ContinuePrompt.Build(entry.Launch.Prompt, entry.SessionId, reason, summary, LastAlive(entry, null));
@@ -610,12 +607,29 @@ internal partial class AgentOrchestrator {
         // The successor's own entry now holds the worktree.
         DeleteLedger(entry.AgentId);
 
-        if (entry.SessionId is not { } previous) return ResumeOutcome.Continued;
+        // A private agent was never registered, so the server holds no agent to end.
+        if (!entry.Launch.IsPrivate)
+            await _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
 
-        if (await AwaitSessionIdAsync(agent, ct) is { } current) await TakeOverAsync(agent.Id, previous, current, ct);
-        else LogContinueSessionUnknown(agent.Id, previous);
+        if (entry.SessionId is { } previous) StartContinuationTakeover(agent, previous);
 
         return ResumeOutcome.Continued;
+    }
+
+    /// <summary>Runs the takeover off the lane, once, as soon as the successor has both its own session
+    /// id and the session it continues: either may arrive first, the id at publish or by discovery.</summary>
+    void StartContinuationTakeover(AgentInstance agent, string? previousSession = null) {
+        string previous, current;
+
+        lock (_ledgerLock) {
+            if (previousSession is not null) agent.ContinuedFromSessionId = previousSession;
+            if (agent.ContinuedFromSessionId is not { } from || agent.SessionId is not { } own) return;
+
+            agent.ContinuedFromSessionId = null;
+            (previous, current) = (from, own);
+        }
+
+        _ = TakeOverAsync(agent.Id, previous, current, _shutdownCts.Token);
     }
 
     /// <summary>The launched successor, or null when it did not launch; a successor that did not
@@ -675,20 +689,7 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    /// <summary>A handshake runtime knows its session at publish; a PTY one learns it by discovery,
-    /// waited for at most <see cref="DaemonConfig.ResumeReadinessWindow"/>.</summary>
-    async Task<string?> AwaitSessionIdAsync(AgentInstance agent, CancellationToken ct) {
-        var started = _time.GetTimestamp();
-
-        while (agent.SessionId is null) {
-            if (agent.Runtime.HasExited || _time.GetElapsedTime(started) >= _config.ResumeReadinessWindow) return null;
-
-            await Task.Delay(ReadinessPoll, _time, ct);
-        }
-
-        return agent.SessionId;
-    }
-
+    /// <summary>Never throws: it runs unobserved.</summary>
     async Task TakeOverAsync(string agentId, string previous, string current, CancellationToken ct) {
         try {
             using var client = await _http.ForBackgroundAsync(ct);
@@ -702,7 +703,8 @@ internal partial class AgentOrchestrator {
                 TakeoverResult.Failed f                          => $"failed: {f.Reason}",
                 _                                                => "unauthorized"
             });
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+        } catch (Exception ex) {
             LogContinueTakeoverFailed(ex, agentId, previous);
         }
     }
@@ -812,9 +814,6 @@ internal partial class AgentOrchestrator {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Continue: agent {AgentId} session {Current} took over {Previous}: {Outcome}")]
     partial void LogContinueTakeover(string agentId, string previous, string current, string outcome);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Continue: agent {AgentId} has no session yet, so it does not take over session {Previous}")]
-    partial void LogContinueSessionUnknown(string agentId, string previous);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Continue: agent {AgentId} could not take over session {Previous}")]
     partial void LogContinueTakeoverFailed(Exception ex, string agentId, string previous);

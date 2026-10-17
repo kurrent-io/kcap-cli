@@ -71,6 +71,10 @@ internal record AgentInstance(
     /// worktree, attachments, MCP config, vendor launcher state, PID record and resume-ledger entry.
     public bool                 ResumePending     { get; set; }
 
+    /// The interrupted session this agent continues, until its own session id is known and the
+    /// takeover of that session's work has started.
+    public string?              ContinuedFromSessionId { get; set; }
+
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
     public string               Status            { get; set; } = "Starting";
@@ -5320,6 +5324,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     agent.VendorSession ??= winner.SessionId;
                     agent.TranscriptPath = winner.Path;
                     UpdateLedgerSession(agent);
+                    StartContinuationTakeover(agent);
                     _statusNotifier.Pulse();
                     LogSessionIdDetected(agent.Id, winner.SessionId);
 
