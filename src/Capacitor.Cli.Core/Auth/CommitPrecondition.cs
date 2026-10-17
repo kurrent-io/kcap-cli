@@ -17,4 +17,17 @@ public abstract record CommitPrecondition {
                 throw new CommitPreconditionFailedException($"profile '{profile}' does not name {Url}; nothing saved.");
         }
     }
+
+    /// Every profile with a server names <paramref name="Url"/>: a local setup that repoints the
+    /// active profile must not leave another profile's credential behind a different server.
+    public sealed record OnlyServer(string Url) : CommitPrecondition {
+        internal override void Check(ProfileConfig config, string profile) {
+            foreach (var (name, other) in config.Profiles) {
+                if (string.IsNullOrWhiteSpace(other.ServerUrl) || ServerIdentity.SameServer(other.ServerUrl, Url)) continue;
+
+                throw new CommitPreconditionFailedException(
+                    $"profile '{name}' points at {other.ServerUrl}; local setup needs every profile on {Url}; nothing saved.");
+            }
+        }
+    }
 }
