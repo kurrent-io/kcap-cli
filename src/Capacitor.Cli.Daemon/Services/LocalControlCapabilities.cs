@@ -21,8 +21,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <see cref="AgentOrchestrator.HandleLocalSendTextWithAttachmentsAsync"/>; and
 /// <c>"settings/1"</c> routes DaemonSettingsPut to <see cref="DaemonSettingsIpc"/>; and
 /// <c>"fence/1"</c> routes AdmissionFenceAcquire to <see cref="AdmissionFenceIpc"/>; and
-/// <c>"shutdown/1"</c> routes Shutdown to <see cref="DaemonShutdownIpc"/>.
+/// <c>"shutdown/1"</c> routes Shutdown to <see cref="DaemonShutdownIpc"/>; and
+/// <c>"resume/1"</c> routes AgentResume to <see cref="AgentOrchestrator.ResumeInterruptedAsync"/>.
 /// </summary>
 internal static class LocalControlCapabilities {
-    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1"];
+    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1"];
 }

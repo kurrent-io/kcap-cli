@@ -406,6 +406,8 @@ internal partial class AgentOrchestrator {
     readonly List<(ResumeLedgerEntry Entry, string Reason)> _interruptedAtBoot = [];
     string[] _ledgerWorktrees = [];
 
+    SemaphoreSlim ResumeLane => field ??= new SemaphoreSlim(Math.Max(1, _config.ResumeConcurrency));
+
     /// <summary>The kcap continue fallback, tried when a native resume is unavailable or fails.</summary>
     internal Func<ResumeLedgerEntry, string, CancellationToken, Task<ResumeOutcome>> ContinueEntry {
         get => field ??= ContinueEntryAsync;
@@ -480,24 +482,53 @@ internal partial class AgentOrchestrator {
             foreach (var (entry, reason) in _interruptedAtBoot.Where(i => !i.Entry.Launch.IsPrivate))
                 await ReportResumeFailedAsync(entry, reason, null, ct);
 
-            using var lane = new SemaphoreSlim(Math.Max(1, _config.ResumeConcurrency));
-
-            await Task.WhenAll(_resumeOrder.Select(async entry => {
-                await lane.WaitAsync(ct);
-
-                try {
-                    await ResumeEntryAsync(entry, ct);
-                } catch (Exception ex) when (ex is not OperationCanceledException) {
-                    LogResumeFailed(ex, entry.AgentId);
-                } finally {
-                    _resumeCandidates.TryRemove(entry.AgentId, out _);
-                    lane.Release();
-                }
-            }));
+            await Task.WhenAll(_resumeOrder.Select(entry => RunResumeThroughLaneAsync(entry, ct)));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
         } catch (Exception ex) {
             LogResumeLaneFailed(ex);
         }
+    }
+
+    async Task RunResumeThroughLaneAsync(ResumeLedgerEntry entry, CancellationToken ct) {
+        await ResumeLane.WaitAsync(ct);
+
+        try {
+            await ResumeEntryAsync(entry, ct);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogResumeFailed(ex, entry.AgentId);
+        } finally {
+            _resumeCandidates.TryRemove(entry.AgentId, out _);
+            ResumeLane.Release();
+        }
+    }
+
+    /// <summary>An operator's retry of an interrupted entry: <c>resuming</c> once the entry is marked
+    /// resuming and queued on the boot lane's gate, <c>not_interrupted</c> for any other state,
+    /// <c>unknown</c> without an entry. The age cap and <see cref="DaemonConfig.AutoResume"/> do not
+    /// apply to an explicit retry.</summary>
+    internal Task<string> ResumeInterruptedAsync(string agentId, CancellationToken ct) {
+        ResumeLedgerEntry resuming;
+
+        lock (_ledgerLock) {
+            if (TryReadLedger(agentId) is not { } entry) return Task.FromResult("unknown");
+            if (entry.State != ResumeState.Interrupted) return Task.FromResult("not_interrupted");
+
+            var now = _time.GetUtcNow();
+            resuming = entry with { State = ResumeState.Resuming, ResumingAt = now, LastError = null, UpdatedAt = now };
+
+            try {
+                ResumeLedger!.Write(resuming);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                LogResumeLedgerFailed(ex, "writing", agentId);
+                throw;
+            }
+
+            _resumeCandidates[agentId] = resuming;
+        }
+
+        _ = RunResumeThroughLaneAsync(resuming, _shutdownCts.Token);
+
+        return Task.FromResult("resuming");
     }
 
     /// <summary>Native resume, then kcap continue, then interrupted.</summary>

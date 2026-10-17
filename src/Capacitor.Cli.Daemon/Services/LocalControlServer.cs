@@ -79,12 +79,16 @@ internal sealed partial class LocalControlServer(
                 case FrameType.DaemonSettingsPut: await settingsIpc.HandlePutAsync(first.Text, stream, ct); break;
                 case FrameType.AdmissionFenceAcquire: await fenceIpc.HandleAcquireAsync(first.Text, stream, ct); break;
                 case FrameType.Shutdown: await shutdownIpc.HandleAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown, got {first.Type}"), ct); break;
+                case FrameType.AgentResume: await HandleAgentResumeAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown/AgentResume, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);
         }
     }
+
+    async Task HandleAgentResumeAsync(string agentId, Stream stream, CancellationToken ct) =>
+        await FrameCodec.WriteAsync(stream, LocalFrame.AgentResumeAck(await orchestrator.ResumeInterruptedAsync(agentId, ct)), ct);
 
     async Task HandleRestartAsync(string mode, Stream stream, CancellationToken ct) {
         var force = mode is "force";
