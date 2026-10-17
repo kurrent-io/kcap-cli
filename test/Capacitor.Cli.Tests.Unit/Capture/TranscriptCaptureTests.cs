@@ -96,6 +96,7 @@ public class TranscriptCaptureTests {
 
         await Assert.That(captured.Consumed).IsEqualTo(2);
         await Assert.That(captured.Lines[0]).Contains("kcap_capture_loss");
+        await Assert.That(captured.Lines[0]).DoesNotContain("not json");
         await Assert.That(captured.Lines[1]).IsEqualTo("{\"a\":1}");
         await Assert.That(losses).IsEquivalentTo([RedactionLossReason.MalformedInput]);
     }
