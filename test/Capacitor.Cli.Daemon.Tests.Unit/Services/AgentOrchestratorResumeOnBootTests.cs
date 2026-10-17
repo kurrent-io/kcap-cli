@@ -23,7 +23,9 @@ public class AgentOrchestratorResumeOnBootTests {
         public string Vendor { get; init; } = "cursor";
         public bool SupportsUnattended => false;
         public bool IsAvailable() => true;
-        public bool SupportsRestartResume(string? runtimeTransport) => true;
+        public bool ThrowsFromSupports { get; init; }
+        public bool SupportsRestartResume(string? runtimeTransport) =>
+            ThrowsFromSupports ? throw new InvalidOperationException("the factory faulted") : true;
 
         public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
         public TaskCompletionSource? Gate { get; set; }
@@ -376,6 +378,24 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
             .Contains(("fails-1", "Failed", "resume_failed:runtime_exited"));
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    /// <summary>A fault outside the resume's own failure path leaves the entry where <c>kcap agent ls</c>
+    /// shows it and <c>kcap agent resume</c> can retry it.</summary>
+    [Test]
+    public async Task An_unexpected_fault_in_the_lane_interrupts_the_entry_with_the_exception_type() {
+        var f = Build(new ResumableFactory { ThrowsFromSupports = true });
+        await using var _ = f.Orch;
+        Entry(f, "faults-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var after = f.Orch.ResumeLedger!.TryRead("faults-1")!;
+        await Assert.That(after.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(after.LastError).IsEqualTo(nameof(InvalidOperationException));
+        await Assert.That(f.Orch.LedgerOnlyAgents().Single().State).IsEqualTo($"interrupted ({nameof(InvalidOperationException)})");
+        await Assert.That(await f.Orch.ResumeInterruptedAsync("faults-1", CancellationToken.None)).IsEqualTo("resuming");
     }
 
     /// <summary>The worktree is a standalone copy, so a cleanup that treated the resumed agent as

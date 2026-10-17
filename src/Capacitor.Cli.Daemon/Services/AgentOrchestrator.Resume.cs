@@ -561,6 +561,10 @@ internal partial class AgentOrchestrator {
             await ResumeEntryAsync(entry, ct);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogResumeFailed(ex, entry.AgentId);
+
+            // Left resuming with no candidate, the entry would be invisible to `agent ls` and refused by
+            // `agent resume` until the next boot.
+            if (!_agents.ContainsKey(entry.AgentId)) InterruptEntry(entry.AgentId, ex.GetType().Name);
         } finally {
             _resumeCandidates.TryRemove(entry.AgentId, out _);
             ResumeLane.Release();
