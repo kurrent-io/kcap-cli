@@ -33,14 +33,17 @@ public static partial class LocalStateFiles {
 
     internal static void ClearJournal(LocalRoot root) {
         File.Delete(root.JournalPath);
+        FaultPoints.Hit($"unlink:{root.JournalPath}");
 
         if (File.Exists(root.JournalPath) || Directory.Exists(root.JournalPath))
             throw new LocalLifecycleException($"The lifecycle journal {root.JournalPath} could not be removed.");
 
-        DirectorySync.Flush(root.Directory);
+        DurableDirectory.Sync(root.Directory);
     }
 
     static void Write(string path, byte[] bytes) {
+        FaultPoints.Hit($"rename:{path}");
+
         for (var attempt = 1; ; attempt++) {
             try {
                 AtomicFile.Replace(path, bytes, OperatingSystem.IsWindows() ? null : OwnerReadWrite, followLink: false, durable: true);
@@ -51,7 +54,8 @@ public static partial class LocalStateFiles {
             }
         }
 
-        DirectorySync.Flush(Path.GetDirectoryName(path)!);
+        FaultPoints.Hit($"renamed:{path}");
+        DurableDirectory.Sync(Path.GetDirectoryName(path)!);
     }
 
     static StateRead<T> Read<TWire, T>(string path, JsonTypeInfo<TWire> info, Func<TWire, T?> map)

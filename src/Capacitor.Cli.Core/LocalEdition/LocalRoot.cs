@@ -29,18 +29,15 @@ public sealed class LocalRoot(string directory) {
             ? new(Path.Combine(home.Path, ".config", "kcap", "local"))
             : new(Path.TrimEndingDirectorySeparator(Path.GetFullPath(configured)));
 
-    /// <summary>Creates the root owner-only, or makes an existing one so. A symlinked root is refused:
+    /// <summary>Creates the root owner-only, or makes an existing one so, and syncs every level of its
+    /// path below <paramref name="home"/> (the filesystem root when null). A symlinked root is refused:
     /// the lock and the registry would live wherever the link points.</summary>
-    public void EnsureCreated() {
+    public void EnsureCreated(UserHome? home = null) {
         if (new DirectoryInfo(Directory).LinkTarget is not null)
             throw new LocalLifecycleException($"{Directory} is a symlink; the local installation's root must be a real directory.");
 
-        if (OperatingSystem.IsWindows()) {
-            System.IO.Directory.CreateDirectory(Directory);
-            return;
-        }
+        DurableDirectory.Ensure(Directory, DurableDirectory.AnchorFor(Directory, home), OwnerOnly);
 
-        System.IO.Directory.CreateDirectory(Directory, OwnerOnly);
-        File.SetUnixFileMode(Directory, OwnerOnly);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(Directory, OwnerOnly);
     }
 }
