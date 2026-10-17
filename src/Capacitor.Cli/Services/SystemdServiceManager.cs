@@ -34,6 +34,15 @@ sealed class SystemdServiceManager(
         return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), bin);
     }
 
+    public string? UnitBinary(string serviceId) {
+        var path = SystemdUnit.UnitPath(home, serviceId);
+        try {
+            return File.Exists(path) ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
+    }
+
     public ServiceQuery Query(string serviceId) {
         var path = SystemdUnit.UnitPath(home, serviceId);
         var unitPresent = File.Exists(path);
@@ -85,15 +94,36 @@ sealed class SystemdServiceManager(
             throw new InvalidOperationException($"systemctl --user daemon-reload exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}")}");
     }
 
-    public void Install(ServiceSpec spec, bool startNow) {
+    /// <summary>A refused reload or enable puts the previous unit file back, so a failed install leaves
+    /// the unit as it was. A refused restart does not: the unit is installed, only not started.</summary>
+    public bool Install(ServiceSpec spec, bool startNow, out string? error) {
+        var path     = SystemdUnit.UnitPath(home, spec.ServiceId);
+        var previous = File.Exists(path) ? File.ReadAllText(path) : null;
+
         WriteUnitFiles(spec);
-        ServiceProcess.Check("systemctl", SystemdUnit.DaemonReloadArgs());
-        ServiceProcess.Check("systemctl", SystemdUnit.EnableArgs(spec.ServiceId));
-        if (startNow) ServiceProcess.Check("systemctl", SystemdUnit.RestartArgs(spec.ServiceId));
+        error = Systemctl(SystemdUnit.DaemonReloadArgs()) ?? Systemctl(SystemdUnit.EnableArgs(spec.ServiceId));
+        if (error is not null) {
+            if (previous is null) File.Delete(path);
+            else _writeUnit(path, previous, null);
+            if (Systemctl(SystemdUnit.DaemonReloadArgs()) is { } reloadError)
+                error += $"; the previous unit file was put back, but {reloadError}, so systemd may still hold the new "
+                       + "definition until the next `systemctl --user daemon-reload`";
+            return false;
+        }
+
+        error = startNow ? Systemctl(SystemdUnit.RestartArgs(spec.ServiceId)) : null;
+        return error is null;
+    }
+
+    string? Systemctl(string[] args) {
+        var (code, _, err) = _runProcess("systemctl", args);
+        return code == 0 ? null : $"systemctl {string.Join(' ', args)} failed (exit {code}): {err.Trim()}";
     }
 
     /// <summary>No distinct verify path for systemd yet — delegate mechanically to <see cref="Install"/>.</summary>
-    public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, startNow: true);
+    public void WriteAndBootstrap(ServiceSpec spec) {
+        if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);
+    }
 
     public bool Uninstall(string serviceId, out string? error) {
         ServiceProcess.Run("systemctl", SystemdUnit.DisableNowArgs(serviceId));

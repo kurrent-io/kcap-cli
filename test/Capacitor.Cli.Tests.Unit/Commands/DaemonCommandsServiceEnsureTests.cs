@@ -28,7 +28,7 @@ public class DaemonCommandsServiceEnsureTests {
         public IReadOnlyList<string> ListInstalled() => [];
         public ServiceStatus Status(string serviceId) => new(ServiceState.NotInstalled, null);
         public ServiceQuery Query(string serviceId) => QueryResult;
-        public void Install(ServiceSpec spec, bool startNow) { }
+        public bool Install(ServiceSpec spec, bool startNow, out string? error) { error = null; return true; }
         public void WriteAndBootstrap(ServiceSpec spec) { }
         public bool Uninstall(string serviceId, out string? error) { error = null; return true; }
         public bool Start(string serviceId, out string? error) { error = null; return true; }

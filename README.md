@@ -1077,7 +1077,7 @@ kcap daemon service uninstall              # stop and remove the service
 kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR
 ```
 
-`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
+`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. Over an installed service, a plain `install` stops it and installs it again. On macOS it rewrites the plist only once launchd has unloaded the old job, waiting up to 15 seconds; on Linux and Windows a refused registration puts the previous unit file back. A failed install says whether the service is still loaded or now stopped, which daemon its unit names, and the command that reinstalls it: `install --replace --verify`, or on Linux `uninstall` then `install`. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
 
 On **Windows** the service is a per-user Scheduled Task scoped to your account, so installing it needs no administrator rights. It runs the daemon in a windowless console (`conhost --headless`) at sign-in, and the task's wrapper restarts the daemon five seconds after any non-zero exit — a crash, or the daemon's own `kcap daemon restart` — the way systemd's `Restart=on-failure` does; an exit 0 is a deliberate stop. `service stop` and `service uninstall` end the task and then the daemon itself, since ending a task leaves its child processes running. Uninstalling the desktop app runs `service uninstall --under` for the app's own folder and takes that folder back off your user PATH, so a task that would otherwise retry the deleted daemon at every sign-in goes with it; a service an npm or standalone install wrote is left alone. The wrapper also carries the installing shell's `HOME` when it is an absolute path, so a Git Bash or redirected home resolves the same daemons directory for the daemon as for the CLI.
 
@@ -2481,6 +2481,10 @@ You'll see the offer on whichever surface reaches you:
   until you trust kcap's). A hook running proves the integration loaded, not that a session reached
   the server. `--json` carries the time as `last_hook_event`, and a git older than 2.54,
   which ignores the commit hook, gets its own warning line.
+- **`kcap status`** shows each running daemon's version, and warns, naming the fix, when a daemon
+  runs a different version than the CLI or its service runs a binary outside the CLI's own install
+  (one `kcap update` does not reach, such as an older npm install's). `--json` carries it as each
+  daemon's `version`.
 
 Manage the nudges with `kcap harness`:
 
@@ -2514,7 +2518,7 @@ after a `--all` dismiss is still offered once.
 ### Other commands
 
 ```bash
-kcap status         # server, auth, hooks (and when each agent last ran one), daemon
+kcap status         # server, auth, hooks (and when each agent last ran one), daemon and its version
 kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)

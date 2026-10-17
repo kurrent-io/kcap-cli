@@ -52,10 +52,15 @@ sealed class WindowsServiceVerify(
         if (replace && pre.Probe == LabelProbe.Loaded && !await StopConfirmedAsync(id))
             return Fail(VerifyExit.StopUnconfirmed, VerifyExit.StopUnconfirmedToken);
 
+        string? installError;
         try {
-            manager.Install(spec, startNow: true);
+            manager.Install(spec, startNow: true, out installError);
         } catch (Exception ex) {
-            Say($"install: {ex.Message}");
+            installError = ex.Message;
+        }
+
+        if (installError is not null) {
+            Say($"install: {installError}");
             return RollBackInstall(id, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
         }
 

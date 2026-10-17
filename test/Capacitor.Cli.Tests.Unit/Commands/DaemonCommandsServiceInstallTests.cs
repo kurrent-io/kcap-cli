@@ -5,7 +5,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>`install --verify` runs on launchd and on a Windows Scheduled Task; systemd reports no job
 /// pid to verify against, so it gets a clear rejection rather than a deep failure inside a transaction.</summary>
-public class DaemonCommandsServiceInstallTests {
+internal sealed class DaemonCommandsServiceInstallTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome] public required TempHome Home { get; init; }
@@ -99,8 +99,58 @@ public class DaemonCommandsServiceInstallTests {
         await Assert.That(manager.InstallCalls).IsEqualTo(0);
     }
 
+    /// <summary>A refused registration is reported on stderr with exit 1, never thrown.</summary>
+    [Test, NotInParallel]
+    public async Task Plain_install_reports_a_refused_registration() {
+        using var err = ConsoleOutput.StartErrorCapture();
+        var manager = new CountingManager { InstallError = "launchctl bootstrap failed (exit 5): Bootstrap failed: 5: Input/output error" };
+        var spec = new ServiceSpec("svc-plain-install-refused", "/x/kcap-daemon", "/x/log", new Dictionary<string, string>(), []);
+
+        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "test-id", Home, TimeProvider.System).InstallPlain(spec, startNow: true);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(err.GetCapturedError()).Contains(
+            "Could not install service 'svc-plain-install-refused' (counting): launchctl bootstrap failed (exit 5)");
+    }
+
+    const string Ours = "/home/u/.local/share/kcap/current/bin/kcap-daemon";
+    const string Npm  = "/opt/homebrew/lib/node_modules/@kurrent/kcap/bin/kcap-daemon";
+    const string Fail = "Could not install service 'tony' (launchd LaunchAgent): boom";
+    const string Replace = "`kcap daemon service install --replace --verify --name tony`";
+
+    static ServiceQuery Q(LabelProbe probe, string? binary) => new(probe, true, ServiceState.Running, binary, null);
+
+    public static IEnumerable<Func<(string Case, ServiceQuery Before, ServiceQuery? After, bool VerifySupported, string Expected)>> FailureCases() {
+        yield return () => ("not loaded before", Q(LabelProbe.Absent, Npm), Q(LabelProbe.Absent, Npm), true, Fail);
+        yield return () => ("still loaded, this install", Q(LabelProbe.Loaded, Ours), Q(LabelProbe.Loaded, Ours), true,
+            $"{Fail}\n  The service is still loaded, and its unit names this install's daemon ({Ours}). To reinstall it in place, run {Replace}.");
+        yield return () => ("still loaded, another install", Q(LabelProbe.Loaded, Npm), Q(LabelProbe.Loaded, Npm), true,
+            $"{Fail}\n  The service is still loaded, and its unit names {Npm}, not this install's daemon ({Ours}). To point it at this install, run {Replace}.");
+        yield return () => ("stopped, unit rewritten to this install", Q(LabelProbe.Loaded, Npm), Q(LabelProbe.Absent, Ours), true,
+            $"{Fail}\n  The service was loaded and is now stopped; its unit names this install's daemon ({Ours}). To install it again, run {Replace}.");
+        yield return () => ("state unreadable after", Q(LabelProbe.Loaded, Npm), null, true,
+            $"{Fail}\n  The service was loaded; kcap could not tell whether it still is (see `kcap daemon service status --name tony`). Its unit names {Npm}, not this install's daemon ({Ours}). To point it at this install, run {Replace}.");
+        yield return () => ("no verify on this platform", Q(LabelProbe.Loaded, Npm), Q(LabelProbe.Loaded, Npm), false,
+            $"{Fail}\n  The service is still loaded, and its unit names {Npm}, not this install's daemon ({Ours}). "
+          + "To point it at this install, run `kcap daemon service uninstall --name tony`, then `kcap daemon service install --name tony`.");
+    }
+
+    /// <summary>The state after the failure decides the wording, since the install may already have
+    /// stopped the old job; the unit it names is read from whichever query still sees the unit.</summary>
+    [Test]
+    [MethodDataSource(nameof(FailureCases))]
+    public async Task Install_failure_says_what_state_the_service_is_left_in(
+            string @case, ServiceQuery before, ServiceQuery? after, bool verifySupported, string expected) {
+        var spec = new ServiceSpec("tony", Ours, "/x/log", new Dictionary<string, string>(), []);
+
+        var text = DaemonServiceCommands.InstallFailure(spec, "launchd LaunchAgent", "boom", before, after, verifySupported);
+
+        await Assert.That(text).IsEqualTo(expected.Replace("\n", Environment.NewLine));
+    }
+
     sealed class CountingManager : IServiceManager {
         public int InstallCalls;
+        public string? InstallError;
         public string Describe() => "counting";
         // Never read: ListInstalled is empty, so doctor's directory audit is not reached.
         public string UnitDirectory => "(fake)";
@@ -108,7 +158,11 @@ public class DaemonCommandsServiceInstallTests {
         public IReadOnlyList<string> ListInstalled() => [];
         public ServiceStatus Status(string serviceId) => new(ServiceState.NotInstalled, null);
         public ServiceQuery Query(string serviceId) => new(LabelProbe.Absent, false, ServiceState.NotInstalled, null, null);
-        public void Install(ServiceSpec spec, bool startNow) => InstallCalls++;
+        public bool Install(ServiceSpec spec, bool startNow, out string? error) {
+            InstallCalls++;
+            error = InstallError;
+            return error is null;
+        }
         public void WriteAndBootstrap(ServiceSpec spec) { }
         public bool Uninstall(string serviceId, out string? error) { error = null; return true; }
         public bool Start(string serviceId, out string? error) { error = null; return true; }

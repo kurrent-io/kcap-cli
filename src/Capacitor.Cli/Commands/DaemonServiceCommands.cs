@@ -405,8 +405,52 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        manager.Install(spec, startNow);
-        return 0;
+        var before = TryQuery(spec.ServiceId);
+        if (manager.Install(spec, startNow, out var error)) return 0;
+
+        await Console.Error.WriteLineAsync(InstallFailure(
+            spec, manager.Describe(), error, before, TryQuery(spec.ServiceId),
+            verifySupported: manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager));
+        return 1;
+    }
+
+    ServiceQuery? TryQuery(string serviceId) {
+        try {
+            return manager.Query(serviceId);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            return null;
+        }
+    }
+
+    /// <summary>Why a plain install failed. When the unit was already loaded: whether it still is, which
+    /// daemon its unit names, and the command that reinstalls it. <paramref name="after"/> is read after
+    /// the failure, because the install may already have stopped the old job.</summary>
+    internal static string InstallFailure(
+            ServiceSpec spec, string describe, string? error, ServiceQuery? before, ServiceQuery? after, bool verifySupported) {
+        var id      = spec.ServiceId;
+        var message = $"Could not install service '{id}' ({describe}): {error}";
+        if (before is not { Probe: LabelProbe.Loaded }) return message;
+
+        var reinstall = verifySupported
+            ? $"`kcap daemon service install --replace --verify --name {id}`"
+            : $"`kcap daemon service uninstall --name {id}`, then `kcap daemon service install --name {id}`";
+
+        var unit = after?.UnitPresent == true ? after : before;
+        var ours = UnitIdentity.SameDaemon(unit.BinaryPath, spec.DaemonBinaryPath);
+        var runs = ours
+            ? $"this install's daemon ({spec.DaemonBinaryPath})"
+            : $"{unit.BinaryPath ?? "a daemon binary kcap could not read"}, not this install's daemon ({spec.DaemonBinaryPath})";
+
+        var detail = after?.Probe switch {
+            LabelProbe.Loaded => $"The service is still loaded, and its unit names {runs}.",
+            LabelProbe.Absent => $"The service was loaded and is now stopped; its unit names {runs}.",
+            _ => $"The service was loaded; kcap could not tell whether it still is (see `kcap daemon service status --name {id}`). Its unit names {runs}.",
+        };
+        var fix = ours && after?.Probe == LabelProbe.Loaded
+            ? $"To reinstall it in place, run {reinstall}."
+            : ours ? $"To install it again, run {reinstall}." : $"To point it at this install, run {reinstall}.";
+
+        return $"{message}{Environment.NewLine}  {detail} {fix}";
     }
 
     async Task<int> Uninstall() {
