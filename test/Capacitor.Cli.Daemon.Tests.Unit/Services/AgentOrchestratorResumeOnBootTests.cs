@@ -20,7 +20,7 @@ public class AgentOrchestratorResumeOnBootTests {
         int _maxInFlight;
 
         public string CliPath => "unused";
-        public string Vendor => "cursor";
+        public string Vendor { get; init; } = "cursor";
         public bool SupportsUnattended => false;
         public bool IsAvailable() => true;
         public bool SupportsRestartResume(string? runtimeTransport) => true;
@@ -90,7 +90,8 @@ public class AgentOrchestratorResumeOnBootTests {
     ResumeLedgerEntry Entry(
             Fixture f, string agentId, string? worktree = null, string? vendorSession = "vendor-session-1",
             bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null,
-            string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false) {
+            string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false,
+            string vendor = "cursor", string? permissionMode = null) {
         var stamp = at ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
@@ -99,9 +100,10 @@ public class AgentOrchestratorResumeOnBootTests {
             McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
-            WorktreeBranch: $"capacitor/custom-{agentId}", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo);
+            WorktreeBranch: $"capacitor/custom-{agentId}", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo,
+            PermissionMode: permissionMode);
         var entry = new ResumeLedgerEntry(
-            ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, "cursor", "acp",
+            ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, vendor, "acp",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
             PredecessorInstanceId: predecessor, ResumingAt: state == ResumeState.Resuming ? stamp : null,
             DaemonInstanceId: daemonInstanceId);
@@ -148,6 +150,18 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(consentLog).Contains("\"agent_id\":\"resume-1\"");
         await Assert.That(consentLog).Contains("\"source\":\"resume\"");
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_resumed_claude_agent_keeps_its_permission_mode() {
+        var f = Build(new ResumableFactory { Vendor = "claude", PtyStyle = true });
+        await using var _ = f.Orch;
+        Entry(f, "resume-plan", vendor: "claude", permissionMode: "plan");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts.Single().PermissionMode).IsEqualTo("plan");
     }
 
     [Test]

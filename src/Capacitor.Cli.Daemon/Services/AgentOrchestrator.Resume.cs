@@ -247,7 +247,9 @@ internal partial class AgentOrchestrator {
             FlowRole:         agent.FlowRole,
             WorktreeBranch:       agent.Worktree.Branch,
             WorktreeIsStandalone: agent.Worktree.IsStandalone,
-            WorktreeSourceRepo:   agent.Worktree.SourceRepo);
+            WorktreeSourceRepo:   agent.Worktree.SourceRepo,
+            PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
+            InactivityBoundSeconds: agent.InactivityBoundSeconds);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior);
     }
@@ -265,8 +267,8 @@ internal partial class AgentOrchestrator {
             WorktreePath:     worktree.Path,
             Work:             work,
             GitRelativeCwd:   worktree.GitRelativeCwd,
-            SandboxPolicy:    null,
-            ApprovalPolicy:   null,
+            SandboxPolicy:    cmd.CodexPosture?.Sandbox,
+            ApprovalPolicy:   cmd.CodexPosture?.Approval,
             PermissionPreset: cmd.AcpPermissionPreset,
             McpConfigPath:    null,
             Title:            StartTitleOf(cmd)?.Text ?? AgentStartTitle.Shorten(prompt),
@@ -280,7 +282,9 @@ internal partial class AgentOrchestrator {
             FlowRole:         cmd.FlowRole,
             WorktreeBranch:       worktree.Branch,
             WorktreeIsStandalone: worktree.IsStandalone,
-            WorktreeSourceRepo:   worktree.SourceRepo);
+            WorktreeSourceRepo:   worktree.SourceRepo,
+            PermissionMode:         cmd.PermissionMode,
+            InactivityBoundSeconds: cmd.InactivityBoundSeconds);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, pinnedSessionId, pinnedSessionId, launch, prior: null);
     }
@@ -815,6 +819,8 @@ internal partial class AgentOrchestrator {
             RequesterDisplay:    launch.RequesterDisplay,
             AcpPermissionPreset: launch.PermissionPreset,
             ResumeSessionId:     entry.VendorSession,
+            InactivityBoundSeconds: launch.InactivityBoundSeconds,
+            PermissionMode:      launch.PermissionMode,
             Title:               launch.Title);
     }
 

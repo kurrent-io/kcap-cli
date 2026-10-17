@@ -25,5 +25,7 @@ public sealed record ResumeLaunchDescriptor(
     string? FlowRole,
     string? WorktreeBranch = null,
     bool? WorktreeIsStandalone = null,
-    string? WorktreeSourceRepo = null
+    string? WorktreeSourceRepo = null,
+    string? PermissionMode = null,
+    int? InactivityBoundSeconds = null
 );

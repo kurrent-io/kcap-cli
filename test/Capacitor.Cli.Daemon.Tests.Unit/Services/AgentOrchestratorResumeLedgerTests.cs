@@ -11,8 +11,8 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// lives, so a successor daemon has a launch to resume; a normal end removes it.
 /// </summary>
 public class AgentOrchestratorResumeLedgerTests {
-    sealed class ObservingAcpFactory : IHostedAgentRuntimeFactory {
-        readonly SpyAcpHostedAgentRuntimeFactory _inner = new();
+    sealed class ObservingAcpFactory(string vendor = "cursor") : IHostedAgentRuntimeFactory {
+        readonly SpyAcpHostedAgentRuntimeFactory _inner = new(vendor);
         public string CliPath => _inner.CliPath;
         public string Vendor => _inner.Vendor;
         public bool SupportsUnattended => false;
@@ -76,6 +76,25 @@ public class AgentOrchestratorResumeLedgerTests {
         await Assert.That(after.CreatedAt).IsEqualTo(atStart.CreatedAt);
         await Assert.That(after.Launch.WorktreeBranch).IsEqualTo(agent.Worktree.Branch);
         await Assert.That(after.DaemonInstanceId).IsEqualTo("instance-now");
+    }
+
+    /// <summary>A resume relaunches with the launch's permission mode, so the pre-start entry and its
+    /// rewrite both carry it.</summary>
+    [Test]
+    public async Task Both_ledger_writes_record_the_claude_permission_mode() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var factory = new ObservingAcpFactory("claude");
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
+        factory.Observe = () => orch.ResumeLedger!.TryRead("ledger-mode");
+
+        await orch.HandleLaunchAgentForTest(
+            AgentOrchestratorHarness.NewCursorLaunch("ledger-mode", repoPath) with { Vendor = "claude", PermissionMode = "acceptEdits" });
+
+        await Assert.That(orch.GetAgentForTest("ledger-mode")).IsNotNull();
+        await Assert.That(factory.ObservedAtStart!.Launch.PermissionMode).IsEqualTo("acceptEdits");
+        await Assert.That(orch.ResumeLedger!.TryRead("ledger-mode")!.Launch.PermissionMode).IsEqualTo("acceptEdits");
     }
 
     [Test]
