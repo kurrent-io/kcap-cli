@@ -135,7 +135,7 @@ sealed class MuseHookCommand(
         // Spawn before the POST, as Claude does: a hook Muse kills mid-POST must not take capture with it.
         var log = Paths.ResolveSessionLog(session.ToString("D"), today);
         if (log is not null && HookHttp.IsPostable(Url)) {
-            if (!watchers.IsWatcherAlive(sessionId)) MuseSessionEndRequest.Delete(WatcherPaths.FromEnvironment(config), sessionId);
+            if (!watchers.IsWatcherAlive(sessionId)) MuseSessionEndRequest.DeleteAll(WatcherPaths.FromEnvironment(config), sessionId);
             await watchers.EnsureWatcherRunning(sessionId, log,
                 agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: false, vendor: Vendor);
         }
@@ -192,7 +192,7 @@ sealed class MuseHookCommand(
         if (await IsRepoExcludedAsync(sessionId, cwd, activeProfile, budget)) return;
 
         // A handed end nobody posted would end the watcher armed here on its first tick.
-        MuseSessionEndRequest.Delete(WatcherPaths.FromEnvironment(config), sessionId);
+        MuseSessionEndRequest.DeleteAll(WatcherPaths.FromEnvironment(config), sessionId);
         await watchers.EnsureWatcherRunning(sessionId, log,
             agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: Vendor);
     }
@@ -240,14 +240,15 @@ sealed class MuseHookCommand(
         if (log is not null && watchers.IsWatcherAlive(sessionId)) {
             MuseSessionEndRequest.Write(paths, sessionId, forwarded.ToJsonString());
 
-            // The watcher retires its pid file before its last look for a request, so a request it
-            // never saw is one written after that: the pid file is gone by now and the end is posted here.
-            if (watchers.IsWatcherAlive(sessionId)) {
+            // The watcher retires its pid file before its last look for a request, so a watcher still
+            // alive here will see this one. One that is gone may have claimed it on the way out; the
+            // claim settles who posts.
+            if (watchers.IsWatcherAlive(sessionId) || MuseSessionEndRequest.TryClaim(paths, sessionId, "hook") is not { } claimed) {
                 MuseHostedSessionMarker.Delete(home, sessionId);
                 return;
             }
 
-            MuseSessionEndRequest.Delete(paths, sessionId);
+            MuseSessionEndRequest.Release(claimed.ClaimedPath);
         }
 
         if (log is not null) {

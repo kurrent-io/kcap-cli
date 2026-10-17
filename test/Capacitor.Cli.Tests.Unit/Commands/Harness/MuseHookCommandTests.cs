@@ -672,7 +672,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(HookPosts("/hooks/").Count).IsEqualTo(0);
         await Assert.That(File.Exists(paths.PidFile(ParentDashless))).IsTrue();
 
-        var request = MuseSessionEndRequest.TryRead(paths, ParentDashless);
+        var request = MuseSessionEndRequest.TryClaim(paths, ParentDashless, "test");
         await Assert.That(request).IsNotNull();
         var body = JsonDocument.Parse(request!.Payload).RootElement;
         await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo(ParentDashless);

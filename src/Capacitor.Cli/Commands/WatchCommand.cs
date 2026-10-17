@@ -746,10 +746,15 @@ partial class WatchCommand(
             await hubConnection.DisposeAsync();
 
             // A watcher stopped before it connected is still the one the Muse hook may have handed an
-            // end to: it was alive when the hook looked.
+            // end to: it was alive when the hook looked. Nothing has been streamed yet, so the log is
+            // drained inline ahead of the end, as the hook would have.
             if (TakesHandedMuseEnd(vendor, agentId)) {
                 watchers.RemoveOwnPidFile(sessionId, Environment.ProcessId);
-                await PostHandedMuseEndIfAnyAsync(sessionId, transcriptPath, vendor, repository: null, handed: null);
+
+                if (ClaimHandedMuseEnd(sessionId) is { } handed) {
+                    await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: vendor);
+                    await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed);
+                }
             }
 
             await logWriter.DisposeAsync();
@@ -957,7 +962,7 @@ partial class WatchCommand(
                     await ScanMuseSubagents(sessionId, transcriptPath, seenSubagents, museChildren, spawnedChildWatcherKeys, cts.Token);
                     await StopFinishedMuseChildren(sessionId, transcriptPath, drained, museChildren);
 
-                    if (MuseSessionEndRequest.TryRead(_paths, sessionId) is { } handed) {
+                    if (ClaimHandedMuseEnd(sessionId) is { } handed) {
                         Log(time, "Muse SessionEnd hook handed its session-end to this watcher; draining and posting it");
                         museEndRequest = handed;
                         cts.Cancel();
@@ -1183,8 +1188,12 @@ partial class WatchCommand(
         watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
 
-        var handedEndPosted = TakesHandedMuseEnd(vendor, agentId)
-            && await PostHandedMuseEndIfAnyAsync(sessionId, transcriptPath, vendor, state.Repository, museEndRequest);
+        if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
+
+        // A handed end that could be neither posted nor spooled leaves its claim on disk and falls
+        // through to the parent-exit synthesis, the one other sender this process has.
+        var handedEndPosted = museEndRequest is { } handedEnd
+            && await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd);
 
         if (!handedEndPosted && endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
@@ -2201,23 +2210,8 @@ partial class WatchCommand(
     /// lifecycle belongs to its parent, and no other vendor's hook hands one.</summary>
     internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
 
-    /// <summary>Posts the end the Muse hook handed over, taking it from disk when this run did not already
-    /// read one, and removes the request once it is posted or spooled. False when there was none to post.</summary>
-    async Task<bool> PostHandedMuseEndIfAnyAsync(
-            string                 sessionId,
-            string                 transcriptPath,
-            string                 vendor,
-            RepositoryPayload?     repository,
-            MuseSessionEndRequest? handed
-        ) {
-        handed ??= MuseSessionEndRequest.TryRead(_paths, sessionId);
-        if (handed is null) return false;
-
-        if (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository, handed))
-            MuseSessionEndRequest.Delete(_paths, sessionId);
-
-        return true;
-    }
+    MuseSessionEndRequest? ClaimHandedMuseEnd(string sessionId) =>
+        MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
     /// <summary>Posts the end the hook would have, the way the hook would have: behind any spooled backlog
     /// for the session, and into the spool on a failure, so an outage never drops it. True once it is
@@ -2257,7 +2251,10 @@ partial class WatchCommand(
 
         Log(time, $"Handed session-end {outcome}");
 
-        return outcome is HookPostOutcome.Posted or HookPostOutcome.Spooled;
+        if (outcome is not (HookPostOutcome.Posted or HookPostOutcome.Spooled)) return false;
+
+        MuseSessionEndRequest.Release(request.ClaimedPath);
+        return true;
     }
 
     async Task PostSessionEndPayloadAsync(string sessionId, string vendor, JsonObject endHook, RepositoryPayload? repository, string what) {

@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Capacitor.Cli.Harness.Muse;
 
 /// <summary>
@@ -5,33 +7,76 @@ namespace Capacitor.Cli.Harness.Muse;
 /// <c>/hooks/session-end/muse</c> payload, left where the watcher looks every tick. Under
 /// <c>muse exec</c> the hook is killed well inside a second, before it could drain the log and post
 /// the end itself; the watcher is a detached process, so it posts the end after its final drain.
+/// Whoever posts it claims it first by renaming it, an atomic step only one party can win, so the
+/// hook and the watcher can never both post the same end.
 /// </summary>
-public sealed record MuseSessionEndRequest(string Payload) {
+public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath) {
     public static string PathFor(WatcherPaths paths, string sessionId) =>
         Path.Combine(paths.Directory, $"{sessionId}.muse-end-requested");
 
-    /// <summary>Written whole, then renamed into place, so a watcher never reads a partial request.</summary>
+    /// <summary>Written whole, then renamed into place, so a reader never sees a partial request.</summary>
     public static void Write(WatcherPaths paths, string sessionId, string payload) {
         Directory.CreateDirectory(paths.Directory);
         var target = PathFor(paths, sessionId);
-        var temp   = $"{target}.{Environment.ProcessId}.tmp";
+        var temp   = $"{target}.{Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}.tmp";
 
         File.WriteAllText(temp, payload);
         File.Move(temp, target, overwrite: true);
     }
 
-    public static MuseSessionEndRequest? TryRead(WatcherPaths paths, string sessionId) {
+    /// <summary>True while an unclaimed request is on disk.</summary>
+    public static bool Exists(WatcherPaths paths, string sessionId) => File.Exists(PathFor(paths, sessionId));
+
+    /// <summary>Takes the request for <paramref name="owner"/>, or null when there is none or another party
+    /// took it first. An empty request is discarded rather than claimed.</summary>
+    public static MuseSessionEndRequest? TryClaim(WatcherPaths paths, string sessionId, string owner) {
+        var source  = PathFor(paths, sessionId);
+        var claimed = $"{source}.{owner}.claimed";
+
         try {
-            var payload = File.ReadAllText(PathFor(paths, sessionId));
-            return string.IsNullOrWhiteSpace(payload) ? null : new MuseSessionEndRequest(payload);
+            File.Move(source, claimed);
+        } catch (FileNotFoundException) {
+            return null;
+        } catch (DirectoryNotFoundException) {
+            return null;
         } catch (IOException) {
             return null;
         } catch (UnauthorizedAccessException) {
             return null;
         }
+
+        string payload;
+        try {
+            payload = File.ReadAllText(claimed);
+        } catch (IOException) {
+            return null;
+        } catch (UnauthorizedAccessException) {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload)) return new MuseSessionEndRequest(payload, claimed);
+
+        Release(claimed);
+        return null;
     }
 
-    public static void Delete(WatcherPaths paths, string sessionId) {
-        try { File.Delete(PathFor(paths, sessionId)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    /// <summary>Removes a claimed request once its end is posted or durably spooled.</summary>
+    public static void Release(string claimedPath) {
+        try { File.Delete(claimedPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    /// <summary>Removes the request and every claim on it, so a watcher armed afterwards is not ended by
+    /// an end nobody posted.</summary>
+    public static void DeleteAll(WatcherPaths paths, string sessionId) {
+        var source = PathFor(paths, sessionId);
+
+        try {
+            if (!Directory.Exists(paths.Directory)) return;
+
+            foreach (var file in Directory.EnumerateFiles(paths.Directory, $"{Path.GetFileName(source)}*"))
+                File.Delete(file);
+        } catch (IOException) {
+        } catch (UnauthorizedAccessException) {
+        }
     }
 }
