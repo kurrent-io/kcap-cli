@@ -1086,14 +1086,17 @@ public class DaemonEnablerTests {
         await Assert.That(requests[0].RetireServiceId).IsNull();
     }
 
+    /// A refused retire, or one whose old service was locked by another transaction, changed nothing.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_refused_retire_installs_the_new_name_without_it() {
+    [Arguments(VerifyExitCodes.RetireRefused)]
+    [Arguments(VerifyExitCodes.Contended)]
+    public async Task A_retire_that_changed_nothing_installs_the_new_name_without_it(int exitCode) {
         var (requests, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = await RenamedHarnessAsync(OwnedRunning());
             h.Lane.Behavior = (request, _) => Task.FromResult<MutationOutcome>(request.RetireServiceId is null
                 ? new MutationOutcome.Succeeded()
-                : new MutationOutcome.Failed(VerifyExitCodes.RetireRefused, "foreign_profile", RecoverySurface.Attention));
+                : new MutationOutcome.Failed(exitCode, "refused", RecoverySurface.Attention));
 
             await h.Ensure();
 

@@ -49,8 +49,11 @@ static class SetupDaemonService {
     }
 
     static string? RenameLine(FlowEnsure outcome) => outcome switch {
-        { Retired: { } retired } =>
+        { Retired: { } retired } when FlowEnsure.IsUp(outcome.Result) =>
             $"  [dim]Removed the service for the daemon's previous name, {Markup.Escape(retired)}.[/]",
+        { Retired: { } retired } =>
+            $"  [yellow]![/] Removed the service for the daemon's previous name, {Markup.Escape(retired)}, "
+          + "but the new one did not start, so no daemon service is running on this machine.",
         { LeftInstalled: { } left } =>
             $"  [yellow]![/] The service for the daemon's previous name, {Markup.Escape(left)}, is still installed. "
           + $"Remove it with [cyan]kcap daemon service uninstall --name {Markup.Escape(left)}[/]",

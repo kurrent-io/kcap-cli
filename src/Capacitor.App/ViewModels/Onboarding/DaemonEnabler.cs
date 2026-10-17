@@ -193,7 +193,7 @@ public sealed class DaemonEnabler : ReactiveObject {
     }
 
     /// A name that replaced a configured one retires that name's installed service in the same
-    /// transaction. A refused retire changed nothing, so the matrix is read again and run without it:
+    /// transaction. A refused or contended retire changed nothing, so the matrix is read again and run without it:
     /// the saved name still gets its daemon, and the lane presents the refusal with the old service id.
     async Task InstallAsync(CancellationToken ct) {
         if (await RetireTargetAsync(ct).ConfigureAwait(true) is not { } retiring) {
@@ -202,7 +202,7 @@ public sealed class DaemonEnabler : ReactiveObject {
         }
 
         var outcome = await RunMutationAsync(MutationVerb.Replace, ct, retiring).ConfigureAwait(true);
-        if (outcome is not MutationOutcome.Failed { ExitCode: VerifyExitCodes.RetireRefused }) return;
+        if (outcome is not MutationOutcome.Failed { ExitCode: VerifyExitCodes.RetireRefused or VerifyExitCodes.Contended }) return;
 
         await ClassifyAsync(ct).ConfigureAwait(true);
         if (!Satisfied) await RunAffordanceAsync(ct).ConfigureAwait(true);

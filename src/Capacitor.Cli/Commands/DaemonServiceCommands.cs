@@ -83,8 +83,9 @@ sealed class DaemonServiceCommands(
     /// left installed when the platform's verify engine can. Only an installed unit is a candidate: a
     /// daemon started by hand has none, and the engine refuses one pinned to another profile.
     ///
-    /// <para>A refused retire leaves the old service in place, so the ladder runs again without it: the
-    /// name setup saved still gets its daemon, and the old service is reported as left installed.</para>
+    /// <para>A refused or contended retire changed nothing, so the ladder runs again without it: the name
+    /// setup saved still gets its daemon. The old service is reported as left installed only once the new
+    /// one is up; before that it is the only daemon the machine has.</para>
     /// </summary>
     internal static async Task<FlowEnsure> RetiringEnsureAsync(
             string id, string? previousName, bool canRetire, Func<string, ServiceQuery> query,
@@ -94,11 +95,11 @@ sealed class DaemonServiceCommands(
         if (previous is null || previous == id || !HasUnit(query(previous))) return new(await ensure(null));
 
         var result = await ensure(canRetire ? previous : null);
-        if (canRetire && result.Reason == "verify_retire_refused") result = await ensure(null);
+        if (canRetire && result.Reason is "verify_retire_refused" or "verify_contended") result = await ensure(null);
 
         var after = query(previous);
 
-        return HasUnit(after) ? new(result, LeftInstalled: previous)
+        return HasUnit(after) ? (FlowEnsure.IsUp(result) ? new(result, LeftInstalled: previous) : new(result))
             : after.Probe == LabelProbe.Absent ? new(result, Retired: previous)
             : new(result);
 

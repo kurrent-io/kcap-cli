@@ -18,6 +18,10 @@ public class RetiringEnsureTests {
     static readonly ServiceEnsureJson InstalledResult = new(NewId, "not_installed", "install", "installed", Verified: true);
     static readonly ServiceEnsureJson RetireRefused   =
         new(NewId, "not_installed", "install", "refused", null, "verify_retire_refused", Verified: true);
+    static readonly ServiceEnsureJson Contended       =
+        new(NewId, "not_installed", "install", "refused", null, "verify_contended", Verified: true);
+    static readonly ServiceEnsureJson TimedOut        =
+        new(NewId, "not_installed", "install", "refused", "retry", "verify_readiness_timeout", Verified: true);
 
     sealed class Ladder(params ServiceEnsureJson[] results) {
         public List<string?> Retires { get; } = [];
@@ -82,11 +86,13 @@ public class RetiringEnsureTests {
         await Assert.That(outcome.LeftInstalled).IsNull();
     }
 
-    /// <summary>A refused retire changed nothing, so the new name still gets its service and the old one
-    /// is reported rather than silently kept.</summary>
+    /// <summary>A refused retire, or one whose old service another transaction held, changed nothing, so
+    /// the new name still gets its service and the old one is reported rather than silently kept.</summary>
     [Test]
-    public async Task A_refused_retire_installs_without_it_and_reports_the_old_service() {
-        var ladder = new Ladder(RetireRefused, InstalledResult);
+    [Arguments("verify_retire_refused")]
+    [Arguments("verify_contended")]
+    public async Task A_retire_that_changed_nothing_installs_without_it_and_reports_the_old_service(string reason) {
+        var ladder = new Ladder(reason == "verify_contended" ? Contended : RetireRefused, InstalledResult);
 
         var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
             NewId, OldId, true, OldUnit(Installed, Installed), ladder.Run);
@@ -118,5 +124,19 @@ public class RetiringEnsureTests {
 
         await Assert.That(outcome.Retired).IsNull();
         await Assert.That(outcome.LeftInstalled).IsNull();
+    }
+
+    /// <summary>When the new service failed the old one is the machine's only daemon, so it is not
+    /// offered for removal.</summary>
+    [Test]
+    public async Task A_failed_install_does_not_report_the_old_service_as_left_over() {
+        var ladder = new Ladder(TimedOut);
+
+        var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
+            NewId, OldId, canRetire: false, OldUnit(Installed, Installed), ladder.Run);
+
+        await Assert.That(outcome.Result).IsEqualTo(TimedOut);
+        await Assert.That(outcome.LeftInstalled).IsNull();
+        await Assert.That(outcome.Retired).IsNull();
     }
 }

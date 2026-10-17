@@ -163,6 +163,18 @@ public class SetupDaemonServiceTests {
         await Assert.That(line).DoesNotContain("uninstall");
     }
 
+    /// <summary>A retire followed by a failed install leaves no daemon service, which the line must not
+    /// read as a clean rename.</summary>
+    [Test]
+    public async Task A_retired_service_beside_a_failed_install_is_a_warning() {
+        var failed = new ServiceEnsureJson("kcap-1", "not_installed", "install", "refused", "retry", "verify_readiness_timeout");
+
+        var (_, line) = await EnsureWithLineAsync(() => Task.FromResult<FlowEnsure?>(new(failed, Retired: "kcap")));
+
+        await Assert.That(line).Contains("[yellow]![/]");
+        await Assert.That(line).Contains("no daemon service is running");
+    }
+
     /// <summary>A service the rename could not retire still runs a second daemon, so the line says how to
     /// remove it.</summary>
     [Test]
