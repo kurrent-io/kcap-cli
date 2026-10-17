@@ -382,7 +382,8 @@ public class AgentOrchestratorResumeOnBootTests {
         f.Orch.LoadResumeLedger();
         await f.Orch.ResumeOnBootAsync(CancellationToken.None);
 
-        await Assert.That(f.Factory.Contexts.Count).IsEqualTo(1);
+        // The native resume, then the continue under a new agent id; both fail.
+        await Assert.That(f.Factory.Contexts.Select(c => c.AgentId).Distinct().Count()).IsEqualTo(2);
         await Assert.That(f.Server.LaunchFailedCalls).IsEmpty();
         await Assert.That(f.Server.ShutdownReports).IsEmpty();
         await Assert.That(f.Orch.ResumeLedger!.TryRead("private-fails-1")!.State).IsEqualTo(ResumeState.Interrupted);

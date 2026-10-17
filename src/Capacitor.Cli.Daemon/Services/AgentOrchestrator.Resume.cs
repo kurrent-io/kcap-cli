@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
+using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -404,8 +407,10 @@ internal partial class AgentOrchestrator {
     string[] _ledgerWorktrees = [];
 
     /// <summary>The kcap continue fallback, tried when a native resume is unavailable or fails.</summary>
-    internal Func<ResumeLedgerEntry, string, CancellationToken, Task<ResumeOutcome>> ContinueEntry { get; set; } =
-        (_, _, _) => Task.FromResult(ResumeOutcome.Interrupted);
+    internal Func<ResumeLedgerEntry, string, CancellationToken, Task<ResumeOutcome>> ContinueEntry {
+        get => field ??= ContinueEntryAsync;
+        set;
+    }
 
     /// <summary>Sorts the predecessor's ledger into candidates and entries interrupted at boot. Runs
     /// after the orphan reaper, whose unresolved records it reads, and before the server connect that
@@ -580,6 +585,128 @@ internal partial class AgentOrchestrator {
         return false;
     }
 
+    const string SupersededReason = "superseded";
+
+    internal TimeSpan ContinueSummaryBudget { get; set; } = TimeSpan.FromSeconds(10);
+
+    string ServerBase => _config.ServerUrl.TrimEnd('/');
+
+    /// <summary>Ends the entry's agent and session as superseded, then starts a fresh agent under a new
+    /// id in the same worktree, whose session takes over the old one's work items and plans.
+    /// <see cref="ResumeOutcome.Interrupted"/> when the fresh agent does not launch.</summary>
+    internal async Task<ResumeOutcome> ContinueEntryAsync(ResumeLedgerEntry entry, string reason, CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
+
+        // A private agent was never registered, so the server holds no agent to end.
+        if (!entry.Launch.IsPrivate)
+            await _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
+
+        var summary = await ReadPreviousSummaryAsync(entry.SessionId, ct);
+        var prompt  = ContinuePrompt.Build(entry.Launch.Prompt, entry.SessionId, reason, summary, LastAlive(entry, null));
+
+        if (await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt) is not { } agent)
+            return ResumeOutcome.Interrupted;
+
+        // The successor's own entry now holds the worktree.
+        DeleteLedger(entry.AgentId);
+
+        if (entry.SessionId is not { } previous) return ResumeOutcome.Continued;
+
+        if (await AwaitSessionIdAsync(agent, ct) is { } current) await TakeOverAsync(agent.Id, previous, current, ct);
+        else LogContinueSessionUnknown(agent.Id, previous);
+
+        return ResumeOutcome.Continued;
+    }
+
+    /// <summary>The launched successor, or null when it did not launch; a successor that did not
+    /// launch leaves no ledger entry behind.</summary>
+    async Task<AgentInstance?> LaunchContinuationAsync(ResumeLedgerEntry entry, string agentId, string prompt) {
+        using var admission = _admission.TryAdmit();
+        if (admission is null) return null;
+
+        using var hold = BeginLaunchHold();
+
+        var input = new LaunchConsentInput(
+            entry.Launch.RequesterUserId, RequesterIsOwner: false, LaunchConsentEngine.KindToken(LaunchKind.Default),
+            entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
+        var consent = _consentGate.GrantContinue(agentId, input, entry.Launch.ConsentSource ?? "");
+
+        var successor = entry with {
+            AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow()
+        };
+        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry));
+        var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
+        var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch);
+
+        if (launch.Agent is { } agent && outcome.Kind == CommandOutcomeKind.LaunchExecuted) {
+            lock (_ledgerLock) {
+                if (!agent.IsCleanupStarted) {
+                    if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
+                    return agent;
+                }
+            }
+        }
+
+        DiscardFailedLaunchLedger(agentId);
+        return null;
+    }
+
+    /// <summary>The previous session as the server summarises it, or null on any failure or after
+    /// <see cref="ContinueSummaryBudget"/>: the summary only enriches the prompt.</summary>
+    async Task<string?> ReadPreviousSummaryAsync(string? sessionId, CancellationToken ct) {
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } id) return null;
+
+        using var budget = new CancellationTokenSource(ContinueSummaryBudget, _time);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, budget.Token);
+
+        try {
+            using var client   = await _http.ForBackgroundAsync(linked.Token);
+            using var response = await client.GetAsync($"{ServerBase}/api/sessions/{Uri.EscapeDataString(id)}/summary", linked.Token);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var body = await response.Content.ReadAsStringAsync(linked.Token);
+
+            return JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.SessionSummaryDto) is { } dto
+                ? ContinuePrompt.Summarize(dto)
+                : null;
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            LogContinueSummaryUnavailable(ex, id);
+            return null;
+        }
+    }
+
+    /// <summary>A handshake runtime knows its session at publish; a PTY one learns it by discovery,
+    /// waited for at most <see cref="DaemonConfig.ResumeReadinessWindow"/>.</summary>
+    async Task<string?> AwaitSessionIdAsync(AgentInstance agent, CancellationToken ct) {
+        var started = _time.GetTimestamp();
+
+        while (agent.SessionId is null) {
+            if (agent.Runtime.HasExited || _time.GetElapsedTime(started) >= _config.ResumeReadinessWindow) return null;
+
+            await Task.Delay(ReadinessPoll, _time, ct);
+        }
+
+        return agent.SessionId;
+    }
+
+    async Task TakeOverAsync(string agentId, string previous, string current, CancellationToken ct) {
+        try {
+            using var client = await _http.ForBackgroundAsync(ct);
+            var result = await new SessionTakeover(new ProvenExitedLiveness(), _time)
+                .RunAsync(client, ServerBase, previous, current, force: false, ct);
+
+            LogContinueTakeover(agentId, previous, current, result switch {
+                TakeoverResult.Completed { Unsuccessful: false } => "completed",
+                TakeoverResult.Completed                         => "partial",
+                TakeoverResult.Refused r                         => $"refused: {r.Reason}",
+                TakeoverResult.Failed f                          => $"failed: {f.Reason}",
+                _                                                => "unauthorized"
+            });
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            LogContinueTakeoverFailed(ex, agentId, previous);
+        }
+    }
+
     static LaunchAgentCommand BuildResumeCommand(ResumeLedgerEntry entry, DateTimeOffset interruptedAt) {
         var launch = entry.Launch;
 
@@ -679,6 +806,18 @@ internal partial class AgentOrchestrator {
     /// <summary>A private agent's launch reports nothing to the server, failures included.</summary>
     Task LaunchFailedUnlessPrivateAsync(bool isPrivate, string agentId, string reason) =>
         isPrivate ? Task.CompletedTask : _server.LaunchFailedAsync(agentId, reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Continue: the summary of previous session {SessionId} is unavailable")]
+    partial void LogContinueSummaryUnavailable(Exception ex, string sessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Continue: agent {AgentId} session {Current} took over {Previous}: {Outcome}")]
+    partial void LogContinueTakeover(string agentId, string previous, string current, string outcome);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Continue: agent {AgentId} has no session yet, so it does not take over session {Previous}")]
+    partial void LogContinueSessionUnknown(string agentId, string previous);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Continue: agent {AgentId} could not take over session {Previous}")]
+    partial void LogContinueTakeoverFailed(Exception ex, string agentId, string previous);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Resume ledger: the ledger could not be read; nothing resumes")]
     partial void LogResumeLedgerUnreadable(Exception ex);
