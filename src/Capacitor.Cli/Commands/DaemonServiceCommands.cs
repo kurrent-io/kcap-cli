@@ -1,7 +1,7 @@
-using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Install;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
@@ -44,7 +44,7 @@ sealed class DaemonServiceCommands(
                 var dir => await verbs.UninstallUnder(dir),
             },
             "start"     => await verbs.Start(rest),
-            "stop"      => await verbs.Stop(),
+            "stop"      => await verbs.Stop(rest),
             "ensure"    => await verbs.Ensure(rest),
             "status"    => rest.Contains("--json") ? await verbs.StatusJson() : await verbs.Status(),
             "refresh"   => await verbs.Refresh(force: rest.Contains("--force")),
@@ -96,12 +96,13 @@ sealed class DaemonServiceCommands(
         return ["--max-agents", maxAgents.ToString()];
     }
 
-    /// <summary>Short of the npm refresh wrapper's 60s kill, so the last reload it starts can finish.</summary>
-    static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(55);
+    /// <summary>Above <see cref="LaunchdServiceManager.ReloadBudget"/> and short of the refresh step's own
+    /// timeout, so the last reload it starts can finish.</summary>
+    static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(85);
 
-    /// <summary>Asks a running daemon for a restart in <c>mode</c> and reports whether it accepted. Test seam;
-    /// production uses the control socket.</summary>
-    internal Func<string, string, bool>? RestartRequester { get; init; }
+    /// <summary>Stops a running daemon for a reload and reports whether it exited. Test seam; production
+    /// uses the control socket.</summary>
+    internal Func<string, bool>? ReloadStopper { get; init; }
 
     static readonly TimeSpan ForcedLockWait = TimeSpan.FromSeconds(10);
 
@@ -121,13 +122,13 @@ sealed class DaemonServiceCommands(
     internal static int ForcedExitCode(UnitRefresh outcome) => outcome is UnitRefresh.Reloaded or UnitRefresh.Current ? 0 : 1;
 
     static string ForceHint(string serviceId) =>
-        $"To apply it now, run `kcap daemon service refresh --name {serviceId} --force` (ends this daemon's hosted agents).";
+        $"To apply it now, run `kcap daemon service refresh --name {serviceId} --force`.";
 
     /// <summary>
     /// Brings every installed unit up to the one this version writes, and moves a unit pinned to a script
-    /// install's version directory onto its stable <c>current</c> path so the daemon follows updates. It
-    /// runs after each update, unattended, so a daemon hosting agents is never restarted: a launchd reload
-    /// is left for a later run (unless <c>--force</c> targets one daemon), and a systemd daemon picks the new path up on its next start.
+    /// install's version directory onto its stable <c>current</c> path so the daemon follows updates. A
+    /// launchd reload stops the daemon with its agents kept for the reloaded one to resume, and is left for
+    /// a later run when the daemon does not exit; a systemd daemon picks the new path up on its next start.
     /// </summary>
     internal async Task<int> Refresh(bool force = false, Func<string, string>? stabilize = null) {
         stabilize ??= ScriptInstallLayout.Stabilize;
@@ -158,7 +159,7 @@ sealed class DaemonServiceCommands(
         return force ? await RefreshForcedAsync(launchd, stabilize) : await RefreshAllAsync(launchd, stabilize);
     }
 
-    /// <summary>The unattended post-update pass: every installed unit, never a restart the daemon did not accept.</summary>
+    /// <summary>The unattended post-update pass: every installed unit, never a reload of a daemon that did not exit.</summary>
     async Task<int> RefreshAllAsync(LaunchdServiceManager launchd, Func<string, string> stabilize) {
         var failed  = 0;
         var started = time.GetTimestamp();
@@ -176,7 +177,7 @@ sealed class DaemonServiceCommands(
                 continue;
             }
 
-            var outcome = launchd.RefreshUnit(serviceId, () => RequestRestart(serviceId, "now"), TimeLeft, out var error, stabilize);
+            var outcome = launchd.RefreshUnit(serviceId, () => StopForReload(serviceId), TimeLeft, out var error, stabilize);
 
             switch (outcome) {
                 case UnitRefresh.Reloaded:
@@ -184,7 +185,7 @@ sealed class DaemonServiceCommands(
                     break;
                 case UnitRefresh.Deferred:
                     await Console.Out.WriteLineAsync(
-                        $"Daemon '{serviceId}': busy, so its service unit change waits for the next update. {ForceHint(serviceId)}");
+                        $"Daemon '{serviceId}': did not stop for the reload, so its service unit change waits for the next update. {ForceHint(serviceId)}");
                     break;
                 case UnitRefresh.Unverified:
                     await Console.Out.WriteLineAsync(
@@ -200,7 +201,7 @@ sealed class DaemonServiceCommands(
         return failed == 0 ? 0 : 1;
     }
 
-    /// <summary>One daemon, a forced restart, and one <c>refresh_outcome=</c> line for machine callers.</summary>
+    /// <summary>One daemon, a reload, and one <c>refresh_outcome=</c> line for machine callers.</summary>
     async Task<int> RefreshForcedAsync(LaunchdServiceManager launchd, Func<string, string> stabilize) {
         UnitRefresh outcome;
         string?     error = null;
@@ -211,7 +212,7 @@ sealed class DaemonServiceCommands(
             } else {
                 var started = time.GetTimestamp(); // the lock wait is not charged to the reload budget
                 outcome = launchd.RefreshUnit(
-                    id, () => RequestRestart(id, "force"), () => RefreshDeadline - time.GetElapsedTime(started),
+                    id, () => StopForReload(id), () => RefreshDeadline - time.GetElapsedTime(started),
                     out error, stabilize, requirePositiveSpawnType: true);
             }
         } catch (Exception ex) {
@@ -225,7 +226,7 @@ sealed class DaemonServiceCommands(
             UnitRefresh.Reloaded        => $"Daemon '{id}': reloaded at standard priority.",
             UnitRefresh.Current         => $"Daemon '{id}': already runs at standard priority.",
             UnitRefresh.NotLoaded       => $"Daemon '{id}': its service is not loaded; run `kcap daemon service start --name {id}`.",
-            UnitRefresh.Deferred        => $"Daemon '{id}': the daemon did not accept the restart.",
+            UnitRefresh.Deferred        => $"Daemon '{id}': the daemon did not stop for the reload.",
             UnitRefresh.Contended       => $"Daemon '{id}': another service operation is in progress. Try again shortly.",
             UnitRefresh.Unverified      => $"Daemon '{id}': launchd's state could not be verified.",
             UnitRefresh.UnitMissing     => $"Daemon '{id}': no service unit is installed.",
@@ -236,17 +237,14 @@ sealed class DaemonServiceCommands(
         return ForcedExitCode(outcome);
     }
 
-    /// <summary>True only when the daemon accepted a restart in <paramref name="mode"/>: <c>now</c> is applied only
-    /// while idle, <c>force</c> ends whatever it hosts. A <c>queued</c> answer is not an acceptance.</summary>
-    bool RequestRestart(string serviceId, string mode) {
-        if (RestartRequester is { } requester) return requester(serviceId, mode);
-        try {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
-            var reply = DaemonRestartClient.RequestAsync(store, serviceId, mode, cts.Token).GetAwaiter().GetResult();
-            return reply is { Type: Core.LocalIpc.FrameType.RestartAck, Text: "restarting" };
-        } catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException) {
-            return false;
-        }
+    /// <summary>True only once the daemon has exited, its agents kept for the reloaded daemon to resume.
+    /// Booting out a job whose daemon is still exiting would kill a successor that has begun resuming.</summary>
+    bool StopForReload(string serviceId) {
+        if (ReloadStopper is { } stopper) return stopper(serviceId);
+        return DaemonShutdownClient.StopAndWaitAsync(
+                store, serviceId, new ShutdownRequestDto("keep", "final"), LaunchdServiceManager.ReloadExitWait, time,
+                CancellationToken.None)
+            .GetAwaiter().GetResult();
     }
 
     internal async Task<int> Install(string[] args, bool startNow) {
@@ -600,7 +598,7 @@ sealed class DaemonServiceCommands(
         return exit;
     }
 
-    async Task<int> Stop() {
+    async Task<int> Stop(string[] args) {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
@@ -608,10 +606,16 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
+        var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
+        var exited  = DaemonPidProbe.ValidatedPid(store, id) is null
+                   || await DaemonShutdownClient.StopAndWaitAsync(store, id, request, DaemonCommands.StopExitWait, time, CancellationToken.None);
+
         if (!manager.Stop(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not stop service '{id}': {error}");
             return 1;
         }
+
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time);
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;
@@ -955,11 +959,12 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("  uninstall --under DIR  Remove every unit whose daemon binary is inside DIR");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
         Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/ownership and rolls back on failure");
-        Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
+        Console.Error.WriteLine("  stop [--name N] [--keep-agents]   Stop the running service (stays installed) and end its agents;");
+        Console.Error.WriteLine("                          --keep-agents keeps them for the next start to resume");
         Console.Error.WriteLine("  ensure [--name N] [--profile P] [--json]   Install-or-start from a fresh status read");
         Console.Error.WriteLine("                          (bakes the born-prompt consent seed; gate refusals emit recovery_surface=)");
         Console.Error.WriteLine("  status [--name N] [--json]   Show installed/running state (--json for machine-readable output)");
-        Console.Error.WriteLine("  refresh                Update installed units to this version's format; reloads only idle daemons");
+        Console.Error.WriteLine("  refresh                Update installed units to this version's format; a reload resumes the daemon's agents");
         return 1;
     }
 }

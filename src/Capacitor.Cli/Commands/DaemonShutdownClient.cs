@@ -1,0 +1,49 @@
+using System.Net.Sockets;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Services;
+
+namespace Capacitor.Cli.Commands;
+
+/// <summary>Sends one shutdown request over a daemon's control socket.</summary>
+static class DaemonShutdownClient {
+    static readonly TimeSpan ExitPollInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>The daemon's reply, or null when it closed the socket without one. An unreachable socket
+    /// throws <see cref="SocketException"/> or <see cref="IOException"/>.</summary>
+    public static async Task<LocalFrame?> RequestAsync(
+            DaemonStore store, string name, ShutdownRequestDto request, CancellationToken ct) {
+        using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        await sock.ConnectAsync(new UnixDomainSocketEndPoint(store.SocketPath(name)), ct);
+
+        await using var stream = new NetworkStream(sock, ownsSocket: false);
+        await FrameCodec.WriteAsync(stream, LocalFrame.Shutdown(request), ct);
+
+        return await FrameCodec.ReadAsync(stream, ct);
+    }
+
+    /// <summary>True only when the daemon acknowledged the request and the process its PID file names
+    /// was gone within <paramref name="exitWait"/>, which bounds the request and the wait together. A
+    /// daemon that does not know the frame answers with an error or nothing, and that is false too.</summary>
+    public static async Task<bool> StopAndWaitAsync(
+            DaemonStore store, string name, ShutdownRequestDto request, TimeSpan exitWait, TimeProvider time,
+            CancellationToken ct) {
+        if (DaemonPidProbe.ReadPidFile(store, name) is not { } entry) return false;
+
+        using var deadline = new CancellationTokenSource(exitWait, time);
+        using var bound    = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
+
+        try {
+            var reply = await RequestAsync(store, name, request, bound.Token);
+            if (reply is not { Type: FrameType.ShutdownAck, Text: "stopping" or "queued" }) return false;
+
+            while (DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken))
+                await Task.Delay(ExitPollInterval, time, bound.Token);
+
+            return true;
+        } catch (Exception ex) when (ex is SocketException or IOException or InvalidDataException
+                                       || (ex is OperationCanceledException && !ct.IsCancellationRequested)) {
+            return false;
+        }
+    }
+}

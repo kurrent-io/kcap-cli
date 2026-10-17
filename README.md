@@ -1026,8 +1026,9 @@ kcap daemon start                   # start in foreground (--name defaults to KC
 kcap daemon start -d                # start in background (daemonize)
 kcap daemon start --name laptop -d  # run multiple daemons on the same machine by giving each a unique name
 kcap daemon status                  # list all running daemons
-kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version)
-kcap daemon stop --name laptop      # stop just that one
+kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version and any resuming/interrupted agents)
+kcap daemon stop --name laptop      # stop just that one, ending its hosted agents
+kcap daemon stop --name laptop --keep-agents   # stop it but keep its agents for the next start to resume
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
 kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
 kcap daemon restart --name laptop --when-idle  # queue the restart for the next idle moment
@@ -1067,12 +1068,13 @@ kcap daemon service install --replace --verify  # take over a foreign/loaded uni
 kcap daemon service install --replace --verify --retire OLD   # also remove the unit OLD, e.g. after a rename
 kcap daemon service status                 # installed / running state
 kcap daemon service status --json          # machine-readable status (pids, binary paths, txn-marker state)
-kcap daemon service stop                   # stop the running service (stays installed)
+kcap daemon service stop                   # stop the running service (stays installed), ending its hosted agents
+kcap daemon service stop --keep-agents     # stop it, keeping its agents for the next start to resume
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
-kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; reloads only an idle daemon (runs after `kcap update`)
-kcap daemon service refresh --name N --force   # reload daemon N now even while busy (ends its hosted agents); prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
+kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; a reload stops the daemon with its agents kept and the reloaded daemon resumes them (runs after `kcap update`)
+kcap daemon service refresh --name N --force   # reload daemon N now; prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
 kcap daemon service uninstall              # stop and remove the service
 kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR
 ```

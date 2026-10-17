@@ -1,10 +1,12 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-/// <summary>A forced refresh targets one daemon, asks it for a forced restart, and reports exactly one
+/// <summary>A forced refresh targets one daemon, stops it for the reload, and reports exactly one
 /// machine-readable outcome line; the unforced run keeps iterating every installed unit.</summary>
 [NotInParallel]
 public class DaemonCommandsServiceRefreshTests {
@@ -24,11 +26,12 @@ public class DaemonCommandsServiceRefreshTests {
     static string Print(string id, string spawnType) =>
         $"gui/501/io.kurrent.kcap.daemon.{id} = {{\n\tstate = running\n\tspawn type = {spawnType}\n}}\n";
 
-    LaunchdServiceManager Manager(List<string[]> calls, Dictionary<string, string> spawnTypes) =>
+    LaunchdServiceManager Manager(List<string[]> calls, Dictionary<string, string> spawnTypes, Action<string[]>? onCall = null) =>
         new(Home, TimeProvider.System,
             writeUnit: (p, c, _) => File.WriteAllText(p, c),
             runBounded: (_, args, _) => {
                 calls.Add(args);
+                onCall?.Invoke(args);
                 var id = args[^1].Split('.')[^1];
                 return args[0] switch {
                     "print" when spawnTypes.TryGetValue(id, out var spawn) => (0, Print(id, spawn), "", false),
@@ -38,8 +41,8 @@ public class DaemonCommandsServiceRefreshTests {
                 };
             });
 
-    DaemonServiceCommands Commands(LaunchdServiceManager manager, string id, Func<string, string, bool> restart) =>
-        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, id, Home, TimeProvider.System) { RestartRequester = restart };
+    DaemonServiceCommands Commands(LaunchdServiceManager manager, string id, Func<string, bool>? stopForReload) =>
+        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, id, Home, TimeProvider.System) { ReloadStopper = stopForReload };
 
     [Test]
     public async Task Forced_run_reloads_only_the_named_daemon_and_prints_one_token() {
@@ -47,14 +50,14 @@ public class DaemonCommandsServiceRefreshTests {
         Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
         Seed("b", LaunchdUnit.Plist(Spec("b")).Replace("Standard", "Adaptive"));
         var calls = new List<string[]>();
-        var modes = new List<(string Id, string Mode)>();
+        var stopped = new List<string>();
         using var console = ConsoleOutput.StartFullCapture();
 
         var exit = await Commands(Manager(calls, new() { ["a"] = "adaptive (6)", ["b"] = "adaptive (6)" }), "a",
-            (id, mode) => { modes.Add((id, mode)); return true; }).Refresh(force: true, stabilize: s => s);
+            id => { stopped.Add(id); return true; }).Refresh(force: true, stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(modes).IsEquivalentTo([("a", "force")]);
+        await Assert.That(stopped).IsEquivalentTo(["a"]);
         await Assert.That(calls.All(c => c[^1].EndsWith(".a", StringComparison.Ordinal) || c[^1].EndsWith(".a.plist", StringComparison.Ordinal))).IsTrue();
         var tokens = console.GetCapturedError().Split('\n').Where(l => l.StartsWith("refresh_outcome=", StringComparison.Ordinal)).ToArray();
         await Assert.That(tokens).IsEquivalentTo(["refresh_outcome=reloaded"]);
@@ -66,13 +69,13 @@ public class DaemonCommandsServiceRefreshTests {
         Seed("a", LaunchdUnit.Plist(Spec("a")));
 
         using (var forced = ConsoleOutput.StartFullCapture()) {
-            var exit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", (_, _) => true).Refresh(force: true, stabilize: s => s);
+            var exit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", _ => true).Refresh(force: true, stabilize: s => s);
             await Assert.That(exit).IsNotEqualTo(0);
             await Assert.That(forced.GetCapturedError()).Contains("refresh_outcome=unverified");
         }
 
         using var unforced = ConsoleOutput.StartFullCapture();
-        var unforcedExit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", (_, _) => true).Refresh(stabilize: s => s);
+        var unforcedExit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", _ => true).Refresh(stabilize: s => s);
         await Assert.That(unforcedExit).IsEqualTo(0);
         await Assert.That(unforced.GetCapturedOutput().Trim()).IsEqualTo("");
         await Assert.That(unforced.GetCapturedError().Trim()).IsEqualTo("");
@@ -86,7 +89,7 @@ public class DaemonCommandsServiceRefreshTests {
         var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "a", TimeSpan.Zero, time);
         using var console = ConsoleOutput.StartFullCapture();
         var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root),
-            Manager([], new() { ["a"] = "adaptive (6)" }), "a", Home, time) { RestartRequester = (_, _) => true };
+            Manager([], new() { ["a"] = "adaptive (6)" }), "a", Home, time) { ReloadStopper = _ => true };
 
         var run     = commands.Refresh(force: true, stabilize: s => s);
         var release = time.GetUtcNow().AddSeconds(9);
@@ -107,7 +110,7 @@ public class DaemonCommandsServiceRefreshTests {
         var manager = new UntouchableManager();
         using var console = ConsoleOutput.StartFullCapture();
         var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "a", Home, TimeProvider.System) {
-            RestartRequester = (_, _) => true,
+            ReloadStopper = _ => true,
         };
 
         var exit = await commands.Refresh(force: true, stabilize: s => s);
@@ -139,7 +142,7 @@ public class DaemonCommandsServiceRefreshTests {
         var calls = new List<string[]>();
         using var console = ConsoleOutput.StartFullCapture();
 
-        var exit = await Commands(Manager(calls, new() { ["b"] = "adaptive (6)" }), "a", (_, _) => true).Refresh(force: true, stabilize: s => s);
+        var exit = await Commands(Manager(calls, new() { ["b"] = "adaptive (6)" }), "a", _ => true).Refresh(force: true, stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(console.GetCapturedError()).Contains("refresh_outcome=unit_missing");
@@ -155,7 +158,7 @@ public class DaemonCommandsServiceRefreshTests {
         var asked = false;
         using var console = ConsoleOutput.StartFullCapture();
 
-        var commands = Commands(Manager(calls, new() { ["a"] = "adaptive (6)" }), "a", (_, _) => asked = true);
+        var commands = Commands(Manager(calls, new() { ["a"] = "adaptive (6)" }), "a", _ => asked = true);
         var exit = await commands.Refresh(force: true, stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -170,16 +173,38 @@ public class DaemonCommandsServiceRefreshTests {
         Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
         Seed("b", LaunchdUnit.Plist(Spec("b")).Replace("Standard", "Adaptive"));
         var calls = new List<string[]>();
-        var asked = new List<(string Id, string Mode)>();
+        var asked = new List<string>();
         using var console = ConsoleOutput.StartFullCapture();
 
         var exit = await Commands(Manager(calls, new() { ["a"] = "adaptive (6)", ["b"] = "adaptive (6)" }), "a",
-            (id, mode) => { asked.Add((id, mode)); return false; }).Refresh(stabilize: s => s);
+            id => { asked.Add(id); return false; }).Refresh(stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(asked).IsEquivalentTo([("a", "now"), ("b", "now")]);
+        await Assert.That(asked).IsEquivalentTo(["a", "b"]);
         await Assert.That(console.GetCapturedOutput()).Contains("kcap daemon service refresh --name a --force");
         await Assert.That(console.GetCapturedError()).DoesNotContain("refresh_outcome=");
+    }
+
+    [Test]
+    public async Task Refresh_waits_for_the_exit_before_bootout() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
+        using var child = DummyProcess.StartSleep(120);
+        var identity = PidIdentity.Capture(child.Pid);
+        File.WriteAllText(Daemons.Store.PidPath("a"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "a", LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => _ = Task.Delay(300).ContinueWith(_ => child.Kill(), TaskScheduler.Default));
+        var aliveAtBootout = new List<bool>();
+        var manager = Manager([], new() { ["a"] = "adaptive (6)" },
+            onCall: args => { if (args[0] == "bootout") aliveAtBootout.Add(!PidIdentity.IsGone(child.Pid, identity)); });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "a", stopForReload: null).Refresh(stabilize: s => s);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("keep", "final"));
+        await Assert.That(aliveAtBootout).IsEquivalentTo([false]);
     }
 
     [Test]

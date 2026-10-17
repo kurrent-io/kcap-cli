@@ -1,0 +1,152 @@
+using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Capacitor.Cli.Tests.Unit.Commands;
+
+/// <summary><c>daemon stop</c> asks the daemon to shut down with the operator's intent and kills it only
+/// when that request is not answered by an exit, marking the resume ledger interrupted on the kill.
+/// The "daemon" is a sleep child this test owns, named by a pid file carrying its real start token.</summary>
+[NotInParallel]
+public class DaemonCommandsStopTests {
+    const string Name = "st";
+
+    [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
+    [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
+    [TempHome]        public required TempHome        Home    { get; init; }
+
+    DaemonCommands Commands(TimeProvider time) =>
+        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
+            TestHarnesses.All(), TestBinaries.None, time);
+
+    DummyProcess StartDaemon() {
+        var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath(Name), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        return child;
+    }
+
+    ResumeLedgerStore SeedLedger(params (string AgentId, ResumeState State, string? LastError)[] entries) {
+        var ledger = ResumeLedgerStore.For(Daemons.Store, Name);
+        var stamp  = TimeProvider.System.GetUtcNow();
+
+        foreach (var (agentId, state, lastError) in entries) {
+            var launch = new ResumeLaunchDescriptor(
+                Prompt: null, Model: null, Effort: null, RepoPath: "/repo", WorktreePath: "/repo/wt",
+                Work: WorkLocation.OwnedWorktree, GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null,
+                PermissionPreset: null, McpConfigPath: null, Title: null, IsPrivate: false, Origin: "local",
+                RequesterUserId: null, RequesterDisplay: null, ConsentSource: null, ConsentAt: null,
+                FlowRunId: null, FlowRole: null);
+            ledger.Write(new ResumeLedgerEntry(
+                ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, "claude", "pty",
+                null, null, launch, state, 0, lastError, PredecessorInstanceId: null, ResumingAt: null));
+        }
+
+        return ledger;
+    }
+
+    static ShutdownRequestDto? Request(LocalFrame? frame) =>
+        frame is { Type: FrameType.Shutdown, Text: { } text } ? ShutdownIpc.Parse(text) : null;
+
+    [Test]
+    public async Task Stop_sends_end_agents_final_and_does_not_kill_when_the_daemon_exits() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var ledger   = SeedLedger(("agent-1", ResumeState.Running, null));
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => { child.Kill(); child.WaitForExit(); });
+        using var console = ConsoleOutput.StartCapture();
+
+        var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "stop", "--name", Name]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await Assert.That(ledger.ReadAll().Single().State).IsEqualTo(ResumeState.Running);
+        await Assert.That(console.GetCapturedOutput()).Contains($"Daemon '{Name}' stopped (PID {child.Pid}).");
+    }
+
+    [Test]
+    public async Task Stop_keep_agents_sends_keep() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("queued"),
+            afterReply: () => { child.Kill(); child.WaitForExit(); });
+        using var console = ConsoleOutput.StartCapture();
+
+        var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "stop", "--name", Name, "--keep-agents"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("keep", "final"));
+    }
+
+    [Test]
+    public async Task Stop_falls_back_to_kill_and_marks_the_ledger_interrupted_when_nothing_answers() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var identity = PidIdentity.Capture(child.Pid);
+        var ledger   = SeedLedger(("agent-1", ResumeState.Running, null), ("agent-2", ResumeState.Resuming, null));
+        using var console = ConsoleOutput.StartCapture();
+
+        var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "stop", "--name", Name]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await PidIdentity.WaitUntilGoneAsync(child.Pid, identity, TimeSpan.FromSeconds(10));
+        var entries = ledger.ReadAll();
+        await Assert.That(entries.Count).IsEqualTo(2);
+        await Assert.That(entries.All(e => e is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" })).IsTrue();
+    }
+
+    [Test]
+    public async Task Stop_falls_back_when_the_daemon_acks_but_never_exits() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var identity = PidIdentity.Capture(child.Pid);
+        var ledger   = SeedLedger(("agent-1", ResumeState.Running, null));
+        var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => acked.SetResult());
+        var time = new FakeTimeProvider();
+        using var console = ConsoleOutput.StartCapture();
+
+        var run = Commands(time).HandleAsync(["daemon", "stop", "--name", Name]);
+        await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(run.IsCompleted).IsFalse();
+
+        for (var steps = 0; !run.IsCompleted; steps++) {
+            if (steps > 2000) throw new TimeoutException("the stop never gave up waiting under the fake clock");
+            time.Advance(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(5);
+        }
+
+        await Assert.That(await run).IsEqualTo(0);
+        await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await PidIdentity.WaitUntilGoneAsync(child.Pid, identity, TimeSpan.FromSeconds(10));
+        await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
+    }
+
+    [Test]
+    public async Task Status_lists_resuming_and_interrupted_counts() {
+        SeedLedger(
+            ("agent-1", ResumeState.Resuming, null),
+            ("agent-2", ResumeState.Interrupted, "stopped_by_operator"),
+            ("agent-3", ResumeState.Interrupted, "runtime_exited"),
+            ("agent-4", ResumeState.Running, null));
+        using var console = ConsoleOutput.StartCapture();
+
+        var exit = await Commands(TimeProvider.System).HandleAsync(["daemon", "status", "--name", Name]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(console.GetCapturedOutput())
+            .Contains("  resuming: 1  interrupted: 2 (runtime_exited, stopped_by_operator)");
+    }
+
+    [Test]
+    public async Task Status_omits_the_ledger_line_when_nothing_is_resuming_or_interrupted() {
+        using var console = ConsoleOutput.StartCapture();
+
+        await Commands(TimeProvider.System).HandleAsync(["daemon", "status", "--name", Name]);
+
+        await Assert.That(console.GetCapturedOutput()).DoesNotContain("resuming:");
+    }
+}
