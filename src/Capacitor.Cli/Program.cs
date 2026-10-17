@@ -166,7 +166,9 @@ var serverEnv = museHook.Apply(ProfileOverrides.FromEnvironment());
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, LocalEndpoints.Read(LocalRoot.FromEnvironment(home)), workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
+var localRoot = LocalRoot.FromEnvironment(home);
+
+var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, LocalEndpoints.Read(localRoot), workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
 
 if (museHook.MissingProfileWarning(profiles) is { } missingProfile) {
     Console.Error.WriteLine(missingProfile);
@@ -186,7 +188,7 @@ var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoi
 var services = new ServiceCollection()
     .AddCapacitorCli(
         config, home, workdir, daemonPaths, profiles, serverEnv, machineEnv, endpoints, clock, baseUrl,
-        telemetryStartup);
+        telemetryStartup, localRoot);
 
 await using var sp = services.BuildValidated();
 
@@ -935,7 +937,8 @@ switch (command) {
     // Spawned detached by a hook that gave up on its own client creation (RefreshTokenHandoff); it
     // outlives the hook to finish the rotation. Not in PrintUsage — nobody types it by hand.
     case RefreshTokenHandoff.Command: {
-        try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
+        if (!profiles.Resolution.SendsNoBearer)
+            try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
 
         return 0;
     }

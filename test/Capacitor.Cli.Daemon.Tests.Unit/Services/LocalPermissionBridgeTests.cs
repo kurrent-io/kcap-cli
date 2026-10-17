@@ -1404,7 +1404,7 @@ public class LocalPermissionBridgeTests {
 /// without a real server. RequestPermissionAsync is virtual on the base class.
 /// </summary>
 sealed class FakeServerConnection(Func<string, string?, JsonElement?, JsonElement?, CancellationToken, Task<PermissionDecision>>? respond)
-    : ServerConnection(new() { Name = "test", ServerUrl = "http://127.0.0.1:1" }, UnusedTokenStore.Create(),
+    : ServerConnection(new() { Name = "test", ServerUrl = "http://127.0.0.1:1" }, new FixedCredentialSource(),
         NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
     public List<Call> Calls { get; } = [];
     public List<(string SessionId, string RequestId, PermissionDecision Decision)> Responds { get; } = [];

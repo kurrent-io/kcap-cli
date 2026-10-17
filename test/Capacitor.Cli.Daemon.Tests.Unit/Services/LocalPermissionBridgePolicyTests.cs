@@ -194,7 +194,7 @@ public class LocalPermissionBridgePolicyTests {
 /// broker settles it.
 sealed class PolicyServerConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
     readonly List<object> _runEvents = [];
     int _beginCount;

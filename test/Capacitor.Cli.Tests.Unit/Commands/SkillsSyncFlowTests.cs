@@ -18,6 +18,20 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class SkillsSyncFlowTests {
     [TempDir("skillsync")] public required TempDir Tmp { get; init; }
 
+    /// <summary>The fixture still stores a signed-in token, so the account it names is what a sync
+    /// would record if the installation did not decide first.</summary>
+    [Test]
+    public async Task A_local_installation_syncs_as_the_installation_not_the_stored_account() {
+        using var repo = Checkout("repo");
+        var       fx   = new SkillsSyncFixture(Tmp, repo.Path, StubSkillsApi.Serving("etag-1", SkillsSyncFixture.Skill("alpha")),
+            installedAt: "http://localhost:51234");
+
+        await Assert.That(await fx.Command.HandleSync(dryRun: false)).IsEqualTo(0);
+
+        await Assert.That(fx.ReadLedger().Identity)
+            .IsEqualTo(new SkillsIdentity($"installation:{SkillsSyncFixture.InstallationId}", "http://localhost:51234"));
+    }
+
     [Test]
     [NotInParallel]
     public async Task A_first_sync_writes_into_the_checkout_and_nothing_into_the_home() {

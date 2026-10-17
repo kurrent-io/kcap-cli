@@ -85,7 +85,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         configure?.Invoke(host);
 
         Rig? rig = null;
-        var connection = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        var connection = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         var factory = new MuseHostedAgentRuntimeFactory(

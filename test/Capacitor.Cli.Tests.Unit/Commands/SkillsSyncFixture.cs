@@ -24,18 +24,23 @@ sealed class SkillsSyncFixture {
     public const string TargetKey = "claude";
     public const string ServerUrl = "https://stub.kcap.test";
 
+    public const string InstallationId = "inst-9";
+
     public static readonly DateTimeOffset Now = new(2026, 9, 18, 9, 0, 0, TimeSpan.Zero);
 
     public SkillsSyncFixture(
             TempDir tmp, string checkout, StubSkillsApi api,
-            string subject = "signed-in-user", string owner = "acme", string repoName = "widgets") {
+            string subject = "signed-in-user", string owner = "acme", string repoName = "widgets",
+            string? installedAt = null) {
         Api      = api;
         Anchor   = checkout;
         GitDir   = GitRepository.ResolveGitDir(checkout)!;
         RepoHash = RepoHashHelper.ComputeRepoHash(owner, repoName);
         RepoHome = $"repo:{owner}/{repoName}";
         Config   = new ConfigRoot(tmp.CreateDir("config"));
-        Identity = new SkillsIdentity(subject, ServerUrl);
+        Identity = installedAt is null
+            ? new SkillsIdentity(subject, ServerUrl)
+            : new SkillsIdentity($"installation:{InstallationId}", installedAt);
         Home     = tmp.PathTo("home");
         // No override consulted: these tests stage the global copies under the plain home layout.
         LegacyRoots = new LegacySkillsRoots(new UserHome(Home), kiroHome: null, geminiCliHome: null);
@@ -54,7 +59,10 @@ sealed class SkillsSyncFixture {
 
         Command = new SkillsCommand(
             Config, TestHarnesses.All(detected: [HarnessId.Claude]), api, new GitProviderRouter(),
-            new WorkingDirectory(checkout), tokens, Resolutions.At(ServerUrl, Config),
+            new WorkingDirectory(checkout), tokens,
+            installedAt is null
+                ? Resolutions.At(ServerUrl, Config)
+                : Resolutions.AtInstallation(installedAt, Config, Resolutions.InstalledAt(installedAt, InstallationId)),
             MachineAuth.None, LegacyRoots, time);
     }
 

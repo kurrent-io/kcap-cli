@@ -14,6 +14,19 @@ public record ResolvedProfile(
     /// <summary>The profile a repository's <c>.kcap.json</c> named that does not exist here, when it was
     /// passed over for the local installation.</summary>
     public string? IgnoredRepoProfile { get; init; }
+
+    /// <summary>What <see cref="ServerUrl"/> is, measured against the installation registry.</summary>
+    public LocalEndpointClass Endpoint { get; init; } = new LocalEndpointClass.Ordinary();
+
+    /// <summary>A loopback origin that is, was, or may be a local installation. Nothing sends it a
+    /// bearer, whatever a token store holds, and the answer needs no token read or provider
+    /// discovery: discovery falls back to a stored token's provider when the server is down.</summary>
+    public bool SendsNoBearer => Endpoint is not LocalEndpointClass.Ordinary;
+
+    /// <summary>This resolution pointed at another server. The classification is recomputed with the
+    /// URL, never carried over from the one it replaces.</summary>
+    public ResolvedProfile Retargeted(string? serverUrl, LocalEndpoints local) =>
+        this with { ServerUrl = local.Canonicalize(serverUrl), Endpoint = local.Classify(serverUrl) };
 }
 
 public class ProfileResolver(
@@ -33,7 +46,7 @@ public class ProfileResolver(
     public ResolvedProfile Resolve() {
         var resolved = ResolveAsWritten();
 
-        return resolved with { ServerUrl = _local.Canonicalize(resolved.ServerUrl) };
+        return resolved.Retargeted(resolved.ServerUrl, _local);
     }
 
     ResolvedProfile ResolveAsWritten() {

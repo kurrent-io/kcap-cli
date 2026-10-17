@@ -22,6 +22,10 @@ public enum StatusAuthState {
     Expired,
 
     None,
+
+    /// <summary>A loopback URL that was a removed local installation, or one the unreadable registry
+    /// cannot rule out: nothing is sent to it, and <c>login</c> is not the fix.</summary>
+    LocalUnavailable,
 }
 
 public static class StatusAuthStates {
@@ -36,6 +40,7 @@ public static class StatusAuthStates {
             StatusAuthState.WrongServer       => "wrong_server",
             StatusAuthState.Expired           => "expired",
             StatusAuthState.None              => "none",
+            StatusAuthState.LocalUnavailable  => "local_unavailable",
         };
     }
 }

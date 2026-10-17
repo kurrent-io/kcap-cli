@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Tests.Helpers;
 
@@ -28,4 +29,24 @@ public static class Resolutions {
     /// setting honoured without writing config.json. No disk read: a named profile answers on its own.</summary>
     public static ProfileContext Of(Profile profile, string name = "default", string? serverUrl = null) =>
         new(new(serverUrl ?? profile.ServerUrl, name, profile, null), new ProfileConfig());
+
+    /// <summary>A resolution of <paramref name="serverUrl"/> on a machine whose registry names it as
+    /// <paramref name="registry"/> says, as the resolver classifies it.</summary>
+    public static ProfileContext AtInstallation(string serverUrl, ConfigRoot config, LocalEndpoints registry) =>
+        new(new ResolvedProfile(null, null, null, null).Retargeted(serverUrl, registry),
+            AppConfig.LoadProfileConfig(config).GetAwaiter().GetResult());
+
+    /// <summary>A registry whose active installation listens on <paramref name="serverUrl"/>'s port.</summary>
+    public static LocalEndpoints InstalledAt(string serverUrl, string installationId = "inst-1") =>
+        new(new StateRead<InstallRegistry>.Present(new InstallRegistry(
+            new LocalInstallation(installationId, new Uri(serverUrl).Port, serverUrl.TrimEnd('/'), "1.0.0"), [])));
+
+    /// <summary>A registry recording <paramref name="serverUrl"/>'s port as a purged installation.</summary>
+    public static LocalEndpoints RetiredAt(string serverUrl) =>
+        new(new StateRead<InstallRegistry>.Present(new InstallRegistry(
+            null, [new RetiredInstallation("inst-0", new Uri(serverUrl).Port, serverUrl.TrimEnd('/'))])));
+
+    /// <summary>A registry that is present but cannot be read.</summary>
+    public static LocalEndpoints UnreadableRegistry { get; } =
+        new(new StateRead<InstallRegistry>.Unreadable("/nowhere/install.json", "it is empty"));
 }

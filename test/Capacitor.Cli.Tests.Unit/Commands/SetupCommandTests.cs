@@ -52,8 +52,8 @@ public class SetupCommandTests {
             TestHarnesses.Under(Home, TestBinaries.Searching(Bin)),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin"))) {
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 

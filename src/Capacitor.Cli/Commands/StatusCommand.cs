@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Muse;
@@ -38,7 +39,7 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync($"           {IgnoredRepoProfileLine(ignored)}");
 
         // Auth
-        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.Endpoint);
         await Console.Out.WriteLineAsync($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
 
         // Hooks
@@ -96,7 +97,7 @@ public sealed class StatusCommand(
     async Task<int> WriteJsonAsync(string[] args, string? baseUrl) {
         var (current, advisory, bundled) = await ResolveVersionAsync(args);
         var server = await ProbeServerAsync(http, baseUrl, config, time);
-        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.Endpoint);
 
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
@@ -202,7 +203,20 @@ public sealed class StatusCommand(
     /// with irrelevant remediation.
     /// </summary>
     internal static async Task<AuthSnapshot> ResolveAuthAsync(
-            TokenStore tokens, MachineAuth machine, string profile, ServerReach server) {
+            TokenStore tokens, MachineAuth machine, string profile, ServerReach server, LocalEndpointClass endpoint) {
+        // Ahead of the provider: through an outage that is the last one cached, and a token left in
+        // the store must not be refreshed for a server it is never sent to.
+        switch (endpoint) {
+            case LocalEndpointClass.Local:
+                return new AuthSnapshot(StatusAuthState.NotRequired);
+            case LocalEndpointClass.Retired:
+                return new AuthSnapshot(StatusAuthState.LocalUnavailable,
+                    Problem: $"{server.Url} belonged to a removed local installation (run: kcap setup)");
+            case LocalEndpointClass.Undetermined(var reason):
+                return new AuthSnapshot(StatusAuthState.LocalUnavailable,
+                    Problem: $"cannot tell whether {server.Url} is the local installation: {reason}");
+        }
+
         if (server.Provider == AuthProvider.None) return new AuthSnapshot(StatusAuthState.NotRequired);
 
         // Diversion is deliberately raised by EITHER variable, so that a half-configured runner is
@@ -243,6 +257,7 @@ public sealed class StatusCommand(
         StatusAuthState.Expired     => $"{auth.Identity} ✗ token expired (run: kcap login)",
         StatusAuthState.WrongServer => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
         StatusAuthState.None        => "not authenticated (run: kcap login)",
+        StatusAuthState.LocalUnavailable => $"✗ {auth.Problem}",
     };
 
     /// <summary>The version facts behind the Version line, without printing it.</summary>
@@ -276,7 +291,7 @@ public sealed class StatusCommand(
 
     internal sealed record AuthSnapshot(
         StatusAuthState State, string? Identity = null, DateTimeOffset? ExpiresAt = null, string? MachineLine = null,
-        string? IssuedServerUrl = null);
+        string? IssuedServerUrl = null, string? Problem = null);
 
     async Task WriteVersionLineAsync(string[] args) {
         Console.Write("  Version: ");
