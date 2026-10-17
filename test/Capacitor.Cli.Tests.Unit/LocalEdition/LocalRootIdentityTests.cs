@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 
@@ -8,6 +9,11 @@ public class LocalRootIdentityTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     static OwnerReading.Root At(string path) => new(path);
+
+    const UnixFileMode Open = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    static void SkipUnlessModesEnforced() =>
+        Skip.When(OperatingSystem.IsWindows() || Environment.UserName == "root", "directory modes are not enforced");
 
     static OwnerReading Gone => OwnerReading.Absent.Instance;
 
@@ -20,7 +26,7 @@ public class LocalRootIdentityTests {
 
     [Test]
     public async Task A_symlinked_ancestor_alias_is_same_via_resolution() {
-        if (OperatingSystem.IsWindows()) return;
+        Skip.When(OperatingSystem.IsWindows(), "symlinks need privileges on Windows");
 
         var real = Tmp.CreateDir("real");
         Directory.CreateSymbolicLink(Tmp.PathTo("alias"), real);
@@ -50,7 +56,7 @@ public class LocalRootIdentityTests {
     public async Task A_case_variant_goes_to_the_probe() {
         var root = new LocalRoot(Tmp.CreateDir("Root"));
 
-        if (!Directory.Exists(Tmp.PathTo("root"))) return;
+        Skip.When(!Directory.Exists(Tmp.PathTo("root")), "the volume is case-sensitive");
 
         await Assert.That(LocalRootIdentity.Compare(root, Tmp.PathTo("root"))).IsEqualTo(RootMatch.Same);
     }
@@ -58,15 +64,16 @@ public class LocalRootIdentityTests {
     [Test]
     [ParallelLimiter<SubprocessLimit>]
     public async Task Case_only_roots_on_a_case_sensitive_volume_are_different() {
-        if (!OperatingSystem.IsMacOS()) return;
+        Skip.When(!OperatingSystem.IsMacOS(), "needs hdiutil");
 
         var image = Tmp.PathTo("cs.dmg");
         var mount = Tmp.CreateDir("m");
         var attached = false;
+        bool detached;
 
         try {
-            if (Run("hdiutil", "create", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0) return;
-            if (Run("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image) != 0) return;
+            Skip.When(Run("hdiutil", "create", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
+            Skip.When(Run("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image) != 0, "hdiutil attach failed");
             attached = true;
 
             var upper = Directory.CreateDirectory(Path.Combine(mount, "Root")).FullName;
@@ -75,13 +82,16 @@ public class LocalRootIdentityTests {
 
             await Assert.That(LocalRootIdentity.Compare(root, Path.Combine(mount, "root"))).IsEqualTo(RootMatch.Different);
         } finally {
-            if (attached) Run("hdiutil", "detach", "-force", mount);
+            detached = !attached || Run("hdiutil", "detach", "-force", mount) == 0 || Run("hdiutil", "detach", "-force", mount) == 0;
         }
+
+        await Assert.That(detached).IsTrue();
     }
 
     [Test]
+    [UnsupportedOSPlatform("windows")]
     public async Task An_unreadable_root_is_unknown() {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return;
+        SkipUnlessModesEnforced();
 
         var rootDir = Tmp.CreateDir("root");
         var other   = Tmp.CreateDir("other");
@@ -92,7 +102,60 @@ public class LocalRootIdentityTests {
         try {
             await Assert.That(LocalRootIdentity.Compare(root, other)).IsEqualTo(RootMatch.Unknown);
         } finally {
-            File.SetUnixFileMode(rootDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            File.SetUnixFileMode(rootDir, Open);
+        }
+    }
+
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task An_unreadable_other_is_unknown() {
+        SkipUnlessModesEnforced();
+
+        var root  = new LocalRoot(Tmp.CreateDir("root"));
+        var other = Tmp.CreateDir("other");
+
+        File.SetUnixFileMode(other, UnixFileMode.None);
+
+        try {
+            await Assert.That(LocalRootIdentity.Compare(root, other)).IsEqualTo(RootMatch.Unknown);
+        } finally {
+            File.SetUnixFileMode(other, Open);
+        }
+    }
+
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task An_other_under_an_unreadable_parent_is_unknown() {
+        SkipUnlessModesEnforced();
+
+        var root   = new LocalRoot(Tmp.CreateDir("root"));
+        var parent = Tmp.CreateDir("parent");
+        Directory.CreateDirectory(Path.Combine(parent, "child"));
+
+        File.SetUnixFileMode(parent, UnixFileMode.None);
+
+        try {
+            await Assert.That(LocalRootIdentity.Compare(root, Path.Combine(parent, "child"))).IsEqualTo(RootMatch.Unknown);
+        } finally {
+            File.SetUnixFileMode(parent, Open);
+        }
+    }
+
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Decide_unknown_when_a_root_reading_cannot_be_compared() {
+        SkipUnlessModesEnforced();
+
+        var rootDir = Tmp.CreateDir("root");
+        var other   = Tmp.CreateDir("other");
+        var root    = new LocalRoot(rootDir);
+
+        File.SetUnixFileMode(rootDir, UnixFileMode.None);
+
+        try {
+            await Assert.That(LocalRootIdentity.Decide(root, new(Gone, At(other)))).IsEqualTo(OwnerDecision.Unknown);
+        } finally {
+            File.SetUnixFileMode(rootDir, Open);
         }
     }
 

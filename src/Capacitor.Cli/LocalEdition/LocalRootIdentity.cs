@@ -16,7 +16,7 @@ static class LocalRootIdentity {
             return RootMatch.Same;
 
         try {
-            if (!Directory.Exists(other)) return RootMatch.Different;
+            if (!Present(other)) return RootMatch.Different;
 
             // A nonce created here is visible under `other` only if both names reach one directory.
             var name  = $".identity-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}";
@@ -25,12 +25,22 @@ static class LocalRootIdentity {
             using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
 
             try {
-                return File.Exists(Path.Combine(other, name)) ? RootMatch.Same : RootMatch.Different;
+                return Present(Path.Combine(other, name)) ? RootMatch.Same : RootMatch.Different;
             } finally {
                 File.Delete(probe);
             }
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return RootMatch.Unknown;
+        }
+    }
+
+    // Exists() reads a permission error as absence, which would call an unreadable root a different one.
+    static bool Present(string path) {
+        try {
+            File.GetAttributes(path);
+            return true;
+        } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
+            return false;
         }
     }
 
