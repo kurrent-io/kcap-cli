@@ -3580,7 +3580,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="StopAgentCoreAsync"/> already swallows the stop's, leaving only the gate wait.</summary>
     async Task ReapReviewerAsync(ReapCandidate candidate) {
         try {
-            if (!await TryClaimReapAsync(candidate)) return;
+            if (!await TryClaimReapAsync(candidate, _shutdownCts.Token)) return;
 
             await StopClaimedReapAsync(candidate);
         } catch (Exception ex) {
@@ -3607,7 +3607,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// the one park-specific exception to <see cref="AgentInstance.ReapClaimed"/> being write-once,
     /// since a claim that neither parks nor reaps must not condemn a live agent) so the next sweep
     /// re-selects and retries.</para></summary>
-    async Task ParkReviewerAsync(ReapCandidate candidate) {
+    async Task ParkReviewerAsync(ReapCandidate candidate, CancellationToken ct) {
         var a = candidate.Agent;
 
         // One park attempt at a time per agent (a sweep skips an agent already parking); reset on an
@@ -3618,7 +3618,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // status + the activity generation captured at selection (FencedOnActivity: true — a
             // delivery since selection has advanced the seq and the park aborts here). A lost claim
             // tears down nothing; clear the guard so the next sweep can retry.
-            if (!await TryClaimReapAsync(candidate)) {
+            if (!await TryClaimReapAsync(candidate, ct)) {
                 a.ParkAttemptInFlight = false;
 
                 return;
@@ -3631,7 +3631,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Never throws: a transport error / timeout / unknown-method folds to Ambiguous rather than a
             // false Rejected, so an uncertain reply never triggers a destructive teardown.
             var ack = await _server.ReportParticipantParkedAsync(
-                a.Id, canonicalSessionId, ReviewerParkedResumableReason, _shutdownCts.Token);
+                a.Id, canonicalSessionId, ReviewerParkedResumableReason, ct);
 
             switch (ack) {
                 case ParkAck.Parked:
@@ -3720,14 +3720,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// reap that would SIGTERM/SIGKILL the child — the only thing that unblocks that write — would be
     /// queued behind the write itself. Before this fence existed the reap was unconditional and broke
     /// the cycle by construction; the two arms below restore that property deliberately.</para></summary>
-    async Task<bool> TryClaimReapAsync(ReapCandidate candidate) {
+    async Task<bool> TryClaimReapAsync(ReapCandidate candidate, CancellationToken ct) {
         var agent = candidate.Agent;
         bool entered;
 
         try {
-            entered = await agent.BorrowedSnapshotGate.WaitAsync(ReapClaimGateWait, _shutdownCts.Token);
+            entered = await agent.BorrowedSnapshotGate.WaitAsync(ReapClaimGateWait, ct);
         } catch (OperationCanceledException) {
-            return false; // daemon teardown supersedes the reap — it kills the registered children itself
+            return false; // the caller gave up: daemon teardown kills the registered children itself
         }
 
         if (!entered) {
@@ -5329,7 +5329,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // routes to the PARK path — slot freed, Codex thread kept for resume; every reap rule keeps
             // flowing to the reap path unchanged. Both are fire-and-forget and contain their own faults.
             foreach (var candidate in FindReviewersToReap())
-                _ = candidate.Park ? ParkReviewerAsync(candidate) : ReapReviewerAsync(candidate);
+                _ = candidate.Park ? ParkReviewerAsync(candidate, _shutdownCts.Token) : ReapReviewerAsync(candidate);
 
             // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
             // the local user is present and drives them directly).
@@ -5582,7 +5582,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Only agents this teardown still owns. One whose own finalizer already ran has reported its
         // real ending and is waiting on cleanup; reporting it again would append a second stop event
         // over the top of a truer one and race that finalizer's unregister.
-        var live = _agents.Values.Where(a => !a.IsPrivate && a.Status is "Starting" or "Running").ToList();
+        var live = _agents.Values.Where(a => !a.IsPrivate && !a.ResumePending && a.Status is "Starting" or "Running").ToList();
 
         if (live.Count == 0) return;
 
@@ -5678,14 +5678,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogDisposeStepFailed(ex, "processor-drain");
             }
 
-            foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
-                try {
-                    await agent.ReadCts.CancelAsync();
-                    await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
-                } catch {
-                    /* best-effort */
-                }
-            }
+            await StopAgentsForShutdownAsync([.. _agents.Values.Where(a => a.Status is "Starting" or "Running")]);
 
             // Children are gone; tell the server so before the registry is torn down. Without this the
             // daemon's whole account of a shutdown is the transport dropping, which says a daemon went
@@ -6229,12 +6222,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// ack-gated teardown) — the seam for driving the arm-A park state machine against a fake
     /// <see cref="ServerConnection"/> whose <see cref="ServerConnection.ReportParticipantParkedAsync"/>
     /// returns a chosen <see cref="ParkAck"/>.</summary>
-    internal Task ParkReviewerForTest(ReapCandidate candidate) => ParkReviewerAsync(candidate);
+    internal Task ParkReviewerForTest(ReapCandidate candidate) => ParkReviewerAsync(candidate, _shutdownCts.Token);
 
     /// <summary>Test-only: the claim ALONE, without the teardown it gates. Lets a contention test pin
     /// which side won the section without also driving a stop whose (slow, side-effecting) teardown is
     /// not what is under test.</summary>
-    internal Task<bool> TryClaimReapForTest(ReapCandidate candidate) => TryClaimReapAsync(candidate);
+    internal Task<bool> TryClaimReapForTest(ReapCandidate candidate) => TryClaimReapAsync(candidate, _shutdownCts.Token);
 
     /// <summary>Test-only: the post-claim stop ALONE, without a real claim ahead of it — lets a test
     /// swap <c>_agents</c>' entry for <c>candidate</c>'s id between "claim won" and this call to prove

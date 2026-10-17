@@ -49,10 +49,19 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
     }
 
     public void Resize(ushort              cols, ushort rows) { }
-    public Task RequestGracefulStopAsync() => Task.CompletedTask;
+    /// <summary>The order the graceful-stop and terminate calls arrived in.</summary>
+    public List<string> StopCalls { get; } = [];
+
+    public Task RequestGracefulStopAsync() {
+        lock (StopCalls) StopCalls.Add("graceful");
+
+        return Task.CompletedTask;
+    }
+
     public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
 
     public Task TerminateAsync(TimeSpan? timeout = null) {
+        lock (StopCalls) StopCalls.Add("terminate");
         ExitGate.TrySetResult();
 
         return Task.CompletedTask;
