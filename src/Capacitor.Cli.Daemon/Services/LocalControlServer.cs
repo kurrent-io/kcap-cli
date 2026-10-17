@@ -87,8 +87,17 @@ internal sealed partial class LocalControlServer(
         }
     }
 
-    async Task HandleAgentResumeAsync(string agentId, Stream stream, CancellationToken ct) =>
-        await FrameCodec.WriteAsync(stream, LocalFrame.AgentResumeAck(await orchestrator.ResumeInterruptedAsync(agentId, ct)), ct);
+    async Task HandleAgentResumeAsync(string agentId, Stream stream, CancellationToken ct) {
+        LocalFrame reply;
+
+        try {
+            reply = LocalFrame.AgentResumeAck(await orchestrator.ResumeInterruptedAsync(agentId, ct));
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            reply = LocalFrame.Error($"the resume ledger could not be written: {ex.Message}");
+        }
+
+        await FrameCodec.WriteAsync(stream, reply, ct);
+    }
 
     async Task HandleRestartAsync(string mode, Stream stream, CancellationToken ct) {
         var force = mode is "force";

@@ -406,7 +406,10 @@ internal partial class AgentOrchestrator {
     readonly List<(ResumeLedgerEntry Entry, string Reason)> _interruptedAtBoot = [];
     string[] _ledgerWorktrees = [];
 
-    SemaphoreSlim ResumeLane => field ??= new SemaphoreSlim(Math.Max(1, _config.ResumeConcurrency));
+    SemaphoreSlim? _resumeLane;
+
+    SemaphoreSlim ResumeLane =>
+        _resumeLane ?? Interlocked.CompareExchange(ref _resumeLane, new SemaphoreSlim(Math.Max(1, _config.ResumeConcurrency)), null) ?? _resumeLane!;
 
     /// <summary>The kcap continue fallback, tried when a native resume is unavailable or fails.</summary>
     internal Func<ResumeLedgerEntry, string, CancellationToken, Task<ResumeOutcome>> ContinueEntry {
@@ -504,7 +507,7 @@ internal partial class AgentOrchestrator {
 
     /// <summary>An operator's retry of an interrupted entry: <c>resuming</c> once the entry is marked
     /// resuming and queued on the boot lane's gate, <c>not_interrupted</c> for any other state,
-    /// <c>unknown</c> without an entry. The age cap and <see cref="DaemonConfig.AutoResume"/> do not
+    /// <c>unknown</c> without an entry. A ledger that cannot be written throws and nothing is queued. The age cap and <see cref="DaemonConfig.AutoResume"/> do not
     /// apply to an explicit retry.</summary>
     internal Task<string> ResumeInterruptedAsync(string agentId, CancellationToken ct) {
         ResumeLedgerEntry resuming;
@@ -516,12 +519,7 @@ internal partial class AgentOrchestrator {
             var now = _time.GetUtcNow();
             resuming = entry with { State = ResumeState.Resuming, ResumingAt = now, LastError = null, UpdatedAt = now };
 
-            try {
-                ResumeLedger!.Write(resuming);
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                LogResumeLedgerFailed(ex, "writing", agentId);
-                throw;
-            }
+            ResumeLedger!.Write(resuming);
 
             _resumeCandidates[agentId] = resuming;
         }

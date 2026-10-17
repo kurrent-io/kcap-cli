@@ -166,4 +166,25 @@ public class LocalControlAgentResumeTests {
             await Assert.That(reply!.Type).IsEqualTo(FrameType.AgentResumeAck);
             await Assert.That(reply.Text).IsEqualTo("unknown");
         });
+
+    [Test]
+    [ExcludeOn(OS.Windows), System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task AgentResume_with_an_unwritable_ledger_answers_an_error_and_leaves_the_entry_interrupted() =>
+        await RunAsync("ar-ro", async (orch, send) => {
+            var entry = Entry(orch, "agent-3", ResumeState.Interrupted);
+            var dir   = Path.GetDirectoryName(orch.ResumeLedger!.RingPath("agent-3"))!;
+            var mode  = File.GetUnixFileMode(dir);
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            try {
+                var reply = await send(LocalFrame.AgentResume("agent-3"));
+
+                await Assert.That(reply!.Type).IsEqualTo(FrameType.Error);
+            } finally {
+                File.SetUnixFileMode(dir, mode);
+            }
+
+            await Assert.That(orch.ResumeLedger!.TryRead("agent-3")!.State).IsEqualTo(ResumeState.Interrupted);
+            await Assert.That(entry.Attempts).IsEqualTo(2);
+        });
 }
