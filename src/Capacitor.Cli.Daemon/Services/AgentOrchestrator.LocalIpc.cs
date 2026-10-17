@@ -9,13 +9,27 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// Local-socket entry points invoked by <see cref="LocalControlServer"/>.
 internal partial class AgentOrchestrator {
-    /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table.</summary>
-    public Task HandleLocalListAsync(bool withTitles, Stream stream, CancellationToken ct) {
-        var lines = _agents.Values.Select(a =>
-            $"{a.Id}\t{a.Status}\t{Cell(a.RepoPath)}\t{KindText(a.Kind)}\t{Cell(a.FlowRunId)}\t{Cell(a.FlowRole)}"
-            + (withTitles ? $"\t{Cell(a.ResolvedTitle ?? a.Title)}" : ""));
+    /// <summary>Reply to a <c>kcap agent ls</c> request with a tab-separated agent table. The state
+    /// column also lists the ledger entries that have no live agent.</summary>
+    public Task HandleLocalListAsync(bool withTitles, bool withState, Stream stream, CancellationToken ct) {
+        withTitles |= withState;
 
-        return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines) }, ct);
+        var lines = _agents.Values.Select(a => ListRow(
+            a.Id, a.Status, a.RepoPath, KindText(a.Kind), a.FlowRunId, a.FlowRole, withTitles ? a.ResolvedTitle ?? a.Title : null,
+            withState ? (_resumeCandidates.ContainsKey(a.Id) ? "resuming" : "running") : null));
+
+        if (withState) {
+            lines = lines.Concat(LedgerOnlyAgents().Select(l => ListRow(
+                l.Entry.AgentId, l.Status, l.Entry.Launch.RepoPath, KindText(LaunchKind.Default), l.Entry.Launch.FlowRunId,
+                l.Entry.Launch.FlowRole, l.Entry.Launch.Title, l.State)));
+        }
+
+        return FrameCodec.WriteAsync(stream, new LocalFrame(FrameType.AgentList) { Text = string.Join('\n', lines.ToList()) }, ct);
+
+        string ListRow(string id, string status, string? repo, string kind, string? flowRunId, string? flowRole, string? title, string? state) =>
+            $"{id}\t{status}\t{Cell(repo)}\t{kind}\t{Cell(flowRunId)}\t{Cell(flowRole)}"
+            + (withTitles ? $"\t{Cell(title)}" : "")
+            + (state is null ? "" : $"\t{Cell(state)}");
     }
 
     /// <summary>

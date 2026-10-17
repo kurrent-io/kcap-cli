@@ -1030,9 +1030,9 @@ kcap daemon status --name laptop    # show status of a specific daemon (incl. it
 kcap daemon stop --name laptop      # stop just that one, ending its hosted agents
 kcap daemon stop --name laptop --keep-agents   # stop it but keep its agents for the next start to resume
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
-kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
-kcap daemon restart --name laptop --when-idle  # queue the restart for the next idle moment
-kcap daemon restart --name laptop --force      # restart now even if busy (tears down running agents)
+kcap daemon restart --name laptop              # restart now, stopping its agents and resuming them on the new daemon; refuses while an eval, a launch or a flow round is in progress
+kcap daemon restart --name laptop --when-idle  # queue the restart until no eval, launch or flow round is in progress
+kcap daemon restart --name laptop --force      # restart without waiting for a flow round (a participant mid-round is parked or ended); an eval or a launch still holds it
 kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory
 kcap daemon doctor --clean          # also remove a stale entry's pid/marker files, dropping it from the list (held entries are never touched; the inert lock file is left in place)
 ```
@@ -1054,7 +1054,7 @@ A daemon whose process is alive but whose local control socket does not yet answ
 Daemon 'laptop': running (PID 12345, starting — not yet serving)
 ```
 
-**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself once it's **idle** (no running hosted agents and no in-flight eval) — service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart --force` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
+**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself, stopping its hosted agents and **resuming them on the new version** under the same ids. It waits until no eval, launch or flow round is in progress and every interactive agent is waiting on input — the last for at most `KCAP_RESTART_TURN_WAIT_SECONDS` (default 300). Service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
 
 #### Run it as a service (auto-restart)
 
@@ -1772,6 +1772,7 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
+| `daemon.auto_resume` | `true`     | Resume hosted agents when the daemon starts after a restart. `false` leaves them interrupted in `kcap agent ls`, from where `kcap agent resume <id>` retries one. Read at daemon start. |
 | `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents` or the `KCAP_MAX_AGENTS` env var, which take precedence at startup. `kcap config set daemon.max_agents` and the desktop app's **Settings…** hand the value to the running daemon, which applies it without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
@@ -2164,13 +2165,16 @@ kcap agent start claude --title "Fix login" -- "fix the login redirect"  # name 
 
 ```bash
 kcap agent                 # no subcommand — same as `kcap agent ls`
-kcap agent ls              # list daemon-hosted agents (id, status, kind, repo, title)
+kcap agent ls              # list daemon-hosted agents (id, status, state, kind, repo, title)
 kcap agent attach ab12     # re-attach your terminal (any unique id prefix works)
+kcap agent resume ab12     # retry an agent a daemon restart left interrupted
 kcap agent stop ab12       # graceful /exit, then terminate
 kcap agent stop --all -y   # stop the listed non-review agents, no prompt
 ```
 
-Agent ids are long, so `attach` and `stop` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+Agent ids are long, so `attach`, `stop` and `resume` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+
+**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one and `stop --all` leaves them out. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. `kcap config set daemon.auto_resume false` turns the resume off.
 
 **Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two:
 

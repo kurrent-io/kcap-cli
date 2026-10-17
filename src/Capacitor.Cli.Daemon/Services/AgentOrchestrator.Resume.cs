@@ -474,6 +474,32 @@ internal partial class AgentOrchestrator {
             .Select(e => new ResumingAgentClaim(e.AgentId, e.PredecessorInstanceId ?? e.DaemonInstanceId ?? "", e.SessionId))
     ];
 
+    /// <summary>Ledger entries with no live agent, as <c>kcap agent ls</c> shows them: the candidates the
+    /// resume lane still holds, then the interrupted entries with their reason.</summary>
+    internal IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgents() {
+        var rows = _resumeCandidates.Values
+            .Where(e => !_agents.ContainsKey(e.AgentId))
+            .OrderBy(e => e.CreatedAt)
+            .Select(e => (e, "Resuming", "resuming"))
+            .ToList();
+
+        IReadOnlyList<ResumeLedgerEntry> entries;
+
+        try {
+            entries = ResumeLedger?.ReadAll() ?? [];
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeLedgerUnreadable(ex);
+            return rows;
+        }
+
+        rows.AddRange(entries
+            .Where(e => e.State == ResumeState.Interrupted && !_agents.ContainsKey(e.AgentId) && !_resumeCandidates.ContainsKey(e.AgentId))
+            .OrderBy(e => e.CreatedAt)
+            .Select(e => (e, "Interrupted", e.LastError is { Length: > 0 } reason ? $"interrupted ({reason})" : "interrupted")));
+
+        return rows;
+    }
+
     /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
     /// resume needs its worktree as much as a boot candidate does.</summary>
     internal IReadOnlyList<string> LedgerWorktreePaths() => _ledgerWorktrees;

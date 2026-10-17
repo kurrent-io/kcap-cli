@@ -1085,7 +1085,7 @@ public sealed class DaemonCommands(
         Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
         Console.Error.WriteLine("  stop [--name <n>] [--yes] [--keep-agents]  Stop a running daemon and end its agents (prompts on multi unless --yes);");
         Console.Error.WriteLine("                             --keep-agents keeps them for the next start to resume");
-        Console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart daemon (now if idle; --when-idle queues; --force overrides)");
+        Console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart now, resuming its agents (--when-idle queues; --force skips the flow-round wait)");
         Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
         Console.Error.WriteLine("  logs                       Show recent daemon log output");
         Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");

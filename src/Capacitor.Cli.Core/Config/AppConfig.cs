@@ -39,6 +39,10 @@ public record DaemonSettings {
 
     [JsonPropertyName("codex_path")]
     public string? CodexPath { get; init; }
+
+    /// Null means unset, which the daemon reads as on.
+    [JsonPropertyName("auto_resume")]
+    public bool? AutoResume { get; init; }
 }
 
 [JsonSerializable(typeof(LegacyV1Config))]

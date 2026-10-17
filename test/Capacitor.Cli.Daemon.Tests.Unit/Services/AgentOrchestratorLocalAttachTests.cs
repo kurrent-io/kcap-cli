@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Core.Policy;
@@ -931,7 +932,7 @@ public class AgentOrchestratorLocalAttachTests {
         orch.SeedAgentForTest("flow-1", kind: LaunchKind.ReviewFlow, flowRunId: "flow-7f3a", flowRole: "reviewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(withTitles: false, client, default);
+        await orch.HandleLocalListAsync(withTitles: false, withState: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -1504,7 +1505,7 @@ public class AgentOrchestratorLocalAttachTests {
 
         async Task<string[]> ListAsync(bool withTitles) {
             using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-            await orch.HandleLocalListAsync(withTitles, client, default);
+            await orch.HandleLocalListAsync(withTitles, withState: false, client, default);
             client.WrittenStream.Position = 0;
             var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -1530,7 +1531,7 @@ public class AgentOrchestratorLocalAttachTests {
             flowRunId: "flow\t7f3a", flowRole: "rev\niewer");
 
         using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
-        await orch.HandleLocalListAsync(withTitles: false, client, default);
+        await orch.HandleLocalListAsync(withTitles: false, withState: false, client, default);
         client.WrittenStream.Position = 0;
         var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
 
@@ -1544,4 +1545,46 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(cols[5]).IsEqualTo("rev iewer");
     }
 
+    /// Ledger rows ride only the state request: a client that never asked for the state column
+    /// would offer `stop --all` an agent that has no process to stop.
+    [Test]
+    public async Task Interrupted_ledger_entries_appear_in_the_agent_list() {
+        using var tmp = new TempDir();
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var ledger = orch.ResumeLedger!;
+        var now    = TimeProvider.System.GetUtcNow();
+        var next   = ResumeLedgerEntries.For("next-1", ResumeState.Resuming);
+        ledger.Write(next with { UpdatedAt = now, ResumingAt = now, Launch = next.Launch with { WorktreePath = tmp.CreateDir("wt").Path, Title = "Coming back" } });
+        ledger.Write(ResumeLedgerEntries.For("gone-1", ResumeState.Interrupted) with { LastError = "worktree\tmissing" });
+        orch.LoadResumeLedger();
+        orch.SeedAgentForTest("live-1");
+        ledger.Write(ResumeLedgerEntries.For("live-1", ResumeState.Running));
+
+        async Task<string[][]> ListAsync(bool withState) {
+            using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+            await orch.HandleLocalListAsync(withTitles: true, withState, client, default);
+            client.WrittenStream.Position = 0;
+            var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+            return [.. reply!.Text.Split('\n').Select(l => l.Split('\t'))];
+        }
+
+        var rows = (await ListAsync(withState: true)).ToDictionary(r => r[0]);
+
+        await Assert.That(rows.Count).IsEqualTo(3);
+        await Assert.That(rows.Values.All(r => r.Length == 8)).IsTrue();
+        await Assert.That(rows["live-1"][7]).IsEqualTo("running");
+        await Assert.That(rows["next-1"][1]).IsEqualTo("Resuming");
+        await Assert.That(rows["next-1"][6]).IsEqualTo("Coming back");
+        await Assert.That(rows["next-1"][7]).IsEqualTo("resuming");
+        await Assert.That(rows["gone-1"][1]).IsEqualTo("Interrupted");
+        await Assert.That(rows["gone-1"][2]).IsEqualTo("/repo");
+        await Assert.That(rows["gone-1"][3]).IsEqualTo("agent");
+        await Assert.That(rows["gone-1"][7]).IsEqualTo("interrupted (worktree missing)");
+
+        var plain = await ListAsync(withState: false);
+        await Assert.That(plain.Length).IsEqualTo(1);
+        await Assert.That(plain[0].Length).IsEqualTo(7);
+    }
 }

@@ -21,6 +21,9 @@ switch to the script install: run `kcap daemon service install` again.
 
 For other installs (e.g. Homebrew), prints the command to run instead.
 
+On macOS and Linux a running daemon restarts on the new version by itself;
+its agents are stopped and resumed.
+
 On Windows the update also works while agent sessions or the daemon keep
 the binary locked: the old executable is moved aside and cleaned up later.
 Running processes keep the old version until they restart (for a running

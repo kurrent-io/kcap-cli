@@ -34,6 +34,12 @@ public sealed record LocalFrame(FrameType Type) {
     /// refuses any other width, and a daemon that predates it ignores the request payload.
     public static LocalFrame ListWithTitles() => new(FrameType.List) { Text = ListTitleColumn };
 
+    public const string ListStateColumn = "title+state";
+
+    /// Adds the state column and the ledger rows of agents with no live process. A daemon that
+    /// predates it answers as it would a bare List, with six columns.
+    public static LocalFrame ListWithState() => new(FrameType.List) { Text = ListStateColumn };
+
     /// Constructs any of the consent control frames, whose payload is always UTF-8 JSON
     /// (snake_case via ConsentIpcJsonContext) carried in Text — see ConsentIpc.cs.
     public static LocalFrame ConsentJson(FrameType type, string json) => new(type) { Text = json };

@@ -183,6 +183,7 @@ public static partial class DaemonRunner {
         var profileDaemon = profiles.Resolution.Profile?.Daemon;
 
         ApplyProfileCapacity(config, profileDaemon, maxAgentsFromArgs);
+        config.AutoResume = profileDaemon?.AutoResume ?? true;
 
         if (!string.IsNullOrEmpty(profileDaemon?.ClaudePath))
             config.ClaudePath = profileDaemon.ClaudePath;
