@@ -70,6 +70,9 @@ internal record AgentInstance(
     /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
     /// worktree, attachments, MCP config, vendor launcher state, PID record and resume-ledger entry.
     public bool                 ResumePending     { get; set; }
+
+    /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
+    public bool                 StopRequested     { get; set; }
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }
@@ -2627,7 +2630,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // action during its own startup uses the documents this launch was reported with.
                 PolicySnapshot: policySnapshot,
                 Journal: journal,
-                FlowRole: isReviewFlow ? cmd.FlowRole : null
+                FlowRole: isReviewFlow ? cmd.FlowRole : null,
+                IsPrivate: isPrivate
             );
 
             HostedRuntimeStart start;
@@ -3944,6 +3948,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     async Task<bool> StopAgentCoreAsync(AgentInstance agent) {
         var agentId = agent.Id;
+
+        // A resume still being judged ends like any stopped agent; a shutdown's own resume mark stays.
+        lock (_ledgerLock) {
+            agent.StopRequested = true;
+            if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
+        }
 
         try {
             LogStopping(agentId);

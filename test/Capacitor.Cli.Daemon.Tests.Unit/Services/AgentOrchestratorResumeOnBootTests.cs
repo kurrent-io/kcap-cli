@@ -318,6 +318,33 @@ public class AgentOrchestratorResumeOnBootTests {
     }
 
     [Test]
+    public async Task A_stop_inside_the_readiness_window_ends_the_agent_without_a_failed_resume() {
+        var f = Build(configure: c => c.ResumeReadinessWindow = TimeSpan.FromSeconds(20));
+        await using var _ = f.Orch;
+        var worktree = Tmp.CreateDir("wt-stopped");
+        Directory.CreateDirectory(Path.Combine(worktree, ".git"));
+        Entry(f, "stopped-1", worktree: worktree, standalone: true);
+        var continued = 0;
+        f.Orch.ContinueEntry = (_, _, _) => {
+            Interlocked.Increment(ref continued);
+            return Task.FromResult(ResumeOutcome.Interrupted);
+        };
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("stopped-1") is not null);
+
+        await f.Orch.HandleStopAgent("stopped-1");
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("stopped-1") is null);
+
+        await Assert.That(continued).IsEqualTo(0);
+        await Assert.That(f.Server.ShutdownReports.Any(r => r.Reason.StartsWith("resume_failed", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(Directory.Exists(worktree)).IsFalse();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("stopped-1")).IsNull();
+    }
+
+    [Test]
     public async Task A_crash_left_entry_claims_with_the_instance_that_wrote_it() {
         var f = Build();
         await using var _ = f.Orch;

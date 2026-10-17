@@ -9,5 +9,8 @@ internal enum ResumeOutcome {
     Continued,
 
     /// <summary>Neither ran; the entry is left interrupted.</summary>
-    Interrupted
+    Interrupted,
+
+    /// <summary>A stop ended the resumed agent before its resume was judged.</summary>
+    Stopped
 }

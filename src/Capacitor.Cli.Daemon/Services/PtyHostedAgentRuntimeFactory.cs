@@ -108,11 +108,15 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var args          = launchArgs.Args;
         var mcpConfigPath = launchArgs.McpConfigPath;
 
-        var env = new Dictionary<string, string> {
-            [HostedAgent.RenderedVar] = HostedAgent.Rendered,
-            [HostedAgent.AgentIdVar]  = ctx.AgentId
-        };
-        HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+        var env = new Dictionary<string, string>();
+
+        // A private agent gets what a --private local spawn gets: nothing that ties its session to
+        // the agent on the server.
+        if (!ctx.IsPrivate) {
+            env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
+            env[HostedAgent.AgentIdVar]  = ctx.AgentId;
+            HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+        }
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
         // OrphanReaper env-marker scan can reap a recordless survivor of a PRIOR incarnation of THIS
@@ -129,7 +133,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         // SignalR bridge. Bypasses Cloudflare's HTTP timeout on the server's
         // /hooks/permission-request long-poll. CLI falls back to KCAP_URL if this var is absent
         // (e.g. older CLI builds).
-        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) {
+        if (!ctx.IsPrivate && !string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) {
             env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
         }
 

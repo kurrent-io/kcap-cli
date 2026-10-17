@@ -387,6 +387,7 @@ internal partial class AgentOrchestrator {
     }
 
     const string NativeResumeUnsupported = "native_resume_unsupported";
+    const string StoppedDuringResume     = "stopped";
 
     static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
@@ -500,6 +501,10 @@ internal partial class AgentOrchestrator {
             if (await NativeResumeAsync(entry, ct) is not { } failure) return ResumeOutcome.Resumed;
 
             (reason, exitCode) = failure;
+
+            // The stop's own teardown ends the agent and removes what it kept.
+            if (reason == StoppedDuringResume) return ResumeOutcome.Stopped;
+
             entry = RecordFailedAttempt(entry, LastErrorOf(reason, exitCode));
         } else {
             reason = NativeResumeUnsupported;
@@ -540,8 +545,10 @@ internal partial class AgentOrchestrator {
 
         if (resume.Agent is not { } agent) return ("runtime_exited", null);
 
-        if (outcome.Kind != CommandOutcomeKind.LaunchExecuted || !await SurvivesReadinessAsync(agent, ct))
-            return ("runtime_exited", agent.Runtime.ExitCode);
+        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct);
+
+        if (agent.StopRequested) return (StoppedDuringResume, null);
+        if (!survived) return ("runtime_exited", agent.Runtime.ExitCode);
 
         lock (_ledgerLock) {
             // A shutdown that began meanwhile has marked the agent for its own resume.

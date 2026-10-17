@@ -282,5 +282,7 @@ internal sealed record RuntimeStartContext(
         TranscriptJournal?  Journal = null,
         // The flow role the server named for a review-flow launch, exported as the participant's
         // role marker. Null for every other launch.
-        string?             FlowRole = null
+        string?             FlowRole = null,
+        // A private agent: nothing in the child's environment may link its session to the server.
+        bool                IsPrivate = false
     );
