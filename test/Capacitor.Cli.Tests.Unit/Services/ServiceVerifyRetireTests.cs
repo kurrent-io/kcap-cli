@@ -140,13 +140,16 @@ public class ServiceVerifyRetireTests {
             ? new HelloProbeResult(true, 1, ExpectedVersion, NewId)
             : new HelloProbeResult(false, null, null, null));
 
-    ServiceVerify Sut(FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null, FakeFence? fence = null) =>
+    ServiceVerify Sut(
+            FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null, FakeFence? fence = null,
+            Func<string, TimeSpan, Task>? endDaemon = null) =>
         new(Daemons.Store, Config.Root, manager,
             validatedPid ?? (id => id == NewId && manager.Bootstrapped ? 4242 : null),
             Hello(manager), TimeProvider.System,
             readPlist: path => path == manager.UnitPath(OldId) ? oldPlist : OwnPlistContent,
             plistExists: path => path == manager.UnitPath(OldId) ? oldPlist is not null : true,
-            acquireFence: (fence ?? new FakeFence(manager)).AcquireAsync);
+            acquireFence: (fence ?? new FakeFence(manager)).AcquireAsync,
+            endDaemon: endDaemon);
 
     /// <summary>Same drive loop as ServiceVerifyInstallTests: Task.Delay(interval, time, ct)'s
     /// continuation resumes synchronously inside Advance(), so a tight Advance-loop reliably steps
@@ -416,6 +419,36 @@ public class ServiceVerifyRetireTests {
         await Assert.That(calls.IndexOf("fence-commit")).IsLessThan(calls.IndexOf($"uninstall:{OldId}"));
         await Assert.That(manager.OldUnitInstalled).IsFalse();
         await Assert.That(File.Exists(marker)).IsFalse();
+    }
+
+    /// <summary>The retired daemon never starts again, so its agents are ended rather than left to the
+    /// bootout's SIGTERM, which keeps them for a successor.</summary>
+    [Test]
+    public async Task A_live_old_daemon_is_asked_to_end_its_agents_after_the_commit_and_before_bootout() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var sut = Sut(manager, OldPlist("mine"), endDaemon: (name, _) => {
+            manager.Calls.Add($"end:{name}");
+            return Task.CompletedTask;
+        });
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        var calls = manager.Calls;
+        await Assert.That(calls.IndexOf("fence-commit")).IsLessThan(calls.IndexOf($"end:{OldId}"));
+        await Assert.That(calls.IndexOf($"end:{OldId}")).IsLessThan(calls.IndexOf($"uninstall:{OldId}"));
+    }
+
+    [Test]
+    public async Task An_old_unit_that_is_not_loaded_is_retired_without_a_shutdown_request() {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true, OldLabelLoaded = false };
+        var ended = new List<string>();
+        var sut = Sut(manager, OldPlist("mine"), endDaemon: (name, _) => { ended.Add(name); return Task.CompletedTask; });
+
+        var exit = await sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(ended).IsEmpty();
     }
 
     [Test, NotInParallel]

@@ -1,4 +1,6 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -13,8 +15,8 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
     const string Unreadable = RecordingServiceManager.Unreadable;
 
-    DaemonServiceCommands Commands(IServiceManager manager) =>
-        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "unused", Home, TimeProvider.System);
+    DaemonServiceCommands Commands(IServiceManager manager, string id = "unused") =>
+        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, id, Home, TimeProvider.System);
 
     [Test]
     public async Task Removes_only_units_whose_daemon_is_inside_the_folder() {
@@ -31,6 +33,68 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(manager.Uninstalled).IsEquivalentTo(["laptop"]);
+    }
+
+    /// <summary>The removed daemon never starts again, so it is asked to end its agents before the unit
+    /// goes; the bootout alone would keep them for a successor.</summary>
+    [Test]
+    public async Task A_running_daemon_is_asked_to_end_its_agents_before_its_unit_is_removed() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "laptop", LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => { child.Kill(); child.WaitForExit(); });
+        var askedFirst = new List<bool>();
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) {
+            OnBootout = _ => askedFirst.Add(received.IsCompleted),
+        };
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await Assert.That(askedFirst).IsEquivalentTo([true]);
+        await Assert.That(manager.Uninstalled).IsEquivalentTo(["laptop"]);
+    }
+
+    [Test]
+    public async Task Uninstall_asks_a_running_daemon_to_end_its_agents_first() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "solo", LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => { child.Kill(); child.WaitForExit(); });
+        var askedFirst = new List<bool>();
+        var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" }) {
+            OnBootout = _ => askedFirst.Add(received.IsCompleted),
+        };
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "solo").Uninstall();
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await Assert.That(askedFirst).IsEquivalentTo([true]);
+        await Assert.That(manager.Uninstalled).IsEquivalentTo(["solo"]);
+    }
+
+    /// <summary>A daemon that cannot be reached is removed by the bootout as before.</summary>
+    [Test]
+    public async Task Uninstall_of_a_daemon_that_does_not_answer_still_removes_its_unit() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "solo").Uninstall();
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(manager.Uninstalled).IsEquivalentTo(["solo"]);
     }
 
     [Test]

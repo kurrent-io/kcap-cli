@@ -108,7 +108,8 @@ sealed class ServiceVerify(
     Action? onCommitted = null,
     Func<string, string?>? gateEnv = null,
     Func<string, bool>? digestMatches = null,
-    Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
+    Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null,
+    Func<string, TimeSpan, Task>? endDaemon = null) {
     static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
@@ -135,6 +136,10 @@ sealed class ServiceVerify(
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
         acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
     readonly TimeSpan _rollbackReserve  = rollbackReserve ?? DefaultRollbackReserve;
+
+    /// <summary>Asks a retired daemon to end its agents and exit, within the wait it is given.</summary>
+    readonly Func<string, TimeSpan, Task> _endDaemon = endDaemon ?? (Func<string, TimeSpan, Task>)(async (name, wait) =>
+        await Commands.DaemonShutdownClient.StopAndWaitAsync(store, name, new ShutdownRequestDto("end", "final"), wait, time, CancellationToken.None));
 
     /// <summary>A small slice reserved INSIDE the forward budget for the final recheck, so a primary
     /// readiness observation that lands right at the poll cutoff still gets one confirmation probe
@@ -1116,6 +1121,11 @@ sealed class ServiceVerify(
         }
 
         var deadline = time.GetUtcNow() + _forwardBudget;
+
+        // The bootout alone reaches the daemon as SIGTERM, which keeps its agents for a successor this
+        // unit will never start. One that does not answer is left to the bootout.
+        if (ticket.Fence is not null) await _endDaemon(retireId, Remaining(deadline));
+
         if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
         if (!await WaitForStopConfirmedAsync(retireId, deadline)) {
             Say(VerifyExit.StopUnconfirmedToken);

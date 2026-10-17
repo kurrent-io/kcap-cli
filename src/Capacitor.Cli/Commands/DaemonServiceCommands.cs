@@ -492,13 +492,15 @@ sealed class DaemonServiceCommands(
         return $"{message}{Environment.NewLine}  {detail} {fix}";
     }
 
-    async Task<int> Uninstall() {
+    internal async Task<int> Uninstall() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
             await Console.Error.WriteLineAsync($"Another service operation is in progress for '{id}'. Try again shortly.");
             return 1;
         }
+
+        await EndAgentsBeforeRemovalAsync(id);
 
         if (!manager.Uninstall(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not uninstall service '{id}': {error}");
@@ -507,6 +509,16 @@ sealed class DaemonServiceCommands(
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
+    }
+
+    /// <summary>Asks a running daemon whose unit is being removed for good to end its agents and exit: the
+    /// bootout alone reaches it as SIGTERM, which keeps them for a successor that never starts. One that
+    /// does not answer is left to the bootout.</summary>
+    async Task EndAgentsBeforeRemovalAsync(string serviceId) {
+        if (DaemonPidProbe.ValidatedPid(store, serviceId) is null) return;
+
+        await DaemonShutdownClient.StopAndWaitAsync(
+            store, serviceId, new ShutdownRequestDto("end", "final"), DaemonCommands.StopExitWait, time, CancellationToken.None);
     }
 
     /// <summary>
@@ -533,11 +545,15 @@ sealed class DaemonServiceCommands(
                 } else if (!Owned(unit)) {
                     // An install holding the lock may have repointed the unit at another copy of kcap.
                     continue;
-                } else if (!manager.Uninstall(unit, out var error)) {
-                    await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
-                    failed = true;
                 } else {
-                    await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
+                    await EndAgentsBeforeRemovalAsync(unit);
+
+                    if (!manager.Uninstall(unit, out var error)) {
+                        await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
+                        failed = true;
+                    } else {
+                        await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
+                    }
                 }
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
                 await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {ex.Message}");
