@@ -612,6 +612,7 @@ public static partial class DaemonRunner {
         });
         builder.Services.AddSingleton<RestartCoordinator>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RestartCoordinator>());
+        builder.Services.AddHostedService<DaemonHeartbeat>();
 
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
