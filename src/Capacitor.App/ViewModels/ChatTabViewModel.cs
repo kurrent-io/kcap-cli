@@ -52,15 +52,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
-    /// Dropped by an explicit idle resend; kept only so a late echo of that copy is absorbed and
-    /// cannot settle the replacement row that now tracks the same text.
-    readonly List<QueuedChatMessage> _superseded = new();
+    /// The row an idle resend dropped, paired with the replacement that took its place.
+    /// A line from before that replacement was sent belongs to the dropped row. The replacement's
+    /// own echo settles the replacement, and a later copy of the same text is absorbed here.
+    readonly List<(QueuedChatMessage Old, QueuedChatMessage Replacement)> _superseded = new();
     /// The send the channel has not answered yet. It is tracked like a queued message but kept out
     /// of the strip: the composer still holds its text, and one prompt must not show in both.
     QueuedChatMessage? _sending;
     QueuedChatMessage? _lastSent;
     bool _sendCommandExecuting;
-    bool _bypassRecallGuard;
+    /// True while an idle row send is in flight. The composer command stays shut for the same
+    /// window: this path does not execute it, so its own executing state never closes the gate.
+    readonly BehaviorSubject<bool> _queuedSendBusy = new(false);
     ChatSendOutcome? _lastSendOutcome;
 
     IEnumerable<QueuedChatMessage> Tracked => _sending is { } sending ? _queuedMessages.Append(sending) : _queuedMessages;
@@ -476,7 +479,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// A send still uploading keeps CanAcceptText true, so the busy flag closes that window too.
     bool AgentCanTakeQueuedNow =>
         AgentIsIdle && !IsReadOnlyParticipant && !HasTerminalMenu && _input.CanAcceptText
-        && !_sendCommandExecuting;
+        && !_sendCommandExecuting && !_queuedSendBusy.Value;
 
     void RefreshQueuedSend() {
         var idle = AgentIsIdle;
@@ -710,18 +713,20 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .Subscribe(_ => RefreshQueuedSend())
             .DisposeWith(_disposables);
 
+        _queuedSendBusy.DisposeWith(_disposables);
         var canSend = Observable.CombineLatest(
             this.WhenAnyValue(x => x.ComposerText),
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
             this.WhenAnyValue(x => x.HasTerminalMenu),
-            (text, can, readOnly, menu) => can && !readOnly && !menu && !string.IsNullOrWhiteSpace(text));
+            _queuedSendBusy,
+            (text, can, readOnly, menu, busy) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
         // is still the user's own draft, not the snapshot.
         SendCommand = ReactiveCommand.CreateFromTask(async () => {
-            await SendComposerAsync(ComposerText, includeTray: true, bypassRecall: _bypassRecallGuard);
+            await SendComposerAsync(ComposerText, includeTray: true, bypassRecall: false);
         }, canSend);
         _disposables.Add(SendCommand);
         SendCommand.IsExecuting
@@ -731,34 +736,29 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
-        // Drops the stuck row first, so the send below is the only copy the banner tracks. The
-        // tray and an unrelated draft stay put: this path delivers that one text alone.
+        // Drops the stuck row first, so the send below is the only copy the banner tracks.
+        // The composer and the tray stay as they are: this path delivers that one text alone,
+        // and a composer send stays shut until it returns.
         SendQueuedCommand = ReactiveCommand.CreateFromTask<QueuedChatMessage>(async message => {
             if (!message.CanSendNow || message.Acknowledged || message.IsForeign || message.DispatchId is not null) return;
-            var draft = ComposerText;
-            var tray = Tray.Snapshot();
-            Tray.Clear();
             _queuedMessages.Remove(message);
             _unechoed.Remove(message);
             if (ReferenceEquals(_lastSent, message)) _lastSent = null;
             RefreshQueue();
-            _lastSendOutcome = null;
-            _bypassRecallGuard = true;
+            _queuedSendBusy.OnNext(true);
+            RefreshQueuedSend();
             try {
-                ComposerText = message.Text;
-                await SendCommand.Execute();
+                await SendComposerAsync(
+                    message.Text, includeTray: false, bypassRecall: true, ownsDraft: false,
+                    onQueued: row => _superseded.Add((message, row)));
             } finally {
-                _bypassRecallGuard = false;
+                _queuedSendBusy.OnNext(false);
+                RefreshQueuedSend();
             }
-            Tray.Restore(tray);
-            if (_lastSendOutcome is null or ChatSendOutcome.Rejected)
+            if (_lastSendOutcome is null or ChatSendOutcome.Rejected) {
+                _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message));
                 RestoreQueuedRow(message);
-            else
-                _superseded.Add(message);
-            // An unrelated draft comes back; a recall of this same text stays cleared on accept.
-            if (!string.Equals(draft, message.Text, StringComparison.Ordinal)
-                && !string.Equals(ComposerText, draft, StringComparison.Ordinal))
-                ComposerText = draft;
+            }
         });
         _disposables.Add(SendQueuedCommand);
 
@@ -783,7 +783,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _input.WhenAnyValue(i => i.CanAcceptText),
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
             SendCommand.IsExecuting,
-            (can, readOnly, sending) => can && !readOnly && !sending);
+            _queuedSendBusy,
+            (can, readOnly, sending, busy) => can && !readOnly && !sending && !busy);
         RunCodeCommand = ReactiveCommand.CreateFromTask<string>(async text => {
             ComposerText = text;
             await SendCommand.Execute();
@@ -943,7 +944,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void RebaseQueuedMessages(long? offset) {
         _inputGeneration++;
         foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
-        foreach (var queued in _superseded) queued.Rebase(_inputGeneration, offset);
+        foreach (var (old, _) in _superseded) old.Rebase(_inputGeneration, offset);
         RefreshQueue();
     }
 
@@ -959,7 +960,41 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         RefreshQueue();
     }
 
-    async Task SendComposerAsync(string snapshot, bool includeTray, bool bypassRecall) {
+    void Acknowledge(QueuedChatMessage queued) {
+        queued.Acknowledged = true;
+        _queuedMessages.Remove(queued);
+        ConfirmDelivery(queued);
+    }
+
+    // A line from before the replacement was sent can only be the dropped row. The first line
+    // the replacement can match is its echo. Once that row has settled, a later copy of the
+    // same text belongs to the dropped row, so it does not settle a different one.
+    bool TakeSupersededEcho(string text, long offset) {
+        for (var i = 0; i < _superseded.Count; i++) {
+            var (old, replacement) = _superseded[i];
+            if (old.Acknowledged || !old.Matches(text, _inputGeneration, offset)) continue;
+            if (replacement.Baseline is { } fence && offset < fence) {
+                AbsorbSuperseded(old);
+                return true;
+            }
+            if (!replacement.Acknowledged && replacement.Matches(text, _inputGeneration, offset)) {
+                Acknowledge(replacement);
+                return true;
+            }
+            if (replacement.Acknowledged) {
+                AbsorbSuperseded(old);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void AbsorbSuperseded(QueuedChatMessage old) {
+        old.Acknowledged = true;
+        _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, old));
+    }
+
+    async Task SendComposerAsync(string snapshot, bool includeTray, bool bypassRecall, bool ownsDraft = true, Action<QueuedChatMessage>? onQueued = null) {
         _lastSendOutcome = null;
         var edits = _composerEdits;
         // The edit count is what says this text was recalled and left alone. Typing the same
@@ -975,7 +1010,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 return;
             }
         }
-        var draftRevision = _drafts?.Revision(_origin, _agentId) ?? 0;
+        var draftRevision = ownsDraft ? _drafts?.Revision(_origin, _agentId) ?? 0 : 0;
         var files = includeTray ? Tray.Snapshot() : [];
         if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
         IReadOnlyList<string> ids = [];
@@ -1011,6 +1046,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _sending = queued;
         _unechoed.Add(queued);
         if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
+        onQueued?.Invoke(queued);
         ChatSendOutcome outcome;
         try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
         catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
@@ -1169,17 +1205,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
-                var superseded = _superseded.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
-                if (superseded is not null) {
-                    superseded.Acknowledged = true;
-                    _superseded.Remove(superseded);
-                    continue;
-                }
+                if (TakeSupersededEcho(text, offset)) continue;
                 var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
                 if (acknowledged is null) continue;
-                acknowledged.Acknowledged = true;
-                _queuedMessages.Remove(acknowledged);
-                ConfirmDelivery(acknowledged);
+                Acknowledge(acknowledged);
             }
             foreach (var e in projected.Envelopes) {
                 switch (e.Kind) {

@@ -19,6 +19,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     int _generation = generation;
     long? _offset = offset;
     internal bool HasBaseline => _offset.HasValue;
+    internal long? Baseline => _offset;
 
     bool _isUnconfirmed;
     public bool IsUnconfirmed {

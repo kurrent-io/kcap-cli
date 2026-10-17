@@ -1631,8 +1631,9 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// An idle row Send keeps an unrelated draft and leaves staged chips alone: the replacement
-    /// is text-only, and a rejected attempt puts the original row back.
+    /// An idle row Send keeps an unrelated draft and leaves staged chips alone, including text
+    /// typed while the channel is still deciding. The replacement is text-only, and a rejected
+    /// attempt puts the original row back.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Queued_send_keeps_draft_and_tray_and_restores_the_row_on_refusal() {
@@ -1656,10 +1657,14 @@ public class ChatTabViewModelTests {
             await Assert.That(queued.CanSendNow).IsTrue();
 
             var accepted = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            await WaitUntilAsync(() => input.Pending is not null, what: "the queued send reaching the channel");
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("unrelated draft");
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            h.Chat.ComposerText = "typed while sending";
             input.Pending!.SetResult(ChatSendOutcome.Accepted);
             await accepted;
             await Assert.That(input.Sends.Last().Ids).IsEmpty();
-            await Assert.That(h.Chat.ComposerText).IsEqualTo("unrelated draft");
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("typed while sending");
             await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
             await Assert.That(h.Chat.QueuedMessages.Single()).IsNotSameReferenceAs(queued);
             await h.TeardownAsync();
@@ -1689,14 +1694,16 @@ public class ChatTabViewModelTests {
             await Assert.That(input.Sends).Count().IsEqualTo(3);
             await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
             await Assert.That(h.Chat.QueuedMessages.Any(q => ReferenceEquals(q, first))).IsFalse();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
             await h.TeardownAsync();
         });
     }
 
-    /// A late echo of the retired copy is absorbed so the replacement stays queued until its own.
+    /// The resend's own echo retires the replacement. A later copy of that text is the dropped
+    /// row's, so the banner stays clear.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_superseded_echo_does_not_retire_the_replacement_row() {
+    public async Task A_resend_echo_retires_the_replacement_and_a_later_copy_is_absorbed() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
             var h = new Harness(TranscriptChat.For("claude"), input: input);
@@ -1712,10 +1719,38 @@ public class ChatTabViewModelTests {
 
             File.AppendAllText(path, User("look") + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
             File.AppendAllText(path, User("look") + "\n");
             await h.TickAsync();
             await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// Once the resend has echoed, a later copy of its text is absorbed. Another row that happens
+    /// to carry the same text stays queued.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_later_echo_of_a_resent_row_leaves_another_same_text_row_queued() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            await SendAsync(h, input, "look");
+            var first = h.Chat.QueuedMessages[0];
+            var second = h.Chat.QueuedMessages[1];
+            var forced = h.Chat.SendQueuedCommand.Execute(first).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(second);
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(second);
             await h.TeardownAsync();
         });
     }
