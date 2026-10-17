@@ -17,6 +17,8 @@ internal sealed partial class CodexLauncher(
     ) : IHostedAgentLauncher {
     readonly CodexPaths _paths = harnesses.Of<CodexHarness>().Paths;
 
+    internal CodexPaths Paths => _paths;
+
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
     public bool   SupportsUnattended => true;

@@ -12,7 +12,7 @@ public class GrokImportSourceTests {
     const string ParentId = "01a1359d-bed2-7ce1-bad9-a99e91d9994e";
     const string ChildId  = "01a135a0-64af-7661-94e6-282ec3ef065c";
 
-    GrokImportSource Source() => new(new GrokPaths(new UserHome(Tmp.Path), null), TimeProvider.System);
+    GrokImportSource Source() => new(new GrokPaths(new UserHome(Tmp.Path), null), _ => Task.FromResult<RepositoryPayload?>(null), TimeProvider.System);
 
     static DiscoveryFilters NoFilters => new(FilterCwd: null, FilterSession: null, Since: null, MinLines: 1);
 

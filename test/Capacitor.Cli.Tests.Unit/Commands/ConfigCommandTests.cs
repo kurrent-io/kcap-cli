@@ -6,6 +6,19 @@ using Capacitor.Cli.Core.Config;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class ConfigCommandTests {
+    // ── daemon.max_agents ────────────────────────────────────────────────────
+
+    /// <summary>A negative capacity is refused when set: the daemon would refuse it at startup.</summary>
+    [Test]
+    [Arguments("-1")]
+    [Arguments("five")]
+    public async Task ApplySet_DaemonMaxAgents_RejectsAnythingButACount(string value) =>
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "daemon.max_agents", value)).Throws<ArgumentException>();
+
+    [Test]
+    public async Task ApplySet_DaemonMaxAgents_ZeroIsUnlimited() =>
+        await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.max_agents", "0").Daemon!.MaxAgents).IsEqualTo(0);
+
     // ── daemon.claude_path ───────────────────────────────────────────────────
 
     [Test]
@@ -262,13 +275,13 @@ public class ConfigCommandTests {
         Directory.CreateDirectory(tmp.Path);
         await File.WriteAllTextAsync(AppConfig.GetConfigPath(root), """{"active_profile":"","profiles":{}}""");
 
-        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "set", "skills.auto_sync", "true"]);
+        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).HandleAsync(["config", "set", "skills.auto_sync", "true"]);
 
         var cfg = await AppConfig.LoadProfileConfig(root);
         await Assert.That(cfg.Profiles.ContainsKey("")).IsFalse();
         await Assert.That(cfg.Profiles["default"].Skills!.AutoSync!.Value).IsTrue();
 
-        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "unset", "skills.auto_sync"]);
+        await new ConfigCommand(root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).HandleAsync(["config", "unset", "skills.auto_sync"]);
         var after = await AppConfig.LoadProfileConfig(root);
         await Assert.That(after.Profiles["default"].Skills!.AutoSync).IsNull();
     }

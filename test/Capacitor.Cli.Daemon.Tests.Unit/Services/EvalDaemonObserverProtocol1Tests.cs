@@ -50,7 +50,7 @@ public class EvalDaemonObserverProtocol1Tests {
 
     sealed class CapturingServerConnection() : ServerConnection(
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-            UnusedTokenStore.Create(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
+            new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance,
             TimeProvider.System) {
         public List<(string Category, string QuestionId, string Outcome, int? Score, string? Verdict)> CompletedCalls { get; } = [];
         public List<(string Category, string QuestionId, string Reason)>                               FailedCalls    { get; } = [];

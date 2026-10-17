@@ -105,19 +105,27 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// <summary>
     /// Running while any note names the session and its holder is not provably gone, whatever exit
     /// record exists: a resumed session is running again, and a takeover must not rest on a guess.
-    /// Hooks may write the id in another case than the one asked about, so the match ignores case.
     /// </summary>
-    public SessionLiveness Liveness(SessionId session) {
+    public SessionLiveness Liveness(SessionId session) =>
+        LiveClaimant(session) is not null ? SessionLiveness.Running
+      : File.Exists(ExitRecord(session))  ? SessionLiveness.Exited
+      :                                     SessionLiveness.Unknown;
+
+    /// <summary>
+    /// A process running <paramref name="session"/> that is not provably gone, or null. Hooks may
+    /// write the id in another case than the one asked about, so the match ignores case.
+    /// </summary>
+    public int? LiveClaimant(SessionId session) {
         foreach (var pid in Claimants()) {
             try {
                 if (File.ReadAllText(Note(pid)).Split('\n') is [var named, var token]
                  && string.Equals(SessionId.Parse(named)?.Value, session.Value, StringComparison.OrdinalIgnoreCase)
                  && !HolderIsGone(pid, token))
-                    return SessionLiveness.Running;
+                    return pid;
             } catch { }
         }
 
-        return File.Exists(ExitRecord(session)) ? SessionLiveness.Exited : SessionLiveness.Unknown;
+        return null;
     }
 
     /// <summary>

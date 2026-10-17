@@ -254,7 +254,7 @@ public class KiroReviewerLaunchTests {
 
     sealed class SilentServerConnection() : ServerConnection(
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-            UnusedTokenStore.Create(),
+            new FixedCredentialSource(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System) { }
 
@@ -390,7 +390,7 @@ public class KiroReviewerLaunchTests {
 
     sealed class CaptureServerConnection() : ServerConnection(
             new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-            UnusedTokenStore.Create(),
+            new FixedCredentialSource(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System) {
         public bool RequestAcpInteractionAsyncCalled { get; private set; }

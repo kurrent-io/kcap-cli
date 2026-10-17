@@ -148,9 +148,19 @@
                         </Grid>
                     </StackPanel>
 
-                    <TextBlock x:Name="StartErrorText" Text="{Binding StartError}" Foreground="{StaticResource KcapDangerBrush}"
-                               TextWrapping="Wrap"
-                               IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <Border x:Name="StartErrorBanner" Padding="12,9" CornerRadius="8" BorderThickness="1"
+                            Background="{StaticResource KcapDangerDimBrush}"
+                            BorderBrush="{StaticResource KcapDangerBrush}"
+                            IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <Grid ColumnDefinitions="Auto,*">
+                            <views:AppIcon Kind="CircleAlert" Size="14" Margin="0,2,8,0" VerticalAlignment="Top"
+                                           Foreground="{StaticResource KcapDangerBrush}" />
+                            <TextBlock Grid.Column="1" x:Name="StartErrorText" Text="{Binding StartError}"
+                                       Foreground="{StaticResource KcapDangerBrush}"
+                                       FontSize="13" LineHeight="18" TextWrapping="Wrap" VerticalAlignment="Center"
+                                       IsVisible="{Binding StartError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </Grid>
+                    </Border>
                 </StackPanel>
             </Border>
         </StackPanel>

@@ -66,14 +66,13 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     Task _loop = Task.CompletedTask;
     volatile HubConnection? _hub;
 
-    public ServerConnectionService(ProfileContext? profiles, TokenStore tokenStore, TimeProvider time)
+    public ServerConnectionService(ProfileContext? profiles, ICredentialSource? credentials, TimeProvider time)
         : this(
             time,
             profiles?.Resolution.ServerUrl,
-            profiles is null
+            credentials is null
                 ? () => Task.FromResult<string?>(null)
-                : async () => (await tokenStore.GetValidTokensForServerAsync(
-                    profiles.Name, profiles.Resolution.ServerUrl!)).Tokens?.AccessToken) { }
+                : async () => (await credentials.ResolveAsync(default)).Bearer) { }
 
     internal ServerConnectionService(
             TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,

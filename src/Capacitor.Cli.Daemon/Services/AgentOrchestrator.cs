@@ -795,7 +795,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _pidRecordRoot = recordRoot;
         _attachmentStore = new AttachmentStore(recordRoot);
         _attachmentFetcher = new AttachmentFetcher(
-            httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
+            httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
@@ -3377,13 +3377,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 SetAgentStatus(agent, status);
 
-                // PrivateLocal agents make no per-agent server calls (deny-all).
+                // PrivateLocal agents make no per-agent server calls (deny-all). A refused report must
+                // not skip the local teardown below: that leaks the process and keeps the forwarder alive.
                 if (!agent.IsPrivate) {
-                    if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
+                    try {
+                        if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
+                    } catch (Exception ex) {
+                        LogCleanupStepFailed(ex, "reporting the final status", agent.Id);
+                    }
 
-                    var stopReason = status == "Completed" ? "exited" : "failed";
+                    try {
+                        var stopReason = status == "Completed" ? "exited" : "failed";
 
-                    await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                        await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                    } catch (Exception ex) {
+                        LogCleanupStepFailed(ex, "recording the run's stop", agent.Id);
+                    }
                 }
             }
 
@@ -4808,7 +4817,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _time.GetUtcNow().ToString("O"),
             cwd: transcript.Cwd,
             model: transcript.ResolvedModel,
-            rawSessionId: transcript.AcpSessionId
+            rawSessionId: transcript.AcpSessionId,
+            repository: HostedSessionRepository.Read(transcript.Cwd)
         );
 
         var forwarder = new AcpTranscriptForwarder(
@@ -5343,6 +5353,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
+        // A local installation is sent no bearer, so a token left in the store is never refreshed.
+        if (_config.Profiles.Resolution.SendsNoBearer) return;
+
         var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval, _time);
 
         while (await _tokenRefresh.WaitForNextTickAsync(ct)) {

@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Gemini;
 using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.PrDetection;
 
@@ -359,6 +360,17 @@ class SkillsCommand(
         // Normalized, so a configured trailing slash does not read as a different server and retire
         // a catalogue nobody changed.
         var server = AppConfig.NormalizeUrl(serverUrl);
+
+        // The installation, never an account: a token left behind by a cloud setup names a user the
+        // local server has never seen. A purge mints a new id, so it retires this catalogue.
+        switch (profiles.Resolution.Endpoint) {
+            case LocalEndpointClass.Local(var installation):
+                return (new SkillsIdentity($"installation:{installation.Id}", server), null);
+            case LocalEndpointClass.Retired:
+                return (null, $"{server} belonged to a removed local installation.");
+            case LocalEndpointClass.Undetermined(var reason):
+                return (null, $"Cannot tell whether {server} is the local installation: {reason}.");
+        }
 
         // A runner has no token store at all. Its client id is the account it authenticates as and
         // costs nothing to read, where minting the bearer it would otherwise be read from is a call.

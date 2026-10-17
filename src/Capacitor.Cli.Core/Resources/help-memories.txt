@@ -1,0 +1,34 @@
+kcap memories — copy local agent memory into server memories
+
+Usage:
+  kcap memories import [--from <dir>] [--audience user|team|org] [--team <name>]
+                       [--project <slug> | --global] [--update] [--dry-run] [--yes]
+
+Reads Claude Code's auto-memory notes (*.md with name / description / type
+frontmatter) and saves each as a memory. MEMORY.md is skipped: it is only an
+index, and the server keeps its own.
+
+Options:
+  --from <dir>       Folder to read. Default: the memory folder of the current
+                     directory's Claude project (~/.claude/projects/<dir>/memory).
+  --audience A       Who can see and edit the memories: user (default), team, org.
+  --team <name>      Team for --audience team, when you are in several.
+  --project <slug>   Home the memories at a project instead of the repository.
+  --global           Home the memories at the whole org instead of the repository.
+  --update           Overwrite a memory whose slug already exists. Without it,
+                     existing slugs are reported and left alone.
+  --dry-run          Show the plan and exit without saving anything.
+  --yes, -y          Skip the confirmation prompt.
+
+Notes:
+  - The home defaults to the current directory's repository. A Claude project
+    folder is only imported from the checkout it was recorded in; from anywhere
+    else, pass --project or --global.
+  - name becomes the slug, description the one-line summary (cut to 300 chars),
+    the body the content (notes over 64 KiB are skipped). type user is saved as
+    preference; feedback, project and reference carry over; anything else is
+    saved as reference.
+  - Re-running is safe: slugs already saved are reported, not duplicated.
+    One exception: an org import you may not publish directly is queued for
+    approval, and for a --project home a re-run after approval queues it again.
+  - The plan does not ask the server which slugs exist; that shows on import.

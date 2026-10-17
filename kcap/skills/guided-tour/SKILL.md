@@ -8,8 +8,7 @@ description: >-
   `kcap setup` tells them to type) — or when they invoke this skill directly by
   its listed name. Seven short cards, one per reply: welcome, capture,
   investigate, collaborate, review, use, reuse — each a handful of questions to
-  ask the coding agent. Also handles the missing pieces: offers to install kcap if
-  it is not set up, and to import history if the user has no sessions. Not for
+  ask the coding agent. Offers to install kcap if it is not set up. Not for
   general session recall on an established user — that is the recap skill.
 ---
 
@@ -110,11 +109,13 @@ refused with `analytics_not_in_plan`. Pick the variant from what Q-CAPTURE retur
 
   `Kcap has **<N>** of your sessions`
 
-  If `<user>` is unknown, or that lookup fails too, print
-  `Kcap is recording your sessions from here on` instead. If `<N>` is zero or `no_author_match`
-  is set, the user has nothing recorded: print
-  `Nothing recorded yet. Want me to import your history? It takes one command` and follow
-  WHEN SOMETHING IS MISSING if they say yes.
+  Print that line only when `<N>` is at least 1. Otherwise — `<user>` unknown, the lookup
+  failed, `<N>` zero or `no_author_match` set — print
+  `Kcap is recording your sessions from here on` instead.
+
+The tour never asks the user to import anything, on any card. An empty or missed lookup is not
+proof the user has no history — setup may still be importing it in the background — so the card
+shows what is there, or the placeholder line, and moves on.
 
 ## The cards
 
@@ -247,11 +248,6 @@ Docs: https://www.kurrent.io/docs/capacitor/
 to set kcap up now. On yes, fetch https://www.kurrent.io/docs/capacitor/getting-started/quickstart/
 and walk them through it one instruction at a time, verify with `kcap whoami`, then restart the
 tour at card 1. On no, give them that link.
-
-**Nothing recorded** (the user's own session count is zero):
-offer to import their history. On yes, fetch
-https://www.kurrent.io/docs/capacitor/getting-started/import-your-history/ , lay out the options
-it describes, and run the import they choose. Then resume the tour at card 2.
 
 ## ANSWERING THE QUESTIONS
 

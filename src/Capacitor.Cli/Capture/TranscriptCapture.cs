@@ -16,12 +16,13 @@ internal static class TranscriptCapture {
         EncodeUntilHeld(rawLines, stop, TimeProvider.System, reportLoss);
 
     internal static CapturedLines EncodeUntilHeld(
-            IReadOnlyList<string> rawLines, Func<bool> stop, TimeProvider time, Action<RedactionLossReason, int> reportLoss) {
+            IReadOnlyList<string> rawLines, Func<bool> stop, TimeProvider time, Action<RedactionLossReason, int> reportLoss,
+            SecretPatterns? patterns = null) {
         var lines = new List<string>(rawLines.Count);
         var losses = new int[ReasonCount];
         foreach (var raw in rawLines) {
             if (lines.Count > 0 && stop()) break;
-            var captured = SecretRedactor.RedactLineWithOutcome(raw, time);
+            var captured = SecretRedactor.RedactLineWithOutcome(raw, new RedactionBudget(time), patterns ?? SecretRedactor.WatcherPatterns);
             if (captured.Loss is { } reason) {
                 if (reason.IsTransient()) break;
                 losses[(int)reason]++;
@@ -55,8 +56,8 @@ internal static class TranscriptCapture {
         return new(lines, lines.Count);
     }
 
-    internal static RedactionOutcome Encode(string rawLine, TimeProvider time) =>
-        Mark(SecretRedactor.RedactLineWithOutcome(rawLine, time));
+    internal static RedactionOutcome Encode(string rawLine, TimeProvider time, SecretPatterns? patterns = null) =>
+        Mark(SecretRedactor.RedactLineWithOutcome(rawLine, new RedactionBudget(time), patterns ?? SecretRedactor.WatcherPatterns));
 
     /// <summary>Encodes a line of a recording read once, end to end, under the recording budget.</summary>
     public static RedactionOutcome EncodeRecorded(string rawLine) => EncodeRecorded(rawLine, TimeProvider.System);

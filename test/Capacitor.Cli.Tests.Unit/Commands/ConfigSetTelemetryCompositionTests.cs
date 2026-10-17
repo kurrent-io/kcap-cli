@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
 
@@ -31,7 +32,7 @@ public class ConfigSetTelemetryCompositionTests {
         await ConfigMutator.MutateAsync(Config.Root, _ => seeded);
         var before = await File.ReadAllTextAsync(ConfigPath);
 
-        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "set", "telemetry", "off"]);
+        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).HandleAsync(["config", "set", "telemetry", "off"]);
 
         await Assert.That(exit).IsEqualTo(0);
         var after = await File.ReadAllTextAsync(ConfigPath);
@@ -44,7 +45,7 @@ public class ConfigSetTelemetryCompositionTests {
         // LoadProfileConfig/SaveProfileConfig, not merely that it round-trips one unchanged.
         await Assert.That(File.Exists(ConfigPath)).IsFalse();
 
-        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).HandleAsync(["config", "set", "telemetry", "off"]);
+        var exit = await new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).HandleAsync(["config", "set", "telemetry", "off"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(File.Exists(ConfigPath)).IsFalse();

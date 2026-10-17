@@ -5,6 +5,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
@@ -25,12 +26,13 @@ public static class CommandServices {
             this IServiceCollection services, ConfigRoot config, UserHome home, WorkingDirectory workdir, DaemonStore daemons,
             ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
             AuthEndpoints endpoints, HookClock clock, string? baseUrl,
-            TelemetryStartup telemetryStartup) {
+            TelemetryStartup telemetryStartup, LocalRoot localRoot) {
         services
             .AddCapacitorContext(config, home, workdir, daemons, profiles)
             .AddCapacitorCommands();
 
         services.AddSingleton(endpoints);
+        services.AddSingleton(localRoot);
         services.AddSingleton(clock);
         // The hook's own clock, not a second one: every deadline a command measures has to share the
         // provider the budget was anchored on, or a faked one moves only half of them.
@@ -96,6 +98,7 @@ public static class CommandServices {
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
         services.AddTransient<CurateCommand>();
+        services.AddTransient<MemoriesCommand>();
         services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();

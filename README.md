@@ -181,6 +181,7 @@ At a glance — each links to its section below:
 | [`kcap review`](#pr-review-with-full-context) | Launch a PR review with full transcript context |
 | [`kcap mcp <server>`](#sessions-mcp-server-for-agents) | Run an MCP server (sessions / flows / memory / …) for agents |
 | [`kcap curate apply`](#curate-guidelines) | Sync promoted guidelines into `CLAUDE.md` / `AGENTS.md` |
+| [`kcap memories import`](#import-local-memories) | Copy Claude Code's local memory notes into server memories |
 | [`kcap page`](#pages) | Publish a self-contained HTML page and get a link to share |
 | [`kcap skills sync`](#skills-sync) | Materialize the repo's approved skill docs into every present harness's skills tree |
 | [`kcap daemon …`](#daemon) | Run and manage the agent daemon |
@@ -734,7 +735,7 @@ Stdio MCP server that lets coding agents keep Capacitor's record of the plan a s
 
 It provides four tools:
 
-- **`declare_plan_document`** — declare the document this session works from: `kind` (`plan`, `spec` or `design`) and `path`, plus optional `argues_from` (the spec a plan implements, or the design a spec refines, so both land on one plan) and `work_item_id`. The CLI reads the file, sends its SHA-256 and — at or under 256 KB — its content, and keys the path relative to the git repository root so the declared document and its discovered twin share one identity; a larger file is declared by hash only and the result says so. Returns `plan_id`, `document_key` and `created`; declaring the same file again lands on the same plan and replaces the stored copy with the file's current text, so an agent declares it again after changing it (Claude Code sessions do this automatically for `Write`/`Edit`/`MultiEdit`; see [Declared-document refresh](#what-it-records)).
+- **`declare_plan_document`** — declare the document this session works from: `kind` (`plan`, `spec` or `design`) and `path`, plus optional `argues_from` (the spec a plan implements, or the design a spec refines, so both land on one plan), `work_item_id`, `plan_id` (the plan to attach it to, when continuing one from a different checkout) and `workspace_root` (the checkout the document is in, when it is not the project directory). A document in another worktree of the session's repository is accepted by absolute path without naming it; one in another repository needs `workspace_root`. The CLI reads the file, sends its SHA-256 and — at or under 256 KB — its content, and keys the path relative to the git repository root so the declared document and its discovered twin share one identity; a larger file is declared by hash only and the result says so. Returns `plan_id`, `document_key` and `created`; declaring the same file again lands on the same plan and replaces the stored copy with the file's current text, so an agent declares it again after changing it (Claude Code sessions do this automatically for `Write`/`Edit`/`MultiEdit`; see [Declared-document refresh](#what-it-records)).
 - **`set_plan_tasks`** — declare the task list as a full ordered snapshot (`title`, optional `task_id`, `status`, `note` per entry), replacing the declared list; entries carrying a known `task_id` keep it, the rest are minted. Returns the tasks with ids and ordinals.
 - **`update_plan_task`** — record one transition, by `task_id` or 1-based `ordinal`, to `pending`, `in_progress`, `completed` or `skipped`, with an optional `note`. When no `plan_id` is given the CLI resolves the session's current plan first, so the result always names the plan it acted on, and a session with no plan gets an error naming the fix.
 - **`get_plan`** — read a plan back: documents, tasks with status and source, and progress. The recovery call after context compaction; a session with no plan gets an empty result, not an error.
@@ -810,6 +811,18 @@ kcap page delete art_01J9...
 ```
 
 A page is private to its owner until `--visibility` says otherwise. `--to` names one audience member (`user:<id>`, `team:<slug>`, `project:<id>`) and is only read under `scoped`; on `share` it replaces the whole audience, so a grant you leave out is one you are taking away. `--session` cites a session the page came out of and defaults to `KCAP_SESSION_ID`, so an agent's publish is attributed without ceremony. The URL is whatever the server says it is — printed on stdout; refusals go to stderr and name the limit they hit along with its value.
+
+### Import local memories
+
+Claude Code keeps its auto-memory per machine, under `~/.claude/projects/<dir>/memory/`. `kcap memories import` copies those notes into server memories once, so they follow you to another machine and can be shared. Run it on the machine that holds the files.
+
+```bash
+kcap memories import --dry-run                 # show the plan for this directory's Claude project
+kcap memories import --audience org --global   # save as org-wide memories, after confirming
+kcap memories import --from ~/notes --update   # read another folder; overwrite slugs that exist
+```
+
+Each note's `name` becomes the slug, `description` the summary and the body the content; type `user` is saved as `preference`. `MEMORY.md` is skipped. The memories land at the current checkout's repository unless `--project <slug>` or `--global` says otherwise — a Claude project folder is only imported from the checkout it was recorded in — with the `user` audience unless `--audience team|org` says otherwise. A slug that already exists is reported and left alone, or overwritten with `--update`, so a re-run is safe; a near-duplicate the server finds is reported beside the save. An `--audience org` import you may not publish directly is queued for an admin's approval; with a `--project` home, re-running it after approval queues it again.
 
 ### Curate guidelines
 
@@ -1064,7 +1077,7 @@ kcap daemon service uninstall              # stop and remove the service
 kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR
 ```
 
-`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
+`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. Over an installed service, a plain `install` stops it and installs it again. On macOS it rewrites the plist only once launchd has unloaded the old job, waiting up to 15 seconds; on Linux and Windows a refused registration puts the previous unit file back. A failed install says whether the service is still loaded or now stopped, which daemon its unit names, and the command that reinstalls it: `install --replace --verify`, or on Linux `uninstall` then `install`. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
 
 On **Windows** the service is a per-user Scheduled Task scoped to your account, so installing it needs no administrator rights. It runs the daemon in a windowless console (`conhost --headless`) at sign-in, and the task's wrapper restarts the daemon five seconds after any non-zero exit — a crash, or the daemon's own `kcap daemon restart` — the way systemd's `Restart=on-failure` does; an exit 0 is a deliberate stop. `service stop` and `service uninstall` end the task and then the daemon itself, since ending a task leaves its child processes running. Uninstalling the desktop app runs `service uninstall --under` for the app's own folder and takes that folder back off your user PATH, so a task that would otherwise retry the deleted daemon at every sign-in goes with it; a service an npm or standalone install wrote is left alone. The wrapper also carries the installing shell's `HOME` when it is an absolute path, so a Git Bash or redirected home resolves the same daemons directory for the daemon as for the CLI.
 
@@ -1746,7 +1759,7 @@ kcap setup --server-url <url> --no-prompt --skip-cursor-hooks
 
 #### Daemon config settings
 
-Use `kcap config set` to configure the binary paths used by the daemon. The values are stored in the active profile and take effect the next time the daemon starts.
+Use `kcap config set` to configure the daemon. The values are stored in the active profile. The binary paths take effect the next time the daemon starts; `daemon.max_agents` is also applied to the running daemon.
 
 ```bash
 kcap config set daemon.claude_path /opt/claude/bin/claude
@@ -1757,7 +1770,7 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
-| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents`, the `KCAP_MAX_AGENTS` env var, or the desktop app's **Settings…**; a running daemon applies a change without a restart. |
+| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents` or the `KCAP_MAX_AGENTS` env var, which take precedence at startup. `kcap config set daemon.max_agents` and the desktop app's **Settings…** hand the value to the running daemon, which applies it without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
 
@@ -2468,6 +2481,10 @@ You'll see the offer on whichever surface reaches you:
   until you trust kcap's). A hook running proves the integration loaded, not that a session reached
   the server. `--json` carries the time as `last_hook_event`, and a git older than 2.54,
   which ignores the commit hook, gets its own warning line.
+- **`kcap status`** shows each running daemon's version, and warns, naming the fix, when a daemon
+  runs a different version than the CLI or its service runs a binary outside the CLI's own install
+  (one `kcap update` does not reach, such as an older npm install's). `--json` carries it as each
+  daemon's `version`.
 
 Manage the nudges with `kcap harness`:
 
@@ -2501,7 +2518,7 @@ after a `--all` dismiss is still offered once.
 ### Other commands
 
 ```bash
-kcap status         # server, auth, hooks (and when each agent last ran one), daemon
+kcap status         # server, auth, hooks (and when each agent last ran one), daemon and its version
 kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)

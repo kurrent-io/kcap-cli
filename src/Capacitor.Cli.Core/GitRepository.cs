@@ -93,6 +93,22 @@ public static class GitRepository {
         }
     }
 
+    /// <summary>The git directory every working tree of the repository shares: the same path for two
+    /// checkouts exactly when they are worktrees of one repository. Null when unresolvable.</summary>
+    public static string? ResolveCommonDir(string startDir) {
+        if (ResolveGitDir(startDir) is not { } gitDir) return null;
+
+        try {
+            var pointer = Path.Combine(gitDir, "commondir");
+            if (!File.Exists(pointer)) return gitDir;
+
+            var target = File.ReadAllTextShared(pointer).Trim();
+            return CanonicalPath.Resolve(Path.IsPathRooted(target) ? target : Path.Combine(gitDir, target));
+        } catch {
+            return null;
+        }
+    }
+
     /// <summary>The branch checked out in <paramref name="startDir"/>'s working tree, read from its
     /// <c>HEAD</c> with no git process; null when detached or unreadable. A checkout can switch
     /// branch after launch, so a branch recorded at creation is not this.</summary>
