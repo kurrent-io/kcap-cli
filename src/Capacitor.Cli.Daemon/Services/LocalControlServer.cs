@@ -14,7 +14,7 @@ internal sealed partial class LocalControlServer(
         DaemonConfig config, AgentOrchestrator orchestrator,
         RestartCoordinator restart, LaunchConsentIpc consentIpc, PermissionIpc permissionIpc, DaemonStatusIpc statusIpc,
         DaemonSettingsIpc settingsIpc, AdmissionFenceIpc fenceIpc,
-        ILogger<LocalControlServer> logger
+        DaemonShutdownIpc shutdownIpc, ILogger<LocalControlServer> logger
     ) : BackgroundService {
     protected override async Task ExecuteAsync(CancellationToken ct) {
         var path = config.Store.SocketPath(config.Name);
@@ -78,7 +78,8 @@ internal sealed partial class LocalControlServer(
                 case FrameType.SendTextWithAttachments: await orchestrator.HandleLocalSendTextWithAttachmentsAsync(first.Text, stream, ct); break;
                 case FrameType.DaemonSettingsPut: await settingsIpc.HandlePutAsync(first.Text, stream, ct); break;
                 case FrameType.AdmissionFenceAcquire: await fenceIpc.HandleAcquireAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire, got {first.Type}"), ct); break;
+                case FrameType.Shutdown: await shutdownIpc.HandleAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);
@@ -91,7 +92,7 @@ internal sealed partial class LocalControlServer(
         // Bare "now" refuses while busy (don't silently queue); "when-idle"/"force" accept.
         if (mode is "now" && restart.IsBusy()) {
             await FrameCodec.WriteAsync(stream,
-                LocalFrame.Error("daemon busy — agents running or eval in progress; use --when-idle or --force"), ct);
+                LocalFrame.Error("daemon busy — an eval, a launch in admission or a flow participant mid-round; use --when-idle or --force"), ct);
 
             return;
         }

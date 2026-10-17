@@ -387,6 +387,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(sp => new AdmissionFence(
             config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time, sp.GetRequiredService<ILogger<AdmissionFence>>()));
         builder.Services.AddSingleton<AdmissionFenceIpc>();
+        builder.Services.AddSingleton<DaemonShutdownIpc>();
 
         builder.Services.AddSingleton<PermissionPromptBroker>();
         builder.Services.AddSingleton<PermissionIpc>();
