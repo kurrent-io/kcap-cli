@@ -73,7 +73,22 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/run-shell-tests.sh
 
+      # The runner has no user manager until lingering is on, and the local server's live service test
+      # needs one to load its unit.
+      - name: Start a systemd user session
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          uid=$(id -u)
+          for _ in $(seq 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+          [ -S "/run/user/$uid/bus" ] || { echo "no systemd user bus at /run/user/$uid/bus" >&2; exit 1; }
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+
       - name: Run tests
+        env:
+          # The live launchd/systemd test loads a uniquely named unit; a disposable runner is the place for it.
+          KCAP_LOCAL_SERVICE_CHECK: ${{ runner.os != 'Windows' && '1' || '' }}
         # Assemblies and per-assembly width are per-leg, above: the ceiling is what the runner can
         # carry without the wall-clock budgets inside the code under test expiring. Five modules was
         # measured to starve those and to vanish an Integration test's temp working directory on
