@@ -41,7 +41,7 @@ public class DaemonCommandsServiceRefreshTests {
                 };
             });
 
-    DaemonServiceCommands Commands(LaunchdServiceManager manager, string id, Func<string, bool>? stopForReload) =>
+    DaemonServiceCommands Commands(LaunchdServiceManager manager, string id, Func<string, ReloadStop>? stopForReload) =>
         new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, id, Home, TimeProvider.System) { ReloadStopper = stopForReload };
 
     [Test]
@@ -54,7 +54,7 @@ public class DaemonCommandsServiceRefreshTests {
         using var console = ConsoleOutput.StartFullCapture();
 
         var exit = await Commands(Manager(calls, new() { ["a"] = "adaptive (6)", ["b"] = "adaptive (6)" }), "a",
-            id => { stopped.Add(id); return true; }).Refresh(force: true, stabilize: s => s);
+            id => { stopped.Add(id); return ReloadStop.Exited; }).Refresh(force: true, stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(stopped).IsEquivalentTo(["a"]);
@@ -69,13 +69,13 @@ public class DaemonCommandsServiceRefreshTests {
         Seed("a", LaunchdUnit.Plist(Spec("a")));
 
         using (var forced = ConsoleOutput.StartFullCapture()) {
-            var exit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", _ => true).Refresh(force: true, stabilize: s => s);
+            var exit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", _ => ReloadStop.Exited).Refresh(force: true, stabilize: s => s);
             await Assert.That(exit).IsNotEqualTo(0);
             await Assert.That(forced.GetCapturedError()).Contains("refresh_outcome=unverified");
         }
 
         using var unforced = ConsoleOutput.StartFullCapture();
-        var unforcedExit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", _ => true).Refresh(stabilize: s => s);
+        var unforcedExit = await Commands(Manager([], new() { ["a"] = "app (1)" }), "a", _ => ReloadStop.Exited).Refresh(stabilize: s => s);
         await Assert.That(unforcedExit).IsEqualTo(0);
         await Assert.That(unforced.GetCapturedOutput().Trim()).IsEqualTo("");
         await Assert.That(unforced.GetCapturedError().Trim()).IsEqualTo("");
@@ -89,7 +89,7 @@ public class DaemonCommandsServiceRefreshTests {
         var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "a", TimeSpan.Zero, time);
         using var console = ConsoleOutput.StartFullCapture();
         var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root),
-            Manager([], new() { ["a"] = "adaptive (6)" }), "a", Home, time) { ReloadStopper = _ => true };
+            Manager([], new() { ["a"] = "adaptive (6)" }), "a", Home, time) { ReloadStopper = _ => ReloadStop.Exited };
 
         var run     = commands.Refresh(force: true, stabilize: s => s);
         var release = time.GetUtcNow().AddSeconds(9);
@@ -110,7 +110,7 @@ public class DaemonCommandsServiceRefreshTests {
         var manager = new UntouchableManager();
         using var console = ConsoleOutput.StartFullCapture();
         var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "a", Home, TimeProvider.System) {
-            ReloadStopper = _ => true,
+            ReloadStopper = _ => ReloadStop.Exited,
         };
 
         var exit = await commands.Refresh(force: true, stabilize: s => s);
@@ -142,7 +142,7 @@ public class DaemonCommandsServiceRefreshTests {
         var calls = new List<string[]>();
         using var console = ConsoleOutput.StartFullCapture();
 
-        var exit = await Commands(Manager(calls, new() { ["b"] = "adaptive (6)" }), "a", _ => true).Refresh(force: true, stabilize: s => s);
+        var exit = await Commands(Manager(calls, new() { ["b"] = "adaptive (6)" }), "a", _ => ReloadStop.Exited).Refresh(force: true, stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(console.GetCapturedError()).Contains("refresh_outcome=unit_missing");
@@ -158,7 +158,7 @@ public class DaemonCommandsServiceRefreshTests {
         var asked = false;
         using var console = ConsoleOutput.StartFullCapture();
 
-        var commands = Commands(Manager(calls, new() { ["a"] = "adaptive (6)" }), "a", _ => asked = true);
+        var commands = Commands(Manager(calls, new() { ["a"] = "adaptive (6)" }), "a", _ => { asked = true; return ReloadStop.Exited; });
         var exit = await commands.Refresh(force: true, stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(1);
@@ -177,10 +177,11 @@ public class DaemonCommandsServiceRefreshTests {
         using var console = ConsoleOutput.StartFullCapture();
 
         var exit = await Commands(Manager(calls, new() { ["a"] = "adaptive (6)", ["b"] = "adaptive (6)" }), "a",
-            id => { asked.Add(id); return false; }).Refresh(stabilize: s => s);
+            id => { asked.Add(id); return ReloadStop.NoAnswer; }).Refresh(stabilize: s => s);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(asked).IsEquivalentTo(["a", "b"]);
+        await Assert.That(console.GetCapturedOutput()).Contains("did not answer the stop request");
         await Assert.That(console.GetCapturedOutput()).Contains("kcap daemon service refresh --name a --force");
         await Assert.That(console.GetCapturedError()).DoesNotContain("refresh_outcome=");
     }
@@ -205,6 +206,68 @@ public class DaemonCommandsServiceRefreshTests {
         var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
         await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("keep", "final"));
         await Assert.That(aliveAtBootout).IsEquivalentTo([false]);
+    }
+
+    DummyProcess StartDaemon(string id) {
+        var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath(id), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        return child;
+    }
+
+    /// <summary>A daemon from before the shutdown frame refuses it; the reload asks it for a restart in
+    /// the old mode instead and reloads once it accepts.</summary>
+    [Test]
+    [Arguments(false, "now")]
+    [Arguments(true, "force")]
+    public async Task A_daemon_that_refuses_shutdown_is_asked_for_a_restart_instead(bool force, string mode) {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
+        using var child = StartDaemon("a");
+        var received = FakeControlSocket.AnswerInOrder(Daemons.Store, "a",
+            [LocalFrame.Error("expected Spawn/Attach/List, got Shutdown"), LocalFrame.RestartAck("restarting")]);
+        var calls = new List<string[]>();
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(Manager(calls, new() { ["a"] = "adaptive (6)" }), "a", stopForReload: null)
+            .Refresh(force: force, stabilize: s => s);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var frames = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(frames[0]!.Type).IsEqualTo(FrameType.Shutdown);
+        await Assert.That(frames[1] is { Type: FrameType.Restart } restart && restart.Text == mode).IsTrue();
+        await Assert.That(calls.Count(c => c[0] == "bootout")).IsEqualTo(1);
+        await Assert.That(console.GetCapturedOutput()).Contains("reloaded");
+    }
+
+    /// <summary>A daemon that accepted the stop but is still exiting at the bound is ended by the bootout,
+    /// and the reload goes ahead.</summary>
+    [Test]
+    public async Task An_accepted_stop_that_overruns_the_wait_still_reloads() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+        Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
+        using var child = StartDaemon("a");
+        var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = FakeControlSocket.AnswerOnce(Daemons.Store, "a", LocalFrame.ShutdownAck("stopping"), afterReply: () => acked.SetResult());
+        var calls   = new List<string[]>();
+        var manager = Manager(calls, new() { ["a"] = "adaptive (6)" },
+            onCall: args => { if (args[0] == "bootout") { child.Kill(); child.WaitForExit(); } });
+        var time     = new FakeTimeProvider();
+        var commands = new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "a", Home, time);
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var run = Task.Run(() => commands.Refresh(stabilize: s => s));
+        await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        for (var steps = 0; !run.IsCompleted; steps++) {
+            if (steps > 2000) throw new TimeoutException("the refresh never gave up waiting under the fake clock");
+            time.Advance(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(5);
+        }
+
+        await Assert.That(await run).IsEqualTo(0);
+        await Assert.That(calls.Count(c => c[0] == "bootout")).IsEqualTo(1);
+        await Assert.That(calls.Count(c => c[0] == "bootstrap")).IsEqualTo(1);
+        await Assert.That(console.GetCapturedOutput()).Contains("reloaded with its updated service unit");
+        await Assert.That(console.GetCapturedOutput()).Contains("ended by the reload");
     }
 
     [Test]

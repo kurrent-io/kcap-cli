@@ -485,7 +485,10 @@ public sealed class DaemonCommands(
                 return 1;
             }
 
-            if (await DaemonShutdownClient.StopAndWaitAsync(store, name, request, StopExitWait, time, CancellationToken.None)) {
+            // Re-checked after the wait: a daemon that finished its stop just past the bound has left its
+            // ledger as it meant to, and its pid may already name another process.
+            if (await DaemonShutdownClient.StopAndWaitAsync(store, name, request, StopExitWait, time, CancellationToken.None)
+             || !DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
                 Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
                 TryCleanupMarkersUnderLock(name);
 

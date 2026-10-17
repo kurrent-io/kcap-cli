@@ -4,26 +4,39 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-/// <summary>A daemon control socket that accepts one connection, reads one frame and answers it.</summary>
+/// <summary>A daemon control socket that accepts connections one at a time, reads one frame on each and
+/// answers it.</summary>
 static class FakeControlSocket {
     /// <param name="afterReply">Runs once the reply is written, before the connection closes.</param>
     /// <returns>The frame the client sent.</returns>
-    public static Task<LocalFrame?> AnswerOnce(DaemonStore store, string name, LocalFrame reply, Action? afterReply = null) {
+    public static async Task<LocalFrame?> AnswerOnce(DaemonStore store, string name, LocalFrame reply, Action? afterReply = null) =>
+        (await AnswerInOrder(store, name, [reply], afterReply))[0];
+
+    /// <summary>Answers one connection per reply, in order.</summary>
+    /// <param name="afterReply">Runs once the last reply is written.</param>
+    /// <returns>The frames the client sent, one per connection.</returns>
+    public static Task<IReadOnlyList<LocalFrame?>> AnswerInOrder(
+            DaemonStore store, string name, IReadOnlyList<LocalFrame> replies, Action? afterReply = null) {
         store.EnsureDirectory();
         var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         listener.Bind(new UnixDomainSocketEndPoint(store.SocketPath(name)));
-        listener.Listen(1);
+        listener.Listen(replies.Count);
 
-        return Task.Run(async () => {
+        return Task.Run<IReadOnlyList<LocalFrame?>>(async () => {
+            var received = new List<LocalFrame?>();
+
             using (listener) {
-                using var connection = await listener.AcceptAsync();
-                await using var stream = new NetworkStream(connection, ownsSocket: false);
-                var received = await FrameCodec.ReadAsync(stream, CancellationToken.None);
-                await FrameCodec.WriteAsync(stream, reply, CancellationToken.None);
-                afterReply?.Invoke();
+                foreach (var reply in replies) {
+                    using var connection = await listener.AcceptAsync();
+                    await using var stream = new NetworkStream(connection, ownsSocket: false);
+                    received.Add(await FrameCodec.ReadAsync(stream, CancellationToken.None));
+                    await FrameCodec.WriteAsync(stream, reply, CancellationToken.None);
+                }
 
-                return received;
+                afterReply?.Invoke();
             }
+
+            return received;
         });
     }
 }

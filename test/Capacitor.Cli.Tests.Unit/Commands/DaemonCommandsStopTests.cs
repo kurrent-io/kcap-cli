@@ -125,6 +125,36 @@ public class DaemonCommandsStopTests {
         await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
     }
 
+    /// <summary>The daemon exits between the end of the bound and the fallback, having left its ledger as
+    /// it wants it: the fallback must neither signal the pid nor overwrite the ledger.</summary>
+    [Test]
+    public async Task Stop_leaves_a_daemon_that_exits_just_after_the_bound_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var ledger   = SeedLedger(("agent-1", ResumeState.Resuming, null));
+        var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => acked.SetResult());
+        var time = new FakeTimeProvider();
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var run = Task.Run(() => Commands(time).HandleAsync(["daemon", "stop", "--name", Name, "--keep-agents"]));
+        await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await Task.Delay(200);
+
+        // The last poll before the bound parks a delay due past it, so the bound fires first.
+        time.Advance(DaemonCommands.StopExitWait - TimeSpan.FromMilliseconds(20));
+        await Task.Delay(200);
+        child.Kill();
+        child.WaitForExit();
+        time.Advance(TimeSpan.FromMilliseconds(50));
+
+        await Assert.That(await run.WaitAsync(TimeSpan.FromSeconds(30))).IsEqualTo(0);
+        await Assert.That(Request(await received.WaitAsync(TimeSpan.FromSeconds(30)))).IsEqualTo(new ShutdownRequestDto("keep", "final"));
+        await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Resuming, LastError: null }).IsTrue();
+        await Assert.That(console.GetCapturedOutput()).DoesNotContain("was not running");
+    }
+
     [Test]
     public async Task Status_lists_resuming_and_interrupted_counts() {
         SeedLedger(

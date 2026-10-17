@@ -168,8 +168,8 @@ sealed partial class LaunchdServiceManager(
     /// onto the stable <c>current</c> path when <paramref name="stabilize"/> maps its binary there (a
     /// script install's version directory is never updated in place). The plist is rewritten whenever
     /// it is out of date, but launchd reads it only when the job loads. So a running job is reloaded only
-    /// once <paramref name="stopForReload"/> reports that the daemon has exited; one that does not exit
-    /// waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
+    /// once <paramref name="stopForReload"/> reports that the daemon has accepted being stopped; one that
+    /// does not waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
     /// <see cref="ReloadBudget"/>. A job that is not stale counts as <see cref="UnitRefresh.Current"/>
     /// whatever its spawn type unless <paramref name="requirePositiveSpawnType"/> asks for a positive one.
     /// </summary>
