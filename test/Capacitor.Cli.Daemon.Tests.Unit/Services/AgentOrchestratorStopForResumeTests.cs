@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
@@ -74,6 +75,24 @@ public class AgentOrchestratorStopForResumeTests {
         await Assert.That(string.Join(",", runtime.StopCalls)).IsEqualTo("graceful,terminate");
     }
 
+    /// The stop must fit a supervisor's exit budget: a child that ignores the graceful request is
+    /// terminated once the grace runs out, however long the request itself would block.
+    [Test]
+    public async Task KeepAgents_terminates_a_runtime_that_never_exits_once_the_grace_runs_out() {
+        var orch    = Build(new CaptureServerConnection());
+        var runtime = new FakeHostedAgentRuntime("cursor", emitsTerminalOutput: true) { NeverExitsOnItsOwn = true };
+        Seed(orch, "keep-stuck", runtime: runtime);
+        await Assert.That(orch.ShutdownStopGrace).IsEqualTo(TimeSpan.FromSeconds(5));
+
+        var elapsed = Stopwatch.StartNew();
+        await orch.DisposeAsync();
+        elapsed.Stop();
+
+        await Assert.That(string.Join(",", runtime.StopCalls)).IsEqualTo("graceful,terminate");
+        await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(10));
+        await Assert.That(Ledger().TryRead("keep-stuck")!.State).IsEqualTo(ResumeState.Resuming);
+    }
+
     [Test]
     public async Task EndAgents_keeps_todays_shutdown_report() {
         var server = new CaptureServerConnection();
@@ -96,19 +115,7 @@ public class AgentOrchestratorStopForResumeTests {
     public async Task A_resumable_reviewer_is_parked_not_prepared() {
         var server = new CaptureServerConnection { ParkOutcome = ParkAck.Parked };
         var orch   = Build(server);
-        var agent = new AgentInstance(
-            "park-on-shutdown", "review this", "default", null, "/repo", "codex",
-            new AgentOrchestratorReviewerParkTests.FakeAppServerRuntime("thread-shutdown"),
-            new WorktreeInfo("/repo", "b", "/repo"),
-            new CancellationTokenSource()) {
-            CreatedAt     = TimeProvider.System.GetUtcNow().UtcDateTime,
-            LastOutputAt  = TimeProvider.System.GetUtcNow().UtcDateTime,
-            Kind          = LaunchKind.ReviewFlow,
-            Status        = "Running",
-            ActivityClock = new AgentActivityClock(TimeProvider.System),
-            Work          = WorkLocation.BorrowedCwd
-        };
-        orch.RegisterAgentForTest(agent);
+        var agent  = SeedResumableReviewer(orch, "park-on-shutdown", "thread-shutdown");
 
         await orch.DisposeAsync();
 
@@ -117,6 +124,28 @@ public class AgentOrchestratorStopForResumeTests {
         await Assert.That(agent.ResumePending).IsFalse();
         await Assert.That(Ledger().TryRead("park-on-shutdown")).IsNull();
         await Assert.That(server.ShutdownReports.Any(r => r.AgentId == "park-on-shutdown")).IsFalse();
+    }
+
+    /// A park waiting on the interactive stops would report its ack only after their grace, late in
+    /// the exit budget; it goes out while a stuck interactive agent is still in its grace.
+    [Test]
+    public async Task A_park_is_reported_while_interactive_agents_are_still_stopping() {
+        var parkEntered = new TaskCompletionSource();
+        var server      = new CaptureServerConnection { ParkOutcome = ParkAck.Parked, ParkEntered = parkEntered };
+        var orch        = Build(server);
+        var stuck       = new FakeHostedAgentRuntime("cursor", emitsTerminalOutput: true) { NeverExitsOnItsOwn = true };
+        Seed(orch, "keep-slow", runtime: stuck);
+        SeedResumableReviewer(orch, "park-early");
+        string? interactiveAtPark = null;
+        _ = parkEntered.Task.ContinueWith(
+            _ => { lock (stuck.StopCalls) interactiveAtPark = string.Join(",", stuck.StopCalls); },
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        await orch.DisposeAsync();
+
+        await Assert.That(server.ParkReports.Any(r => r.AgentId == "park-early")).IsTrue();
+        await Assert.That(interactiveAtPark).IsNotNull();
+        await Assert.That(interactiveAtPark!).DoesNotContain("terminate");
     }
 
     [Test]
@@ -150,6 +179,24 @@ public class AgentOrchestratorStopForResumeTests {
         });
 
     ResumeLedgerStore Ledger() => ResumeLedgerStore.For(Store.Store, "test");
+
+    static AgentInstance SeedResumableReviewer(AgentOrchestrator orch, string id, string threadId = "thread-1") {
+        var agent = new AgentInstance(
+            id, "review this", "default", null, "/repo", "codex",
+            new AgentOrchestratorReviewerParkTests.FakeAppServerRuntime(threadId),
+            new WorktreeInfo("/repo", "b", "/repo"),
+            new CancellationTokenSource()) {
+            CreatedAt     = TimeProvider.System.GetUtcNow().UtcDateTime,
+            LastOutputAt  = TimeProvider.System.GetUtcNow().UtcDateTime,
+            Kind          = LaunchKind.ReviewFlow,
+            Status        = "Running",
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            Work          = WorkLocation.BorrowedCwd
+        };
+        orch.RegisterAgentForTest(agent);
+
+        return agent;
+    }
 
     static AgentInstance Seed(
             AgentOrchestrator orch, string id, string? worktree = null, FakeHostedAgentRuntime? runtime = null) {

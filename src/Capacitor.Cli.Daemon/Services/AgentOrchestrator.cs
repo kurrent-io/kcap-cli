@@ -3998,12 +3998,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // terminate — not escape via the OUTER catch and skip terminate, which on the reap path
             // leaves a permanent zombie (ReapClaimed latched, agent still Running, every future reap
             // CAS-refused).
+            // A shutdown stop has the supervisor's exit budget to fit in, not a user's patience.
+            var shuttingDown = _shutdownCts.IsCancellationRequested;
             Task graceful = Task.CompletedTask;
 
             try {
-                graceful = agent.Runtime.RequestGracefulStopAsync();
-                await graceful.WaitAsync(GracefulExitWait, _time);
-                await agent.Runtime.WaitForExitAsync(GracefulExitWait);
+                if (shuttingDown) {
+                    await AwaitGracefulExitAsync(agent, ShutdownStopGrace, CancellationToken.None);
+                } else {
+                    graceful = agent.Runtime.RequestGracefulStopAsync();
+                    await graceful.WaitAsync(GracefulExitWait, _time);
+                    await agent.Runtime.WaitForExitAsync(GracefulExitWait);
+                }
             } catch (TimeoutException ex) {
                 // WaitAsync abandons the send rather than cancelling it (nothing CAN cancel it), so the
                 // abandoned task is observed separately — it completes on its own once the terminate
@@ -4019,7 +4025,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // so we can tell from logs whether the graceful path is actually working
             // in production or if this vendor's CLI is consistently being SIGTERMed instead.
             if (!agent.Runtime.HasExited) {
-                LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds, agent.Vendor);
+                LogGracefulExitTimedOut(agentId, (shuttingDown ? ShutdownStopGrace : GracefulExitWait).TotalSeconds, agent.Vendor);
             }
 
             // Cancel the read loop and terminate the process. We deliberately do NOT end
@@ -4033,7 +4039,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // teardown, and is idempotent: if claude already fired its own session-end
             // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
-            await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(10));
+            await agent.Runtime.TerminateAsync(shuttingDown ? ShutdownTerminateGrace : TimeSpan.FromSeconds(10));
 
             // TerminateAsync's SIGKILL is followed by a single non-blocking waitpid, so the
             // child is usually not reaped yet; poll briefly before calling the stop a failure.

@@ -27,6 +27,13 @@ internal partial class AgentOrchestrator {
 
     const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
+    /// Grace for a shutdown stop, graceful request and exit together. Five seconds, then a one-second
+    /// SIGTERM, keeps a keep-agents shutdown, whose stops and parks all run at once, well inside
+    /// launchd's 20-second exit budget.
+    internal TimeSpan ShutdownStopGrace { get; set; } = TimeSpan.FromSeconds(5);
+
+    static readonly TimeSpan ShutdownTerminateGrace = TimeSpan.FromSeconds(1);
+
     /// Stops an interactive agent so a successor daemon can resume it, leaving its ledger entry
     /// <see cref="ResumeState.Resuming"/> and its terminal ring on disk. An agent with no readable
     /// entry has nothing to resume from and is left to the ordinary shutdown.
@@ -51,19 +58,33 @@ internal partial class AgentOrchestrator {
 
         TryWriteRing(agent.Id, ring);
 
-        var graceful = Task.CompletedTask;
-
         // The vendor saves its session on a graceful exit; a resume reopens what it saved.
         try {
-            graceful = agent.Runtime.RequestGracefulStopAsync();
-            await graceful.WaitAsync(GracefulExitWait, _time, ct);
-            await agent.Runtime.WaitForExitAsync(GracefulExitWait);
+            await AwaitGracefulExitAsync(agent, ShutdownStopGrace, ct);
         } catch (Exception ex) {
-            if (!graceful.IsCompleted) ObserveAbandonedGracefulStop(graceful, agent.Id);
             LogGracefulExitFailed(ex, agent.Id);
         }
 
-        await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
+        await agent.Runtime.TerminateAsync(ShutdownTerminateGrace);
+    }
+
+    /// Asks for a graceful exit and waits for it, request and exit together within
+    /// <paramref name="grace"/>. A request that has not returned by then is abandoned, not awaited:
+    /// a PTY write to a child that stopped reading never returns until the terminate after it.
+    async Task AwaitGracefulExitAsync(AgentInstance agent, TimeSpan grace, CancellationToken ct) {
+        var started  = _time.GetTimestamp();
+        var graceful = Task.CompletedTask;
+
+        try {
+            graceful = agent.Runtime.RequestGracefulStopAsync();
+            await graceful.WaitAsync(grace, _time, ct);
+        } catch {
+            if (!graceful.IsCompleted) ObserveAbandonedGracefulStop(graceful, agent.Id);
+            throw;
+        }
+
+        var remaining = grace - _time.GetElapsedTime(started);
+        if (remaining > TimeSpan.Zero) await agent.Runtime.WaitForExitAsync(remaining);
     }
 
     /// Appends a predecessor's ring, at most <see cref="TerminalOutputBuffer.MaxBytes"/> of its tail,
@@ -78,21 +99,19 @@ internal partial class AgentOrchestrator {
     }
 
     /// The per-agent shutdown step. Under <see cref="ShutdownIntent.KeepAgents"/> interactive agents
-    /// stop for resume and resumable reviewers park; everything else is terminated.
+    /// stop for resume and resumable reviewers park; everything else is terminated. Every agent stops
+    /// at once, so the total is one agent's stop however many run, and a park's durable ack goes out
+    /// at the start of the exit budget.
     async Task StopAgentsForShutdownAsync(IReadOnlyList<AgentInstance> live) {
-        if (ShutdownIntent == ShutdownIntent.KeepAgents) {
-            await Task.WhenAll(live.Where(IsInteractive).Select(PrepareForShutdownResumeAsync));
-            await ParkReviewersForShutdownAsync([.. live.Where(a => !IsInteractive(a) && IsResumableReviewer(a))]);
-        }
+        // _shutdownCts is already cancelled here, so the parks run on their own budget.
+        using var parkBudget = new CancellationTokenSource(ShutdownReportBudget, _time);
+        var       keep       = ShutdownIntent == ShutdownIntent.KeepAgents;
 
-        foreach (var agent in live.Where(a => !a.ResumePending)) {
-            try {
-                await agent.ReadCts.CancelAsync();
-                await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
-            } catch {
-                /* best-effort */
-            }
-        }
+        await Task.WhenAll(live.Select(agent =>
+            !keep                      ? TerminateForShutdownAsync(agent)
+          : IsInteractive(agent)       ? PrepareForShutdownResumeAsync(agent)
+          : IsResumableReviewer(agent) ? ParkForShutdownAsync(agent, parkBudget.Token)
+          :                              TerminateForShutdownAsync(agent)));
     }
 
     async Task PrepareForShutdownResumeAsync(AgentInstance agent) {
@@ -100,22 +119,27 @@ internal partial class AgentOrchestrator {
             await PrepareForResumeAsync(agent, CancellationToken.None);
         } catch (Exception ex) {
             LogCleanupStepFailed(ex, "stopping for resume", agent.Id);
-
-            try { await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5)); } catch { /* best-effort */ }
         }
 
-        try { await agent.ReadCts.CancelAsync(); } catch { /* best-effort */ }
+        await TerminateForShutdownAsync(agent);
     }
 
-    /// <see cref="_shutdownCts"/> is already cancelled here, so the parks run on their own budget.
-    async Task ParkReviewersForShutdownAsync(IReadOnlyList<AgentInstance> reviewers) {
-        if (reviewers.Count == 0) return;
+    async Task ParkForShutdownAsync(AgentInstance reviewer, CancellationToken ct) {
+        await ParkReviewerAsync(
+            new ReapCandidate(reviewer, ReviewerParkedResumableReason, reviewer.ActivityClock.ActivitySeq, FencedOnActivity: false) { Park = true },
+            ct);
 
-        using var budget = new CancellationTokenSource(ShutdownReportBudget, _time);
+        await TerminateForShutdownAsync(reviewer);
+    }
 
-        await Task.WhenAll(reviewers.Select(r => ParkReviewerAsync(
-            new ReapCandidate(r, ReviewerParkedResumableReason, r.ActivityClock.ActivitySeq, FencedOnActivity: false) { Park = true },
-            budget.Token)));
+    /// Idempotent: an agent a stop above already ended has nothing left to terminate.
+    static async Task TerminateForShutdownAsync(AgentInstance agent) {
+        try {
+            await agent.ReadCts.CancelAsync();
+            if (!agent.Runtime.HasExited) await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
+        } catch {
+            /* best-effort */
+        }
     }
 
     bool TryMarkResuming(AgentInstance agent) {
