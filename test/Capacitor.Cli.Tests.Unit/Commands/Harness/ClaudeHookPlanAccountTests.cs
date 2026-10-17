@@ -5,6 +5,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.PrDetection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
@@ -40,8 +41,10 @@ public class ClaudeHookPlanAccountTests {
         var spool    = new HookSpool(Tmp.PathTo("spool"), time: TimeProvider.System);
         var payload  = $$"""{"hook_event_name":"SessionStart","session_id":"s1","slug":"my-plan","cwd":"{{Tmp.Path.Replace("\\", "\\\\")}}","transcript_path":"{{transcriptPath.Replace("\\", "\\\\")}}"}""";
 
-        await new ClaudeHookCommand(Config.Root, profiles, new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal,
-                new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(),
+        // A hook clock that never moves, so the send cannot outlast its budget and spool on a loaded runner. Every
+        // request it would bound answers from the handler, so none can hang on the frozen deadline.
+        await new ClaudeHookCommand(Config.Root, profiles, new HookClock(new FakeTimeProvider()), Home, TestHarnesses.Under(Home), HostedAgent.Terminal,
+                new RecordingCapacitorHttpClient(handler), TestWatchers.For(Config.Root, profiles, new FixedCapacitorHttpClient()), FakeProcessStarter.Refusing(),
                 router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: store)
             .HandleCore(new HttpClient(handler), AuthStatus.Ok, spool, new StringReader(payload));
 
