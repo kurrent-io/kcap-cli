@@ -174,7 +174,9 @@ The order is the server contract's:
    in-process rollback eligibility ends when the `committing` write is *attempted*, not when it returns. On any
    exception from that write the process deletes nothing and fails with `commit_failed`. The next recovery decides
    from what is on disk: `pending` or `unit` rolls back, `committing` rolls forward.
-2. **Registry.** `PublishRegistry(registry.WithActive(installation))`. Skipped when the registry already names it.
+2. **Registry.** `PublishRegistry(registry.WithActive(installation))`. It is never skipped, even when the registry
+   already names the installation. A visible registry is not proof of a durable one: an earlier attempt may have
+   renamed it and crashed before its directory sync. Republishing makes that sync before `allow` can become visible.
 3. **Profile.** One durable config mutation through `CommitBoundary.CommitAsync`: the active profile's `server_url`
    set to the canonical URL (`PointProfileAtServer`) and its stamp set to `None` on that URL. No token publication.
    Idempotent.
@@ -242,6 +244,14 @@ setups under different `KCAP_LOCAL_ROOT`s therefore need two more things:
     `LaunchdUnit.TryReadPlist`. On systemd, `systemctl --user show -p Environment` and the unit file are read.
   - Each reading is `Absent`, `Root(path)` or `Unreadable`.
   - Rollback, recovery and reuse act on the unit only when every present reading names this root.
+- **Root identity.** "Names this root" is decided by filesystem identity, not spelling. On macOS, `/tmp/kcap-A`,
+  `/private/tmp/kcap-A`, a case variant and a firmlinked `/System/Volumes/Data/...` path all reach one directory.
+  - If both paths resolve with `CanonicalPath.TryResolve` to an equal path under `PathComparison`, they are the same
+    root.
+  - Otherwise, a nonce probe. Holding the lifecycle lock, write `<root>/.identity-<random>`, durability not needed,
+    and test whether the same name exists under the other path. If it does, it is the same root. If the other path
+    does not exist, it is a distinct root: it cannot alias one that exists. The nonce is deleted afterwards.
+  - Any I/O error along the way makes the reading `Unknown`, never "another root".
 
 ### Recovery
 
@@ -445,6 +455,11 @@ Failure codes: `unsupported_platform`, `musl_unsupported`, `socket_path_too_long
   - a loaded job with no readable plist and no live process at the moment;
   - a loaded job and a plist naming different roots;
   - an unreadable plist with an absent label.
+- **Root identity:** recovery through an ancestor alias (`/tmp/x` against `/private/tmp/x`), with the job between
+  starts, treats the unit as ours and makes a verified unload before any deletion. A genuinely distinct root is
+  treated as another root's. An I/O error in the probe is `Unknown`.
+- **Registry rename then crash:** the first run renames the registry and crashes before its directory sync. Recovery
+  republishes it durably before `allow` becomes visible.
 - **Plist unlink then crash:** the first run unlinks the plist and crashes before syncing `LaunchAgents`. Recovery
   syncs `LaunchAgents` before it clears the journal.
 - **Fresh home:** a pending setup that fails at the manifest, or is cancelled, with no `~/Library/LaunchAgents`
