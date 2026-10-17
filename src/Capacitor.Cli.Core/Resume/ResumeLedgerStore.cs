@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Core.Resume;
 /// entry is renamed <c>.corrupt</c> and never acted on.
 /// </summary>
 public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time = null) {
-    const string NewerSchemaReason = "ledger_newer_than_daemon";
+    public const string NewerSchemaReason = "ledger_newer_than_daemon";
 
     const UnixFileMode OwnerOnlyDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     const UnixFileMode OwnerOnlyFile      = UnixFileMode.UserRead | UnixFileMode.UserWrite;

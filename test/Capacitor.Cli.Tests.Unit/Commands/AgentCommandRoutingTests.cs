@@ -160,6 +160,8 @@ public class AgentCommandRoutingTests {
     [Test, NotInParallel]
     [Arguments("not_interrupted", "0123456789abcdef0123456789abcdef is not interrupted.")]
     [Arguments("unknown", "No agent 0123456789abcdef0123456789abcdef.")]
+    [Arguments("blocked:predecessor_process_unresolved",
+        "0123456789abcdef0123456789abcdef cannot be resumed: predecessor_process_unresolved.")]
     public async Task Resume_that_is_refused_says_why_and_exits_1(string ack, string expected) {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         _ = FakeControlSocket.AnswerOnce(Daemons.Store, "rs", LocalFrame.AgentResumeAck(ack));

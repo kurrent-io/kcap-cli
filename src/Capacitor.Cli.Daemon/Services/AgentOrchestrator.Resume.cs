@@ -569,14 +569,17 @@ internal partial class AgentOrchestrator {
 
     /// <summary>An operator's retry of an interrupted entry: <c>resuming</c> once the entry is marked
     /// resuming and queued on the boot lane's gate, <c>not_interrupted</c> for any other state,
-    /// <c>unknown</c> without an entry. A ledger that cannot be written throws and nothing is queued. The age cap and <see cref="DaemonConfig.AutoResume"/> do not
-    /// apply to an explicit retry.</summary>
+    /// <c>unknown</c> without an entry, and <c>blocked:&lt;reason&gt;</c> while the predecessor's process is
+    /// unresolved or the entry was written by a newer daemon. A ledger that cannot be written throws and
+    /// nothing is queued. The age cap and <see cref="DaemonConfig.AutoResume"/> do not apply to an explicit
+    /// retry.</summary>
     internal Task<string> ResumeInterruptedAsync(string agentId, CancellationToken ct) {
         ResumeLedgerEntry resuming;
 
         lock (_ledgerLock) {
             if (TryReadLedger(agentId) is not { } entry) return Task.FromResult("unknown");
             if (entry.State != ResumeState.Interrupted) return Task.FromResult("not_interrupted");
+            if (ResumeBlockedReason(entry) is { } blocked) return Task.FromResult($"blocked:{blocked}");
 
             var now = _time.GetUtcNow();
             resuming = entry with { State = ResumeState.Resuming, ResumingAt = now, LastError = null, UpdatedAt = now };
@@ -590,6 +593,13 @@ internal partial class AgentOrchestrator {
 
         return Task.FromResult("resuming");
     }
+
+    /// <summary>Why a retry must not run: a second process beside one the reaper could not prove gone, or a
+    /// rewrite of an entry whose schema this daemon does not know.</summary>
+    string? ResumeBlockedReason(ResumeLedgerEntry entry) =>
+        entry.LastError == ResumeLedgerStore.NewerSchemaReason ? ResumeLedgerStore.NewerSchemaReason
+      : _orphanReaper?.BlockedCandidates().Any(c => c.AgentId == entry.AgentId) == true ? "predecessor_process_unresolved"
+      : null;
 
     /// <summary>Native resume, then kcap continue, then interrupted.</summary>
     internal async Task<ResumeOutcome> ResumeEntryAsync(ResumeLedgerEntry entry, CancellationToken ct) {

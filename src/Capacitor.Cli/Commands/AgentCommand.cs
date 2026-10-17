@@ -188,6 +188,10 @@ internal sealed class AgentCommand(
                     await Console.Error.WriteLineAsync($"No agent {agentId}.");
 
                     return 1;
+                case { Type: FrameType.AgentResumeAck, Text: { } blocked } when blocked.StartsWith("blocked:", StringComparison.Ordinal):
+                    await Console.Error.WriteLineAsync($"{agentId} cannot be resumed: {blocked["blocked:".Length..]}.");
+
+                    return 1;
                 case { Type: FrameType.Error }:
                     await Console.Error.WriteLineAsync($"kcap: {resp.Text}");
 

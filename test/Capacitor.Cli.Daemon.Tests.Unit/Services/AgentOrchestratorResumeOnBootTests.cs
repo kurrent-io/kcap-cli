@@ -268,6 +268,42 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
     }
 
+    /// <summary>The reaper could not prove the old process gone, so an operator's retry would run a second
+    /// process on the session.</summary>
+    [Test]
+    public async Task A_retry_is_refused_while_the_predecessor_process_is_unresolved() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "ambiguous-2", state: ResumeState.Interrupted);
+        f.Orch.WritePidRecordForTest(new AgentPidRecord(
+            "ambiguous-2", 999_999, "", PidIdentityKind.IdentityUnavailable, "Default", "cursor", null, null,
+            f.Orch.DaemonIdForTest, "previous-epoch", TimeProvider.System.GetUtcNow()));
+
+        var ack = await f.Orch.ResumeInterruptedAsync("ambiguous-2", CancellationToken.None);
+
+        await Assert.That(ack).IsEqualTo("blocked:predecessor_process_unresolved");
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("ambiguous-2")!.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+        await Assert.That(f.Factory.Contexts).IsEmpty();
+    }
+
+    /// <summary>A newer daemon wrote the entry; this one cannot know what it means and must not rewrite it.</summary>
+    [Test]
+    public async Task A_retry_is_refused_for_an_entry_written_by_a_newer_daemon() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Entry(f, "newer-1", state: ResumeState.Interrupted);
+        f.Orch.ResumeLedger!.Write(entry with { SchemaVersion = ResumeLedgerEntry.CurrentSchemaVersion + 1 });
+
+        var ack = await f.Orch.ResumeInterruptedAsync("newer-1", CancellationToken.None);
+
+        await Assert.That(ack).IsEqualTo("blocked:ledger_newer_than_daemon");
+        var json = await File.ReadAllTextAsync(f.Orch.ResumeLedger!.EntryPath("newer-1"));
+        await Assert.That(json).Contains($"\"schema_version\":{ResumeLedgerEntry.CurrentSchemaVersion + 1}");
+        await Assert.That(json).Contains("\"state\":\"interrupted\"");
+        await Assert.That(f.Factory.Contexts).IsEmpty();
+    }
+
     [Test]
     public async Task The_lane_runs_at_most_ResumeConcurrency_launches_at_once() {
         var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
