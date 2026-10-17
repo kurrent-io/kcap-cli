@@ -44,6 +44,7 @@ partial class WatchCommand(
         ICapacitorHttpClient http, ICredentialSource credentials, WatcherManager watchers,
         GitProviderRouter router, TimeProvider time, AccountStore accounts, UserHome home) {
     readonly CursorMarkers  _markers  = new(config, time);
+    readonly WatcherPaths   _paths    = WatcherPaths.FromEnvironment(config);
     readonly Dictionary<(string, string?), HeldLineRedaction> _heldLines = [];
 
     /// <summary>The clock redaction budgets read, when not <c>time</c>.</summary>
@@ -743,6 +744,27 @@ partial class WatchCommand(
 
         if (cts.Token.IsCancellationRequested) {
             await hubConnection.DisposeAsync();
+
+            // A watcher stopped before it connected is still the one the Muse hook may have handed an
+            // end to: it was alive when the hook looked. Nothing has been streamed yet, so the log is
+            // drained inline ahead of the end, as the hook would have.
+            if (TakesHandedMuseEnd(vendor, agentId)) {
+                watchers.RemoveOwnPidFile(sessionId, Environment.ProcessId);
+
+                if (ClaimHandedMuseEnd(sessionId) is { } handed) {
+                    await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: vendor);
+
+                    switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed)) {
+                        case HandedEndOutcome.Dropped:
+                            await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
+                            break;
+                        case HandedEndOutcome.Failed:
+                            await RetryOrUnclaimHandedEndAsync(sessionId, transcriptPath, cwd, vendor, repository: null, handed);
+                            break;
+                    }
+                }
+            }
+
             await logWriter.DisposeAsync();
 
             return 0;
@@ -838,6 +860,10 @@ partial class WatchCommand(
         var spawnedChildWatcherKeys = new HashSet<string>(StringComparer.Ordinal);
 
         var museChildren = new MuseChildWatchers();
+
+        // The end the Muse SessionEnd hook handed over, posted after the final drain in place of the
+        // parent-exit synthesis.
+        MuseSessionEndRequest? museEndRequest = null;
 
         try {
             while (!cts.Token.IsCancellationRequested) {
@@ -943,6 +969,12 @@ partial class WatchCommand(
                 } else if (agentId is null && vendor == "muse") {
                     await ScanMuseSubagents(sessionId, transcriptPath, seenSubagents, museChildren, spawnedChildWatcherKeys, cts.Token);
                     await StopFinishedMuseChildren(sessionId, transcriptPath, drained, museChildren);
+
+                    if (ClaimHandedMuseEnd(sessionId) is { } handed) {
+                        Log(time, "Muse SessionEnd hook handed its session-end to this watcher; draining and posting it");
+                        museEndRequest = handed;
+                        cts.Cancel();
+                    }
                 }
 
                 // A Codex collab CHILD posts its own subagent-stop once its rollout's
@@ -1157,14 +1189,38 @@ partial class WatchCommand(
             ApplyEvidenceRepo(state, fallbackRepo);
         }
 
-        if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
-            await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
-        }
-
         // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
-        // on a recycled pid (KillWatcher's token guard is the crash-exit backstop).
+        // on a recycled pid (KillWatcher's token guard is the crash-exit backstop). It goes before the
+        // last look for a handed end: the Muse hook checks for a live watcher after writing a request,
+        // so an end written after this look finds none and gets a watcher of its own.
         watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
+
+        if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
+
+        if (museEndRequest is { } handedEnd) {
+            switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd)) {
+                // The session carried on, so this watcher's stop must not leave it unwatched.
+                case HandedEndOutcome.Dropped:
+                    await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
+                    break;
+
+                case HandedEndOutcome.Failed:
+                    await RetryOrUnclaimHandedEndAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, handedEnd);
+                    break;
+            }
+        } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
+            // A resumed session's hooks claim its new process; the end of the one this watcher followed
+            // is then not the session's end, and the new process is left without a watcher.
+            var claimant = LiveClaimant(sessionId);
+
+            if (SessionRunsOnElsewhere(vendor, agentId, claimant)) {
+                Log(time, $"Not posting a {endReason} session-end: the session runs on in pid {claimant}");
+                await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, claimant);
+            } else {
+                await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
+            }
+        }
 
         await logWriter.DisposeAsync();
 
@@ -2065,7 +2121,7 @@ partial class WatchCommand(
         }
     }
 
-    internal async Task PostSessionEndOnParentExitAsync(
+    internal async Task<bool> PostSessionEndOnParentExitAsync(
             string             sessionId,
             string             transcriptPath,
             string?            cwd,
@@ -2075,7 +2131,7 @@ partial class WatchCommand(
         ) {
         if (!KnownVendors.Contains(vendor)) {
             Log(time, $"Parent-exit session-end skipped: unknown vendor '{vendor}'");
-            return;
+            return false;
         }
 
         // Gemini fires no subagent-stop hook and the child watchers spawned in ScanGeminiSubagents
@@ -2155,24 +2211,133 @@ partial class WatchCommand(
             }
         }
 
+        var endHook = new JsonObject {
+            ["session_id"]      = sessionId,
+            ["transcript_path"] = transcriptPath,
+            ["cwd"]             = cwd ?? "",
+            ["hook_event_name"] = "session_end",
+            ["reason"]          = reason,
+            // Stamp the exit time so the server can scope the SessionEnded id
+            // per run. Vendors with no session-end hook (Kiro) end ONLY via this
+            // path, so without a timestamp a resumed session's second exit would
+            // dedupe against the first and the session would stay Active.
+            // Computed once here and reused across POST retries, so it stays
+            // idempotent for a single exit.
+            ["ended_at"]        = time.GetUtcNow().ToString("O"),
+        };
+
+        return await PostSessionEndPayloadAsync(sessionId, vendor, endHook, repository, "Parent-exit");
+    }
+
+    /// <summary>Only a Muse session watcher takes an end its SessionEnd hook handed over; a child watcher's
+    /// lifecycle belongs to its parent, and no other vendor's hook hands one.</summary>
+    internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
+
+    /// <summary>A Muse session watcher whose exit is not the session's: a live process is claimed for the
+    /// session, so a resumed run owns it now. Other vendors keep ending on their own exit, as their hooks
+    /// do not re-arm a watcher across a resume.</summary>
+    internal static bool SessionRunsOnElsewhere(string vendor, string? agentId, int? liveClaimant) =>
+        TakesHandedMuseEnd(vendor, agentId) && liveClaimant is not null;
+
+    int? LiveClaimant(string sessionId) =>
+        SessionId.Parse(sessionId) is { } session ? AgentSessions.OnThisMachine(config).LiveClaimant(session) : null;
+
+    MuseSessionEndRequest? ClaimHandedMuseEnd(string sessionId) =>
+        MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    internal enum HandedEndOutcome { Posted, Dropped, Failed }
+
+    /// <summary>A handed end that could be neither posted nor spooled is tried once more the way a parent
+    /// exit is posted, which needs no spool, and otherwise put back for the next watcher. Not while the
+    /// session still has spooled hooks: a direct post would overtake them, ending the session before its
+    /// start replays.</summary>
+    async Task RetryOrUnclaimHandedEndAsync(
+            string                sessionId,
+            string                transcriptPath,
+            string?               cwd,
+            string                vendor,
+            RepositoryPayload?    repository,
+            MuseSessionEndRequest handed
+        ) {
+        if (!new HookSpool(config, time).HasBacklog(sessionId)
+         && await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, repository, "hook_handed")) {
+            MuseSessionEndRequest.Release(handed.ClaimedPath);
+
+            return;
+        }
+
+        MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
+    }
+
+    /// <summary>Spawns the watcher a resumed session is left without once this one exits; this watcher's
+    /// pid file is already retired, so the spawn sees no live watcher. The successor follows the resumed
+    /// process when one is claimed; a watcher cannot resolve it from its own ancestry.</summary>
+    async Task ArmSuccessorAsync(string sessionId, string transcriptPath, string? cwd, string vendor, int? parentPid) {
+        try {
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: vendor, parentPid: parentPid);
+            Log(time, $"Armed a successor watcher for the resumed session{(parentPid is { } p ? $" following pid {p}" : "")}");
+        } catch (Exception ex) {
+            Log(time, $"Arming a successor watcher failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Posts the end the hook would have, the way the hook would have: behind any spooled backlog
+    /// for the session, and into the spool on a failure, so an outage never drops it. Posted once it is
+    /// posted or durably spooled; Dropped when the session carried on after the end was handed over;
+    /// Failed keeps the claim on disk.</summary>
+    async Task<HandedEndOutcome> PostHandedSessionEndAsync(
+            string                sessionId,
+            string                transcriptPath,
+            string                vendor,
+            RepositoryPayload?    repository,
+            MuseSessionEndRequest request
+        ) {
+        if (MuseSessionEndRequest.ResumedSince(_paths, sessionId, request.HandedAt)) {
+            Log(time, "Handed session-end dropped: the session was resumed after its end was handed over");
+            MuseSessionEndRequest.Release(request.ClaimedPath);
+
+            return HandedEndOutcome.Dropped;
+        }
+
+        JsonObject endHook;
+
+        try {
+            endHook = JsonNode.Parse(request.Payload) as JsonObject ?? new JsonObject();
+        } catch (JsonException ex) {
+            Log(time, $"Handed session-end request is not JSON ({ex.Message}); posting a plain end instead");
+            endHook = new JsonObject { ["reason"] = "other", ["ended_at"] = time.GetUtcNow().ToString("O") };
+        }
+
+        endHook["session_id"]      = sessionId;
+        endHook["transcript_path"] = transcriptPath;
+
+        if (repository is not null) {
+            endHook["repository"] = JsonNode.Parse(
+                JsonSerializer.Serialize(repository, CapacitorJsonContext.Default.RepositoryPayload)
+            );
+        }
+
+        var route   = $"session-end/{vendor}";
+        var body    = endHook.ToJsonString();
+        var spool   = new HookSpool(config, time);
+        var outcome = spool.HasBacklog(sessionId)
+            ? (spool.Append(sessionId, route, body) ? HookPostOutcome.Spooled : HookPostOutcome.Skipped)
+            : await new AgentHookPoster(config, profiles, http, watchers, time)
+                .PostOrSpoolAsync(route, body, $"{vendor}-watch", spool, sessionId, route);
+
+        Log(time, $"Handed session-end {outcome}");
+
+        if (outcome is not (HookPostOutcome.Posted or HookPostOutcome.Spooled)) return HandedEndOutcome.Failed;
+
+        MuseSessionEndRequest.Release(request.ClaimedPath);
+        return HandedEndOutcome.Posted;
+    }
+
+    /// <summary>True when the server accepted the end.</summary>
+    async Task<bool> PostSessionEndPayloadAsync(string sessionId, string vendor, JsonObject endHook, RepositoryPayload? repository, string what) {
         using var budgetCts = new CancellationTokenSource(ParentExitPostBudget, time);
 
         try {
-            var endHook = new JsonObject {
-                ["session_id"]      = sessionId,
-                ["transcript_path"] = transcriptPath,
-                ["cwd"]             = cwd ?? "",
-                ["hook_event_name"] = "session_end",
-                ["reason"]          = reason,
-                // Stamp the exit time so the server can scope the SessionEnded id
-                // per run. Vendors with no session-end hook (Kiro) end ONLY via this
-                // path, so without a timestamp a resumed session's second exit would
-                // dedupe against the first and the session would stay Active.
-                // Computed once here and reused across POST retries, so it stays
-                // idempotent for a single exit.
-                ["ended_at"]        = time.GetUtcNow().ToString("O"),
-            };
-
             if (repository is not null) {
                 endHook["repository"] = JsonNode.Parse(
                     JsonSerializer.Serialize(repository, CapacitorJsonContext.Default.RepositoryPayload)
@@ -2186,11 +2351,11 @@ partial class WatchCommand(
             using var response = await httpClient.PostWithRetryAsync(url, content, time, timeout: ParentExitPostBudget, ct: budgetCts.Token);
 
             if (!response.IsSuccessStatusCode) {
-                Log(time, $"Parent-exit session-end POST returned HTTP {(int)response.StatusCode}");
-                return;
+                Log(time, $"{what} session-end POST returned HTTP {(int)response.StatusCode}");
+                return false;
             }
 
-            Log(time, "Parent-exit session-end POST succeeded");
+            Log(time, $"{what} session-end POST succeeded");
 
             try {
                 var body = await response.Content.ReadAsStringAsync(budgetCts.Token);
@@ -2200,13 +2365,17 @@ partial class WatchCommand(
                     watchers.SpawnWhatsDoneGenerator(sessionId, vendor);
                 }
             } catch (Exception ex) {
-                Log(time, $"Parent-exit session-end response parse failed: {ex.Message}");
+                Log(time, $"{what} session-end response parse failed: {ex.Message}");
             }
+
+            return true;
         } catch (OperationCanceledException) {
-            Log(time, $"Parent-exit session-end POST timed out after {ParentExitPostBudget.TotalSeconds:F0}s");
+            Log(time, $"{what} session-end POST timed out after {ParentExitPostBudget.TotalSeconds:F0}s");
         } catch (Exception ex) {
-            Log(time, $"Parent-exit session-end POST failed: {ex.Message}");
+            Log(time, $"{what} session-end POST failed: {ex.Message}");
         }
+
+        return false;
     }
 
     static readonly Regex CommandNameRegex = CommandNameRx();

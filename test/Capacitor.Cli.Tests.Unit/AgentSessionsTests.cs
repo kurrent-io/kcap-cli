@@ -34,6 +34,19 @@ public class AgentSessionsTests {
         await Assert.That(Sessions.IsClaimed(SessionId.Parse("stale")!)).IsFalse();
     }
 
+    /// <summary>A note whose holder is gone names no live claimant, so a resumed session is seen only through
+    /// the process that is actually running it.</summary>
+    [Test]
+    public async Task The_live_claimant_is_the_process_running_the_session() {
+        DeadNote(Shell, Session.Value);
+
+        await Assert.That(Sessions.LiveClaimant(Session)).IsNull();
+
+        Sessions.Claim(Agent, Session);
+
+        await Assert.That(Sessions.LiveClaimant(Session)).IsEqualTo(Agent);
+    }
+
     [Test]
     public async Task Reap_drops_only_notes_no_live_process_holds() {
         Sessions.Claim(Agent, Session);
