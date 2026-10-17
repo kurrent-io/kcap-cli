@@ -15,6 +15,9 @@ sealed class LocalServerSystemdService(
     /// only has to cover the probe seeing the lock released.</summary>
     static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(15);
 
+    /// <summary>systemctl's exit status for a unit it has no record of (LSB "program is not installed").</summary>
+    const int UnitNotLoadedExit = 5;
+
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _run = run ?? ServiceProcess.Run;
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
 
@@ -57,7 +60,13 @@ sealed class LocalServerSystemdService(
             File.Delete(path);
         } else {
             // systemd can still run a unit whose file is gone; there is nothing left to disable, but it must stop.
-            _run("systemctl", LocalServerSystemdUnit.StopArgs(unit));
+            // Only "not loaded" means there was nothing to stop: a server that has not yet taken its lock would
+            // pass the probe below, so no other failure may.
+            var (exit, _, err) = _run("systemctl", LocalServerSystemdUnit.StopArgs(unit));
+            if (exit is not (0 or UnitNotLoadedExit))
+                throw new LocalLifecycleException(
+                    $"systemctl {string.Join(' ', LocalServerSystemdUnit.StopArgs(unit))} failed (exit {exit}): {err.Trim()}");
+
             await LocalStackProbe.WaitUntilDownAsync(unit.Root, StopBudget, time, ct, findLive);
         }
 

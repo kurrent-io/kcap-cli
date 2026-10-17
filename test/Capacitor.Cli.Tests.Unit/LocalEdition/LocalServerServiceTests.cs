@@ -223,6 +223,25 @@ public class LocalServerServiceTests {
         ]);
     }
 
+    /// <summary>A server that has not taken its lock yet passes the stack probe, so the stop's own result must
+    /// decide.</summary>
+    [Test]
+    public async Task A_failed_stop_of_a_unit_whose_file_is_gone_is_an_error_even_with_nothing_alive() {
+        var commands = new Commands { Results = { ["systemctl --user stop"] = (1, "", "Job for kcap-local.service canceled.") } };
+
+        await Assert.That(() => Systemd(commands).UninstallAsync(Unit, CancellationToken.None))
+            .Throws<LocalLifecycleException>().WithMessageContaining("canceled");
+    }
+
+    [Test]
+    public async Task A_unit_systemd_has_no_record_of_needs_no_stop() {
+        var commands = new Commands { Results = { ["systemctl --user stop"] = (5, "", "Failed to stop kcap-local.service: Unit kcap-local.service not loaded.") } };
+
+        await Systemd(commands).UninstallAsync(Unit, CancellationToken.None);
+
+        await Assert.That(commands.Calls[^1]).IsEqualTo("systemctl --user daemon-reload");
+    }
+
     [Test]
     public async Task A_systemd_uninstall_still_stops_a_unit_whose_file_is_gone() {
         var commands = new Commands();
