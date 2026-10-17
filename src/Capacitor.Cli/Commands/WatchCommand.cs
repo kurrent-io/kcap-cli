@@ -1168,19 +1168,21 @@ partial class WatchCommand(
             ApplyEvidenceRepo(state, fallbackRepo);
         }
 
+        // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
+        // on a recycled pid (KillWatcher's token guard is the crash-exit backstop). It goes before the
+        // last look for a handed end: the Muse hook re-checks the pid file after writing a request,
+        // so an end written after this look finds no watcher and is posted by the hook.
+        watchers.RemoveOwnPidFile(
+            agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
+
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= MuseSessionEndRequest.TryRead(_paths, sessionId);
 
         if (museEndRequest is { } handedEnd) {
-            await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd);
-            MuseSessionEndRequest.Delete(_paths, sessionId);
+            if (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd))
+                MuseSessionEndRequest.Delete(_paths, sessionId);
         } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
-
-        // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
-        // on a recycled pid (KillWatcher's token guard is the crash-exit backstop).
-        watchers.RemoveOwnPidFile(
-            agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
 
         await logWriter.DisposeAsync();
 
@@ -2193,13 +2195,14 @@ partial class WatchCommand(
     /// lifecycle belongs to its parent, and no other vendor's hook hands one.</summary>
     internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
 
-    /// <summary>Posts the end the hook would have: its payload, plus the transcript path and repository
-    /// only the watcher knows.</summary>
-    async Task PostHandedSessionEndAsync(
-            string             sessionId,
-            string             transcriptPath,
-            string             vendor,
-            RepositoryPayload? repository,
+    /// <summary>Posts the end the hook would have, the way the hook would have: behind any spooled backlog
+    /// for the session, and into the spool on a failure, so an outage never drops it. True once it is
+    /// posted or durably spooled; false leaves the request for a later watcher to try again.</summary>
+    async Task<bool> PostHandedSessionEndAsync(
+            string                sessionId,
+            string                transcriptPath,
+            string                vendor,
+            RepositoryPayload?    repository,
             MuseSessionEndRequest request
         ) {
         JsonObject endHook;
@@ -2214,7 +2217,23 @@ partial class WatchCommand(
         endHook["session_id"]      = sessionId;
         endHook["transcript_path"] = transcriptPath;
 
-        await PostSessionEndPayloadAsync(sessionId, vendor, endHook, repository, "Handed");
+        if (repository is not null) {
+            endHook["repository"] = JsonNode.Parse(
+                JsonSerializer.Serialize(repository, CapacitorJsonContext.Default.RepositoryPayload)
+            );
+        }
+
+        var route   = $"session-end/{vendor}";
+        var body    = endHook.ToJsonString();
+        var spool   = new HookSpool(config, time);
+        var outcome = spool.HasBacklog(sessionId)
+            ? (spool.Append(sessionId, route, body) ? HookPostOutcome.Spooled : HookPostOutcome.Skipped)
+            : await new AgentHookPoster(config, profiles, http, watchers, time)
+                .PostOrSpoolAsync(route, body, $"{vendor}-watch", spool, sessionId, route);
+
+        Log(time, $"Handed session-end {outcome}");
+
+        return outcome is HookPostOutcome.Posted or HookPostOutcome.Spooled;
     }
 
     async Task PostSessionEndPayloadAsync(string sessionId, string vendor, JsonObject endHook, RepositoryPayload? repository, string what) {

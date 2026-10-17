@@ -26,8 +26,7 @@ public class MuseSessionEndRequestTests {
         var paths = new WatcherPaths(Tmp.PathTo("watchers"));
         await Assert.That(MuseSessionEndRequest.TryRead(paths, SessionId)).IsNull();
 
-        Directory.CreateDirectory(paths.Directory);
-        await File.WriteAllTextAsync(MuseSessionEndRequest.PathFor(paths, SessionId), "");
+        Tmp.CreateFile(["watchers", $"{SessionId}.muse-end-requested"], "");
         await Assert.That(MuseSessionEndRequest.TryRead(paths, SessionId)).IsNull();
     }
 }
