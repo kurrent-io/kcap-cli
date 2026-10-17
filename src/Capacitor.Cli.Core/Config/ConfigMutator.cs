@@ -39,7 +39,7 @@ public static class ConfigMutator {
     /// bounds the directory sync; with none the whole chain to the filesystem root is synced.</summary>
     public static Task<ProfileConfig> MutateStrictAsync(
             ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, bool durable,
-            CancellationToken ct = default, UserHome? home = null) =>
+            UserHome? home = null, CancellationToken ct = default) =>
         Task.Run(() => MutateStrict(config, mutate, durable, home), ct);
 
     public static ProfileConfig MutateStrict(ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate) =>

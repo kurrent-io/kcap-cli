@@ -30,6 +30,7 @@ public class OnlyServerPreconditionTests {
     [Test]
     public async Task OnlyServer_admits_a_loopback_spelling_of_the_same_server() {
         var config = With(("default", "http://localhost:9473"));
+        // SameServer compares hosts literally, so localhost and 127.0.0.1 currently differ.
         var same   = ServerIdentity.SameServer("http://localhost:9473", Local);
 
         if (same) await Assert.That(() => new CommitPrecondition.OnlyServer(Local).Check(config, "default")).ThrowsNothing();
