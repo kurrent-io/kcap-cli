@@ -187,7 +187,9 @@ sealed class MuseHookCommand(
         var sessionId = session.ToString("N");
         if (DisabledSessions.IsDisabled(sessionId, config) || !HookHttp.IsPostable(Url)) return;
 
-        // Marked whatever the watcher's state: the one still alive may be leaving with the old end.
+        // Both whatever the watcher's state: the one still alive may be leaving with the old end, and
+        // it decides whether to end the session by whether a live process is claimed for it.
+        watchers.ClaimAgentProcess(sessionId, Vendor);
         DiscardHandedEnd(sessionId);
         if (watchers.IsWatcherAlive(sessionId)) return;
 
@@ -200,14 +202,19 @@ sealed class MuseHookCommand(
 
     /// <summary>A session carrying on makes any end handed over before now stale. The mark covers a claim a
     /// watcher already holds, which it drops before posting and arms a successor; the claim here takes an
-    /// end nobody has, so it cannot end the watcher armed next.</summary>
+    /// end nobody has, so it cannot end the watcher armed next. An end handed over after the mark is the
+    /// resumed run's own and goes back for that watcher.</summary>
     void DiscardHandedEnd(string sessionId) {
         var paths = WatcherPaths.FromEnvironment(config);
 
         MuseSessionEndRequest.MarkResumed(paths, sessionId);
 
-        if (MuseSessionEndRequest.TryClaim(paths, sessionId, "rearm") is { } stale)
-            MuseSessionEndRequest.Release(stale.ClaimedPath);
+        if (MuseSessionEndRequest.TryClaim(paths, sessionId, "rearm") is not { } handed) return;
+
+        if (MuseSessionEndRequest.ResumedSince(paths, sessionId, handed.HandedAt))
+            MuseSessionEndRequest.Release(handed.ClaimedPath);
+        else
+            MuseSessionEndRequest.Unclaim(paths, sessionId, handed);
     }
 
     /// <summary>An out-of-scope repository disables the session, so its later hooks stop at the

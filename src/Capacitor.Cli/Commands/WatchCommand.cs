@@ -756,7 +756,7 @@ partial class WatchCommand(
 
                     switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed)) {
                         case HandedEndOutcome.Dropped:
-                            await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor);
+                            await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
                             break;
                         case HandedEndOutcome.Failed:
                             MuseSessionEndRequest.Unclaim(_paths, sessionId, handed);
@@ -1191,8 +1191,8 @@ partial class WatchCommand(
 
         // Graceful exit: retire this incarnation's pid file so no later teardown/cleanup can act
         // on a recycled pid (KillWatcher's token guard is the crash-exit backstop). It goes before the
-        // last look for a handed end: the Muse hook re-checks the pid file after writing a request,
-        // so an end written after this look finds no watcher and is posted by the hook.
+        // last look for a handed end: the Muse hook checks for a live watcher after writing a request,
+        // so an end written after this look finds none and gets a watcher of its own.
         watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
 
@@ -1202,7 +1202,7 @@ partial class WatchCommand(
             switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd)) {
                 // The session carried on, so this watcher's stop must not leave it unwatched.
                 case HandedEndOutcome.Dropped:
-                    await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor);
+                    await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, LiveClaimant(sessionId));
                     break;
 
                 // Neither posted nor spooled: tried once more the way a parent exit is posted, which needs no
@@ -1215,7 +1215,16 @@ partial class WatchCommand(
                     break;
             }
         } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
-            await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
+            // A resumed session's hooks claim its new process; the end of the one this watcher followed
+            // is then not the session's end, and the new process is left without a watcher.
+            var claimant = LiveClaimant(sessionId);
+
+            if (SessionRunsOnElsewhere(vendor, agentId, claimant)) {
+                Log(time, $"Not posting a {endReason} session-end: the session runs on in pid {claimant}");
+                await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, claimant);
+            } else {
+                await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
+            }
         }
 
         await logWriter.DisposeAsync();
@@ -2229,17 +2238,27 @@ partial class WatchCommand(
     /// lifecycle belongs to its parent, and no other vendor's hook hands one.</summary>
     internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
 
+    /// <summary>A Muse session watcher whose exit is not the session's: a live process is claimed for the
+    /// session, so a resumed run owns it now. Other vendors keep ending on their own exit, as their hooks
+    /// do not re-arm a watcher across a resume.</summary>
+    internal static bool SessionRunsOnElsewhere(string vendor, string? agentId, int? liveClaimant) =>
+        TakesHandedMuseEnd(vendor, agentId) && liveClaimant is not null;
+
+    int? LiveClaimant(string sessionId) =>
+        SessionId.Parse(sessionId) is { } session ? AgentSessions.OnThisMachine(config).LiveClaimant(session) : null;
+
     MuseSessionEndRequest? ClaimHandedMuseEnd(string sessionId) =>
         MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
     internal enum HandedEndOutcome { Posted, Dropped, Failed }
 
-    /// <summary>Spawns the watcher a resumed session is left without once this one, which took its stale
-    /// end, exits; this watcher's pid file is already retired, so the spawn sees no live watcher.</summary>
-    async Task ArmSuccessorAsync(string sessionId, string transcriptPath, string? cwd, string vendor) {
+    /// <summary>Spawns the watcher a resumed session is left without once this one exits; this watcher's
+    /// pid file is already retired, so the spawn sees no live watcher. The successor follows the resumed
+    /// process when one is claimed; a watcher cannot resolve it from its own ancestry.</summary>
+    async Task ArmSuccessorAsync(string sessionId, string transcriptPath, string? cwd, string vendor, int? parentPid) {
         try {
-            await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: vendor);
-            Log(time, "Armed a successor watcher for the resumed session");
+            await watchers.EnsureWatcherRunning(sessionId, transcriptPath, agentId: null, sessionIdOverride: null, cwd: cwd, skipTitle: true, vendor: vendor, parentPid: parentPid);
+            Log(time, $"Armed a successor watcher for the resumed session{(parentPid is { } p ? $" following pid {p}" : "")}");
         } catch (Exception ex) {
             Log(time, $"Arming a successor watcher failed: {ex.Message}");
         }

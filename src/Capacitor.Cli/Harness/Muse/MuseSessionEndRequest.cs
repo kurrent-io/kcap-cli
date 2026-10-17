@@ -7,8 +7,8 @@ namespace Capacitor.Cli.Harness.Muse;
 /// <c>/hooks/session-end/muse</c> payload, left where the watcher looks every tick. Under
 /// <c>muse exec</c> the hook is killed well inside a second, before it could drain the log and post
 /// the end itself; the watcher is a detached process, so it posts the end after its final drain.
-/// Whoever posts it claims it first by renaming it, an atomic step only one party can win, so the
-/// hook and the watcher can never both post the same end.
+/// Whoever takes it claims it first by renaming it, an atomic step only one party can win, so two
+/// watchers on the session, or a watcher and the re-arm of a resumed session, never both act on one end.
 /// </summary>
 public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, DateTimeOffset HandedAt) {
     public static string PathFor(WatcherPaths paths, string sessionId) =>

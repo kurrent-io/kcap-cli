@@ -722,6 +722,25 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
     }
 
+    /// <summary>An end handed over after the session was marked resumed is the resumed run's own; the hook
+    /// must leave it for the watcher it arms. The request is stamped ahead of the mark the hook writes.</summary>
+    [Test]
+    public async Task Stop_rearm_keeps_a_handed_end_newer_than_the_resume() {
+        StubHooks();
+        StageParentLog();
+        var paths = WatcherPaths.FromEnvironment(Config.Root);
+        MuseSessionEndRequest.Write(paths, ParentDashless, """{"reason":"fresh"}""");
+        File.SetLastWriteTimeUtc(MuseSessionEndRequest.PathFor(paths, ParentDashless), DateTime.UtcNow.AddMinutes(2));
+
+        await Command().Handle(new StringReader(
+            $$"""{"hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"done","session_id":"{{ParentId}}","turn_id":"3a75e7fd-2b07-401b-9446-6af740e7933d","cwd":"{{AbsentCwd()}}","transcript_path":null}"""),
+            new StringWriter(), ParentEnv, Today);
+
+        await Assert.That(MuseSessionEndRequest.Exists(paths, ParentDashless)).IsTrue();
+        await Assert.That(MuseSessionEndRequest.TryClaim(paths, ParentDashless, "test")?.Payload).IsEqualTo("""{"reason":"fresh"}""");
+        await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
+    }
+
     /// <summary>With no log there is nothing to drain, so the end goes straight to the server.</summary>
     [Test]
     public async Task SessionEnd_posts_session_end_with_the_reason() {
