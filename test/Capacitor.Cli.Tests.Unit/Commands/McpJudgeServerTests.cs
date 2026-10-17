@@ -91,6 +91,7 @@ public class McpJudgeServerTests : IDisposable {
     [Arguments("get_session_errors", "limit", 101)]
     [Arguments("get_session_errors", "offset", -1)]
     [Arguments("get_tool_result", "offset", -1)]
+    [Arguments("get_session_summary", "offset", -1)]
     public async Task an_out_of_range_page_argument_is_a_tool_error(string tool, string argument, int value) {
         _server.Given(Request.Create().UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBody("[]"));
 
@@ -117,17 +118,21 @@ public class McpJudgeServerTests : IDisposable {
     }
 
     [Test]
-    public async Task get_tool_result_reads_a_long_body_a_page_at_a_time() {
-        var body = new string('a', JudgeResultCap.MaxChars) + "TAIL";
-        _server.Given(Request.Create().WithPath("/api/sessions/abc-123/tool-results/toolu_xyz").UsingGet())
-            .RespondWith(Response.Create().WithStatusCode(200).WithBody(body));
+    public async Task get_tool_result_pages_the_output_inside_its_envelope() {
+        var output = new string('a', JudgeResultCap.MaxChars) + "TAIL";
+        _server.Given(Request.Create().WithPath("/api/sessions/abc-123/tool-results/toolu_xyz").WithParam("agent_id", "ag1").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                $$"""{"call_id":"toolu_xyz","tool":"Bash","is_error":true,"output_bytes":{{output.Length}},"output":"{{output}}"}"""));
 
-        var first  = await CallText("get_tool_result", new JsonObject { ["session_id"] = "abc-123", ["call_id"] = "toolu_xyz" });
-        var second = await CallText("get_tool_result", new JsonObject { ["session_id"] = "abc-123", ["call_id"] = "toolu_xyz", ["offset"] = JudgeResultCap.MaxChars });
+        static JsonObject Args(int? offset) => new() { ["session_id"] = "abc-123", ["call_id"] = "toolu_xyz", ["agent_id"] = "ag1", ["offset"] = offset };
 
-        await Assert.That(first).Contains($"Call again with offset {JudgeResultCap.MaxChars} for the rest.");
-        await Assert.That(second).StartsWith("TAIL");
-        await Assert.That(second).DoesNotContain("Call again");
+        using var first  = JsonDocument.Parse(await CallText("get_tool_result", Args(null)));
+        using var second = JsonDocument.Parse(await CallText("get_tool_result", Args(first.RootElement.GetProperty("next_offset").GetInt32())));
+
+        await Assert.That(first.RootElement.GetProperty("output").GetString()!.Length).IsEqualTo(JudgeResultCap.MaxChars);
+        await Assert.That(first.RootElement.GetProperty("tool").GetString()).IsEqualTo("Bash");
+        await Assert.That(second.RootElement.GetProperty("output").GetString()).IsEqualTo("TAIL");
+        await Assert.That(second.RootElement.TryGetProperty("next_offset", out _)).IsFalse();
     }
 
     [Test]

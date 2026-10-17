@@ -3,8 +3,9 @@ using System.Text.Json.Nodes;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>Cuts each search hit's snippet to a window around the first query term it contains. A server can return a hit's
-/// whole event as its snippet, and twenty whole events overflow the judge's tool-result limit.</summary>
+/// <summary>Cuts each search hit's snippet to a window around where the query matched, and drops trailing hits that would
+/// take the page past <see cref="JudgeResultCap.MaxChars"/>. A server can return a hit's whole event as its snippet, and
+/// twenty whole events overflow the judge's tool-result limit.</summary>
 static class JudgeSearchExcerpts {
     const int Before = 200;
     const int Window = 500;
@@ -12,32 +13,27 @@ static class JudgeSearchExcerpts {
     public static string Render(string body, string query) {
         if (JsonNode.Parse(body) is not JsonObject root || root["results"] is not JsonArray results) return body;
 
-        var terms = Terms(query);
-
         foreach (var hit in results.OfType<JsonObject>()) {
             if (hit["snippet"] is not JsonValue value || !value.TryGetValue<string>(out var snippet) || snippet.Length <= Window) continue;
-            hit["snippet"] = JsonNode.Parse($"\"{JsonEncodedText.Encode(Excerpt(snippet, terms))}\"");
+            hit["snippet"] = JsonNode.Parse($"\"{JsonEncodedText.Encode(Excerpt(snippet, query))}\"");
         }
 
-        return root.ToJsonString();
+        var text    = root.ToJsonString();
+        var omitted = 0;
+        while (text.Length > JudgeResultCap.MaxChars && results.Count > 1) {
+            results.RemoveAt(results.Count - 1);
+            omitted++;
+            root["results_omitted"] = omitted;
+            text = root.ToJsonString();
+        }
+
+        return text;
     }
 
-    static string Excerpt(string snippet, string[] terms) {
-        var at = terms
-            .Select(t => snippet.IndexOf(t, StringComparison.OrdinalIgnoreCase))
-            .Where(i => i >= 0)
-            .DefaultIfEmpty(0)
-            .Min();
-        var start = Math.Max(0, at - Before);
-        var end   = Math.Min(snippet.Length, start + Window);
+    static string Excerpt(string snippet, string query) {
+        var start = JudgeText.Boundary(snippet, Math.Max(0, JudgeText.MatchAt(snippet, query) - Before));
+        var end   = JudgeText.Boundary(snippet, Math.Min(snippet.Length, start + Window));
 
         return $"{(start > 0 ? "…" : "")}{snippet[start..end]}{(end < snippet.Length ? "…" : "")} ({snippet.Length} chars)";
     }
-
-    // The words of a websearch-style query, without its quotes, negations and OR keywords.
-    static string[] Terms(string query) =>
-        query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Select(t => t.Trim('"', '\'', '(', ')').TrimStart('-'))
-            .Where(t => t.Length > 0 && !t.Equals("or", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
 }
