@@ -464,12 +464,23 @@ internal sealed class AgentCommand(
     /// AgentList frame with an empty payload is a genuinely empty table, so only that maps to [].
     /// </summary>
     static async Task<IReadOnlyList<AgentRow>?> FetchAgentsAsync(string sock) {
+        var rows = await FetchAgentTableAsync(sock, LocalFrame.ListWithState());
+
+        // A current daemon never answers the state request with six columns; one that predates it
+        // does, and still gives titles to the older request.
+        if (rows is { Count: > 0 } && rows.All(r => r.Columns == 6))
+            rows = await FetchAgentTableAsync(sock, LocalFrame.ListWithTitles());
+
+        return rows?.Select(r => r.Row).ToList();
+    }
+
+    static async Task<IReadOnlyList<(AgentRow Row, int Columns)>?> FetchAgentTableAsync(string sock, LocalFrame request) {
         try {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));
             await using var stream = new NetworkStream(socket, ownsSocket: false);
 
-            await FrameCodec.WriteAsync(stream, LocalFrame.ListWithState(), default);
+            await FrameCodec.WriteAsync(stream, request, default);
             var resp = await FrameCodec.ReadAsync(stream, default);
 
             if (resp is null) {
@@ -507,7 +518,7 @@ internal sealed class AgentCommand(
                 return null;
             }
 
-            return [.. rows.Select(ParseAgentRow)];
+            return [.. rows.Select(l => (ParseAgentRow(l), l.Split('\t').Length))];
         } catch (Exception ex) when (ex is SocketException or IOException) {
             await Console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
 

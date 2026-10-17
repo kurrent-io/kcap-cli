@@ -164,8 +164,11 @@ internal partial class AgentOrchestrator {
         // applies — a review-flow survivor from a prior incarnation is refused exactly like a
         // live one. StopByPidRecordAsync itself stays policy-free (it's shared with the
         // server-origin HandleStopAgent path); the decision is made here, before it ever runs.
+        // An agent a restart left resuming or interrupted has no process, only its ledger entry.
+        var discarded = TryDiscardResumeEntry(agentId);
+
         if (_pidRecords is null || !_pidRecords.TryRead(agentId, out var found)) {
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\tfailed"), ct);
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(discarded)}"), ct);
 
             return;
         }
@@ -173,7 +176,9 @@ internal partial class AgentOrchestrator {
         if (found is not { } record) {
             // A confirmed snapshot target may have finished while the owner read the prompt.
             await FrameCodec.WriteAsync(stream,
-                reportMissing ? LocalFrame.StopAck($"{agentId}\tmissing") : LocalFrame.Error($"no such agent {agentId}"), ct);
+                discarded     ? LocalFrame.StopAck($"{agentId}\tstopped")
+              : reportMissing ? LocalFrame.StopAck($"{agentId}\tmissing")
+              :                 LocalFrame.Error($"no such agent {agentId}"), ct);
 
             return;
         }

@@ -60,7 +60,7 @@ Daemon restarts:
   A daemon restart stops the agents and the new daemon resumes them under the
   same ids. The STATE column of `ls` reads `running`, `resuming`, or
   `interrupted (<reason>)` for one that could not be brought back; `resume`
-  retries it. An attached terminal waits for its agent to come back (up to
+  retries it, `stop` discards it, and a start discards it after 30 days. An attached terminal waits for its agent to come back (up to
   KCAP_ATTACH_RECONNECT_SECONDS, default 90) and re-attaches on its own, or
   prints why it did not and exits 1.
 

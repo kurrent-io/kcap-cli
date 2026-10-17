@@ -170,4 +170,26 @@ public class AgentCommandRoutingTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That((console.GetCapturedOutput() + console.GetCapturedError()).Trim()).IsEqualTo(expected);
     }
+
+    /// A daemon that predates the state column answers its request as a bare List; the titles it
+    /// can still give come from asking again in the older form.
+    [Test, NotInParallel]
+    public async Task Ls_against_a_daemon_without_the_state_column_asks_again_for_titles() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        var received = FakeControlSocket.AnswerInOrder(Daemons.Store, "old", [
+            new LocalFrame(FrameType.AgentList) { Text = "aaaa1111\tRunning\t/r1\tagent\t\t" },
+            new LocalFrame(FrameType.AgentList) { Text = "aaaa1111\tRunning\t/r1\tagent\t\t\tFix the login" },
+        ]);
+        using var console = ConsoleOutput.StartCapture("\n");
+
+        var exit = await Command().HandleAsync(["agent", "ls", "--daemon", "old"], baseUrl: null);
+
+        var requests = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(requests.Select(r => r?.Text ?? "")).IsEquivalentTo(new[] { LocalFrame.ListStateColumn, LocalFrame.ListTitleColumn });
+        var lines = console.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(lines[0]).Contains("TITLE");
+        await Assert.That(lines[0]).DoesNotContain("STATE");
+        await Assert.That(lines[1]).Contains("Fix the login");
+    }
 }

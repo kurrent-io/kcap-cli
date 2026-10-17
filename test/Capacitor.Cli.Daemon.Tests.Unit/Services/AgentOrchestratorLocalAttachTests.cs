@@ -1556,7 +1556,7 @@ public class AgentOrchestratorLocalAttachTests {
         var now    = TimeProvider.System.GetUtcNow();
         var next   = ResumeLedgerEntries.For("next-1", ResumeState.Resuming);
         ledger.Write(next with { UpdatedAt = now, ResumingAt = now, Launch = next.Launch with { WorktreePath = tmp.CreateDir("wt").Path, Title = "Coming back" } });
-        ledger.Write(ResumeLedgerEntries.For("gone-1", ResumeState.Interrupted) with { LastError = "worktree\tmissing" });
+        ledger.Write(ResumeLedgerEntries.For("gone-1", ResumeState.Interrupted) with { LastError = "worktree\tmissing", UpdatedAt = now });
         orch.LoadResumeLedger();
         orch.SeedAgentForTest("live-1");
         ledger.Write(ResumeLedgerEntries.For("live-1", ResumeState.Running));
@@ -1586,5 +1586,61 @@ public class AgentOrchestratorLocalAttachTests {
         var plain = await ListAsync(withState: false);
         await Assert.That(plain.Length).IsEqualTo(1);
         await Assert.That(plain[0].Length).IsEqualTo(7);
+    }
+
+    static async Task<LocalFrame?> StopV2Async(AgentOrchestrator orch, string agentId) {
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalStopV2Async(force: false, agentId, client, default);
+        client.WrittenStream.Position = 0;
+
+        return await FrameCodec.ReadAsync(client.WrittenStream, default);
+    }
+
+    static async Task<string[]> ListedIdsAsync(AgentOrchestrator orch) {
+        using var client = new DuplexTestStream(new MemoryStream(), new MemoryStream());
+        await orch.HandleLocalListAsync(withTitles: true, withState: true, client, default);
+        client.WrittenStream.Position = 0;
+        var reply = await FrameCodec.ReadAsync(client.WrittenStream, default);
+
+        return [.. reply!.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Split('\t')[0])];
+    }
+
+    [Test]
+    public async Task Stopping_an_interrupted_entry_deletes_it_and_its_ring() {
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var ledger = orch.ResumeLedger!;
+        ledger.Write(ResumeLedgerEntries.For("gone-1", ResumeState.Interrupted) with { LastError = "worktree_missing" });
+        await File.WriteAllBytesAsync(ledger.RingPath("gone-1"), "earlier"u8.ToArray());
+
+        var reply = await StopV2Async(orch, "gone-1");
+
+        await Assert.That(reply!.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(reply.Text).IsEqualTo("gone-1\tstopped");
+        await Assert.That(ledger.TryRead("gone-1")).IsNull();
+        await Assert.That(File.Exists(ledger.RingPath("gone-1"))).IsFalse();
+        await Assert.That(await ListedIdsAsync(orch)).DoesNotContain("gone-1");
+    }
+
+    [Test]
+    public async Task Stopping_a_resuming_candidate_keeps_the_lane_from_launching_it() {
+        using var tmp = new TempDir();
+        var server = new TripwireServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var ledger = orch.ResumeLedger!;
+        var now    = TimeProvider.System.GetUtcNow();
+        var next   = ResumeLedgerEntries.For("next-1", ResumeState.Resuming);
+        ledger.Write(next with { UpdatedAt = now, ResumingAt = now, Launch = next.Launch with { WorktreePath = tmp.CreateDir("wt").Path } });
+        orch.LoadResumeLedger();
+        var launched = false;
+        orch.ContinueEntry = (_, _, _) => { launched = true; return Task.FromResult(ResumeOutcome.Interrupted); };
+
+        var reply = await StopV2Async(orch, "next-1");
+        await orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(reply!.Text).IsEqualTo("next-1\tstopped");
+        await Assert.That(launched).IsFalse();
+        await Assert.That(ledger.TryRead("next-1")).IsNull();
+        await Assert.That(await ListedIdsAsync(orch)).DoesNotContain("next-1");
     }
 }

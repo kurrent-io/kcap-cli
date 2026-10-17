@@ -402,4 +402,22 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(keep).Contains(candidate.Launch.WorktreePath);
         await Assert.That(keep).Contains(interrupted.Launch.WorktreePath);
     }
+
+    [Test]
+    public async Task Interrupted_entries_older_than_thirty_days_are_reaped_with_their_ring() {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 10, 17, 12, 0, 0, TimeSpan.Zero));
+        var f = Build(time: time);
+        await using var _ = f.Orch;
+        var stale = Entry(f, "stale-1", state: ResumeState.Interrupted, at: time.GetUtcNow() - TimeSpan.FromDays(31));
+        var young = Entry(f, "young-1", state: ResumeState.Interrupted, at: time.GetUtcNow() - TimeSpan.FromDays(29));
+        await File.WriteAllBytesAsync(f.Orch.ResumeLedger!.RingPath("stale-1"), "old output"u8.ToArray());
+
+        f.Orch.LoadResumeLedger();
+
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("stale-1")).IsNull();
+        await Assert.That(File.Exists(f.Orch.ResumeLedger!.RingPath("stale-1"))).IsFalse();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("young-1")!.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(f.Orch.LedgerWorktreePaths()).DoesNotContain(stale.Launch.WorktreePath);
+        await Assert.That(f.Orch.LedgerWorktreePaths()).Contains(young.Launch.WorktreePath);
+    }
 }

@@ -401,6 +401,9 @@ internal partial class AgentOrchestrator {
 
     static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
+    /// How long an interrupted entry waits for `kcap agent resume` or `stop` before a start reaps it.
+    static readonly TimeSpan InterruptedRetention = TimeSpan.FromDays(30);
+
     readonly ConcurrentDictionary<string, ResumeLedgerEntry> _resumeCandidates = new(StringComparer.Ordinal);
     readonly List<ResumeLedgerEntry> _resumeOrder = [];
     readonly List<(ResumeLedgerEntry Entry, string Reason)> _interruptedAtBoot = [];
@@ -435,6 +438,11 @@ internal partial class AgentOrchestrator {
         var blocked = (_orphanReaper?.BlockedCandidates() ?? []).Select(c => c.AgentId).ToHashSet(StringComparer.Ordinal);
         var beat    = DaemonHeartbeat.LastBeat(_config.Store, _config.Name);
         var now     = _time.GetUtcNow();
+
+        foreach (var stale in entries.Where(e => e.State == ResumeState.Interrupted && now - e.UpdatedAt > InterruptedRetention))
+            DeleteLedger(stale.AgentId);
+
+        entries = [.. entries.Where(e => e.State != ResumeState.Interrupted || now - e.UpdatedAt <= InterruptedRetention)];
 
         _ledgerWorktrees = [.. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
 
@@ -500,6 +508,27 @@ internal partial class AgentOrchestrator {
         return rows;
     }
 
+    /// <summary>`kcap agent stop` of an agent the daemon is not running: deletes its entry and ring and
+    /// withdraws it from the resume lane. False when there is a live agent or no entry.</summary>
+    internal bool TryDiscardResumeEntry(string agentId) {
+        if (ResumeLedger is not { } ledger || _agents.ContainsKey(agentId)) return false;
+
+        lock (_ledgerLock) {
+            if (TryReadLedger(agentId) is null) return false;
+
+            _resumeCandidates.TryRemove(agentId, out _);
+
+            try {
+                ledger.Delete(agentId);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                LogResumeLedgerFailed(ex, "deleting", agentId);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
     /// resume needs its worktree as much as a boot candidate does.</summary>
     internal IReadOnlyList<string> LedgerWorktreePaths() => _ledgerWorktrees;
@@ -522,6 +551,9 @@ internal partial class AgentOrchestrator {
         await ResumeLane.WaitAsync(ct);
 
         try {
+            // A stop while the entry waited for the lane withdrew it.
+            if (!_resumeCandidates.ContainsKey(entry.AgentId)) return;
+
             await ResumeEntryAsync(entry, ct);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogResumeFailed(ex, entry.AgentId);

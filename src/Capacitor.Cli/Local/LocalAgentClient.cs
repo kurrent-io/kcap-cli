@@ -43,6 +43,7 @@ internal static class LocalAgentClient {
         var       writeLock   = new SemaphoreSlim(1, 1);
         var       exitCode    = 0;
         var       readOnly    = false; // daemon attached us to a protected agent; input is dropped
+        var       attached    = false; // some connection got an Attached reply
 
         async Task Send(LocalFrame f) {
             await writeLock.WaitAsync(ct);
@@ -73,6 +74,7 @@ internal static class LocalAgentClient {
 
                     return false;
                 case FrameType.Attached:
+                    attached = true;
                     Volatile.Write(ref readOnly, false);
                     var (_, snapshot) = FrameCodec.Attached(f);
                     if (snapshot.Length > 0) terminal.Write(snapshot, snapshot.Length);
@@ -81,6 +83,7 @@ internal static class LocalAgentClient {
 
                     return false;
                 case FrameType.AttachedReadOnly:
+                    attached = true;
                     Volatile.Write(ref readOnly, true);
                     var (_, reason, roSnapshot) = FrameCodec.AttachedReadOnly(f);
                     if (roSnapshot.Length > 0) terminal.Write(roSnapshot, roSnapshot.Length);
@@ -99,7 +102,9 @@ internal static class LocalAgentClient {
 
                     return true;
                 case FrameType.Error:
-                    await Console.Error.WriteLineAsync($"\r\nkcap: {f.Text}");
+                    // A refused attach to an agent a restart left interrupted: its reason says more.
+                    if (attached || reconnect is null || !await ReportInterruptedAsync(reconnect))
+                        await Console.Error.WriteLineAsync($"\r\nkcap: {f.Text}");
                     exitCode = 1;
 
                     return true;
@@ -149,22 +154,27 @@ internal static class LocalAgentClient {
             return null;
         }
 
+        async Task<bool> ReportInterruptedAsync(AttachReconnect r) {
+            if (r.Ledger() is not { State: ResumeState.Interrupted } entry) return false;
+
+            await Console.Error.WriteLineAsync(
+                $"\r\nkcap: {r.AgentId} was interrupted ({entry.LastError ?? "no reason recorded"}). Retry with `kcap agent resume {r.AgentId}`.");
+
+            return true;
+        }
+
         // The resumed agent's connection, or null after reporting why it will not come back.
         async Task<NetworkStream?> ReconnectAsync(AttachReconnect r) {
             var deadline = time.GetUtcNow() + r.Window;
 
             while (true) {
-                switch (r.Ledger()) {
-                    case null:
-                        await Console.Error.WriteLineAsync($"\r\nkcap: {r.AgentId} was not resumed — see `kcap agent ls`.");
+                if (r.Ledger() is null) {
+                    await Console.Error.WriteLineAsync($"\r\nkcap: {r.AgentId} was not resumed — see `kcap agent ls`.");
 
-                        return null;
-                    case { State: ResumeState.Interrupted } entry:
-                        await Console.Error.WriteLineAsync(
-                            $"\r\nkcap: {r.AgentId} was interrupted ({entry.LastError ?? "no reason recorded"}). Retry with `kcap agent resume {r.AgentId}`.");
-
-                        return null;
+                    return null;
                 }
+
+                if (await ReportInterruptedAsync(r)) return null;
 
                 var remaining = deadline - time.GetUtcNow();
 
@@ -234,6 +244,8 @@ internal static class LocalAgentClient {
 
                 break;
             }
+
+            if (await ReportInterruptedAsync(reconnect)) break;
 
             if (!announced) {
                 announced = true;

@@ -92,6 +92,27 @@ public class LocalAgentClientReconnectTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(console.GetCapturedError()).Contains("worktree_missing");
         await Assert.That(console.GetCapturedError()).Contains($"kcap agent resume {AgentId}");
+        await Assert.That(console.GetCapturedError()).DoesNotContain("daemon restarting");
+    }
+
+    [Test]
+    public async Task Attaching_to_an_agent_already_interrupted_prints_the_reason() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        SeedLedger(ResumeState.Interrupted, "too_old");
+        using var listener = Listen();
+        using var terminal = new FakeAgentTerminal();
+        using var console  = ConsoleOutput.StartErrorCapture("\n");
+
+        var run = Attach(SocketPath, terminal, Reconnect());
+        await AnswerAsync(listener, LocalFrame.Error($"no such agent {AgentId}"));
+
+        var exit = await run.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(console.GetCapturedError()).Contains("too_old");
+        await Assert.That(console.GetCapturedError()).Contains($"kcap agent resume {AgentId}");
+        await Assert.That(console.GetCapturedError()).DoesNotContain("no such agent");
+        await Assert.That(console.GetCapturedError()).DoesNotContain("daemon restarting");
     }
 
     [Test]
