@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Install;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -11,9 +12,10 @@ public class ScriptUpdaterTests {
     static bool Unsupported => OperatingSystem.IsWindows();
 
     static async Task<(bool Ok, string Out, string Err)> Install(
-            ScriptReleaseFixture f, string version, string channel = "latest", TimeSpan? downloadTimeout = null) {
+            ScriptReleaseFixture f, string version, string channel = "latest", TimeSpan? downloadTimeout = null,
+            Func<string, bool>? inUse = null) {
         var (stdout, stderr) = (new StringWriter(), new StringWriter());
-        var ok = await new ScriptUpdater(f.Client(downloadTimeout))
+        var ok = await new ScriptUpdater(f.Client(downloadTimeout)) { InUse = inUse ?? ScriptUpdater.AnyFileInUse }
             .InstallAsync(f.Layout, version, channel, ScriptReleaseFixture.Rid, stdout, stderr, CancellationToken.None);
         return (ok, stdout.ToString(), stderr.ToString());
     }
@@ -144,13 +146,13 @@ public class ScriptUpdaterTests {
     /// <summary>A process started from a version before <c>current</c> moved away may still run there, so
     /// installing that version again moves the old directory aside instead of deleting it.</summary>
     [Test]
-    public async Task A_leftover_version_directory_is_moved_aside_not_deleted() {
+    public async Task A_leftover_version_directory_in_use_is_moved_aside_not_deleted() {
         Skip.When(Unsupported, "the fixture's current is a symlink");
         using var f = new ScriptReleaseFixture();
         f.LeaveVersion("1.5.0", "leftover");
         f.Publish("1.5.0");
 
-        var (ok, _, _) = await Install(f, "1.5.0");
+        var (ok, _, _) = await Install(f, "1.5.0", inUse: dir => Path.GetFileName(dir).StartsWith(".replaced-", StringComparison.Ordinal));
 
         await Assert.That(ok).IsTrue();
         await Assert.That(File.ReadAllText(f.Layout.CurrentBin("kcap"))).IsEqualTo("kcap 1.5.0");
@@ -200,5 +202,51 @@ public class ScriptUpdaterTests {
         await Assert.That(new DirectoryInfo(link).LinkTarget).IsEqualTo("versions/b");
         await Assert.That(Directory.EnumerateFileSystemEntries(tmp.Path).Select(p => Path.GetFileName(p)!).ToArray())
             .IsEquivalentTo(["versions", "current"]);
+    }
+
+    /// <summary>An update keeps the version it replaced, which a daemon started before the switch still runs,
+    /// and deletes the older ones.</summary>
+    [Test]
+    public async Task An_update_prunes_versions_older_than_the_one_it_replaced() {
+        Skip.When(Unsupported, "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.LeaveVersion("0.9.0", "older");
+        f.Publish("1.5.0");
+
+        var (ok, output, _) = await Install(f, "1.5.0");
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(output).Contains("Removed 1 unused kcap version.");
+        await Assert.That(Directory.EnumerateDirectories(f.Layout.Versions).Select(p => Path.GetFileName(p)!).ToArray())
+            .IsEquivalentTo(["1.0.0", "1.5.0"]);
+    }
+
+    [Test]
+    public async Task Pruning_keeps_what_it_is_told_to_and_what_is_in_use() {
+        using var tmp = new TempDir();
+        var layout = new ScriptInstallLayout(tmp.Path);
+        foreach (var name in new[] { "1.0.0", "1.1.0", "1.2.0", "1.3.0-beta.1", ".replaced-1.2.0-abc", ".update-12-def", ".staging-34", "notes" })
+            tmp.CreateFile($"versions/{name}/bin/kcap");
+        var updater = new ScriptUpdater(null!) { InUse = dir => Path.GetFileName(dir) == "1.1.0" };
+
+        var pruned = updater.PruneVersions(layout, keep: [layout.VersionDir("1.3.0-beta.1"), layout.VersionDir("1.2.0"), null]);
+
+        await Assert.That(pruned).IsEqualTo(2);
+        await Assert.That(Directory.EnumerateDirectories(layout.Versions).Select(p => Path.GetFileName(p)!).ToArray())
+            .IsEquivalentTo(["1.1.0", "1.2.0", "1.3.0-beta.1", ".update-12-def", ".staging-34", "notes"]);
+    }
+
+    /// <summary>A file someone holds open marks its directory in use; a running binary refuses the same
+    /// exclusive write open on Windows and Linux.</summary>
+    [Test]
+    public async Task A_directory_with_a_file_held_open_is_in_use() {
+        using var tmp = new TempDir();
+        var dir = tmp.CreateDir("1.0.0");
+        var exe = tmp.CreateFile("1.0.0/bin/kcap");
+
+        await Assert.That(ScriptUpdater.AnyFileInUse(dir)).IsFalse();
+        using (new FileStream(exe, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await Assert.That(ScriptUpdater.AnyFileInUse(dir)).IsTrue();
+        await Assert.That(ScriptUpdater.AnyFileInUse(dir)).IsFalse();
     }
 }
