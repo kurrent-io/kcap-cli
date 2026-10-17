@@ -1021,4 +1021,111 @@ public class DaemonEnablerTests {
         await Assert.That(statusCalls).IsEqualTo(0);
         await Assert.That(mutations).IsEqualTo(0);
     }
+
+    /// Renames the configured "old-mac" to the identity's name, over a new name with no service.
+    static async Task<Harness> RenamedHarnessAsync(ServiceSnapshot? oldService) {
+        var h = new Harness(withName: true);
+        h.Name!.DaemonName = "old-mac";
+        await h.Name.SaveAsync(CancellationToken.None);
+        h.Pick = _ => Task.FromResult<string?>(DaemonName);
+        h.Status(Snap());
+        h.Cli.NamedStatusBehavior = _ => Task.FromResult(oldService);
+        return h;
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_rename_retires_the_old_name_s_service_with_the_install() {
+        var (requests, statusReads, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = await RenamedHarnessAsync(OwnedRunning());
+
+            await h.Ensure();
+
+            return (h.Lane.Requests.ToList(), h.Cli.NamedStatusReads.ToList(), h.Vm.Satisfied);
+        });
+
+        await Assert.That(statusReads).IsEquivalentTo(new[] { "old-mac" });
+        await Assert.That(requests.Count).IsEqualTo(1);
+        await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(requests[0].RetireServiceId).IsEqualTo("old-mac");
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    /// A name with no service — never installed, or run by hand — has nothing to retire.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_rename_with_no_old_service_installs_without_retiring() {
+        var requests = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = await RenamedHarnessAsync(Snap(state: "not_installed", daemonPid: 777));
+
+            await h.Ensure();
+
+            return h.Lane.Requests.ToList();
+        });
+
+        await Assert.That(requests.Count).IsEqualTo(1);
+        await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(requests[0].RetireServiceId).IsNull();
+    }
+
+    /// The lane fails a retire an old CLI cannot run, which would leave the new name without a daemon.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_cli_that_cannot_retire_installs_without_retiring() {
+        var requests = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = await RenamedHarnessAsync(OwnedRunning());
+            h.Cli.SupportsRetire = false;
+
+            await h.Ensure();
+
+            return h.Lane.Requests.ToList();
+        });
+
+        await Assert.That(requests.Count).IsEqualTo(1);
+        await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(requests[0].RetireServiceId).IsNull();
+    }
+
+    /// A refused retire, or one whose old service was locked by another transaction, changed nothing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(VerifyExitCodes.RetireRefused)]
+    [Arguments(VerifyExitCodes.Contended)]
+    public async Task A_retire_that_changed_nothing_installs_the_new_name_without_it(int exitCode) {
+        var (requests, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = await RenamedHarnessAsync(OwnedRunning());
+            h.Lane.Behavior = (request, _) => Task.FromResult<MutationOutcome>(request.RetireServiceId is null
+                ? new MutationOutcome.Succeeded()
+                : new MutationOutcome.Failed(exitCode, "refused", RecoverySurface.Attention));
+
+            await h.Ensure();
+
+            return (h.Lane.Requests.ToList(), h.Vm.Satisfied);
+        });
+
+        await Assert.That(requests.Count).IsEqualTo(2);
+        await Assert.That(requests[0].RetireServiceId).IsEqualTo("old-mac");
+        await Assert.That(requests[1].Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(requests[1].RetireServiceId).IsNull();
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    /// Only a name the save replaced is retired: the profile's first name has no predecessor.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_first_name_reads_no_other_service() {
+        var (requests, statusReads) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness(withName: true);
+            h.Pick = _ => Task.FromResult<string?>(DaemonName);
+            h.Status(Snap());
+
+            await h.Ensure();
+
+            return (h.Lane.Requests.ToList(), h.Cli.NamedStatusReads.ToList());
+        });
+
+        await Assert.That(statusReads).IsEmpty();
+        await Assert.That(requests.Count).IsEqualTo(1);
+        await Assert.That(requests[0].RetireServiceId).IsNull();
+    }
 }

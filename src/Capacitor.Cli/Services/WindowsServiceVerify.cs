@@ -21,12 +21,17 @@ sealed class WindowsServiceVerify(
         TimeProvider time,
         Func<bool>? profileViable = null,
         TimeSpan? forwardBudget = null,
-        Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null) {
+        Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null,
+        Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
     static readonly TimeSpan LockWait     = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan FenceWait    = TimeSpan.FromSeconds(3);
     static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait     = TimeSpan.FromSeconds(5);
 
     readonly TimeSpan _forwardBudget = forwardBudget ?? ServiceVerify.DefaultForwardBudget;
+
+    readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
+        acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
 
     public async Task<int> InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId = null) {
         var id = spec.ServiceId;
@@ -35,11 +40,24 @@ sealed class WindowsServiceVerify(
 
         if (profileViable is not null && !profileViable()) return Fail(VerifyExit.Viability, VerifyExit.ViabilityToken);
 
-        // A rename retires only a unit pinned to the same profile, checked before anything changes; an
-        // absent unit has nothing to retire.
-        if (retireServiceId is not null && unitEnv?.Invoke(retireServiceId) is { } retiredEnv
-         && !SameProfile(retiredEnv, spec.Environment))
-            return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
+        IAdmissionFenceSession? fence = null;
+        if (retireServiceId is not null) {
+            var (refused, present, session) = await PrepareRetireAsync(retireServiceId, spec);
+            if (refused is { } exit) return exit;
+            fence = session;
+            if (!present) retireServiceId = null;
+        }
+
+        try {
+            return await InstallAfterRetirePreparedAsync(spec, replace, expectedVersion, retireServiceId, fence);
+        } finally {
+            if (fence is not null) await fence.DisposeAsync();
+        }
+    }
+
+    async Task<int> InstallAfterRetirePreparedAsync(
+            ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId, IAdmissionFenceSession? fence) {
+        var id = spec.ServiceId;
 
         // A rename never takes over a daemon that already answers to the new name.
         if (retireServiceId is not null && validatedDaemonPid(id) is not null)
@@ -67,12 +85,61 @@ sealed class WindowsServiceVerify(
         if (!await WaitReadyAsync(id, expectedVersion))
             return RollBackInstall(id, VerifyExit.ReadinessTimeout, VerifyExit.ReadinessTimeoutToken);
 
-        if (retireServiceId is not null && !manager.Uninstall(retireServiceId, out var retireError)) {
+        if (retireServiceId is null) return VerifyExit.Ok;
+
+        if (fence is not null && !await fence.CommitAsync(FenceWait, CancellationToken.None)) {
+            await fence.AbortAsync(FenceWait, CancellationToken.None);
+            return RetireRefusal("fence_unavailable");
+        }
+
+        if (!manager.Uninstall(retireServiceId, out var retireError)) {
             Say($"retire: {retireError}");
-            return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
+            return RetireRefusal("uninstall_failed");
+        }
+
+        // Left behind, the marker would fence the next daemon started under the old name.
+        if (fence is not null && File.Exists(store.RetiringMarkerPath(retireServiceId))) {
+            try { File.Delete(store.RetiringMarkerPath(retireServiceId)); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Say($"retire: could not remove the retiring marker: {ex.Message}"); }
         }
 
         return VerifyExit.Ok;
+    }
+
+    /// <summary>
+    /// Proves the task a rename leaves behind is this profile's and, when its daemon runs, takes that
+    /// daemon's admission fence, before anything changes. Uninstalling the task kills the daemon, so one
+    /// that is busy, or cannot be fenced, is refused; so is an installed task whose wrapper cannot be read.
+    /// </summary>
+    async Task<(int? Exit, bool Present, IAdmissionFenceSession? Fence)> PrepareRetireAsync(string retireId, ServiceSpec spec) {
+        ServiceQuery old;
+        try {
+            old = manager.Query(retireId);
+        } catch (InvalidOperationException ex) {
+            Say($"retire: {ex.Message}");
+            return (RetireRefusal("unit_unknown"), true, null);
+        }
+
+        if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
+
+        if (unitEnv?.Invoke(retireId) is not { } retiredEnv) return (RetireRefusal("unit_unreadable"), true, null);
+        if (!SameProfile(retiredEnv, spec.Environment)) return (RetireRefusal("foreign_profile"), true, null);
+
+        if (old.State != ServiceState.Running) return (null, true, null);
+        if (old.JobPid is not { } jobPid) return (RetireRefusal("fence_unavailable"), true, null);
+
+        var acquired = await _acquireFence(retireId, CancellationToken.None);
+        switch (acquired.Outcome) {
+            case AdmissionFenceOutcome.Busy:        return (RetireRefusal("agents_active"), true, null);
+            case AdmissionFenceOutcome.Unsupported: return (RetireRefusal("fence_unsupported"), true, null);
+            case AdmissionFenceOutcome.Acquired:
+                // The socket must answer for the process the uninstall will kill.
+                if (acquired.Session!.Pid == jobPid) return (null, true, acquired.Session);
+                await acquired.Session.DisposeAsync();
+                return (RetireRefusal("fence_unavailable"), true, null);
+            default:
+                return (RetireRefusal("fence_unavailable"), true, null);
+        }
     }
 
     public async Task<int> StartVerifiedAsync(string id) {
@@ -143,6 +210,11 @@ sealed class WindowsServiceVerify(
     static bool SameProfile(IReadOnlyDictionary<string, string> retired, IReadOnlyDictionary<string, string> installing) =>
         retired.TryGetValue(Core.Config.ProfileOverrides.ProfileVar, out var a) && !string.IsNullOrEmpty(a)
      && installing.TryGetValue(Core.Config.ProfileOverrides.ProfileVar, out var b) && string.Equals(a, b, StringComparison.Ordinal);
+
+    static int RetireRefusal(string reason) {
+        Say($"retire_reason={reason}");
+        return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
+    }
 
     static int Fail(int exit, string token) {
         Say(token);
