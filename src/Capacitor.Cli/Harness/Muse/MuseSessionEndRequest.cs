@@ -10,9 +10,12 @@ namespace Capacitor.Cli.Harness.Muse;
 /// Whoever posts it claims it first by renaming it, an atomic step only one party can win, so the
 /// hook and the watcher can never both post the same end.
 /// </summary>
-public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath) {
+public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath, DateTimeOffset ClaimedAt) {
     public static string PathFor(WatcherPaths paths, string sessionId) =>
         Path.Combine(paths.Directory, $"{sessionId}.muse-end-requested");
+
+    static string ResumedPathFor(WatcherPaths paths, string sessionId) =>
+        Path.Combine(paths.Directory, $"{sessionId}.muse-resumed");
 
     /// <summary>Written whole, then renamed into place, so a reader never sees a partial request.</summary>
     public static void Write(WatcherPaths paths, string sessionId, string payload) {
@@ -29,7 +32,7 @@ public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath) {
 
     /// <summary>Takes the request for <paramref name="owner"/>, or null when there is none or another party
     /// took it first. An empty request is discarded rather than claimed.</summary>
-    public static MuseSessionEndRequest? TryClaim(WatcherPaths paths, string sessionId, string owner) {
+    public static MuseSessionEndRequest? TryClaim(WatcherPaths paths, string sessionId, string owner, TimeProvider time) {
         var source  = PathFor(paths, sessionId);
         var claimed = $"{source}.{owner}.claimed";
 
@@ -54,10 +57,33 @@ public sealed record MuseSessionEndRequest(string Payload, string ClaimedPath) {
             return null;
         }
 
-        if (!string.IsNullOrWhiteSpace(payload)) return new MuseSessionEndRequest(payload, claimed);
+        if (!string.IsNullOrWhiteSpace(payload)) return new MuseSessionEndRequest(payload, claimed, time.GetUtcNow());
 
         Release(claimed);
         return null;
+    }
+
+    /// <summary>Records that the session carried on after its end was handed over, so a claim taken
+    /// before this moment is posted no more: the end it carries is older than the session's new life.</summary>
+    public static void MarkResumed(WatcherPaths paths, string sessionId) {
+        try {
+            Directory.CreateDirectory(paths.Directory);
+            File.WriteAllText(ResumedPathFor(paths, sessionId), "");
+        } catch (IOException) {
+        } catch (UnauthorizedAccessException) {
+        }
+    }
+
+    /// <summary>Whether the session was marked resumed after <paramref name="claimedAt"/>.</summary>
+    public static bool ResumedSince(WatcherPaths paths, string sessionId, DateTimeOffset claimedAt) {
+        try {
+            var marker = ResumedPathFor(paths, sessionId);
+            return File.Exists(marker) && File.GetLastWriteTimeUtc(marker) >= claimedAt.UtcDateTime;
+        } catch (IOException) {
+            return false;
+        } catch (UnauthorizedAccessException) {
+            return false;
+        }
     }
 
     /// <summary>Removes a claimed request once its end is posted or durably spooled.</summary>

@@ -14,12 +14,12 @@ public class MuseSessionEndRequestTests {
         MuseSessionEndRequest.Write(paths, SessionId, """{"session_id":"x","reason":"exit"}""");
         await Assert.That(MuseSessionEndRequest.Exists(paths, SessionId)).IsTrue();
 
-        var claimed = MuseSessionEndRequest.TryClaim(paths, SessionId, "watcher");
+        var claimed = MuseSessionEndRequest.TryClaim(paths, SessionId, "watcher", TimeProvider.System);
         await Assert.That(claimed).IsNotNull();
         await Assert.That(claimed!.Payload).IsEqualTo("""{"session_id":"x","reason":"exit"}""");
         await Assert.That(MuseSessionEndRequest.Exists(paths, SessionId)).IsFalse();
 
-        await Assert.That(MuseSessionEndRequest.TryClaim(paths, SessionId, "hook")).IsNull();
+        await Assert.That(MuseSessionEndRequest.TryClaim(paths, SessionId, "hook", TimeProvider.System)).IsNull();
 
         MuseSessionEndRequest.Release(claimed.ClaimedPath);
         await Assert.That(File.Exists(claimed.ClaimedPath)).IsFalse();
@@ -28,24 +28,23 @@ public class MuseSessionEndRequestTests {
     [Test]
     public async Task No_file_or_an_empty_one_is_no_request() {
         var paths = new WatcherPaths(Tmp.PathTo("watchers"));
-        await Assert.That(MuseSessionEndRequest.TryClaim(paths, SessionId, "watcher")).IsNull();
+        await Assert.That(MuseSessionEndRequest.TryClaim(paths, SessionId, "watcher", TimeProvider.System)).IsNull();
 
         Tmp.CreateFile(["watchers", $"{SessionId}.muse-end-requested"], "");
-        await Assert.That(MuseSessionEndRequest.TryClaim(paths, SessionId, "watcher")).IsNull();
+        await Assert.That(MuseSessionEndRequest.TryClaim(paths, SessionId, "watcher", TimeProvider.System)).IsNull();
         await Assert.That(MuseSessionEndRequest.Exists(paths, SessionId)).IsFalse();
     }
 
     [Test]
-    public async Task Delete_all_removes_the_request_and_every_claim() {
+    public async Task A_resume_marked_after_the_claim_is_seen_and_one_before_it_is_not() {
         var paths = new WatcherPaths(Tmp.PathTo("watchers"));
 
-        MuseSessionEndRequest.Write(paths, SessionId, "{}");
-        var claimed = MuseSessionEndRequest.TryClaim(paths, SessionId, "w1")!;
-        MuseSessionEndRequest.Write(paths, SessionId, "{}");
+        MuseSessionEndRequest.MarkResumed(paths, SessionId);
+        var later = DateTimeOffset.UtcNow.AddMinutes(1);
+        await Assert.That(MuseSessionEndRequest.ResumedSince(paths, SessionId, later)).IsFalse();
 
-        MuseSessionEndRequest.DeleteAll(paths, SessionId);
-
-        await Assert.That(File.Exists(claimed.ClaimedPath)).IsFalse();
-        await Assert.That(MuseSessionEndRequest.Exists(paths, SessionId)).IsFalse();
+        var earlier = DateTimeOffset.UtcNow.AddMinutes(-1);
+        await Assert.That(MuseSessionEndRequest.ResumedSince(paths, SessionId, earlier)).IsTrue();
+        await Assert.That(MuseSessionEndRequest.ResumedSince(paths, "0000000000000000000000000000beef", earlier)).IsFalse();
     }
 }

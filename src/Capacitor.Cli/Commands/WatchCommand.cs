@@ -1190,12 +1190,12 @@ partial class WatchCommand(
 
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
 
-        // A handed end that could be neither posted nor spooled leaves its claim on disk and falls
-        // through to the parent-exit synthesis, the one other sender this process has.
-        var handedEndPosted = museEndRequest is { } handedEnd
-            && await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd);
-
-        if (!handedEndPosted && endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
+        if (museEndRequest is { } handedEnd) {
+            // A handed end that could be neither posted nor spooled keeps its claim on disk and is tried
+            // once more the way a parent exit is posted, which needs no spool.
+            if (!await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd))
+                await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, "hook_handed");
+        } else if (endReason is not null && agentId is null && state.ThresholdReached && !cursorSuppressesEndPost) {
             await PostSessionEndOnParentExitAsync(sessionId, transcriptPath, cwd, vendor, state.Repository, endReason);
         }
 
@@ -2211,11 +2211,12 @@ partial class WatchCommand(
     internal static bool TakesHandedMuseEnd(string vendor, string? agentId) => vendor == "muse" && agentId is null;
 
     MuseSessionEndRequest? ClaimHandedMuseEnd(string sessionId) =>
-        MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        MuseSessionEndRequest.TryClaim(_paths, sessionId, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), time);
 
     /// <summary>Posts the end the hook would have, the way the hook would have: behind any spooled backlog
     /// for the session, and into the spool on a failure, so an outage never drops it. True once it is
-    /// posted or durably spooled; false leaves the request for a later watcher to try again.</summary>
+    /// posted or durably spooled, or dropped because the session carried on after the end was handed
+    /// over; false keeps the claim on disk.</summary>
     async Task<bool> PostHandedSessionEndAsync(
             string                sessionId,
             string                transcriptPath,
@@ -2223,6 +2224,13 @@ partial class WatchCommand(
             RepositoryPayload?    repository,
             MuseSessionEndRequest request
         ) {
+        if (MuseSessionEndRequest.ResumedSince(_paths, sessionId, request.ClaimedAt)) {
+            Log(time, "Handed session-end dropped: the session was resumed after its end was handed over");
+            MuseSessionEndRequest.Release(request.ClaimedPath);
+
+            return true;
+        }
+
         JsonObject endHook;
 
         try {

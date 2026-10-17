@@ -197,9 +197,13 @@ sealed class MuseHookCommand(
 
     /// <summary>A handed end still unclaimed when the session carries on would end the watcher armed for it
     /// on its first tick. It is taken through the same claim a watcher uses, so a watcher already on its
-    /// way out with it keeps it.</summary>
+    /// way out with it keeps it; that watcher then finds the session marked resumed and drops it too.</summary>
     void DiscardHandedEnd(string sessionId) {
-        if (MuseSessionEndRequest.TryClaim(WatcherPaths.FromEnvironment(config), sessionId, "rearm") is { } stale)
+        var paths = WatcherPaths.FromEnvironment(config);
+
+        MuseSessionEndRequest.MarkResumed(paths, sessionId);
+
+        if (MuseSessionEndRequest.TryClaim(paths, sessionId, "rearm", clock.Time) is { } stale)
             MuseSessionEndRequest.Release(stale.ClaimedPath);
     }
 

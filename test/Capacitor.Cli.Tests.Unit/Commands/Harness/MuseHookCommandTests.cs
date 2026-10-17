@@ -672,7 +672,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(File.Exists(paths.PidFile(ParentDashless))).IsTrue();
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(0);
 
-        var request = MuseSessionEndRequest.TryClaim(paths, ParentDashless, "test");
+        var request = MuseSessionEndRequest.TryClaim(paths, ParentDashless, "test", TimeProvider.System);
         await Assert.That(request).IsNotNull();
         var body = JsonDocument.Parse(request!.Payload).RootElement;
         await Assert.That(body.GetProperty("session_id").GetString()).IsEqualTo(ParentDashless);
@@ -699,7 +699,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(_spawner.Spawned[0].TranscriptPath).IsEqualTo(log);
         await Assert.That(_spawner.Spawned[0].Vendor).IsEqualTo("muse");
 
-        var request = MuseSessionEndRequest.TryClaim(WatcherPaths.FromEnvironment(Config.Root), ParentDashless, "test");
+        var request = MuseSessionEndRequest.TryClaim(WatcherPaths.FromEnvironment(Config.Root), ParentDashless, "test", TimeProvider.System);
         await Assert.That(request).IsNotNull();
         await Assert.That(JsonDocument.Parse(request!.Payload).RootElement.GetProperty("reason").GetString()).IsEqualTo("exit");
     }
@@ -718,6 +718,7 @@ public class MuseHookCommandTests : IDisposable {
             new StringWriter(), ParentEnv, Today);
 
         await Assert.That(MuseSessionEndRequest.Exists(paths, ParentDashless)).IsFalse();
+        await Assert.That(MuseSessionEndRequest.ResumedSince(paths, ParentDashless, DateTimeOffset.UtcNow.AddMinutes(-1))).IsTrue();
         await Assert.That(_spawner.Spawned.Count).IsEqualTo(1);
     }
 
