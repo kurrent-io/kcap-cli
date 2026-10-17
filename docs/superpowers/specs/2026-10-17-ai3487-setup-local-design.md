@@ -116,10 +116,13 @@ Unlocked checks, in order, stopping at the first refusal (checks 4–6 are rerun
    - the server unit's plist, or its label loaded in launchd.
 
    The label is fixed per user, not per root, so a unit owned by another `KCAP_LOCAL_ROOT` is refused here rather than
-   touched. A registry with no active installation and retained data cannot arise: uninstall without purge keeps the
-   installation active, and a purge deletes the data. What an install's rollback deletes is therefore only what that
-   attempt created.
-7. **Config.** The config is read strictly: an unreadable `config.json` is `config_unreadable`, never a fresh default.
+   touched (see "The per-user unit"). A registry with no active installation and retained data cannot arise: uninstall
+   without purge keeps the installation active, and a purge deletes the data. What an install's rollback deletes is
+   therefore only what that attempt created.
+7. **Config.** Read strictly: an unreadable `config.json` is `config_unreadable`, never a fresh default. Like check
+   5, it is skipped on the recover hint and run under the lease after recovery. Rolling back needs no config, and
+   rolling forward reads the journal's `config_dir` strictly at the moment it publishes. An unreadable config in
+   the invoking process therefore never strands a recovery.
 8. **Version.** The version to install must pass `ReleaseManifest.IsValidVersion`. That holds for the
    `KCAP_LOCAL_BUNDLE_VERSION` override too: it becomes a path segment. A failure is `invalid_arguments`.
 
@@ -129,8 +132,9 @@ without the answers, it is `answer_required`.
 
 ### The install transaction
 
-Under the lease, after recovery, the preflight checks 4–6 are rerun: they are the preconditions the lock exists to
-hold. Then:
+Under the lease, after recovery, the preflight checks 4–7 are rerun: they are the preconditions the lock exists to
+hold. The empty-slot check of the unit (check 6) is made while holding the unit lock (see "The per-user unit"), which
+is then held through `Install`. Then:
 
 1. **Port.** 9473, the server's default, when it is free on both `127.0.0.1` and `::1` and not a retired port;
    otherwise an OS-assigned free loopback port that is not retired. Emits `port_chosen`.
@@ -195,17 +199,42 @@ being cleared" hold without exception.
 On a failure or cancellation before the point of no return, with a token and budgets of its own (the install's token
 is already cancelled):
 
-1. At phase `unit`, unload the unit with `ILocalServerService.UninstallAsync`: a verified stop, so no restart policy
-   or reboot can start it and no store it owns is alive, then the plist removed. This runs even when `Install` failed
-   partway; an absent label is fine. At phase `pending` no unit was attempted, and the preflight proved none existed,
-   so this step is skipped.
-2. Delete the installation: `bin/`, `data/` and `run/` whole. The empty-slot precondition proved this attempt created
-   all three. `logs/` is kept, because the failure message names the log to read.
-3. Sync the root and `LaunchAgents` directories, so the removals are durable.
-4. Clear the journal.
+1. **Unit.** At phase `unit`, under the unit lock, decide who owns the unit:
+   - **Ours** (the plist names this root): unload it with `ILocalServerService.UninstallAsync`. That is a verified
+     stop, so no restart policy or reboot can start it and no store it owns is alive, and then the plist is removed.
+     This runs even when `Install` failed partway; an absent label is fine.
+   - **Another root's:** leave it untouched. That happens when this setup crashed before its `Install` and another
+     root has installed since.
+   - **Unprovable** (the label is loaded with no plist to read): leave it untouched, and continue only if step 2's
+     probe shows nothing of ours alive.
 
-If step 1 fails, nothing is deleted and the journal stays at `pending`: the next lifecycle command retries the
-rollback. Emits `rolling_back`, then `rolled_back`, and the original failure is reported.
+   At phase `pending` no unit was attempted, and the preflight proved none existed, so this step is skipped.
+2. **Nothing alive.** `LocalStackProbe.FindLive(root)` must report nothing of this root's stack alive. Every deletion
+   waits on that, whatever step 1 decided.
+3. **Delete** the installation: `bin/`, `data/` and `run/` whole. The empty-slot precondition proved this attempt
+   created all three. `logs/` is kept, because the failure message names the log to read.
+4. **Sync** only the directories whose entries were removed: the root, and `LaunchAgents` only when a plist was
+   removed. An absent `LaunchAgents` that setup never touched needs no sync and is never created.
+5. **Clear** the journal.
+
+If step 1 or step 2 fails (the unload throws, the label stays loaded, a postmaster survives), nothing is deleted. The
+journal stays exactly as it was, `unit`/`fenced`, and `rolled_back` is not emitted. The next lifecycle command
+retries, with another verified unload before any deletion. Otherwise it emits `rolling_back`, then `rolled_back`, and
+reports the original failure.
+
+### The per-user unit
+
+The launchd label `io.kurrent.kcap.local` and its plist are per user, while the lifecycle lock is per root. Two
+setups under different `KCAP_LOCAL_ROOT`s therefore need two more things:
+
+- **A unit lock.** It is a lock file at the fixed `~/.config/kcap/local-unit.lock`, which ignores both
+  `KCAP_LOCAL_ROOT` and `KCAP_CONFIG_DIR`, as the daemons directory does. It is taken after the lifecycle lock and
+  before any config lock. Every check of the unit, and every `Install`, unload or removal of it, holds it. Two roots
+  can then never both pass the empty-slot check and replace each other's unit.
+- **An owner check.** A unit is ours when the `KCAP_LOCAL_ROOT` in its plist's `EnvironmentVariables` equals this
+  root. Rollback, recovery and reuse act on the unit only when it is ours. `ILocalServerService` gains
+  `OwnerRoot(unit)`, which reads that variable from the plist on launchd, or from the unit file's `Environment=` on
+  systemd, and returns null when there is no file or it cannot be read.
 
 ### Recovery
 
@@ -292,6 +321,15 @@ data is flushed and its directory entry is synced.
 syncs the config directory after it. The commit uses it, so `allowed` is never published ahead of the profile it
 depends on. `ConfigMutator` also flushes its temp file before every rename, durable or not. The later step-5 rewrite
 of the same file therefore cannot leave an empty `config.json` after a power loss.
+
+**New directories:** every directory setup creates goes through one helper. It creates the components one at a time,
+from the first existing ancestor, owner-only where the layout requires it. After each one it syncs that component's
+parent, so a new directory's own entry is durable and not only its contents. The helper covers:
+- the root and its managed directories;
+- a new config directory (`ConfigMutator` uses it);
+- a new `LaunchAgents` (the durable `ServiceFiles` variant uses it).
+
+Each dependent phase or publication comes after those syncs.
 
 **Rollback:** the removals are synced before the journal is cleared.
 
@@ -380,6 +418,19 @@ Failure codes: `unsupported_platform`, `musl_unsupported`, `socket_path_too_long
 - **Preflight vs recovery:** a pending journal with `data/` and no registry is recovered, not refused.
 - **Empty slot:** pre-existing `bin/`, `data/`, `run/`, a plist or a loaded label each refuse an install and survive
   untouched. That includes a unit owned by another root.
+- **Failed unload:** the journal stays `unit`/`fenced`, and `rolled_back` is not emitted. A second recovery makes
+  another verified unload before any deletion, including when the first attempt unloaded the label but left a
+  postmaster alive.
+- **Per-user unit:**
+  - Setup A records `unit`, then crashes before `Install`. Setup B, under another root, commits. A's recovery then
+    leaves B's unit loaded and its plist in place.
+  - Two roots set up concurrently: exactly one passes the empty-slot check, and the other is refused.
+- **New directories:** ordered fault tests for a new multi-level config path and an absent `LaunchAgents`. Each new
+  component's parent is synced before the publication that depends on it.
+- **Fresh home:** a pending setup that fails at the manifest, or is cancelled, with no `~/Library/LaunchAgents`
+  clears its journal and never creates that directory.
+- **Config vs recovery:** a corrupt current config does not block `pending` or `unit` recovery. A `committing`
+  recovery with a healthy original config, under an unreadable different current override, publishes to the original.
 - **Validation:**
   - An invalid `KCAP_LOCAL_BUNDLE_VERSION` (absolute, `..`, not semver) is refused before `Begin`.
   - A malformed but parseable setup journal (bad id, version, port, URL, relative `config_dir`, or a mismatched
