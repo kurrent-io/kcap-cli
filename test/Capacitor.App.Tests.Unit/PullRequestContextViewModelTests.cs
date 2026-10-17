@@ -642,8 +642,12 @@ public class PullRequestContextViewModelTests {
         await WaitUntilAsync(() => h.Source.Overviews == 2 && h.Source.Lists == 2, what: "renewal and list pending");
         renewal.SetResult(h.Source.Overview(h.Vm.Selected!.Subject) with { AccessValidForSeconds = 10 });
         await WaitUntilAsync(() => h.Vm.CanReveal, what: "short access lease renewed");
-        h.Time.Advance(TimeSpan.FromSeconds(10)); Dispatcher.UIThread.RunJobs();
-        await WaitUntilAsync(() => h.Vm.HasStaleOverview, what: "list does not renew access");
+        // The renewal re-arms the tick in a later UI job than the one that reveals it, so the clock steps
+        // until the indicator shows: a single advance can land before the timer is armed and fire nothing.
+        var renewed = h.Time.GetUtcNow();
+        await WaitUntilAsync(() => { h.Time.Advance(TimeSpan.FromSeconds(1)); Dispatcher.UIThread.RunJobs(); return h.Vm.HasStaleOverview; },
+            what: "list does not renew access");
+        await Assert.That(h.Time.GetUtcNow() - renewed).IsLessThanOrEqualTo(TimeSpan.FromSeconds(11));
         await Assert.That(h.Vm.Description).IsEqualTo("Private description");
         list.SetResult();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "list settled");
