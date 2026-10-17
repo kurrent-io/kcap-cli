@@ -59,13 +59,13 @@ public sealed class LifecycleLease : IDisposable {
     public StateRead<LifecycleJournalEntry> ReadJournal() => LocalStateFiles.ReadJournal(Root);
 
     /// <summary>Records a new operation, refusing to overwrite one that has not been recovered.</summary>
-    public LifecycleJournalEntry Begin(string operation, string phase, bool serverStartAllowed, string? installationId = null,
+    public LifecycleJournalEntry Begin(string operation, string phase, ServerStart serverStart, string? installationId = null,
         IReadOnlyDictionary<string, string>? details = null) {
         if (ReadJournal() is not StateRead<LifecycleJournalEntry>.Absent)
             throw new InvalidOperationException("A lifecycle operation is already recorded; recover it before beginning another.");
 
         var entry = new LifecycleJournalEntry(
-            operation, phase, serverStartAllowed, installationId, _time.GetUtcNow(), details ?? new Dictionary<string, string>());
+            operation, phase, serverStart, installationId, _time.GetUtcNow(), details ?? new Dictionary<string, string>());
 
         LocalStateFiles.WriteJournal(Root, entry);
 
@@ -73,9 +73,9 @@ public sealed class LifecycleLease : IDisposable {
     }
 
     /// <summary>Records that <paramref name="entry"/>'s operation reached a new phase.</summary>
-    public LifecycleJournalEntry Advance(LifecycleJournalEntry entry, string phase, bool serverStartAllowed,
+    public LifecycleJournalEntry Advance(LifecycleJournalEntry entry, string phase, ServerStart serverStart,
         IReadOnlyDictionary<string, string>? details = null) {
-        var next = entry with { Phase = phase, ServerStartAllowed = serverStartAllowed, Details = details ?? entry.Details };
+        var next = entry with { Phase = phase, ServerStart = serverStart, Details = details ?? entry.Details };
 
         LocalStateFiles.WriteJournal(Root, next);
 

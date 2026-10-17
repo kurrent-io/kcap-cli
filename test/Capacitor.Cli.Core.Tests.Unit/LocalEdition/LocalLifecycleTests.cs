@@ -49,7 +49,7 @@ public class LocalLifecycleTests {
     [Test]
     public async Task An_operation_this_build_cannot_recover_is_left_untouched() {
         var lifecycle = new LocalLifecycle(Root, [new UndoSetup()], TimeProvider.System);
-        await lifecycle.RunAsync(Wait, (lease, _) => Task.FromResult(lease.Begin("migrate-v9", "halfway", serverStartAllowed: false)), CancellationToken.None);
+        await lifecycle.RunAsync(Wait, (lease, _) => Task.FromResult(lease.Begin("migrate-v9", "halfway", ServerStart.Deny)), CancellationToken.None);
         var before = File.ReadAllText(Root.JournalPath);
         var ran    = false;
 
@@ -72,7 +72,7 @@ public class LocalLifecycleTests {
     [Test]
     public async Task A_recovery_that_leaves_the_journal_behind_is_an_error() {
         var lifecycle = new LocalLifecycle(Root, [new ForgetfulRecovery()], TimeProvider.System);
-        await lifecycle.RunAsync(Wait, (lease, _) => Task.FromResult(lease.Begin("setup", "staged", serverStartAllowed: false)), CancellationToken.None);
+        await lifecycle.RunAsync(Wait, (lease, _) => Task.FromResult(lease.Begin("setup", "staged", ServerStart.Deny)), CancellationToken.None);
 
         await Assert.That(() => lifecycle.RunAsync(Wait, (_, _) => Task.FromResult(true), CancellationToken.None))
             .Throws<InvalidOperationException>();
@@ -91,10 +91,10 @@ public class LocalLifecycleTests {
     }
 
     static Task<bool> SetupCrashingAt(LifecycleLease lease, string crashAt) {
-        var entry = lease.Begin("setup", Phases[0], serverStartAllowed: false, "inst-1", new Dictionary<string, string> { ["port"] = "51234" });
+        var entry = lease.Begin("setup", Phases[0], ServerStart.Deny, "inst-1", new Dictionary<string, string> { ["port"] = "51234" });
 
         foreach (var phase in Phases) {
-            if (phase != entry.Phase) entry = lease.Advance(entry, phase, serverStartAllowed: phase == "started");
+            if (phase != entry.Phase) entry = lease.Advance(entry, phase, phase == "started" ? ServerStart.Allow : ServerStart.Deny);
             if (phase == crashAt) throw new SimulatedCrash();
         }
 
