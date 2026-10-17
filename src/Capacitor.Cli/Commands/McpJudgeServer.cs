@@ -192,6 +192,10 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             }
 
             var encoded = Uri.EscapeDataString(sessionId);
+            var offset  = OptionalInt(arguments, "offset") ?? 0;
+            var limit   = toolName == "get_session_errors"
+                ? OptionalInt(arguments, "limit", max: JudgeErrorDigest.MaxLimit, min: 1) ?? JudgeErrorDigest.DefaultLimit
+                : 0;
 
             using var httpResponse = toolName switch {
                 "get_session_recap"   => await client.GetAsync($"{apiRoot}/api/sessions/{encoded}/recap?chain=true"),
@@ -210,14 +214,53 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
             var body = await httpResponse.Content.ReadAsStringAsync();
 
-            return !httpResponse.IsSuccessStatusCode
-                ? BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true)
-                : BuildToolResult(id, body);
+            if (!httpResponse.IsSuccessStatusCode) {
+                return BuildToolResult(id, JudgeResultCap.Cap($"Error: HTTP {(int)httpResponse.StatusCode} — {body}", "The error body was cut."), isError: true);
+            }
+
+            return BuildToolResult(id, Shape(toolName, body, arguments, offset, limit));
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         }
+    }
+
+    static string Shape(string toolName, string body, JsonObject? arguments, int offset, int limit) {
+        if (toolName == "get_tool_result") return JudgeResultCap.Page(body, offset);
+
+        string shaped;
+        try {
+            shaped = toolName switch {
+                "get_session_errors" => JudgeErrorDigest.Render(body, offset, limit),
+                "search_session" => JudgeSearchExcerpts.Render(body, GetRequiredString(arguments, "query")),
+                _                => body
+            };
+        } catch (JsonException) {
+            shaped = body;
+        }
+
+        return JudgeResultCap.Cap(shaped, toolName switch {
+            "get_transcript"     => "Pass a smaller take, or skip past what you have read.",
+            "get_session_errors" => "Pass a smaller limit, or page with offset.",
+            "search_session"     => "Pass a smaller limit or a narrower query.",
+            _                    => "Use search_session or get_transcript for the detail."
+        });
+    }
+
+    static int? OptionalInt(JsonObject? arguments, string name, int max = int.MaxValue, int min = 0) {
+        if (arguments?[name] is not { } node) return null;
+
+        int value;
+        try {
+            value = node.GetValue<int>();
+        } catch (Exception e) when (e is InvalidOperationException or FormatException) {
+            throw new ArgumentException($"{name} must be an integer");
+        }
+
+        return value < min || value > max
+            ? throw new ArgumentException(max == int.MaxValue ? $"{name} must be at least {min}" : $"{name} must be between {min} and {max}")
+            : value;
     }
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
@@ -278,11 +321,17 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         ),
         new(
             "get_session_errors",
-            "List errors and failures recorded in the session (tool errors, non-zero exits, exceptions). "
-          + "Use when you need to ground a finding in specific failures instead of inferring from the transcript.",
+            "List the failed tool calls recorded in the session and its continuations (tool errors, non-zero exits, exceptions). "
+          + "repeated_operations groups failures that share a tool and operation (the command, file path or pattern acted on) with their refs — "
+          + "the direct evidence for repeated failed attempts. failures lists one row per failure with a head-and-tail excerpt of its error, "
+          + "a page at a time: pass next_offset as offset for the next page, and a row's call_id to get_tool_result for its full output.",
             new(
                 "object",
-                new() { ["session_id"] = new("string", "Session ID (must match the judge's bound session)") },
+                new() {
+                    ["session_id"] = new("string", "Session ID (must match the judge's bound session)"),
+                    ["offset"]     = new("integer", "Failure rows to skip (the previous page's next_offset)"),
+                    ["limit"]      = new("integer", $"Failure rows per page (default {JudgeErrorDigest.DefaultLimit}, max {JudgeErrorDigest.MaxLimit})")
+                },
                 ["session_id"]
             ),
             McpToolAnnotations.Read
@@ -318,7 +367,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             "search_session",
             "Full-text search scoped to one session. Returns ranked excerpts with speaker (user/assistant/tool), timestamp, and a highlighted snippet. "
           + "Use for targeted lookups ('where did the agent run rm', 'what error mentioned permission') rather than paging the full trace. "
-          + "limit defaults to 20, capped at 50.",
+          + "A long snippet is cut to a window around the first query term. limit defaults to 20, capped at 50.",
             new(
                 "object",
                 new() {
@@ -334,12 +383,14 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             "get_tool_result",
             "Fetch the untruncated body of a single tool result by its call_id. Use when get_session_summary reported the result was truncated "
           + "(see the truncated_tool_results field) and the finding depends on what the tool actually produced — e.g. full dotnet test output, "
-          + "full git diff, full search hit list. 1 MB hard cap on response size.",
+          + $"full git diff, full search hit list. A body longer than {JudgeResultCap.MaxChars} characters comes back a page at a time; "
+          + "pass the offset the page names to read the rest.",
             new(
                 "object",
                 new() {
                     ["session_id"] = new("string", "Session ID (must match the judge's bound session)"),
-                    ["call_id"]    = new("string", "call_id from a tool_invocation/tool_result pair (e.g. toolu_01abc...)")
+                    ["call_id"]    = new("string", "call_id from a tool_invocation/tool_result pair (e.g. toolu_01abc...)"),
+                    ["offset"]     = new("integer", "Character offset to read the body from (default 0)")
                 },
                 ["session_id", "call_id"]
             ),
