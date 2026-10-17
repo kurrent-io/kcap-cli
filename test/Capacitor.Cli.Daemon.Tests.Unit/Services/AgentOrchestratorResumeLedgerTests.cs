@@ -46,7 +46,7 @@ public class AgentOrchestratorResumeLedgerTests {
         var factory = new ObservingAcpFactory();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
-            allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
+            allowedRepoPath: repoPath, extraRuntimeFactories: [factory], configure: c => c.InstanceId = "instance-now");
         factory.Observe = () => orch.ResumeLedger!.TryRead("ledger-launch");
 
         await orch.HandleLaunchAgentForTest(AgentOrchestratorHarness.NewCursorLaunch("ledger-launch", repoPath));
@@ -63,6 +63,10 @@ public class AgentOrchestratorResumeLedgerTests {
 
         var agent = orch.GetAgentForTest("ledger-launch")!;
         await Assert.That(atStart.Launch.WorktreePath).IsEqualTo(agent.Worktree.Path);
+        await Assert.That(atStart.Launch.WorktreeBranch).IsEqualTo(agent.Worktree.Branch);
+        await Assert.That(atStart.Launch.WorktreeIsStandalone).IsEqualTo(agent.Worktree.IsStandalone);
+        await Assert.That(atStart.Launch.WorktreeSourceRepo).IsEqualTo(agent.Worktree.SourceRepo);
+        await Assert.That(atStart.DaemonInstanceId).IsEqualTo("instance-now");
         var after = orch.ResumeLedger!.TryRead("ledger-launch")!;
         await Assert.That(after.SessionId).IsEqualTo(agent.SessionId);
         await Assert.That(after.SessionId).IsNotNull();
@@ -70,6 +74,8 @@ public class AgentOrchestratorResumeLedgerTests {
         await Assert.That(after.Launch.ConsentSource).IsEqualTo("default");
         await Assert.That(after.Launch.ConsentAt).IsEqualTo(atStart.Launch.ConsentAt);
         await Assert.That(after.CreatedAt).IsEqualTo(atStart.CreatedAt);
+        await Assert.That(after.Launch.WorktreeBranch).IsEqualTo(agent.Worktree.Branch);
+        await Assert.That(after.DaemonInstanceId).IsEqualTo("instance-now");
     }
 
     [Test]

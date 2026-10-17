@@ -20,7 +20,8 @@ public sealed record ResumeLedgerEntry(
     int Attempts,
     string? LastError,
     string? PredecessorInstanceId,
-    DateTimeOffset? ResumingAt
+    DateTimeOffset? ResumingAt,
+    string? DaemonInstanceId = null
 ) {
     public const int CurrentSchemaVersion = 1;
 }

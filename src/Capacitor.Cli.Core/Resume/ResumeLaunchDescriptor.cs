@@ -22,5 +22,8 @@ public sealed record ResumeLaunchDescriptor(
     string? ConsentSource,
     string? ConsentAt,
     string? FlowRunId,
-    string? FlowRole
+    string? FlowRole,
+    string? WorktreeBranch = null,
+    bool? WorktreeIsStandalone = null,
+    string? WorktreeSourceRepo = null
 );

@@ -28,6 +28,7 @@ public class AgentOrchestratorResumeOnBootTests {
         public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
         public TaskCompletionSource? Gate { get; set; }
         public bool ExitBeforeHandshake { get; init; }
+        public int? ExitImmediatelyWith { get; init; }
         public int InFlight => Volatile.Read(ref _inFlight);
         public int MaxInFlight => Volatile.Read(ref _maxInFlight);
 
@@ -39,6 +40,13 @@ public class AgentOrchestratorResumeOnBootTests {
             try {
                 if (Gate is { } gate) await gate.Task.WaitAsync(ct);
                 if (ExitBeforeHandshake) throw new InvalidOperationException("the agent exited before its handshake");
+
+                if (ExitImmediatelyWith is { } code) {
+                    var exited = new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true) { ExitCode = code };
+                    exited.ExitGate.SetResult();
+
+                    return new HostedRuntimeStart(exited, McpConfigPath: null, Transcript: null);
+                }
 
                 var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path };
 
@@ -66,6 +74,8 @@ public class AgentOrchestratorResumeOnBootTests {
             allowedRepoPath: repo, extraRuntimeFactories: [factory],
             configure: c => {
                 captured = c;
+                c.InstanceId = "instance-now";
+                c.ResumeReadinessWindow = TimeSpan.FromMilliseconds(100);
                 configure?.Invoke(c);
             },
             timeProvider: time);
@@ -75,7 +85,8 @@ public class AgentOrchestratorResumeOnBootTests {
 
     ResumeLedgerEntry Entry(
             Fixture f, string agentId, string? worktree = null, string? vendorSession = "vendor-session-1",
-            bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null) {
+            bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null,
+            string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false) {
         var stamp = at ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
@@ -83,11 +94,13 @@ public class AgentOrchestratorResumeOnBootTests {
             GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null, PermissionPreset: null,
             McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
-            ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null);
+            ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
+            WorktreeBranch: $"capacitor/custom-{agentId}", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, "cursor", "acp",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
-            PredecessorInstanceId: "instance-old", ResumingAt: state == ResumeState.Resuming ? stamp : null);
+            PredecessorInstanceId: predecessor, ResumingAt: state == ResumeState.Resuming ? stamp : null,
+            DaemonInstanceId: daemonInstanceId);
         f.Orch.ResumeLedger!.Write(entry);
 
         return entry;
@@ -108,6 +121,9 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(ctx.ResumeSessionId).IsEqualTo("vendor-session-1");
         await Assert.That(ctx.Prompt).IsEqualTo(ResumeNudge.Build(entry.ResumingAt!.Value, "build the thing"));
         await Assert.That(ctx.Worktree.Path).IsEqualTo(entry.Launch.WorktreePath);
+        await Assert.That(ctx.Worktree.Branch).IsEqualTo("capacitor/custom-resume-1");
+        await Assert.That(ctx.Worktree.SourceRepo).IsEqualTo(f.Repo);
+        await Assert.That(ctx.Worktree.IsStandalone).IsFalse();
 
         var agent = f.Orch.GetAgentForTest("resume-1");
         await Assert.That(agent).IsNotNull();
@@ -116,6 +132,8 @@ public class AgentOrchestratorResumeOnBootTests {
         var after = f.Orch.ResumeLedger!.TryRead("resume-1")!;
         await Assert.That(after.State).IsEqualTo(ResumeState.Running);
         await Assert.That(after.Launch.Prompt).IsEqualTo("build the thing");
+        await Assert.That(after.DaemonInstanceId).IsEqualTo("instance-now");
+        await Assert.That(agent!.ResumePending).IsFalse();
 
         var buffered = System.Text.Encoding.UTF8.GetString(agent!.OutputBuffer.Snapshot());
         await Assert.That(buffered).StartsWith("earlier output");
@@ -241,7 +259,7 @@ public class AgentOrchestratorResumeOnBootTests {
     }
 
     [Test]
-    public async Task A_runtime_that_exits_before_handshake_tries_continue_once_then_interrupts_and_reports_resume_failed() {
+    public async Task A_start_that_throws_tries_continue_once_then_interrupts_and_reports_resume_failed() {
         var f = Build(new ResumableFactory { ExitBeforeHandshake = true });
         await using var _ = f.Orch;
         var entry = Entry(f, "fails-1");
@@ -265,6 +283,64 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
             .Contains(("fails-1", "Failed", "resume_failed:runtime_exited"));
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    /// <summary>The worktree is a standalone copy, so a cleanup that treated the resumed agent as
+    /// ended would delete it outright.</summary>
+    [Test]
+    public async Task A_runtime_that_exits_before_handshake_tries_continue_once_then_interrupts_and_reports_resume_failed() {
+        var f = Build(new ResumableFactory { ExitImmediatelyWith = 3 });
+        await using var _ = f.Orch;
+        var worktree = Tmp.CreateDir("wt-standalone");
+        Directory.CreateDirectory(Path.Combine(worktree, ".git"));
+        var entry = Entry(f, "exits-1", worktree: worktree, standalone: true);
+        var continued = new ConcurrentQueue<(string AgentId, string Reason, int Attempts)>();
+        f.Orch.ContinueEntry = (e, reason, _) => {
+            continued.Enqueue((e.AgentId, reason, e.Attempts));
+            return Task.FromResult(ResumeOutcome.Interrupted);
+        };
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("exits-1") is null);
+
+        await Assert.That(continued.Single()).IsEqualTo(("exits-1", "runtime_exited", 1));
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsTrue();
+
+        var after = f.Orch.ResumeLedger!.TryRead("exits-1")!;
+        await Assert.That(after.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(after.LastError).IsEqualTo("runtime_exited (exit code 3)");
+        await Assert.That(after.Attempts).IsEqualTo(1);
+
+        await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
+            .Contains(("exits-1", "Failed", "resume_failed:runtime_exited"));
+        await Assert.That(f.Server.ShutdownReportExitCodes).Contains(("exits-1", (int?)3));
+    }
+
+    [Test]
+    public async Task A_crash_left_entry_claims_with_the_instance_that_wrote_it() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "crashed-1", state: ResumeState.Running, predecessor: null, daemonInstanceId: "instance-crashed");
+
+        f.Orch.LoadResumeLedger();
+
+        await Assert.That(f.Orch.ResumingClaims().Single().PredecessorInstanceId).IsEqualTo("instance-crashed");
+    }
+
+    [Test]
+    public async Task A_failed_private_resume_sends_nothing_for_its_agent() {
+        var f = Build(new ResumableFactory { ExitBeforeHandshake = true });
+        await using var _ = f.Orch;
+        Entry(f, "private-fails-1", isPrivate: true);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts.Count).IsEqualTo(1);
+        await Assert.That(f.Server.LaunchFailedCalls).IsEmpty();
+        await Assert.That(f.Server.ShutdownReports).IsEmpty();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("private-fails-1")!.State).IsEqualTo(ResumeState.Interrupted);
     }
 
     [Test]

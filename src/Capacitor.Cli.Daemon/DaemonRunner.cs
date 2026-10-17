@@ -135,6 +135,7 @@ public static partial class DaemonRunner {
         config.ReviewerMaxLifetime = ParseSecondsEnv("KCAP_REVIEWER_MAX_LIFETIME", config.ReviewerMaxLifetime);
         config.RestartTurnWait = ParseSecondsEnv("KCAP_RESTART_TURN_WAIT_SECONDS", config.RestartTurnWait);
         config.ResumeMaxAge = ParseSecondsEnv("KCAP_RESUME_MAX_AGE_SECONDS", config.ResumeMaxAge);
+        config.ResumeReadinessWindow = ParseSecondsEnv("KCAP_RESUME_READINESS_SECONDS", config.ResumeReadinessWindow);
         if (int.TryParse(Environment.GetEnvironmentVariable("KCAP_RESUME_CONCURRENCY"), out var resumeConcurrency) && resumeConcurrency > 0)
             config.ResumeConcurrency = resumeConcurrency;
         config.ReviewerIdleTimeout = ParseSecondsEnv("KCAP_REVIEWER_IDLE_TIMEOUT", config.ReviewerIdleTimeout);

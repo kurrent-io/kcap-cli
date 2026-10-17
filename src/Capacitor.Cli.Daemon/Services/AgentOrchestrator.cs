@@ -2175,6 +2175,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<CommandOutcome> LaunchAdmittedAsync(
             LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null) {
         var agentId       = cmd.AgentId;
+        var isPrivate     = resume?.IsPrivate ?? false;
         var prompt        = cmd.Prompt;
         var startTitle    = StartTitleOf(cmd);
         var model         = cmd.Model;
@@ -2200,7 +2201,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // the launch with no LaunchFailed reaching the server. (The removed vendor allowlist used to
         // absorb this incidentally.)
         if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_runtimeFactories.TryGetValue(cmd.Vendor, out var runtimeFactory)) {
-            await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2209,7 +2210,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // runtime can't run unattended — before creating a worktree, so there's nothing to
         // clean up. This guards every newly registered runtime through the same capability seam.
         if (UnattendedLaunchPolicy.RejectionReason(cmd.Vendor, runtimeFactory.SupportsUnattended, isReviewFlow) is { } unattendedRejection) {
-            await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, unattendedRejection);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2230,7 +2231,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var unhonorableModel = effectiveModel!;
 
             if (modelDisposition == ModelSelectionDisposition.Reject) {
-                await _server.LaunchFailedAsync(cmd.AgentId,
+                await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     ModelSelectionLaunchPolicy.RejectionReason(cmd.Vendor, unhonorableModel));
 
                 return new CommandOutcome(
@@ -2243,7 +2244,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
 
         if (isReviewFlow && cmd.Borrowed && !runtimeFactory.SupportsBorrowedReviewFlow) {
-            await _server.LaunchFailedAsync(cmd.AgentId,
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                 $"Borrowed review flows are not certified for '{cmd.Vendor}'; retry with an owned review worktree.");
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2255,7 +2256,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // PR-review launch would defeat a containment invariant, so it fails the launch outright
         // rather than being silently dropped or silently honoured.
         if (CodexPosturePolicy.RejectionReason(cmd) is { } postureRejection) {
-            await _server.LaunchFailedAsync(cmd.AgentId, postureRejection);
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, postureRejection);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2273,7 +2274,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // before the caller heard anything. The single-attempt launch probe did not bound the
                 // launch path at all while this sat in front of the rejection; my claim that it did
                 // was wrong.
-                await _server.LaunchFailedAsync(cmd.AgentId,
+                await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
                 // The self-heal: a certification mismatch usually means the advertisement is stale.
@@ -2325,20 +2326,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         try {
             // MaxConcurrentAgents == 0 is unlimited: the gate is skipped entirely, never compared.
             if (_config.MaxConcurrentAgents > 0 && EffectiveCount >= _config.MaxConcurrentAgents) {
-                await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
             }
 
             // A local spawn was never held to the allowed-repo list, so neither is its resume.
             if (resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
-                await _server.LaunchFailedAsync(agentId, $"Repo path not allowed: {repoPath}");
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path not allowed: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
             if (!Directory.Exists(repoPath)) {
-                await _server.LaunchFailedAsync(agentId, $"Repo path does not exist: {repoPath}");
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path does not exist: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
@@ -2354,7 +2355,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             if (isReview) {
                 if (cmd.Review is not { } review) {
-                    await _server.LaunchFailedAsync(agentId, "Review launch missing PR info");
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, "Review launch missing PR info");
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
@@ -2365,7 +2366,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var actual = await GetOriginRemoteAsync(repoPath, _time);
 
                 if (actual is null) {
-                    await _server.LaunchFailedAsync(agentId, $"No origin remote at {repoPath}");
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"No origin remote at {repoPath}");
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
@@ -2373,7 +2374,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var expected = $"github.com/{review.Owner}/{review.Repo}";
 
                 if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) {
-                    await _server.LaunchFailedAsync(agentId, $"Repo at {repoPath} no longer matches {review.Owner}/{review.Repo} (origin: {actual})");
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo at {repoPath} no longer matches {review.Owner}/{review.Repo} (origin: {actual})");
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
@@ -2386,7 +2387,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Validate effort level before expensive worktree setup
             if (!string.IsNullOrEmpty(effort) && !ValidEffortLevels.Contains(effort)) {
-                await _server.LaunchFailedAsync(agentId, $"Invalid effort level: {effort}");
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Invalid effort level: {effort}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
@@ -2455,7 +2456,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // session/request_permission would otherwise put a decision event ahead of the snapshot
             // it names, and the event lane preserves insertion order. Keyed by the agent id — no
             // vendor session id exists yet.
-            if (policySnapshot is { IsEmpty: false } uploadable) {
+            if (!isPrivate && policySnapshot is { IsEmpty: false } uploadable) {
                 if (uploadable.Degraded)
                     LogPolicySnapshotDegraded(agentId,
                         uploadable.Degradations.Count > 0 ? uploadable.Degradations[0] : "unspecified");
@@ -2540,7 +2541,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (codexReviewer &&
                     !KcapMcpRegistry.TryResolveReviewFlowAllowlist(
                         cmd.McpAllowlist, out reviewerServers, out var rejected)) {
-                    await _server.LaunchFailedAsync(agentId,
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId,
                         $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
 
                     if (work == WorkLocation.OwnedWorktree) {
@@ -2641,7 +2642,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
-            using var pendingLaunch = TrackPendingLaunch(
+            using var pendingLaunch = isPrivate ? null : TrackPendingLaunch(
                 agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
                 vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
 
@@ -2660,7 +2661,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // §3.5: DescribeLaunchFailure covers a null/whitespace ex.Message with the typed
                 // fallback; these three exception types always carry a real message, but every
                 // LaunchFailed send site routes through the same fallback rather than assuming so.
-                await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
 
                 // No AgentInstance was created, so CleanupAgentAsync won't run — revoke the reviewer
                 // token here (if we minted one) so it doesn't leak into the live-token set.
@@ -2763,9 +2764,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 RequesterDisplay    = cmd.RequesterDisplay,
                 InactivityBoundSeconds = cmd.InactivityBoundSeconds,
                 StartTitle          = startTitle,
-                IsPrivate           = resume?.IsPrivate ?? false
+                IsPrivate           = isPrivate,
+                // Keeps the worktree and the entry through any failure until the resume is judged.
+                ResumePending       = resume is not null
             };
-            if (resume is not null) ReplayPersistedRing(agent);
+            if (resume is not null) {
+                resume.Agent = agent;
+                ReplayPersistedRing(agent);
+            }
             PublishAgent(agent);
             published = true;
             storeLease?.Keep();
@@ -2788,9 +2794,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // same way. PTY runtimes never raise the callback; Claude has no live stream, so it is
             // probed once, off the launch path, and only for an interactive launch (a review-flow
             // reviewer has no composer).
-            runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
+            if (!isPrivate) runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
 
-            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
+            if (!isPrivate && string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
                 _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
@@ -2819,7 +2825,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // StartAcpForwardingAsync itself still enforces the load-bearing ordering (bind strictly
             // after RegisterAgentAsync above, strictly before any AcpSessionEvents) by awaiting the
             // bind before constructing the forwarder.
-            if (start.Transcript is { } transcript) {
+            if (!isPrivate && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
                 // FinalizeAgentRunAsync to cancel even if the agent finalizes before the bind below
                 // ever resolves (see AgentInstance.AcpCts).
@@ -2882,12 +2888,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Report the resolved model so the server can display / validate the real model the agent
             // is running. Best-effort: never let a report failure break the launch.
-            if (cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
+            if (!isPrivate && cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
                 // Task 8: a protocol-v3 explicit-model reviewer launch reports the CONCRETE
                 // resolved model via the dedicated ReportExplicitReviewerModelResolved channel, keyed by
                 // the durable LaunchAttemptId, so the server's one-shot waiter can validate + re-price it.
                 ReportExplicitReviewerModel(agentId, cmd.Vendor, explicitReviewerModel, runtimeFactory);
-            } else if (string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
+            } else if (!isPrivate && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
                 // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
                 // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
                 // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
@@ -2914,7 +2920,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (published) {
                 await CleanupAgentAsync(agentId);
                 // §3.5: never forward a null/whitespace ex.Message raw.
-                await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
@@ -2968,7 +2974,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // reclassified AcpReviewerReapedException (design spec §3.2) — thrown before any
             // AgentInstance exists, so DescribeLaunchFailure's fallback is the ONLY cover a blank
             // message gets here.
-            await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+            await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
 
             // Phase B2-b (sequenced-settlement design §4.2.2): a pre-insert failure — the worktree (if any)
             // was torn down and no agent was ever registered; terminal for the sequenced lane.

@@ -14,7 +14,7 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
     public string Vendor              => vendor;
     public int    Pid                 => 0;
     public bool   HasExited           => ExitGate.Task.IsCompleted;
-    public int?   ExitCode            => 0;
+    public int?   ExitCode            { get; init; } = 0;
     public bool   EmitsTerminalOutput => emitsTerminalOutput;
 
     /// <summary>Released by a test to simulate the hosted process exiting.</summary>

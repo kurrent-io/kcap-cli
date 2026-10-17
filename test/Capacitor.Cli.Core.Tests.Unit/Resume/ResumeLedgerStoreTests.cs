@@ -16,8 +16,8 @@ public class ResumeLedgerStoreTests {
         new ResumeLaunchDescriptor(
             "do it", "opus", "high", "/repo", "/repo/wt", WorkLocation.OwnedWorktree, "sub/dir", "sandbox", "never",
             "preset", "/mcp.json", "title", true, "server", "user-1", "User One", "owner", "2026-10-17T08:00:00Z",
-            "flow-1", "reviewer"),
-        ResumeState.Running, 2, "err", "pred-1", T0.AddMinutes(1));
+            "flow-1", "reviewer", WorktreeBranch: "capacitor/wt", WorktreeIsStandalone: false, WorktreeSourceRepo: "/repo"),
+        ResumeState.Running, 2, "err", "pred-1", T0.AddMinutes(1), DaemonInstanceId: "instance-1");
 
     [Test]
     public async Task Write_then_TryRead_round_trips_every_field() {
@@ -28,6 +28,25 @@ public class ResumeLedgerStoreTests {
         store.Write(entry);
 
         await Assert.That(store.TryRead("agent-1")).IsEqualTo(entry);
+    }
+
+    [Test]
+    public async Task An_entry_written_before_the_instance_and_worktree_fields_reads_them_as_null() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+        var path = store.EntryPath("agent-1");
+        var json = System.Text.RegularExpressions.Regex.Replace(
+            File.ReadAllText(path), ",\"(daemon_instance_id|worktree_branch|worktree_is_standalone|worktree_source_repo)\":(\"[^\"]*\"|true|false)", "");
+        await Assert.That(json).DoesNotContain("worktree_branch");
+        File.WriteAllText(path, json);
+
+        var read = store.TryRead("agent-1")!;
+
+        await Assert.That(read.DaemonInstanceId).IsNull();
+        await Assert.That(read.Launch.WorktreeBranch).IsNull();
+        await Assert.That(read.Launch.WorktreeIsStandalone).IsNull();
+        await Assert.That(read.Launch.WorktreeSourceRepo).IsNull();
     }
 
     [Test]

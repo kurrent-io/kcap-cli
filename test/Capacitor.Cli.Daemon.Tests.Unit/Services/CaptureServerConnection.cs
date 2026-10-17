@@ -400,9 +400,12 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// server a shutdown must not wait on.</summary>
     public bool ShutdownReportHangs { get; init; }
 
+    public List<(string AgentId, int? ExitCode)> ShutdownReportExitCodes { get; } = [];
+
     public override async Task ReportAgentEndedForShutdownAsync(
             string agentId, string? sessionId, string status, string reason, int? exitCode, CancellationToken ct) {
         lock (ShutdownReports) ShutdownReports.Add((agentId, status, reason, ct.IsCancellationRequested));
+        lock (ShutdownReportExitCodes) ShutdownReportExitCodes.Add((agentId, exitCode));
 
         if (ShutdownReportHangs) await Task.Delay(Timeout.Infinite, ct);
     }

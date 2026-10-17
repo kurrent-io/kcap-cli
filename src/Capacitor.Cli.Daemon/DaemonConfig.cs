@@ -23,6 +23,10 @@ public class DaemonConfig {
     /// <summary>Whether a booting daemon resumes its ledgered agents at all.</summary>
     public bool AutoResume { get; set; } = true;
 
+    /// <summary>How long a resumed runtime must stay alive after publishing for the resume to count;
+    /// for a PTY vendor this is the whole handshake.</summary>
+    public TimeSpan ResumeReadinessWindow { get; set; } = TimeSpan.FromSeconds(10);
+
     /// <summary>
     /// Absolute path of the native <c>kcap</c> CLI binary, resolved as the daemon's sibling
     /// (<see cref="Capacitor.Cli.Core.Mcp.KcapBinaryCommand.ResolveCliSibling"/>) — inside the

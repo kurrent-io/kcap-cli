@@ -241,7 +241,10 @@ internal partial class AgentOrchestrator {
             // The decision's own time: a rewrite keeps the stamp the pre-start entry took.
             ConsentAt:        consent is null ? null : prior?.Launch.ConsentAt ?? _time.GetUtcNow().ToString("O"),
             FlowRunId:        agent.FlowRunId,
-            FlowRole:         agent.FlowRole);
+            FlowRole:         agent.FlowRole,
+            WorktreeBranch:       agent.Worktree.Branch,
+            WorktreeIsStandalone: agent.Worktree.IsStandalone,
+            WorktreeSourceRepo:   agent.Worktree.SourceRepo);
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior);
     }
@@ -271,7 +274,10 @@ internal partial class AgentOrchestrator {
             ConsentSource:    consent.Source,
             ConsentAt:        _time.GetUtcNow().ToString("O"),
             FlowRunId:        cmd.FlowRunId,
-            FlowRole:         cmd.FlowRole);
+            FlowRole:         cmd.FlowRole,
+            WorktreeBranch:       worktree.Branch,
+            WorktreeIsStandalone: worktree.IsStandalone,
+            WorktreeSourceRepo:   worktree.SourceRepo);
 
         return NewRunningEntry(cmd.AgentId, cmd.Vendor, PreStartTransport, null, null, launch, prior: null);
     }
@@ -296,7 +302,8 @@ internal partial class AgentOrchestrator {
             Attempts:              0,
             LastError:             null,
             PredecessorInstanceId: null,
-            ResumingAt:            null);
+            ResumingAt:            null,
+            DaemonInstanceId:      _config.InstanceId);
     }
 
     internal void WriteLedger(AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
@@ -371,12 +378,17 @@ internal partial class AgentOrchestrator {
 
     /// <summary>What a resume launch carries past an ordinary admitted launch.</summary>
     internal sealed record ResumeLaunch(ResumeLedgerEntry Entry, WorktreeInfo Worktree) {
+        /// <summary>The instance the launch built, once it exists.</summary>
+        public AgentInstance? Agent { get; set; }
+
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
         public string       Origin    => Entry.Launch.Origin;
     }
 
     const string NativeResumeUnsupported = "native_resume_unsupported";
+
+    static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
     readonly ConcurrentDictionary<string, ResumeLedgerEntry> _resumeCandidates = new(StringComparer.Ordinal);
     readonly List<ResumeLedgerEntry> _resumeOrder = [];
@@ -441,7 +453,7 @@ internal partial class AgentOrchestrator {
     internal ResumingAgentClaim[] ResumingClaims() => [
         .. _resumeCandidates.Values
             .Where(e => !e.Launch.IsPrivate)
-            .Select(e => new ResumingAgentClaim(e.AgentId, e.PredecessorInstanceId ?? "", e.SessionId))
+            .Select(e => new ResumingAgentClaim(e.AgentId, e.PredecessorInstanceId ?? e.DaemonInstanceId ?? "", e.SessionId))
     ];
 
     /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
@@ -453,7 +465,7 @@ internal partial class AgentOrchestrator {
     internal async Task ResumeOnBootAsync(CancellationToken ct) {
         try {
             foreach (var (entry, reason) in _interruptedAtBoot.Where(i => !i.Entry.Launch.IsPrivate))
-                await ReportResumeFailedAsync(entry, reason, ct);
+                await ReportResumeFailedAsync(entry, reason, null, ct);
 
             using var lane = new SemaphoreSlim(Math.Max(1, _config.ResumeConcurrency));
 
@@ -482,12 +494,13 @@ internal partial class AgentOrchestrator {
                   && factory.SupportsRestartResume(entry.Transport);
 
         string reason;
+        int?   exitCode = null;
 
         if (native) {
             if (await NativeResumeAsync(entry, ct) is not { } failure) return ResumeOutcome.Resumed;
 
-            reason = failure;
-            entry  = RecordFailedAttempt(entry, reason);
+            (reason, exitCode) = failure;
+            entry = RecordFailedAttempt(entry, LastErrorOf(reason, exitCode));
         } else {
             reason = NativeResumeUnsupported;
         }
@@ -495,18 +508,22 @@ internal partial class AgentOrchestrator {
         var outcome = await ContinueEntry(entry, reason, ct);
         if (outcome != ResumeOutcome.Interrupted) return outcome;
 
-        InterruptEntry(entry.AgentId, reason);
-        if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, ct);
+        InterruptEntry(entry.AgentId, LastErrorOf(reason, exitCode));
+        if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
 
         return ResumeOutcome.Interrupted;
     }
 
-    /// <summary>Relaunches the entry under its own agent id; null when it registered, else why not.</summary>
-    async Task<string?> NativeResumeAsync(ResumeLedgerEntry entry, CancellationToken ct) {
+    static string LastErrorOf(string reason, int? exitCode) =>
+        exitCode is { } code ? $"{reason} (exit code {code})" : reason;
+
+    /// <summary>Relaunches the entry under its own agent id. Null when it registered and its runtime
+    /// stayed alive through <see cref="DaemonConfig.ResumeReadinessWindow"/>, else why not.</summary>
+    async Task<(string Reason, int? ExitCode)?> NativeResumeAsync(ResumeLedgerEntry entry, CancellationToken ct) {
         ct.ThrowIfCancellationRequested();
 
         using var admission = _admission.TryAdmit();
-        if (admission is null) return "daemon_renaming";
+        if (admission is null) return ("daemon_renaming", null);
 
         using var hold = BeginLaunchHold();
 
@@ -515,15 +532,38 @@ internal partial class AgentOrchestrator {
             entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
-        var outcome = await LaunchAdmittedAsync(
-            BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, new ResumeLaunch(entry, ResumedWorktree(entry)));
+        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry));
+        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume);
 
-        return outcome.Kind switch {
-            CommandOutcomeKind.LaunchExecuted => null,
-            CommandOutcomeKind.LaunchRejected when outcome.RejectReason == CommandRejectedReason.DaemonCapacity => "daemon_capacity",
-            CommandOutcomeKind.LaunchRejected => "launch_rejected",
-            _                                 => "runtime_exited"
-        };
+        if (outcome.Kind == CommandOutcomeKind.LaunchRejected)
+            return (outcome.RejectReason == CommandRejectedReason.DaemonCapacity ? "daemon_capacity" : "launch_rejected", null);
+
+        if (resume.Agent is not { } agent) return ("runtime_exited", null);
+
+        if (outcome.Kind != CommandOutcomeKind.LaunchExecuted || !await SurvivesReadinessAsync(agent, ct))
+            return ("runtime_exited", agent.Runtime.ExitCode);
+
+        lock (_ledgerLock) {
+            // A shutdown that began meanwhile has marked the agent for its own resume.
+            if (!agent.IsCleanupStarted && !_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether the resumed runtime is still running, and still this agent, once the readiness
+    /// window has passed since it published.</summary>
+    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct) {
+        var started = _time.GetTimestamp();
+
+        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)) {
+            var left = _config.ResumeReadinessWindow - _time.GetElapsedTime(started);
+            if (left <= TimeSpan.Zero) return true;
+
+            await Task.Delay(left < ReadinessPoll ? left : ReadinessPoll, _time, ct);
+        }
+
+        return false;
     }
 
     static LaunchAgentCommand BuildResumeCommand(ResumeLedgerEntry entry, DateTimeOffset interruptedAt) {
@@ -548,16 +588,21 @@ internal partial class AgentOrchestrator {
             Title:               launch.Title);
     }
 
-    /// <summary>The ledger's worktree as the launch path names it. A daemon-created worktree is either
-    /// linked, on its <c>capacitor/</c> branch, or a standalone copy with a repository of its own.</summary>
+    /// <summary>The ledger's worktree as the launch path names it.</summary>
     static WorktreeInfo ResumedWorktree(ResumeLedgerEntry entry) {
-        var path = entry.Launch.WorktreePath;
+        var launch = entry.Launch;
+        var path   = launch.WorktreePath;
 
-        if (entry.Launch.Work == WorkLocation.BorrowedCwd) return WorktreeInfo.Borrowed(path);
+        if (launch.Work == WorkLocation.BorrowedCwd) return WorktreeInfo.Borrowed(path);
 
+        // An entry written before the worktree fields existed carries none of them.
         return new WorktreeInfo(
-            path, $"capacitor/{Path.GetFileName(path)}", entry.Launch.RepoPath,
-            IsStandalone: Directory.Exists(Path.Combine(path, ".git"))) { GitRelativeCwd = entry.Launch.GitRelativeCwd };
+            path,
+            launch.WorktreeBranch ?? $"capacitor/{Path.GetFileName(path)}",
+            launch.WorktreeSourceRepo ?? launch.RepoPath,
+            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git"))) {
+            GitRelativeCwd = launch.GitRelativeCwd
+        };
     }
 
     /// <summary>Replays the predecessor's persisted ring into a resumed agent, then removes it.</summary>
@@ -583,6 +628,7 @@ internal partial class AgentOrchestrator {
 
             TryWriteLedger(agent.Id, () => entry with {
                 DaemonId              = _daemonId,
+                DaemonInstanceId      = _config.InstanceId,
                 UpdatedAt             = _time.GetUtcNow(),
                 Transport             = agent.RuntimeTransport,
                 SessionId             = agent.SessionId ?? entry.SessionId,
@@ -613,8 +659,12 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    Task ReportResumeFailedAsync(ResumeLedgerEntry entry, string reason, CancellationToken ct) =>
-        _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Failed", $"resume_failed:{reason}", null, ct);
+    Task ReportResumeFailedAsync(ResumeLedgerEntry entry, string reason, int? exitCode, CancellationToken ct) =>
+        _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Failed", $"resume_failed:{reason}", exitCode, ct);
+
+    /// <summary>A private agent's launch reports nothing to the server, failures included.</summary>
+    Task LaunchFailedUnlessPrivateAsync(bool isPrivate, string agentId, string reason) =>
+        isPrivate ? Task.CompletedTask : _server.LaunchFailedAsync(agentId, reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Resume ledger: the ledger could not be read; nothing resumes")]
     partial void LogResumeLedgerUnreadable(Exception ex);
