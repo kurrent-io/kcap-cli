@@ -20,7 +20,11 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
     public static LocalFrame Restart(string mode)       => new(FrameType.Restart)    { Text = mode };
     public static LocalFrame RestartAck(string status)  => new(FrameType.RestartAck) { Text = status };
-    public static LocalFrame Stop(string agentId)       => new(FrameType.Stop)       { Text = agentId };
+    public static LocalFrame Shutdown(ShutdownRequestDto dto) => new(FrameType.Shutdown)       { Text = ShutdownIpc.Serialize(dto) };
+    public static LocalFrame ShutdownAck(string status) => new(FrameType.ShutdownAck)          { Text = status };
+    public static LocalFrame AgentResume(string agentId) => new(FrameType.AgentResume)         { Text = agentId };
+    public static LocalFrame AgentResumeAck(string status) => new(FrameType.AgentResumeAck)    { Text = status };
+    public static LocalFrame Stop(string agentId)      => new(FrameType.Stop)       { Text = agentId };
     public static LocalFrame StopAck(string payload)    => new(FrameType.StopAck)    { Text = payload };
     public static LocalFrame StopV2(bool force, string agentId) => FrameCodec.StopV2(force, agentId);
 

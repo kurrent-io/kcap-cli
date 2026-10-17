@@ -39,6 +39,9 @@ public enum FrameType : byte {
     AdmissionFenceAcquire = 25, // Text = AdmissionFenceAcquireDto JSON
     AdmissionFenceCommit  = 26,
     AdmissionFenceAbort   = 27,
+    // Daemon shutdown and interrupted-agent retry — one-shot; each is acked once.
+    Shutdown    = 28, // Text = ShutdownRequestDto JSON
+    AgentResume = 29, // Text = agent id
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -61,4 +64,6 @@ public enum FrameType : byte {
     SendTextAck = 80, // Text = SendTextAckDto JSON, reply to SendText
     DaemonSettingsAck = 81, // Text = DaemonSettingsAckDto JSON, reply to DaemonSettingsPut
     AdmissionFenceAck = 82, // Text = AdmissionFenceAckDto JSON, reply to every fence frame
+    ShutdownAck    = 83, // Text = "stopping"
+    AgentResumeAck = 84, // Text = "resuming" | "not_interrupted" | "unknown"
 }
