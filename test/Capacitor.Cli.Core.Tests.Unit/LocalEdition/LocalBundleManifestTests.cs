@@ -1,0 +1,83 @@
+using System.Security.Cryptography;
+using System.Text;
+using Capacitor.Cli.Core.LocalEdition;
+
+namespace Capacitor.Cli.Core.Tests.Unit.LocalEdition;
+
+public class LocalBundleManifestTests {
+    const string Version = "1.3.0";
+    const string Rid     = "osx-arm64";
+    static readonly string Sha = new('a', 64);
+
+    static string Json(ECDsa key, string version = Version, string rid = Rid, string? archive = null, string? sha = null,
+                       long size = 10, int schema = 1, string? keyId = null) =>
+        $$"""{"archive":"{{archive ?? $"kcap-local-{Version}-{Rid}.tar.gz"}}","key_id":"{{keyId ?? LocalBundleManifestKey.KeyId(key)}}","rid":"{{rid}}","schema":{{schema}},"sha256":"{{sha ?? Sha}}","size":{{size}},"version":"{{version}}"}""";
+
+    static (byte[] Bytes, string Sig) Sign(ECDsa key, string json) {
+        var bytes = Encoding.UTF8.GetBytes(json);
+
+        return (bytes, Convert.ToBase64String(key.SignData(bytes, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence)));
+    }
+
+    static async Task AssertRefused(Func<ECDsa, string> build, Func<(byte[] Bytes, string Sig), (byte[] Bytes, string Sig)>? tamper = null) {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var (bytes, sig) = Sign(key, build(key));
+        if (tamper is not null) (bytes, sig) = tamper((bytes, sig));
+
+        var e = Assert.Throws<LocalBundleException>(() => LocalBundleManifest.Verify(bytes, sig, key, Version, Rid));
+        await Assert.That(e.Code).IsEqualTo(LocalInstallFailureCode.VerificationFailed);
+    }
+
+    [Test]
+    public async Task A_good_manifest_verifies() {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var (bytes, sig) = Sign(key, Json(key));
+
+        var m = LocalBundleManifest.Verify(bytes, sig, key, Version, Rid);
+
+        await Assert.That(m).IsEqualTo(new LocalBundleManifest(Version, Rid, "kcap-local-1.3.0-osx-arm64.tar.gz", Sha, 10, LocalBundleManifestKey.KeyId(key)));
+    }
+
+    [Test]
+    public Task A_bad_signature_is_refused() => AssertRefused(k => Json(k), t => (t.Bytes, "AAAA"));
+
+    [Test]
+    public Task A_manifest_changed_after_signing_is_refused() =>
+        AssertRefused(k => Json(k), t => (Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(t.Bytes).Replace("\"size\":10", "\"size\":11")), t.Sig));
+
+    [Test]
+    public Task A_foreign_key_id_is_refused() => AssertRefused(k => Json(k, keyId: new string('b', 64)));
+
+    [Test]
+    public Task The_wrong_version_is_refused() => AssertRefused(k => Json(k, version: "1.3.1"));
+
+    [Test]
+    public Task The_wrong_rid_is_refused() => AssertRefused(k => Json(k, rid: "linux-x64"));
+
+    [Test]
+    public Task The_wrong_archive_name_is_refused() => AssertRefused(k => Json(k, archive: "evil.tar.gz"));
+
+    [Test]
+    public Task A_malformed_sha_is_refused() => AssertRefused(k => Json(k, sha: "xyz"));
+
+    [Test]
+    public Task A_zero_size_is_refused() => AssertRefused(k => Json(k, size: 0));
+
+    [Test]
+    public Task Schema_2_is_refused() => AssertRefused(k => Json(k, schema: 2));
+
+    [Test]
+    public Task Non_json_is_refused() => AssertRefused(_ => "not json");
+
+    [Test]
+    public async Task Every_failure_code_has_a_distinct_snake_case_wire_name() {
+        var names = Enum.GetValues<LocalInstallFailureCode>().Select(c => c.Wire()).ToList();
+
+        await Assert.That(names.Distinct().Count()).IsEqualTo(names.Count);
+        await Assert.That(names.Count).IsEqualTo(19);
+        await Assert.That(names.All(n => n.All(ch => char.IsAsciiLetterLower(ch) || ch == '_'))).IsTrue();
+        await Assert.That(LocalInstallFailureCode.BundleNotPublished.Wire()).IsEqualTo("bundle_not_published");
+        await Assert.That(LocalInstallFailureCode.SocketPathTooLong.Wire()).IsEqualTo("socket_path_too_long");
+        await Assert.That(LocalInstallFailureCode.Cancelled.Wire()).IsEqualTo("cancelled");
+    }
+}

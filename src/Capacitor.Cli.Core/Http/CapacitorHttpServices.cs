@@ -181,6 +181,13 @@ public static class CapacitorHttpServices {
             c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
         });
 
+        // Same terms as the release client: the bundle is an archive, so the cap is generous and
+        // redirects are followed.
+        services.AddHttpClient<LocalBundleClient>(c => {
+            c.Timeout = TimeSpan.FromMinutes(10);
+            c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
+        });
+
         // A named lane, and WorkOSClient draws from it per call: the token store holds that client for
         // the process's life, so a typed client would freeze one handler inside it.
         //
