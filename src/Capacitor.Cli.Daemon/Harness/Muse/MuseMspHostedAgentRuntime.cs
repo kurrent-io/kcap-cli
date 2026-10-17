@@ -82,6 +82,10 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     /// <summary>The steer awaiting proof that its turn took it: the user-message item carrying its command id.</summary>
     (string CommandId, TaskCompletionSource Taken)? _pendingSteer;
 
+    /// <summary>Set once this host has shown a user-message item naming its command, which is what a dropped
+    /// steer is told apart by; a host that never shows one cannot be judged that way.</summary>
+    volatile bool _hostEchoesUserMessages;
+
     readonly ReapVerdictGate _gate;
 
     readonly Task _pumpTask;
@@ -684,12 +688,16 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     /// the turn refused it or ended without taking it, so the caller starts a new turn with the same text.
     /// The ack only admits a steer: a turn already winding down drops it afterwards, recording
     /// <c>turn_submit.rejected</c> in its own log and telling the client nothing, so only the user-message
-    /// item carrying the steer's command id proves the input is in the turn.</summary>
+    /// item carrying the steer's command id proves the input is in the turn. That judgement is made only
+    /// against a host that has echoed such an item before; on any other host the ack stands, since a
+    /// second turn could run the input twice.</summary>
     async Task<bool> SteerAsync(string sessionId, string turnId, string text, bool requireAnswer) {
         var commandId = MuseMsp.NewId();
         var taken     = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         lock (_turnGate) _pendingSteer = (commandId, taken);
+
+        using var watch = CancellationTokenSource.CreateLinkedTokenSource(_ownerToken);
 
         try {
             using var steer = await RequestInputAsync(
@@ -705,7 +713,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
                 return false;
             }
 
-            var ended = WaitForTurnIdleAsync(_ownerToken);
+            var ended = WaitForTurnEndAsync(turnId, watch.Token);
 
             try {
                 await Task.WhenAny(taken.Task, ended).WaitAsync(SteerFallbackCap, _time).ConfigureAwait(false);
@@ -717,11 +725,18 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
 
             if (taken.Task.IsCompleted) return true;
 
+            if (Volatile.Read(ref _terminal) != 0 || !_hostEchoesUserMessages) {
+                _logger.LogWarning("Muse: turn {TurnId} ended before the steered input was seen in it; the input is reported "
+                                 + "delivered (agentId={AgentId}).", turnId, _agentId);
+                return true;
+            }
+
             _logger.LogInformation("Muse: turn {TurnId} ended without taking the steered input; starting a new turn (agentId={AgentId}).",
                 turnId, _agentId);
 
             return false;
         } finally {
+            watch.Cancel();
             lock (_turnGate) _pendingSteer = null;
         }
     }
@@ -734,8 +749,27 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
         }
     }
 
+    /// <summary>Completes once <paramref name="turnId"/> is no longer the running turn, whichever turn runs
+    /// after it; a wait on plain idleness would follow the next turn instead.</summary>
+    async Task WaitForTurnEndAsync(string turnId, CancellationToken ct) {
+        while (true) {
+            TaskCompletionSource waiter;
+
+            lock (_turnGate) {
+                if (_runningTurnId != turnId || Volatile.Read(ref _terminal) != 0) return;
+
+                waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _idleWaiters.Add(waiter);
+            }
+
+            await AwaitTurnIdleAsync(waiter, ct).ConfigureAwait(false);
+        }
+    }
+
     void NoteSteeredItem(JsonElement p) {
         if (p.Obj("item") is not { } item || item.Str("kind") != "userMessage" || item.Str("commandId") is not { } commandId) return;
+
+        _hostEchoesUserMessages = true;
 
         TaskCompletionSource? taken = null;
         lock (_turnGate) {
