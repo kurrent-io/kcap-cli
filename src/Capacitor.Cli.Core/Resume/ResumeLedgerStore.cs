@@ -12,8 +12,11 @@ namespace Capacitor.Cli.Core.Resume;
 public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time = null) {
     const string NewerSchemaReason = "ledger_newer_than_daemon";
 
-    public static ResumeLedgerStore For(DaemonStore store, string daemonName) =>
-        new(store.ResumeDirectory(daemonName));
+    const UnixFileMode OwnerOnlyDirectory = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    const UnixFileMode OwnerOnlyFile      = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    public static ResumeLedgerStore For(DaemonStore store, string daemonName, TimeProvider? time = null) =>
+        new(store.ResumeDirectory(daemonName), time);
 
     public static string FileStem(string agentId) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(agentId))).ToLowerInvariant();
@@ -23,12 +26,18 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
     public string RingPath(string agentId) => Path.Combine(resumeDirectory, FileStem(agentId) + ".ring");
 
     public void Write(ResumeLedgerEntry entry) {
-        Directory.CreateDirectory(resumeDirectory);
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(resumeDirectory);
+        else Directory.CreateDirectory(resumeDirectory, OwnerOnlyDirectory);
 
         var finalPath = EntryPath(entry.AgentId);
         var tempPath  = finalPath + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+        var options   = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnlyFile;
 
-        File.WriteAllText(tempPath, JsonSerializer.Serialize(entry, ResumeLedgerJsonContext.Default.ResumeLedgerEntry));
+        using (var writer = new StreamWriter(tempPath, options)) {
+            writer.Write(JsonSerializer.Serialize(entry, ResumeLedgerJsonContext.Default.ResumeLedgerEntry));
+        }
+
         File.Move(tempPath, finalPath, overwrite: true);
     }
 

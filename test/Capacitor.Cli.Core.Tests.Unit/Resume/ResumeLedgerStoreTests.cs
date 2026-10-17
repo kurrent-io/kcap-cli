@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using Capacitor.Cli.Core.LocalIpc;
+using System.Runtime.Versioning;
 using Capacitor.Cli.Core.Resume;
+using Microsoft.Extensions.Time.Testing;
 
 [assembly: SuppressMessage("Naming", "CA1716", Scope = "namespace", Target = "~N:Capacitor.Cli.Core.Tests.Unit.Resume", Justification = "The namespace mirrors the Resume directory it tests.")]
 
@@ -26,6 +28,33 @@ public class ResumeLedgerStoreTests {
         store.Write(entry);
 
         await Assert.That(store.TryRead("agent-1")).IsEqualTo(entry);
+    }
+
+    [Test]
+    public async Task Write_persists_enums_as_strings() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+
+        var json = File.ReadAllText(store.EntryPath("agent-1"));
+
+        await Assert.That(json).Contains("\"state\":\"running\"");
+        await Assert.That(json).Contains("\"work\":\"OwnedWorktree\"");
+    }
+
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Write_keeps_the_directory_and_entry_owner_only() {
+        Skip.When(OperatingSystem.IsWindows(), "Unix file modes only");
+
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+
+        await Assert.That(File.GetUnixFileMode(tmp.Store.ResumeDirectory("d1")))
+            .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        await Assert.That(File.GetUnixFileMode(store.EntryPath("agent-1")))
+            .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     [Test]
@@ -81,7 +110,8 @@ public class ResumeLedgerStoreTests {
     [Test]
     public async Task MarkInterrupted_rewrites_matching_entries_only() {
         using var tmp   = new TempDaemonStore();
-        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        var       clock = new FakeTimeProvider(T0.AddHours(1));
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1", clock);
         store.Write(Entry("agent-1"));
         store.Write(Entry("agent-2"));
 
@@ -92,7 +122,7 @@ public class ResumeLedgerStoreTests {
         await Assert.That(changed).IsEqualTo(1);
         await Assert.That(one.State).IsEqualTo(ResumeState.Interrupted);
         await Assert.That(one.LastError).IsEqualTo("boom");
-        await Assert.That(one.UpdatedAt > T0).IsTrue();
+        await Assert.That(one.UpdatedAt).IsEqualTo(T0.AddHours(1));
         await Assert.That(two).IsEqualTo(Entry("agent-2"));
     }
 

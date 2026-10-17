@@ -25,6 +25,6 @@ public sealed record ResumeLedgerEntry(
     public const int CurrentSchemaVersion = 1;
 }
 
-[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower, UseStringEnumConverter = true)]
 [JsonSerializable(typeof(ResumeLedgerEntry))]
 public partial class ResumeLedgerJsonContext : JsonSerializerContext;
