@@ -7,6 +7,9 @@ sealed record LocalSetupArgs(bool Json, bool SingleUser, bool Yes, bool NoPrompt
         "--server-url", "--discover", "--org", "--slug", "--tier", "--invite-code", "--device", "--github", "--muse-assistant",
     ];
 
+    /// <summary>The later steps' flags whose next token is their value, which a bare name check must skip.</summary>
+    static readonly string[] TakesValue = ["--plugin-scope", "--default-visibility", "--use-provider-api-key", "--daemon-name"];
+
     static readonly string[] JsonAccepts = ["--local", "--json", "--single-user", "--yes", "--no-update-check"];
 
     /// <param name="args">The command line with the verb at index 0, as <c>HandleAsync</c> receives it.</param>
@@ -14,14 +17,21 @@ sealed record LocalSetupArgs(bool Json, bool SingleUser, bool Yes, bool NoPrompt
     public static (LocalSetupArgs? Args, string? Error) Parse(string[] args, string? kcapUrlEnv) {
         var rest = args.Skip(1).ToArray();
 
-        if (rest.Length > 0 && !rest[0].StartsWith('-'))
-            return Refuse($"'{rest[0]}' names a server, and --local sets up its own on this machine. Drop one of them.");
-
         foreach (var arg in rest) {
             var flag = arg.Split('=', 2)[0];
 
             if (Conflicting.Contains(flag))
                 return Refuse($"{flag} cannot be used with --local, which sets up its own server on this machine.");
+        }
+
+        for (var i = 0; i < rest.Length; i++) {
+            if (TakesValue.Contains(rest[i])) {
+                i++;
+                continue;
+            }
+
+            if (!rest[i].StartsWith('-'))
+                return Refuse($"'{rest[i]}' names a server, and --local sets up its own on this machine. Drop one of them.");
         }
 
         if (!string.IsNullOrEmpty(kcapUrlEnv))

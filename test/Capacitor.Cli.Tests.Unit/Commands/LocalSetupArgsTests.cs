@@ -32,6 +32,29 @@ internal sealed class LocalSetupArgsTests {
     }
 
     [Test]
+    [Arguments("--single-user", "acme")]
+    [Arguments("--yes", "example-tenant")]
+    [Arguments("--no-prompt", "acme")]
+    public async Task A_positional_name_after_a_flag_is_refused(string flag, string name) {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", flag, name], kcapUrlEnv: null);
+
+        await Assert.That(parsed).IsNull();
+        await Assert.That(error).Contains($"'{name}' names a server");
+    }
+
+    [Test]
+    [Arguments("--daemon-name", "x")]
+    [Arguments("--plugin-scope", "user")]
+    [Arguments("--default-visibility", "private")]
+    [Arguments("--use-provider-api-key", "true")]
+    public async Task A_pass_through_flag_value_is_not_a_positional_name(string flag, string value) {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", flag, value, "--single-user"], kcapUrlEnv: null);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(parsed).IsEqualTo(new LocalSetupArgs(Json: false, SingleUser: true, Yes: false, NoPrompt: false));
+    }
+
+    [Test]
     public async Task A_set_KCAP_URL_is_refused() {
         var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local"], kcapUrlEnv: "https://acme.kcap.ai");
 
