@@ -90,7 +90,8 @@ public sealed class KcapCli : IKcapCli {
     static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
-    // acquire, then a 3s commit or abort) and the retire's own 20s forward budget — about 118s in all.
+    // acquire, then a 3s commit or abort), the old daemon's 10s end-agents wait and the retire's own 20s
+    // forward budget — about 128s in all.
     static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150);
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can

@@ -116,12 +116,16 @@ sealed class ServiceVerify(
     static readonly TimeSpan TargetProbeWait = TimeSpan.FromSeconds(5);
     static readonly TimeSpan FenceWait       = TimeSpan.FromSeconds(3);
 
+    /// <summary>How long a retirement waits for the old daemon to end its agents, capped at half the
+    /// forward budget; the bootout's own budget starts after it.</summary>
+    static readonly TimeSpan EndWait         = TimeSpan.FromSeconds(10);
+
     public static readonly TimeSpan DefaultForwardBudget   = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
 
-    /// <summary>The advertised transaction bound (30s at the defaults): forward cutoff + rollback
-    /// reserve. A caller's kill-timeout (the desktop app's mutation timeout) MUST sit strictly
-    /// above this. Two bounded phases can precede it — lock acquisition (≤ 10s) and, only on crash
+    /// <summary>The advertised transaction bound (40s at the defaults): a retirement's end wait
+    /// (<see cref="EndWait"/>) + forward cutoff + rollback reserve. A caller's kill-timeout (the desktop
+    /// app's mutation timeout) MUST sit strictly above this. Two bounded phases can precede it — lock acquisition (≤ 10s) and, only on crash
     /// residue, a recovery pre-phase (≤ the rollback reserve) — so for full headroom a caller should
     /// allow the sum. The one accepted exception is <see cref="KillWait"/> (≤ 5s) on the manual-owner
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
@@ -130,7 +134,7 @@ sealed class ServiceVerify(
     /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) PLUS the
     /// old daemon's fence (acquire and commit, each within <see cref="FenceWait"/>) on top of the sum
     /// above.</summary>
-    public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
+    public static readonly TimeSpan AdvertisedBound = EndWait + DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
@@ -1120,11 +1124,13 @@ sealed class ServiceVerify(
             return RetireRefusal("fence_unavailable");
         }
 
-        var deadline = time.GetUtcNow() + _forwardBudget;
-
         // The bootout alone reaches the daemon as SIGTERM, which keeps its agents for a successor this
-        // unit will never start. One that does not answer is left to the bootout.
-        if (ticket.Fence is not null) await _endDaemon(retireId, Remaining(deadline));
+        // unit will never start. One that does not answer is left to the bootout, which keeps its whole
+        // forward budget however long the request took.
+        if (ticket.Fence is not null)
+            await _endDaemon(retireId, TimeSpan.FromTicks(Math.Min(EndWait.Ticks, _forwardBudget.Ticks / 2)));
+
+        var deadline = time.GetUtcNow() + _forwardBudget;
 
         if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
         if (!await WaitForStopConfirmedAsync(retireId, deadline)) {

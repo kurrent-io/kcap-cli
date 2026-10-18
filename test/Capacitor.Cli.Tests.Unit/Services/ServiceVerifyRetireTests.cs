@@ -82,8 +82,11 @@ public class ServiceVerifyRetireTests {
             Bootstrapped = true;
         }
 
+        public readonly List<(string ServiceId, TimeSpan Timeout)> UninstallTimeouts = [];
+
         public bool Uninstall(string serviceId, TimeSpan timeout, out string? error) {
             Calls.Add($"uninstall:{serviceId}");
+            UninstallTimeouts.Add((serviceId, timeout));
             if (serviceId == OldId) OldUnitInstalled = false; else Bootstrapped = false;
             error = null;
             return true;
@@ -437,6 +440,35 @@ public class ServiceVerifyRetireTests {
         var calls = manager.Calls;
         await Assert.That(calls.IndexOf("fence-commit")).IsLessThan(calls.IndexOf($"end:{OldId}"));
         await Assert.That(calls.IndexOf($"end:{OldId}")).IsLessThan(calls.IndexOf($"uninstall:{OldId}"));
+    }
+
+    /// <summary>The end request has its own wait, so one that spends all of it still leaves the bootout the
+    /// whole forward budget.</summary>
+    [Test]
+    [Arguments(30, 10)]
+    [Arguments(8, 4)]
+    public async Task The_end_request_waits_apart_from_the_forward_budget(int forwardSeconds, int endSeconds) {
+        var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
+        var time    = new FakeTimeProvider();
+        var waits   = new List<TimeSpan>();
+        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+            id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello(manager), time,
+            forwardBudget: TimeSpan.FromSeconds(forwardSeconds),
+            readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,
+            plistExists: _ => true,
+            acquireFence: new FakeFence(manager).AcquireAsync,
+            endDaemon: (_, wait) => {
+                waits.Add(wait);
+                time.Advance(wait);
+                return Task.CompletedTask;
+            });
+
+        var task = sut.InstallVerifiedAsync(Spec(ViableDaemonPath(), "mine"), replace: true, ExpectedVersion, retireServiceId: OldId);
+        var exit = await Drive(task, time, TimeSpan.FromMilliseconds(100));
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
+        await Assert.That(waits).IsEquivalentTo([TimeSpan.FromSeconds(endSeconds)]);
+        await Assert.That(manager.UninstallTimeouts.First(u => u.ServiceId == OldId).Timeout).IsEqualTo(TimeSpan.FromSeconds(forwardSeconds));
     }
 
     [Test]
