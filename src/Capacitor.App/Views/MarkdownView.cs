@@ -2,6 +2,7 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
@@ -68,9 +69,17 @@ public sealed class MarkdownView : ContentControl {
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
     /// a change, and the markdown it already holds is not one.
+    /// Markdig throws from the parse for text nested past its depth limit; that text shows as
+    /// plain source, and the viewer is left holding nothing so a pipeline change cannot re-throw.
     void Render() {
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
-        _viewer.Markdown = Text;
+        try {
+            _viewer.Markdown = Text;
+            Content = _viewer;
+        } catch (ArgumentException) {
+            _viewer.Markdown = null;
+            Content = new TextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
+        }
     }
 
     public string? Text {
