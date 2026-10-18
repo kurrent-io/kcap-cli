@@ -59,6 +59,10 @@ internal partial class AgentOrchestrator {
         /// <summary>Read and set under the ledger lock.</summary>
         public bool Withdrawn { get; set; }
 
+        /// <summary>Withdrawn by a stop, which leaves the entry's worktree and attachments to the attempt's
+        /// end. Read and set under the ledger lock.</summary>
+        public bool Discarded { get; set; }
+
         public CancellationToken Token => _cts.Token;
 
         /// <summary>Called outside the ledger lock: cancellation runs its callbacks inline.</summary>
@@ -589,37 +593,69 @@ internal partial class AgentOrchestrator {
         return rows;
     }
 
+    /// <summary>What <see cref="DiscardResumeEntry"/> did. <see cref="Entry"/> is the discarded entry, null
+    /// when nothing was; <see cref="Live"/> is the agent published under the id when that is why, so a
+    /// caller that missed it a moment earlier can stop it as live.</summary>
+    internal readonly record struct ResumeDiscard(ResumeLedgerEntry? Entry, bool AttemptInFlight, AgentInstance? Live) {
+        public bool Discarded => Entry is not null;
+
+        /// <summary>The stop releases the entry's worktree and attachments itself; an attempt in flight
+        /// releases them once it has ended.</summary>
+        public bool LeavesResourcesToStop => Entry is not null && !AttemptInFlight;
+    }
+
     /// <summary>`kcap agent stop` of an agent the daemon is not running: deletes its entry and ring and
     /// withdraws it from the resume lane. False when there is a live agent or no entry.</summary>
-    internal bool TryDiscardResumeEntry(string agentId) => TryDiscardResumeEntry(agentId, out _);
+    internal bool TryDiscardResumeEntry(string agentId) => DiscardResumeEntry(agentId).Discarded;
 
-    /// <summary>As above; <paramref name="live"/> is the agent published under the id when that is why
-    /// nothing was discarded, so a caller that missed it a moment earlier can stop it as live.</summary>
-    internal bool TryDiscardResumeEntry(string agentId, out AgentInstance? live) {
-        live = null;
-        if (ResumeLedger is not { } ledger) return false;
+    internal ResumeDiscard DiscardResumeEntry(string agentId) {
+        if (ResumeLedger is not { } ledger) return default;
 
-        ResumeAttempt? attempt;
+        ResumeAttempt?     attempt;
+        ResumeLedgerEntry? entry;
 
         // Under the lock a resume publishes under: either the agent is live and its own stop applies,
         // or the attempt is withdrawn before it can publish.
         lock (_ledgerLock) {
-            if (_agents.TryGetValue(agentId, out live) || TryReadLedger(agentId) is null) return false;
+            if (_agents.TryGetValue(agentId, out var live)) return new ResumeDiscard(null, false, live);
+            if ((entry = TryReadLedger(agentId)) is null) return default;
 
             try {
                 ledger.Delete(agentId);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 LogResumeLedgerFailed(ex, "deleting", agentId);
-                return false;
+                return default;
             }
 
             _resumeCandidates.TryRemove(agentId, out _);
-            if (_resumeAttempts.TryGetValue(agentId, out attempt)) attempt.Withdrawn = true;
+
+            if (_resumeAttempts.TryGetValue(agentId, out attempt)) {
+                attempt.Withdrawn = true;
+                attempt.Discarded = true;
+            }
         }
 
         attempt?.Cancel();
 
-        return true;
+        return new ResumeDiscard(entry, attempt is not null, null);
+    }
+
+    /// <summary>The owned worktree and attachment directory of a discarded entry, as a normal stop
+    /// removes them. A borrowed or external path is never touched. Never throws.</summary>
+    async Task RemoveDiscardedResourcesAsync(ResumeLedgerEntry entry) {
+        if (entry.Launch.Work == WorkLocation.OwnedWorktree) {
+            try {
+                await WorktreeManager.RemoveAsync(ResumedWorktree(entry), _time);
+            } catch (Exception ex) {
+                LogCleanupStepFailed(ex, "removing a discarded resume's worktree", entry.AgentId);
+            }
+        }
+
+        try {
+            _attachmentStore.Remove(entry.AgentId);
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "removing a discarded resume's attachments", entry.AgentId);
+        }
     }
 
     bool IsWithdrawn(string agentId) {
@@ -696,6 +732,8 @@ internal partial class AgentOrchestrator {
             // `agent resume` until the next boot.
             if (!_agents.ContainsKey(entry.AgentId) && !IsWithdrawn(entry.AgentId)) InterruptEntry(entry.AgentId, ex.GetType().Name);
         } finally {
+            bool discarded;
+
             // A manual retry may already hold the id with its own candidate and attempt.
             lock (_ledgerLock) {
                 if (attempt is not null && _resumeAttempts.TryGetValue(entry.AgentId, out var registered) && ReferenceEquals(registered, attempt))
@@ -703,7 +741,12 @@ internal partial class AgentOrchestrator {
 
                 if (_resumeCandidates.TryGetValue(entry.AgentId, out var candidate) && ReferenceEquals(candidate, entry))
                     _resumeCandidates.TryRemove(entry.AgentId, out _);
+
+                discarded = attempt?.Discarded == true;
             }
+
+            // Whatever the attempt had started is ended by now, so nothing still runs in the worktree.
+            if (discarded) await RemoveDiscardedResourcesAsync(entry);
 
             attempt?.Dispose();
             ResumeLane.Release();

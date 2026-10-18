@@ -1742,12 +1742,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,
     /// on Unix, carries the expected <c>KCAP_AGENT_ID</c> env — ambiguity spares), reap it by identity
     /// and delete the record on confirmed death. This makes the server's registry-independent S2 stop
-    /// effective even against a NEW daemon incarnation that never knew the agent in memory.</summary>
-    async Task<bool> TryStopByPidRecordAsync(string agentId) {
-        if (FindPidRecord(agentId) is not { } record) return false;
-
-        return await StopByPidRecordAsync(record);
-    }
+    /// effective even against a NEW daemon incarnation that never knew the agent in memory. True when no
+    /// survivor is left: none was recorded, or the recorded one is confirmed gone.</summary>
+    async Task<bool> TryStopByPidRecordAsync(string agentId) =>
+        FindPidRecord(agentId) is not { } record || await StopByPidRecordAsync(record);
 
     async Task<bool> StopByPidRecordAsync(AgentPidRecord record) {
         var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _time, _shutdownCts.Token);
@@ -3970,13 +3968,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (!_agents.TryGetValue(agentId, out var agent)) {
             // An agent a restart left resuming or interrupted has only its ledger entry; a private one is
             // never the server's to stop. One whose resume published since the miss is stopped as live.
-            AgentInstance? late;
+            var discard = TryReadLedger(agentId) is { Launch.IsPrivate: false } ? DiscardResumeEntry(agentId) : default;
 
-            if (TryReadLedger(agentId) is not { Launch.IsPrivate: false } || TryDiscardResumeEntry(agentId, out late) || late is null) {
+            if (discard.Live is not { } late) {
                 // No in-memory agent: this may be a survivor of a prior daemon incarnation the server is
                 // still trying to stop. Fall back to the PID record: reap by exact identity if a matching
                 // live process is still there.
-                await TryStopByPidRecordAsync(agentId);
+                var gone = await TryStopByPidRecordAsync(agentId);
+
+                // A survivor that would not die may still be working in the worktree.
+                if (gone && discard is { LeavesResourcesToStop: true, Entry: { } entry }) await RemoveDiscardedResourcesAsync(entry);
+
                 return;
             }
 

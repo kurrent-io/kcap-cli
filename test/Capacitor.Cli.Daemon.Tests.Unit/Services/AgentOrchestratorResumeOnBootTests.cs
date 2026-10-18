@@ -168,10 +168,10 @@ public class AgentOrchestratorResumeOnBootTests {
         f.Orch.LoadResumeLedger();
         await f.Orch.ResumeOnBootAsync(CancellationToken.None);
 
-        var discarded = f.Orch.TryDiscardResumeEntry("resume-live", out var live);
+        var discard = f.Orch.DiscardResumeEntry("resume-live");
 
-        await Assert.That(discarded).IsFalse();
-        await Assert.That(live).IsSameReferenceAs(f.Orch.GetAgentForTest("resume-live"));
+        await Assert.That(discard.Discarded).IsFalse();
+        await Assert.That(discard.Live).IsSameReferenceAs(f.Orch.GetAgentForTest("resume-live"));
         await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-live")).IsNotNull();
     }
 
@@ -478,6 +478,32 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumingClaims().Any(c => c.AgentId == waiting)).IsFalse();
     }
 
+    /// <summary>A stop of an entry with nothing in flight removes what a normal stop removes; the entry's
+    /// worktree is standalone so the removal needs no git checkout.</summary>
+    [Test]
+    public async Task A_server_stop_of_a_waiting_candidate_removes_its_worktree_and_attachments() {
+        var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var f = Build(factory, c => c.ResumeConcurrency = 1);
+        await using var _ = f.Orch;
+        var first  = Entry(f, "release-1", standalone: true);
+        var second = Entry(f, "release-2", standalone: true);
+        Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("release-1"));
+        Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("release-2"));
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => factory.InFlight == 1);
+        var waiting = factory.Contexts.Single().AgentId == "release-1" ? second : first;
+
+        await f.Orch.HandleServerStopAgentForTest(waiting.AgentId);
+
+        await Assert.That(Directory.Exists(waiting.Launch.WorktreePath)).IsFalse();
+        await Assert.That(Directory.Exists(f.Orch.AttachmentStore.DirectoryFor(waiting.AgentId))).IsFalse();
+
+        factory.Gate.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+    }
+
     /// <summary>A stop while the runtime is still handshaking finds no published agent to mark; the
     /// attempt itself has to give up, or it would publish the agent and rewrite its entry afterwards. The
     /// gate never opens: the stop has to end the start itself.</summary>
@@ -486,7 +512,7 @@ public class AgentOrchestratorResumeOnBootTests {
         var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
         var f = Build(factory);
         await using var _ = f.Orch;
-        Entry(f, "handshake-1");
+        var entry = Entry(f, "handshake-1", standalone: true);
         var continued = 0;
         f.Orch.ContinueEntry = (_, _, _) => {
             Interlocked.Increment(ref continued);
@@ -505,6 +531,7 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(continued).IsEqualTo(0);
         await Assert.That(f.Server.ShutdownReports.Any(r => r.Reason.StartsWith("resume_failed", StringComparison.Ordinal))).IsFalse();
         await Assert.That(f.Orch.LedgerOnlyAgents()).IsEmpty();
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsFalse();
     }
 
     /// <summary>The host stop cancels the resume lane before the orchestrator's own shutdown runs, so the

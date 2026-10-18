@@ -165,9 +165,10 @@ internal partial class AgentOrchestrator {
         // live one. StopByPidRecordAsync itself stays policy-free (it's shared with the
         // server-origin HandleStopAgent path); the decision is made here, before it ever runs.
         // An agent a restart left resuming or interrupted has no process, only its ledger entry.
-        var discarded = TryDiscardResumeEntry(agentId, out var late);
+        var discard   = DiscardResumeEntry(agentId);
+        var discarded = discard.Discarded;
 
-        if (late is not null) {
+        if (discard.Live is { } late) {
             // Its resume published between the live check above and the discard.
             var ok = await StopAgentCoreAsync(late);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
@@ -175,13 +176,20 @@ internal partial class AgentOrchestrator {
             return;
         }
 
+        // Only once no survivor of the agent can still be working in the worktree.
+        Task ReleaseDiscardedAsync() =>
+            discard is { LeavesResourcesToStop: true, Entry: { } entry } ? RemoveDiscardedResourcesAsync(entry) : Task.CompletedTask;
+
         if (_pidRecords is null || !_pidRecords.TryRead(agentId, out var found)) {
+            await ReleaseDiscardedAsync();
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(discarded)}"), ct);
 
             return;
         }
 
         if (found is not { } record) {
+            await ReleaseDiscardedAsync();
+
             // A confirmed snapshot target may have finished while the owner read the prompt.
             await FrameCodec.WriteAsync(stream,
                 discarded     ? LocalFrame.StopAck($"{agentId}\tstopped")
@@ -203,6 +211,7 @@ internal partial class AgentOrchestrator {
         }
 
         var reaped = await StopByPidRecordAsync(record);
+        if (reaped) await ReleaseDiscardedAsync();
 
         await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(reaped)}"), ct);
     }
