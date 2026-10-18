@@ -629,7 +629,10 @@ static class SessionImporter {
             // A blocked Cursor batch leaves the server's watermark at the gap; any later batch would
             // move it past the blocked lines, and the next import resumes from the watermark.
             if (vendor is HarnessId.Cursor && resp.StatusCode is HttpStatusCode.Conflict) {
-                progress?.Report(new BatchDropped(sessionId, agentId, first, last, "HTTP 409: the server blocked this batch at a gap"));
+                // The server accepted every line before its next_line_number.
+                var blockedAt = BlockedAt(await resp.Content.ReadAsStringAsync(), first, last);
+                if (blockedAt > first) progress?.Report(new BatchFlushed(agentId, batch.LineNumbers.Count(n => n < blockedAt)));
+                progress?.Report(new BatchDropped(sessionId, agentId, blockedAt, last, "HTTP 409: the server blocked this batch at a gap"));
                 throw new TranscriptDeliveryAbortedException();
             }
 
@@ -650,6 +653,17 @@ static class SessionImporter {
         batch.Clear();
 
         return flushed;
+    }
+
+    /// <summary>The first line a 409 left unaccepted, or the batch's first line when the body does not
+    /// name one inside the batch.</summary>
+    static int BlockedAt(string body, int first, int last) {
+        try {
+            var next = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.TranscriptBatchAck).NextLineNumber;
+            return next > first && next <= last ? next : first;
+        } catch (JsonException) {
+            return first;
+        }
     }
 
     /// <summary>

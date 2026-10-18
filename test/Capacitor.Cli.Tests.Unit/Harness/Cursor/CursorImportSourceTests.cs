@@ -1697,6 +1697,7 @@ public class CursorImportSourceTests {
 
         var posted          = new List<string>();
         var transcriptPosts = 0;
+        var progress        = new CollectingProgress();
         using var handler = new StubHandler(postCapture: (req, _) => {
             var path = req.RequestUri!.AbsolutePath;
             posted.Add(path);
@@ -1725,12 +1726,14 @@ public class CursorImportSourceTests {
                     },
                 },
             },
-            new ImportContext(client, "http://localhost", ForcePrivate: false),
+            new ImportContext(client, "http://localhost", ForcePrivate: false, Progress: progress),
             CancellationToken.None
         );
 
         await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
         await Assert.That(transcriptPosts).IsEqualTo(1);
+        await Assert.That(progress.Events.OfType<BatchFlushed>().Sum(e => e.LinesAdded)).IsEqualTo(40);
+        await Assert.That(progress.Events.OfType<BatchDropped>().Single().FirstLineNumber).IsEqualTo(40);
         await Assert.That(posted).DoesNotContain("/hooks/subagent-start");
         await Assert.That(posted).Contains("/hooks/session-end/cursor");
     }
@@ -2244,5 +2247,10 @@ public class CursorImportSourceTests {
 
             return postCapture?.Invoke(request, body) ?? new HttpResponseMessage(HttpStatusCode.OK);
         }
+    }
+
+    sealed class CollectingProgress : IProgress<ImportProgress> {
+        public List<ImportProgress> Events { get; } = [];
+        public void Report(ImportProgress value) => Events.Add(value);
     }
 }
