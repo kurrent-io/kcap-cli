@@ -1450,24 +1450,50 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     public async Task RequestGracefulStopAsync() {
-        if (_sessionId is not { Length: > 0 } sessionId) {
-            _logger.LogDebug("ACP runtime RequestGracefulStopAsync called before a session was established; nothing to cancel.");
-            return;
+        // Marked intentional before anything is sent: the agent may exit on the cancel alone, and that
+        // exit must not read as a crash and open a reconnect.
+        AcpConnection            connection;
+        CancellationTokenSource? reconnectOwner;
+        lock (_reconnectLock) {
+            _intentionalStop = true;
+            connection       = _installed.Connection;
+            reconnectOwner   = _ownerCts;
         }
 
-        var cancelParams = JsonSerializer.SerializeToElement(
-            new SessionCancelParams(SessionId: sessionId),
-            CapacitorJsonContext.Default.SessionCancelParams);
-
+        // A reconnect in flight cannot commit any more; ending it now spares its candidate the wait for
+        // the terminate that follows.
         try {
-            await _installed.Connection.NotifyAsync("session/cancel", cancelParams).ConfigureAwait(false);
-        } catch (Exception ex) when (Phase != RuntimePhase.Running) {
-            // A graceful-stop notify against a dead or mid-swap connection is expected while
-            // reconnecting/terminal — swallow and log (reconnect spec §9); the hard stop path
-            // (TerminateAsync) is what actually ends the incident.
-            _logger.LogDebug(ex, "ACP: session/cancel against a non-running connection; ignoring.");
+            reconnectOwner?.Cancel();
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: cancelling the reconnect owner during graceful stop failed.");
+        }
+
+        if (_sessionId is { Length: > 0 } sessionId) {
+            var cancelParams = JsonSerializer.SerializeToElement(
+                new SessionCancelParams(SessionId: sessionId),
+                CapacitorJsonContext.Default.SessionCancelParams);
+
+            // Bounded: a write stuck on an agent that stopped reading must not hold back the EOF below.
+            var cancel = connection.NotifyAsync("session/cancel", cancelParams);
+            try {
+                await cancel.WaitAsync(GracefulCancelSendBound, _timeProvider).ConfigureAwait(false);
+            } catch (Exception ex) {
+                _ = cancel.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                _logger.LogDebug(ex, "ACP: session/cancel during graceful stop did not complete; closing stdin anyway.");
+            }
+        }
+
+        // session/cancel ends the turn, not the process, and a stop during startup has no turn at all:
+        // the agent exits on stdin EOF.
+        try {
+            await connection.CloseInputAsync().ConfigureAwait(false);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: closing stdin during graceful stop failed; falling through to terminate.");
         }
     }
+
+    static readonly TimeSpan GracefulCancelSendBound = TimeSpan.FromSeconds(1);
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => _installed.Process.WaitForExitAsync(timeout);
 
