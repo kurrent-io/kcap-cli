@@ -53,7 +53,7 @@ public class SetupCommandTests {
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root) {
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 
@@ -1456,7 +1456,7 @@ public class SetupCommandTests {
     // The environment they probe and the /auth/config cache they stub are both process-global, so no
     // cohort of key-holders can exclude the readers: bare.
 
-    static string[] SkipAllAgentInstallFlags => [
+    internal static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
         "--skip-cursor-hooks", "--skip-cursor-mcp",
         "--skip-copilot-hooks", "--skip-copilot-mcp", "--skip-copilot-instructions",

@@ -36,6 +36,7 @@ using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
+using Capacitor.Cli.LocalEdition;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 using Profile = Capacitor.Cli.Core.Config.Profile;
@@ -550,13 +551,31 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv, LocalRoot localRoot) {
+        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv, LocalRoot localRoot,
+        ILocalInstallerFactory localInstallers) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
     internal Func<IReadOnlyList<string>, string?>? PickHandoffVendor { get; set; }
 
     public async Task<int> HandleAsync(string[] args) {
+        LocalSetupArgs? local = null;
+
+        if (args.Contains("--local")) {
+            var (parsed, refusal) = LocalSetupArgs.Parse(args, Environment.GetEnvironmentVariable(ProfileOverrides.UrlVar));
+
+            if (refusal is not null) {
+                if (args.Contains("--json")) WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.InvalidArguments, refusal));
+                else await Console.Error.WriteLineAsync($"  {refusal}");
+
+                return 1;
+            }
+
+            if (parsed!.Json) return await RunLocalJsonAsync(parsed);
+
+            local = parsed;
+        }
+
         if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
 
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -717,6 +736,12 @@ sealed class SetupCommand(
 
             // A named server can be one still being created, which the provisioner says to re-run setup against.
             if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
+        } else if (local is not null) {
+            var (exit, committed) = await new LocalSetupTerminal(localInstallers, local).RunAsync();
+
+            if (committed is null) return exit;
+
+            (serverUrl, provider, loginComplete) = (committed.ServerUrl, AuthProvider.None, true);
         } else if (noPrompt && requestedWorkspace is null) {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace)");
@@ -2008,6 +2033,12 @@ sealed class SetupCommand(
     internal async Task<int> RunLoginStepAsync(
             bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile,
             bool museAssistant = false) {
+        if (loginComplete && provider == AuthProvider.None) {
+            AnsiConsole.MarkupLine("  [green]✓[/] No sign-in needed for a local installation.");
+
+            return 0;
+        }
+
         if (loginComplete) {
             // Discovery's WorkOS leg reports the sign-in itself, naming the workspace it picked. Every
             // other provider's discovery reports a tenant count and no identity, so this is its only one.
@@ -2424,6 +2455,44 @@ sealed class SetupCommand(
             + "  Drop the workspace argument to discover, or drop --discover to use it."
             : $"--discover only reports, so {stray} has nothing to apply to.\n"
             + "  It takes --json, --github, --device and --no-prompt.";
+    }
+
+    /// <summary>Only the install, as JSON lines on stdout: the wizard owns every later step. The deferral spans the
+    /// last line, so an interrupt still reports how the install ended before the process exits 130.</summary>
+    internal async Task<int> RunLocalJsonAsync(LocalSetupArgs args) {
+        using var deferral = InteractiveLifetime.Defer();
+
+        var sawCommitting = false;
+        var progress = new SyncProgress<LocalInstallEvent>(e => {
+            if (e is LocalInstallEvent.Committing) sawCommitting = true;
+
+            WriteJsonLine(LocalSetupJsonLines.Line(e));
+        });
+
+        try {
+            var installer = localInstallers.Create(progress);
+            var plan      = installer.Preflight();
+
+            if (LocalSetupTerminal.MissingAnswer(args, plan, installer.RootDirectory) is { } missing) {
+                WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.AnswerRequired, missing));
+
+                return 1;
+            }
+
+            await installer.InstallAsync(new(args.SingleUser, args.Yes), progress, deferral.Token);
+
+            return 0;
+        } catch (Exception ex) {
+            var failure = LocalSetupJsonLines.Classify(ex, sawCommitting);
+            WriteJsonLine(LocalSetupJsonLines.Failed(failure.Code, failure.Message));
+
+            return 1;
+        }
+    }
+
+    static void WriteJsonLine(string line) {
+        Console.Out.WriteLine(line);
+        Console.Out.Flush();
     }
 
     /// <summary>

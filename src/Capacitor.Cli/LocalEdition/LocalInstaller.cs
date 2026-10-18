@@ -27,6 +27,8 @@ sealed class LocalInstaller(
     /// <summary>The version to install. Defaults to the override or this CLI's own.</summary>
     public string Version { get; init; } = LocalBundleClient.RequestedVersion();
 
+    public string RootDirectory => root.Directory;
+
     /// <summary>Replaces the platform's socket-path limit.</summary>
     public int? SocketLimit { get; init; }
 
