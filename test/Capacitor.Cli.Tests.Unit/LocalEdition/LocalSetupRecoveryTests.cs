@@ -74,8 +74,6 @@ public class LocalSetupRecoveryTests {
             return null;
         } catch (LocalInstallFailure failure) {
             return failure;
-        } catch (NotImplementedException) when (JournalAbsent(root ?? Root) && Registered(root ?? Root)) {
-            return null;
         }
     }
 

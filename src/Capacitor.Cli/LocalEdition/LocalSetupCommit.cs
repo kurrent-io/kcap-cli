@@ -29,7 +29,7 @@ static class LocalSetupCommit {
         lease.PublishRegistry(Registry(lease).WithActive(new(details.InstallationId, details.Port, details.ServerUrl, details.Version)));
         FaultPoints.Hit("setup:after-registry");
 
-        await PublishProfileAsync(details);
+        await PublishProfileAsync(details, "The setup journal is kept; fix the configuration, then run kcap setup --local again.");
         FaultPoints.Hit("setup:after-profile");
 
         var allowed = lease.Advance(entry, LocalSetupJournal.Allowed, ServerStart.Allow);
@@ -78,7 +78,8 @@ static class LocalSetupCommit {
             _ => InstallRegistry.Empty,
         };
 
-    static async Task PublishProfileAsync(SetupDetails details) {
+    /// <summary>Points the profile at the server, durably, only if it still names no other server. <paramref name="next"/> ends the failure message.</summary>
+    public static async Task PublishProfileAsync(SetupDetails details, string next) {
         var url = details.ServerUrl;
 
         var request = new CommitRequest(
@@ -89,7 +90,7 @@ static class LocalSetupCommit {
         var result = await CommitBoundary.CommitAsync(new ConfigRoot(details.ConfigDir), request, null, NoAuthProgress.Instance, CancellationToken.None);
 
         if (result is AuthResult.Failed(var message, _))
-            throw Failed($"The profile \"{details.Profile}\" in {details.ConfigDir} could not be pointed at {url}: {message}. The setup journal is kept; fix the configuration, then run kcap setup --local again.");
+            throw Failed($"The profile \"{details.Profile}\" in {details.ConfigDir} could not be pointed at {url}: {message}. {next}");
     }
 
     static async Task<bool> LiftedAsync(HttpClient local, string url, TimeProvider time) {

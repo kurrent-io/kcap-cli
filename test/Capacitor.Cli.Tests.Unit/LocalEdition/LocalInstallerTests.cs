@@ -442,4 +442,123 @@ public class LocalInstallerTests {
             "journal:allowed", "GET /auth/config", "stop", "start", "GET /healthz/ready", "GET /auth/config", "journal:cleared",
         ], CollectionOrdering.Matching);
     }
+
+    [Test]
+    public async Task Reuse_downloads_nothing_and_asks_nothing() {
+        var first = await Install();
+
+        Bundle.Requests.Clear();
+        _events.Reports.Clear();
+        _log.Clear();
+
+        var second = await Install(new(SingleUser: false, Confirmed: false));
+
+        await Assert.That(Bundle.Requests).IsEmpty();
+        await Assert.That(second).IsEqualTo(first);
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(_log).Contains("start");
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(_events.Reports.Select(e => e.GetType().Name)).IsEquivalentTo([
+            nameof(LocalInstallEvent.PreflightPassed),
+            nameof(LocalInstallEvent.Starting),
+            nameof(LocalInstallEvent.Ready),
+            nameof(LocalInstallEvent.Reused),
+            nameof(LocalInstallEvent.Committed),
+        ], CollectionOrdering.Matching);
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.Reused>().Single()).IsEqualTo(new LocalInstallEvent.Reused(first.ServerUrl, Version));
+        await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles["default"].ServerUrl).IsEqualTo(first.ServerUrl);
+    }
+
+    [Test]
+    public async Task Reuse_reinstalls_a_missing_unit_file_of_its_own_installation() {
+        await Install();
+        File.Delete(Path.Combine(LaunchAgents, LocalServerUnit.ProductionLabel + ".plist"));
+        _log.Clear();
+
+        await Install(new(false, false));
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(File.Exists(Path.Combine(LaunchAgents, LocalServerUnit.ProductionLabel + ".plist"))).IsTrue();
+    }
+
+    [Test]
+    public async Task Reuse_never_starts_or_publishes_over_a_foreign_unit() {
+        await Install();
+        Tmp.CreateDir("other");
+        var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
+        Service.OwnerOverride = new(other, other);
+        _log.Clear();
+
+        var before = File.ReadAllBytes(ConfigPath);
+
+        var failure = await Failure(new(false, false));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(_log).DoesNotContain("start");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(File.ReadAllBytes(ConfigPath).SequenceEqual(before)).IsTrue();
+    }
+
+    [Test]
+    [Arguments("foreign")]
+    [Arguments("redirect")]
+    [Arguments("malformed")]
+    [Arguments("pending")]
+    public async Task Reuse_without_lift_proof_never_touches_the_profile(string answer) {
+        await Install();
+        File.WriteAllText(ConfigPath, File.ReadAllText(ConfigPath).Replace("\"default\":{", "\"default\":{\"note\":1,", StringComparison.Ordinal));
+
+        var before = File.ReadAllBytes(ConfigPath);
+
+        Server.Override = path => path != "/auth/config" ? null : answer switch {
+            "foreign"   => new(HttpStatusCode.OK) { Content = new StringContent("""{"provider":"WorkOS"}""") },
+            "redirect"  => new(HttpStatusCode.Found) { Headers = { Location = new("http://elsewhere.test/") } },
+            "malformed" => new(HttpStatusCode.OK) { Content = new StringContent("{nope") },
+            _           => PendingAnswer(),
+        };
+
+        var failure = await Failure(new(false, false));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(File.ReadAllBytes(ConfigPath).SequenceEqual(before)).IsTrue();
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.Reused>()).IsEmpty();
+    }
+
+    static HttpResponseMessage PendingAnswer() {
+        var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"provider":"None"}""") };
+        response.Headers.Add(LocalServerProbe.PendingHeader, "pending");
+        return response;
+    }
+
+    [Test]
+    public async Task Reuse_reports_a_version_difference() {
+        var first = await Install();
+
+        _events.Reports.Clear();
+
+        var other = new LocalInstaller(Root, Config, Home, Service, Bundle.Client(), new HttpClient(Server), Bundle.Key, MacArm, _time, _ => []) {
+            Version     = "9.9.9",
+            SocketLimit = int.MaxValue,
+        };
+
+        var committed = await other.InstallAsync(new(false, false), _events, CancellationToken.None);
+
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.Reused>().Single().InstalledVersion).IsEqualTo(Version);
+        await Assert.That(committed).IsEqualTo(first);
+    }
+
+    [Test]
+    public async Task A_cancel_before_the_reuse_publish_changes_nothing() {
+        await Install();
+
+        var before = File.ReadAllBytes(ConfigPath);
+
+        using var cts = new CancellationTokenSource();
+        Server.OnRequest = path => { if (path == "/auth/config") cts.Cancel(); };
+
+        var failure = await Failure(new(false, false), cts.Token);
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.Cancelled);
+        await Assert.That(File.ReadAllBytes(ConfigPath).SequenceEqual(before)).IsTrue();
+    }
 }

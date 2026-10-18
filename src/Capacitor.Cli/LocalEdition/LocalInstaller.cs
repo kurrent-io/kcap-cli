@@ -55,7 +55,7 @@ sealed class LocalInstaller(
             throw new LocalInstallFailure(hint == PlanHint.Recover ? LocalInstallFailureCode.RecoveryFailed : LocalInstallFailureCode.StartFailed, ex.Message);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw new LocalInstallFailure(LocalInstallFailureCode.Cancelled, "Setup was cancelled.");
-        } catch (Exception ex) when (ex is not (LocalInstallFailure or NotImplementedException)) {
+        } catch (Exception ex) when (ex is not LocalInstallFailure) {
             throw new LocalInstallFailure(LocalInstallFailureCode.StartFailed, ex.Message);
         }
     }
@@ -73,7 +73,11 @@ sealed class LocalInstaller(
 
             _progress.Report(new LocalInstallEvent.PreflightPassed(plan.Hint, plan.Version, root.Directory));
 
-            if (plan.Hint == PlanHint.Reuse) throw new NotImplementedException("Reusing an existing local installation.");
+            if (plan.Hint == PlanHint.Reuse) {
+                var existing = plan.Existing!;
+
+                return await ReuseAsync(existing, unitLock!, ct);
+            }
 
             if (!answers.SingleUser || !answers.Confirmed)
                 throw new LocalInstallFailure(LocalInstallFailureCode.AnswerRequired,
@@ -142,6 +146,47 @@ sealed class LocalInstaller(
                 $"Setup could not finish its commit ({ex.Message}). Nothing was removed; run kcap setup --local again to finish it.");
         }
 
+        _progress.TryReport(committed);
+
+        return committed;
+    }
+
+    /// <summary>Takes over the unit lock. Nothing is downloaded, no port is taken and no journal is written: the
+    /// profile is published only once the installation's own server answers unfenced.</summary>
+    async Task<LocalInstallEvent.Committed> ReuseAsync(LocalInstallation existing, LocalUnitLock unitLock, CancellationToken ct) {
+        var unit = LocalServerUnit.ForInstallation(root, existing.Port);
+
+        try {
+            LocalOwnUnit.Ensure(root, unit, service,
+                () => new LocalInstallFailure(LocalInstallFailureCode.NotOurServer,
+                    $"The {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed."),
+                startPresent: true);
+        } finally {
+            unitLock.Dispose();
+        }
+
+        _progress.Report(new LocalInstallEvent.Starting(unit.Label));
+
+        await LocalServerReadiness.WaitAsync(local, unit, LocalServerReadiness.StartBudget, time, ct);
+        _progress.Report(new LocalInstallEvent.Ready(unit.BaseUrl));
+
+        if (await LocalServerProbe.AuthConfigAsync(local, unit.BaseUrl, ct) != AuthConfigAnswer.Lifted)
+            throw new LocalInstallFailure(LocalInstallFailureCode.NotOurServer,
+                $"Something other than this installation's local server answers on {unit.BaseUrl}, so the profile was not changed.");
+
+        ct.ThrowIfCancellationRequested();
+
+        var details = new SetupDetails(existing.Id, existing.Port, existing.Version, existing.ServerUrl, Path.GetFullPath(config.Directory), ActiveProfile());
+
+        try {
+            await LocalSetupCommit.PublishProfileAsync(details, "Fix the configuration, then run kcap setup --local again.");
+        } catch (Exception ex) when (ex is not LocalInstallFailure) {
+            throw new LocalInstallFailure(LocalInstallFailureCode.CommitFailed, $"The profile could not be published ({ex.Message}).");
+        }
+
+        _progress.Report(new LocalInstallEvent.Reused(existing.ServerUrl, existing.Version));
+
+        var committed = new LocalInstallEvent.Committed(existing.ServerUrl, existing.Id, existing.Port, existing.Version);
         _progress.TryReport(committed);
 
         return committed;

@@ -52,22 +52,9 @@ sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, Http
         }
     }
 
-    /// <summary>True when the unit had to be installed. The unit is per user, so it is installed only into an empty
-    /// slot or over this root's own job, and one that is not provably this root's is left alone.</summary>
-    async Task<bool> EnsureOwnUnitAsync(LocalRoot root, LocalServerUnit unit) {
-        using var _ = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, CancellationToken.None);
-
-        var owner = service.Owner(unit);
-        var empty = owner is { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent };
-
-        if (!empty && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
-            throw Failed($"The interrupted setup cannot be finished: the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's. Nothing was changed and the setup journal {root.JournalPath} is kept.");
-
-        if (!empty && service.IsInstalled(unit)) return false;
-
-        service.Install(unit);
-        return true;
-    }
+    Task<bool> EnsureOwnUnitAsync(LocalRoot root, LocalServerUnit unit) =>
+        LocalOwnUnit.EnsureAsync(root, unit, service, home, () =>
+            Failed($"The interrupted setup cannot be finished: the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's. Nothing was changed and the setup journal {root.JournalPath} is kept."));
 
     static LocalInstallFailure Failed(string message) => new(LocalInstallFailureCode.RecoveryFailed, message);
 }
