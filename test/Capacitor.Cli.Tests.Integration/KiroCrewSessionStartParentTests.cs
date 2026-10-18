@@ -97,47 +97,32 @@ public class KiroCrewSessionStartParentTests : IDisposable {
         await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
     }
 
-    /// <summary>Runs <paramref name="body"/> with <c>KIROCREW_SPAWNED</c> set as Crew sets it on the
-    /// <c>kiro-cli</c> it launches, or cleared as for a plain Kiro session.</summary>
-    static async Task UnderCrew(bool spawnedByCrew, Func<Task> body) {
-        var previous = Environment.GetEnvironmentVariable("KIROCREW_SPAWNED");
-        Environment.SetEnvironmentVariable("KIROCREW_SPAWNED", spawnedByCrew ? "1" : null);
-
-        try {
-            await body();
-        } finally {
-            Environment.SetEnvironmentVariable("KIROCREW_SPAWNED", previous);
-        }
-    }
-
     /// <summary>A one-prompt sub-agent fires agentSpawn once, possibly before Crew records its session,
     /// so under Crew the hook waits for the record.</summary>
     [Test]
-    [NotInParallel("KIROCREW_SPAWNED")]
+    [NotInParallel]
     public async Task A_sub_agent_Crew_records_moments_later_still_names_its_parent() {
         SeedSessionMap();
         SeedSubagent(withSessionId: false);
+        using var crew = EnvScope.Exclusive("KIROCREW_SPAWNED", "1");
 
-        await UnderCrew(spawnedByCrew: true, async () => {
-            var body = await SpawnAsync(Child, RecordsSessionOnFirstPoll());
+        var body = await SpawnAsync(Child, RecordsSessionOnFirstPoll());
 
-            await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
-        });
+        await Assert.That(body["parent_session_id"]?.GetValue<string>()).IsEqualTo(Parent);
     }
 
     /// <summary>A Kiro session Crew did not launch is never kept waiting on every prompt, even on a machine
     /// with Crew installed: the same late record is not waited for.</summary>
     [Test]
-    [NotInParallel("KIROCREW_SPAWNED")]
+    [NotInParallel]
     public async Task A_session_Crew_did_not_launch_does_not_wait_for_a_crew_record() {
         SeedSessionMap();
         SeedSubagent(withSessionId: false);
+        using var crew = EnvScope.Exclusive("KIROCREW_SPAWNED", null);
 
-        await UnderCrew(spawnedByCrew: false, async () => {
-            var body = await SpawnAsync(Child, RecordsSessionOnFirstPoll());
+        var body = await SpawnAsync(Child, RecordsSessionOnFirstPoll());
 
-            await Assert.That(body["parent_session_id"]).IsNull();
-        });
+        await Assert.That(body["parent_session_id"]).IsNull();
     }
 
     /// <summary>The chat names its sub-agents, which links a one-prompt child recorded before it.</summary>
