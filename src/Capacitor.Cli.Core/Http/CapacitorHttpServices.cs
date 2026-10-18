@@ -138,6 +138,11 @@ public static class CapacitorHttpServices {
                 () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
+        services.AddHttpClient(CapacitorClients.LocalInstallation)
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(5))
+            .ConfigurePrimaryHttpMessageHandler(
+                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+
         return services;
     }
 
