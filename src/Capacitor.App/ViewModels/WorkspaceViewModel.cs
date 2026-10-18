@@ -151,7 +151,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
-            ComposerDrafts? drafts = null) {
+            ComposerDrafts? drafts = null, Action<string>? inputSent = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -265,6 +265,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 Chat = new ChatTabViewModel(
                     agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts) {
                     ShowTerminal = () => ActiveTab = WorkspaceTab.Terminal,
+                    InputSent = inputSent,
                 };
             })
             .DisposeWith(_disposables);

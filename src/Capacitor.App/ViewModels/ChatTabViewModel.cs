@@ -346,6 +346,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// Set by the workspace hosting this chat; the card's fallback sends the user there.
     public Action? ShowTerminal { get; set; }
+    /// Told the session id of every prompt the channel accepted: a reply answers the session's open
+    /// questions, and no permission response will ever say so.
+    public Action<string>? InputSent { get; init; }
+    volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
     public string TerminalMenuSummary {
@@ -584,6 +588,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
+        sessionId?.Subscribe(id => _sessionId = id).DisposeWith(_disposables);
         Cards = new PendingCardsViewModel(
             agentId, origin, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
             localDaemonOnAppServer);
@@ -752,7 +757,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _queuedMessages.Add(queued);
             }
             RefreshQueue();
-            if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
+            if (outcome == ChatSendOutcome.Accepted) {
+                ClearSentDraft(queued);
+                Tray.RemoveAll(chipIds);
+                if (_sessionId is { Length: > 0 } sent) InputSent?.Invoke(sent);
+            }
             if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);
         _disposables.Add(SendCommand);

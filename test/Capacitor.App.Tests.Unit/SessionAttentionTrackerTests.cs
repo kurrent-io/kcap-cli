@@ -292,4 +292,47 @@ public class SessionAttentionTrackerTests {
         h.Lane.PermissionRespondedSubject.OnNext(new PermissionRespondedPing("s1", "r1"));
         await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "cleared with the permission");
     }
+
+    /// A reply sent from the app answers the open question, though the stream lists it as open until
+    /// the agent's tool result is ingested; a permission is not answered by text.
+    [Test]
+    public async Task A_sent_reply_settles_the_questions_and_leaves_a_permission_lit() {
+        using var h = new Harness();
+        h.Connect();
+        h.Detail = _ => Snapshot([Question("t1")]);
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "attention on");
+
+        h.Tracker.InputSent("s1");
+        await Assert.That(h.Sessions).DoesNotContain("s1");
+        h.Detail = _ => Snapshot([Question("t1"), Permission("r1")]);
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "the permission");
+
+        h.Tracker.InputSent("s1");
+        await Assert.That(h.Sessions).Contains("s1");
+        h.Lane.PermissionRespondedSubject.OnNext(new PermissionRespondedPing("s1", "r1"));
+        await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "cleared with the permission");
+    }
+
+    /// The reconciliation in flight when the reply goes out holds a snapshot from before it, so the
+    /// question it lists for the first time was already answered.
+    [Test]
+    public async Task A_question_first_listed_by_a_read_the_reply_overtook_never_lights() {
+        using var h = new Harness();
+        h.Connect();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.DetailTask = async _ => { await gate.Task; return Snapshot([Question("t1")]); };
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Fetches == 1, what: "the fetch");
+
+        h.Tracker.InputSent("s1");
+        gate.SetResult();
+        await Task.Delay(100);
+
+        await Assert.That(h.Sessions).DoesNotContain("s1");
+    }
 }

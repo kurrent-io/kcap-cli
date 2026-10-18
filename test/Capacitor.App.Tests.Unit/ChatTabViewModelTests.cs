@@ -1488,6 +1488,34 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Only a prompt the channel accepted can have answered the session's open questions.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_an_accepted_send_reports_its_session() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var time = new FakeTimeProvider();
+            var answered = new List<string>();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
+                new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                sessionId: new BehaviorSubject<string?>("s1")) { InputSent = answered.Add };
+
+            chat.ComposerText = "refused";
+            var send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
+            await send;
+            await Assert.That(answered).IsEmpty();
+
+            chat.ComposerText = "delivered";
+            send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(answered).IsEquivalentTo(["s1"]);
+            await chat.TeardownAsync();
+        });
+    }
+
     /// Pins that a draft outlives its tab, which navigation tears down, and that a sent one does not.
     [Test]
     [NotInParallel("AvaloniaSession")]
