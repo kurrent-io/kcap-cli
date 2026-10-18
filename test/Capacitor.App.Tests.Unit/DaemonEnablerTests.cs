@@ -1068,6 +1068,24 @@ public class DaemonEnablerTests {
         await Assert.That(requests[0].RetireServiceId).IsNull();
     }
 
+    /// An unreadable status says nothing about the old service, so the retire is still attempted; the
+    /// engine skips an absent unit and refuses one it cannot prove is this profile's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_rename_whose_old_status_cannot_be_read_still_retires() {
+        var requests = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = await RenamedHarnessAsync(oldService: null);
+
+            await h.Ensure();
+
+            return h.Lane.Requests.ToList();
+        });
+
+        await Assert.That(requests.Count).IsEqualTo(1);
+        await Assert.That(requests[0].Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(requests[0].RetireServiceId).IsEqualTo("old-mac");
+    }
+
     /// The lane fails a retire an old CLI cannot run, which would leave the new name without a daemon.
     [Test]
     [NotInParallel("AvaloniaSession")]

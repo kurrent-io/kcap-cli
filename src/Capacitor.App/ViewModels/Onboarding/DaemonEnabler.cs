@@ -211,19 +211,22 @@ public sealed class DaemonEnabler : ReactiveObject {
         if (!Satisfied) await RunAffordanceAsync(ct).ConfigureAwait(true);
     }
 
-    /// The replaced name's service id, when its service is installed and the CLI can retire it. A name
-    /// with nothing to retire is forgotten.
+    /// The replaced name's service id, unless its service is known to be absent or the CLI cannot retire
+    /// it. An unreadable status still retires: the verify engine checks the old unit itself, skipping an
+    /// absent one and refusing a foreign or busy one. A name with nothing to retire is forgotten.
     async Task<string?> RetireTargetAsync(CancellationToken ct) {
         if (_replacedName is not { } replaced) return null;
 
         var retiring = DaemonStore.Sanitize(replaced);
         var target   = retiring != DaemonStore.Sanitize(_request!.DaemonName)
-                    && await _cli.ServiceStatusAsync(replaced, ct).ConfigureAwait(true) is { } old
-                    && (old.UnitPresent || ServiceStateClassifier.Parse(old.State) is ServiceState.Installed or ServiceState.Running)
+                    && MayBeInstalled(await _cli.ServiceStatusAsync(replaced, ct).ConfigureAwait(true))
                     && await _cli.SupportsServiceRetireAsync(ct).ConfigureAwait(true);
 
         if (!target) _replacedName = null;
         return target ? retiring : null;
+
+        static bool MayBeInstalled(ServiceSnapshot? old) =>
+            old is null || old.UnitPresent || ServiceStateClassifier.Parse(old.State) is ServiceState.Installed or ServiceState.Running;
     }
 
     async Task<bool> SaveNameAsync(CancellationToken ct) {
