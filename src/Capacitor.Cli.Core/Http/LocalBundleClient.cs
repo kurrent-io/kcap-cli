@@ -119,7 +119,7 @@ public sealed partial class LocalBundleClient(HttpClient http, TimeProvider time
             if (!string.Equals(Convert.ToHexStringLower(hash.GetHashAndReset()), m.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new LocalBundleException(LocalInstallFailureCode.VerificationFailed, "The bundle's checksum does not match its manifest.");
 
-            progress?.Report(total);
+            if (reported != total) progress?.Report(total);
         } catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException && !ct.IsCancellationRequested) {
             throw new LocalBundleException(LocalInstallFailureCode.DownloadFailed, $"Could not download {url}: {e.Message}", e);
         }

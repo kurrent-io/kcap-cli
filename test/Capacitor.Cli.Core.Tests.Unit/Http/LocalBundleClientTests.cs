@@ -110,6 +110,17 @@ public class LocalBundleClientTests {
     }
 
     [Test]
+    public async Task A_last_step_report_at_the_total_is_not_repeated() {
+        using var tmp = new TempDir();
+        var body = RandomNumberGenerator.GetBytes(1024 * 1024);
+        var seen = new List<long>();
+
+        await Client(_ => Reply(HttpStatusCode.OK, body)).DownloadAsync(ManifestFor(body), tmp.PathTo("a.tar.gz"), new Collect(seen), CancellationToken.None);
+
+        await Assert.That(seen).IsEquivalentTo([(long)body.Length]);
+    }
+
+    [Test]
     public async Task An_oversize_body_stops_at_the_declared_size() {
         using var tmp = new TempDir();
         var body = new byte[100];
