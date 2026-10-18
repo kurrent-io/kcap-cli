@@ -4,11 +4,10 @@ using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
 
-/// <summary>A per-user unit that only records: each call appends its name to the shared log, and
-/// <see cref="Owner"/> names the root of whatever was last installed.</summary>
+/// <summary>A per-user unit that only records: each call appends its name to the shared log. The unit file is a real
+/// file under the home holding the root it serves, and <see cref="Owner"/> reads it, as the real adapters read the
+/// plist; the loaded job is <see cref="LoadedRoot"/>.</summary>
 sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalServerService {
-    string? _installedRoot;
-
     public Exception? InstallFailure { get; set; }
 
     public Exception? UninstallFailure { get; set; }
@@ -16,16 +15,23 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// <summary>Runs after a <see cref="Start"/> is logged, e.g. to change what the fake server answers.</summary>
     public Action? OnStart { get; set; }
 
-    /// <summary>Replaces the readings <see cref="Owner"/> would otherwise derive from the installs.</summary>
+    /// <summary>Replaces the readings <see cref="Owner"/> would otherwise derive.</summary>
     public UnitOwner? OwnerOverride { get; set; }
+
+    /// <summary>The root the loaded job serves, or null when no job is loaded.</summary>
+    public string? LoadedRoot { get; set; }
 
     public string Describe => "fake unit";
 
+    void Log(string entry) {
+        lock (log) log.Add(entry);
+    }
+
     public void Install(LocalServerUnit unit) {
-        log.Add("install");
+        Log("install");
         if (InstallFailure is { } failure) throw failure;
 
-        _installedRoot = unit.Root.Directory;
+        LoadedRoot = unit.Root.Directory;
 
         var file = UnitFile(unit);
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -33,20 +39,25 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     }
 
     public void Start(LocalServerUnit unit) {
-        log.Add("start");
+        Log("start");
         OnStart?.Invoke();
     }
 
     public Task StopAsync(LocalServerUnit unit, CancellationToken ct) {
-        log.Add("stop");
+        Log("stop");
         return Task.CompletedTask;
     }
 
+    /// <summary>Unloads the job, then, as the real verified stop does, refuses to remove the unit file while
+    /// anything of the stack is still alive.</summary>
     public Task UninstallAsync(LocalServerUnit unit, CancellationToken ct) {
-        log.Add("uninstall");
+        Log("uninstall");
         if (UninstallFailure is { } failure) throw failure;
 
-        _installedRoot = null;
+        LoadedRoot = null;
+
+        if (LocalStackProbe.FindLive(unit.Root) is { } live)
+            throw new LocalLifecycleException($"The fake unit stopped, but {live}.");
 
         var file = UnitFile(unit);
         if (File.Exists(file)) {
@@ -61,8 +72,13 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
     public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit));
 
-    public UnitOwner Owner(LocalServerUnit unit) =>
-        OwnerOverride ?? (_installedRoot is { } root
-            ? new(new OwnerReading.Root(root), new OwnerReading.Root(root))
-            : new(OwnerReading.Absent.Instance, OwnerReading.Absent.Instance));
+    public UnitOwner Owner(LocalServerUnit unit) {
+        if (OwnerOverride is { } owner) return owner;
+
+        var file = UnitFile(unit);
+
+        return new(
+            LoadedRoot is { } loaded ? new OwnerReading.Root(loaded) : OwnerReading.Absent.Instance,
+            File.Exists(file) ? new OwnerReading.Root(File.ReadAllText(file)) : OwnerReading.Absent.Instance);
+    }
 }

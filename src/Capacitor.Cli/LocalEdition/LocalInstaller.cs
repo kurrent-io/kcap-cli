@@ -55,7 +55,7 @@ sealed class LocalInstaller(
         } catch (LocalLifecycleException ex) {
             throw new LocalInstallFailure(hint == PlanHint.Recover ? LocalInstallFailureCode.RecoveryFailed : LocalInstallFailureCode.StartFailed, ex.Message);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
-            throw new LocalInstallFailure(LocalInstallFailureCode.Cancelled, "Setup was cancelled before it changed anything.");
+            throw new LocalInstallFailure(LocalInstallFailureCode.Cancelled, "Setup was cancelled.");
         } catch (Exception ex) when (ex is not (LocalInstallFailure or NotImplementedException)) {
             throw new LocalInstallFailure(LocalInstallFailureCode.StartFailed, ex.Message);
         }
@@ -116,6 +116,8 @@ sealed class LocalInstaller(
 
             FaultPoints.Hit("setup:before-committing");
             ct.ThrowIfCancellationRequested();
+
+            _progress.Report(new LocalInstallEvent.Committing());
         } catch (Exception ex) {
             unitLock?.Dispose();
 
@@ -126,20 +128,24 @@ sealed class LocalInstaller(
             throw failure;
         }
 
-        // From the attempt on, a throw is ambiguous: the rename may have landed even if the sync did not.
-        _progress.Report(new LocalInstallEvent.Committing());
+        LocalInstallEvent.Committed committed;
 
+        // From the attempt on, a throw is ambiguous: the rename may have landed even if the sync did not.
         try {
             entry = lease.Advance(entry, LocalSetupJournal.Committing, ServerStart.Fenced);
             FaultPoints.Hit("setup:after-committing");
 
-            return await LocalSetupCommit.RollForwardAsync(lease, entry, details, service, local, time, _progress);
+            committed = await LocalSetupCommit.RollForwardAsync(lease, entry, details, service, home, local, time);
         } catch (LocalInstallFailure) {
             throw;
         } catch (Exception ex) {
             throw new LocalInstallFailure(LocalInstallFailureCode.CommitFailed,
                 $"Setup could not finish its commit ({ex.Message}). Nothing was removed; run kcap setup --local again to finish it.");
         }
+
+        _progress.ReportFinished(committed);
+
+        return committed;
     }
 
     /// <summary>Downloads, verifies and unpacks the bundle into <c>bin/&lt;version&gt;</c>, then points <c>bin/current</c>
@@ -151,7 +157,15 @@ sealed class LocalInstaller(
 
         DurableDirectory.Ensure(staging, root.Directory, OwnerOnly);
 
-        var (bytes, signature) = await bundles.FetchManifestAsync(details.Version, rid, ct);
+        byte[] bytes;
+        string signature;
+
+        try {
+            (bytes, signature) = await bundles.FetchManifestAsync(details.Version, rid, ct);
+        } catch (ArgumentException ex) {
+            throw new LocalInstallFailure(LocalInstallFailureCode.InvalidArguments, ex.Message);
+        }
+
         var manifest           = LocalBundleManifest.Verify(bytes, signature, manifestKey, details.Version, rid);
 
         _progress.Report(new LocalInstallEvent.Downloading($"{bundles.BaseUrl}/{rid}/{manifest.Archive}", manifest.Size));
@@ -179,10 +193,8 @@ sealed class LocalInstaller(
     }
 
     async Task RollBackAsync(LifecycleLease lease, LifecycleJournalEntry entry, LocalInstallFailure failure) {
-        _progress.Report(new LocalInstallEvent.RollingBack(failure.Message));
-
         try {
-            await LocalSetupRollback.RunAsync(lease, entry, service, home, _progress);
+            await LocalSetupRollback.RunAsync(lease, entry, service, home, _progress, failure.Message);
         } catch (Exception ex) {
             var reason = ex is LocalInstallFailure ? ex.Message : $"Setup could not be undone ({ex.Message}).";
 
@@ -195,8 +207,7 @@ sealed class LocalInstaller(
         ex switch {
             LocalInstallFailure failure                                    => failure,
             LocalBundleException bundle                                    => new(bundle.Code, bundle.Message),
-            OperationCanceledException when ct.IsCancellationRequested     => new(LocalInstallFailureCode.Cancelled, "Setup was cancelled; what it had installed was removed."),
-            ArgumentException                                              => new(LocalInstallFailureCode.InvalidArguments, ex.Message),
+            OperationCanceledException when ct.IsCancellationRequested     => new(LocalInstallFailureCode.Cancelled, "Setup was cancelled."),
             _                                                              => new(LocalInstallFailureCode.StartFailed, ex.Message),
         };
 

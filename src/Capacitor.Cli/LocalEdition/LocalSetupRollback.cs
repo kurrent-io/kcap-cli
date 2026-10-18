@@ -16,9 +16,10 @@ static class LocalSetupRollback {
     static readonly string[] Created = ["bin", "data", "run"];
 
     /// <summary>Throws <see cref="LocalInstallFailure"/> with <see cref="LocalInstallFailureCode.RecoveryFailed"/>
-    /// when it stopped short; <see cref="LocalInstallEvent.RolledBack"/> is reported only when it finished.</summary>
+    /// when it stopped short. <see cref="LocalInstallEvent.RollingBack"/> is reported once nothing can start this
+    /// root's server, and <see cref="LocalInstallEvent.RolledBack"/> only when it finished.</summary>
     public static async Task RunAsync(LifecycleLease lease, LifecycleJournalEntry entry, ILocalServerService service, UserHome home,
-        IProgress<LocalInstallEvent> progress) {
+        IProgress<LocalInstallEvent> progress, string reason) {
         var root = lease.Root;
 
         if (!LocalSetupJournal.TryRead(entry, out var details, out var error))
@@ -38,6 +39,7 @@ static class LocalSetupRollback {
             if (LocalStackProbe.FindLive(root) is { } live)
                 throw Stopped($"Setup could not be undone: {live} under {root.Directory}. Nothing was removed.");
 
+            progress.Report(new LocalInstallEvent.RollingBack(reason));
             FaultPoints.Hit("rollback:delete");
 
             foreach (var name in Created) Delete(Path.Combine(root.Directory, name));
@@ -51,7 +53,7 @@ static class LocalSetupRollback {
             lease.Complete();
         }
 
-        progress.Report(new LocalInstallEvent.RolledBack());
+        progress.ReportFinished(new LocalInstallEvent.RolledBack());
     }
 
     static async Task UnloadAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service) {

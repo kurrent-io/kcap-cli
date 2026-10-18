@@ -209,6 +209,108 @@ public class LocalInstallerTests {
         await Assert.That(JournalPhase()).IsEqualTo(LocalSetupJournal.Unit);
         await Assert.That(Directory.Exists(Bin)).IsTrue();
         await Assert.That(_events.Reports.OfType<LocalInstallEvent.RolledBack>()).IsEmpty();
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.RollingBack>()).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_foreign_unit_is_left_untouched_on_rollback() {
+        Server.WhileFenced = FakeAuthConfig.Lifted;
+        Tmp.CreateDir("other");
+        var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
+
+        LocalInstallFailure failure;
+        using (Record(p => { if (p == "rollback:unit") Service.OwnerOverride = new(other, other); }))
+            failure = await Failure();
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(_log).DoesNotContain("uninstall");
+        await Assert.That(Directory.Exists(Bin)).IsFalse();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task An_unknown_owner_deletes_nothing() {
+        Server.WhileFenced = FakeAuthConfig.Lifted;
+
+        LocalInstallFailure failure;
+        using (Record(p => {
+                   if (p == "rollback:unit")
+                       Service.OwnerOverride = new(new OwnerReading.Unreadable("launchctl failed"), OwnerReading.Absent.Instance);
+               }))
+            failure = await Failure();
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.RecoveryFailed);
+        await Assert.That(_log).DoesNotContain("uninstall");
+        await Assert.That(JournalPhase()).IsEqualTo(LocalSetupJournal.Unit);
+        await Assert.That(Directory.Exists(Bin)).IsTrue();
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.RollingBack>()).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_cancel_after_the_point_of_no_return_still_commits() {
+        using var cts = new CancellationTokenSource();
+
+        using (Record(p => { if (p == "setup:after-committing") cts.Cancel(); }))
+            await Install(ct: cts.Token);
+
+        await Assert.That(cts.IsCancellationRequested).IsTrue();
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(LocalStateFiles.ReadRegistry(Root) is StateRead<InstallRegistry>.Present { Value.Active: not null }).IsTrue();
+    }
+
+    [Test]
+    public async Task A_throwing_reporter_after_the_journal_is_cleared_still_commits() {
+        var progress = new SyncProgress<LocalInstallEvent>(e => {
+            _events.Report(e);
+            if (e is LocalInstallEvent.Committed) throw new IOException("stdout is closed");
+        });
+
+        var committed = await Installer().InstallAsync(Yes, progress, CancellationToken.None);
+
+        await Assert.That(committed.Version).IsEqualTo(Version);
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task Lifted_on_a_later_poll_needs_no_restart() {
+        Server.WhileAllowed = FakeAuthConfig.Pending;
+
+        // The answer is chosen after OnRequest runs, so the switch on the second poll makes that poll the first lifted one.
+        var polls = 0;
+        Server.OnRequest = path => {
+            if (path == "/auth/config" && JournalPhase() == LocalSetupJournal.Allowed && ++polls == 2) Server.WhileAllowed = FakeAuthConfig.Lifted;
+        };
+
+        using var pump = new CancellationTokenSource();
+        var clock = AdvanceUntilCancelled(pump.Token);
+
+        try {
+            using (Record()) await Install();
+        } finally {
+            await pump.CancelAsync();
+            await clock;
+        }
+
+        await Assert.That(JournalAbsent()).IsTrue();
+
+        var afterAllowed = _log.SkipWhile(e => e != "journal:allowed").ToList();
+        await Assert.That(afterAllowed).IsEquivalentTo([
+            "journal:allowed", "GET /auth/config", "GET /auth/config", "journal:cleared",
+        ], CollectionOrdering.Matching);
+    }
+
+    /// <summary>Moves the fake clock so the lift poll's gap elapses; the first answer is already decided when it is
+    /// read, so how far the clock runs does not change the outcome.</summary>
+    async Task AdvanceUntilCancelled(CancellationToken ct) {
+        while (!ct.IsCancellationRequested) {
+            _time.Advance(TimeSpan.FromMilliseconds(250));
+
+            try {
+                await Task.Delay(5, ct);
+            } catch (OperationCanceledException) {
+                return;
+            }
+        }
     }
 
     [Test]
