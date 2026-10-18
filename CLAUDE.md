@@ -93,6 +93,10 @@ running notes file that every PR edits.
   contains its pattern. The PTY launch writes the prompt to an owner-only file under the daemon's
   state directory and passes a pointer; only a slash command stays inline, because the agent runs
   one only as the literal first message.
+- **The daemon's state directory is owner-only on Windows too, and securing it never blocks a
+  boot.** `OwnerOnlyDirectory` gives it a protected DACL (the user and SYSTEM) at every start, so
+  what is inside stops inheriting from a relocated `KCAP_DAEMONS_DIR`. A failure warns and boots:
+  refusing would brick a daemon whose state sits where no ACL can be set.
 - **The PTY read loop never awaits a consumer.** Local sinks and the cloud sink take chunks through
   a non-blocking `TryEnqueue` under `SinksLock`, and each drains on its own pump. A consumer that
   falls behind is cut off and replayed from the ring — a local client by reattaching, the cloud

@@ -140,6 +140,9 @@ public sealed class TokenStore(
     // The write itself, for a caller that already holds the profile's lock.
     async Task SaveLockedAsync(string profile, StoredTokens tokens, CancellationToken ct) {
         Directory.CreateDirectory(TokenDir);
+
+        // Best-effort: where no ACL or mode can be set, failing the save would also lose the credential.
+        try { OwnerOnlyDirectory.Ensure(TokenDir); } catch { /* keeps the location's access */ }
         var path     = ProfileTokenPath(profile);
         // Unique per write so concurrent writers never splice each other's bytes; the atomic
         // File.Move then publishes one complete document, last-writer-wins.
