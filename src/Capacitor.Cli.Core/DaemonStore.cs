@@ -127,7 +127,7 @@ public sealed partial class DaemonStore(string directory) {
     /// <summary>
     /// Deletes everything in the directory, then the directory, unless a daemon, a start or a service
     /// transaction holds one of its locks: then nothing it holds is touched. Every lock, and the daemon
-    /// lock of each state directory's name, is held until the rest is gone, so none can be taken
+    /// lock of every name an entry carries, is held until the rest is gone, so none can be taken
     /// meanwhile; unlinking a held lock lets the next taker lock a fresh file. Entries that appear
     /// after the snapshot are left. Call it only on a directory kcap owns, which
     /// <see cref="DefaultDirectory"/> is. Returns whether the directory is gone.
@@ -138,7 +138,7 @@ public sealed partial class DaemonStore(string directory) {
         var entries = System.IO.Directory.EnumerateFileSystemEntries(Directory).ToList();
         var locks = entries
             .Where(e => System.IO.File.Exists(e) && LockExtensions.Contains(Path.GetExtension(e).TrimStart('.')))
-            .Concat(entries.Where(System.IO.Directory.Exists).Select(d => File(Path.GetFileName(d), LockExtension)))
+            .Concat(entries.Select(e => File(System.IO.Directory.Exists(e) ? Path.GetFileName(e) : Path.GetFileNameWithoutExtension(e), LockExtension)))
             .Distinct(StringComparer.Ordinal)
             .ToList();
         var held = new List<FileStream>();
