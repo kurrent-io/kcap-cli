@@ -20,10 +20,11 @@ internal static partial class PromptFile {
     }
 
     /// <summary>The agent runs a slash command only when it is the literal first message, so a pointer
-    /// to a file would turn it into prose. A leading absolute path is not a command.</summary>
+    /// to a file would turn it into prose. A leading absolute path is not a command, and a command is one
+    /// line, so text on the lines after it still goes to the file.</summary>
     internal static bool IsSlashCommand(string prompt) => SlashCommand().IsMatch(prompt);
 
-    [GeneratedRegex(@"\A\s*/[A-Za-z0-9][A-Za-z0-9_.:-]*(\s|\z)")]
+    [GeneratedRegex(@"\A\s*/[A-Za-z0-9][A-Za-z0-9_.:-]*(?:[ \t][^\r\n]*)?\s*\z")]
     private static partial Regex SlashCommand();
 
     internal static string Write(string root, string agentId, string prompt) {

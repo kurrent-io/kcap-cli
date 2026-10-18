@@ -51,6 +51,8 @@ public class PromptFileTests {
     [Arguments("/review 42", true)]
     [Arguments("  /compact", true)]
     [Arguments("/plugin:command arg", true)]
+    [Arguments("/compact\n", true)]
+    [Arguments("/review 42\nprivate notes", false)]
     [Arguments("/Users/me/notes.md has the plan", false)]
     [Arguments("/ this is prose", false)]
     [Arguments("build it", false)]
