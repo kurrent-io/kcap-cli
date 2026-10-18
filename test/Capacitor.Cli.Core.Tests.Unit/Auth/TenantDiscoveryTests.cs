@@ -334,6 +334,15 @@ public class TenantDiscoveryTests {
         var (exact, _) = TenantDiscovery.NameProfiles(existing, named, named[0]);
 
         await Assert.That(string.Join(",", exact.Select(t => t.ProfileName))).IsEqualTo("other,work");
+
+        DiscoveredTenant[] renamed = [
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "new",   Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "other", Origin = "https://a.example" },
+        ];
+
+        var (regrouped, _) = TenantDiscovery.NameProfiles(existing, renamed, renamed[0]);
+
+        await Assert.That(string.Join(",", regrouped.Select(t => t.ProfileName))).IsEqualTo("other,other");
     }
 
     /// <summary>A tenant the discovery service lists twice is still one profile: rows match on the

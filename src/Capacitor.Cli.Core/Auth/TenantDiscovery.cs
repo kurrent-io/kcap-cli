@@ -96,11 +96,18 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         // A tenant listed twice is one tenant: its rows share a name rather than claiming two.
         var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
 
-        // A profile already named for the tenant on its server is that tenant's, whatever order the
-        // tenants arrive in; only then are the server's other profiles shared out.
-        for (var i = 0; i < tenants.Length; i++)
-            if (first[i] == i && IsOnServer(existing, tenants[i].ProfileName, tenants[i]) && claimed.Add(tenants[i].ProfileName))
-                names[i] = tenants[i].ProfileName;
+        // A profile already named for the tenant, under any of its rows' names, on its server is that
+        // tenant's whatever order the tenants arrive in; only then are the server's other profiles
+        // shared out.
+        for (var i = 0; i < tenants.Length; i++) {
+            if (first[i] != i) continue;
+
+            names[i] = Enumerable.Range(0, tenants.Length)
+                .Where(j => first[j] == i)
+                .Select(j => tenants[j].ProfileName)
+                .FirstOrDefault(name => IsOnServer(existing, name, tenants[i]) && !claimed.Contains(name));
+            if (names[i] is { } own) claimed.Add(own);
+        }
 
         for (var i = 0; i < tenants.Length; i++)
             if (first[i] == i && names[i] is null && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
