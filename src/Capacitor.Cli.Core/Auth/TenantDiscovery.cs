@@ -121,7 +121,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
                 names[i] = onServer;
 
         foreach (var i in order)
-            names[i] ??= Unclaimed(existing, claimed, tenants[i]);
+            names[i] ??= Unclaimed(existing, claimed, tenants[i].ProfileName);
 
         for (var i = 0; i < tenants.Length; i++)
             names[i] ??= names[first[i]];
@@ -183,16 +183,14 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         return onServer.Contains(tenant.ProfileName, StringComparer.Ordinal) ? tenant.ProfileName : onServer[0];
     }
 
-    /// <summary>The tenant's slug, or the first numbered suffix free of other tenants; a numbered
-    /// profile already on the tenant's server is the one an earlier sign-in gave it.</summary>
-    static string Unclaimed(ProfileConfig existing, HashSet<string> claimed, DiscoveredTenant tenant) {
-        var name = tenant.ProfileName;
+    /// <summary>The slug, or else the first numbered suffix no profile has: profiles record no
+    /// organization, so an existing numbered profile may be another tenant's.</summary>
+    static string Unclaimed(ProfileConfig existing, HashSet<string> claimed, string name) {
         if (claimed.Add(name)) return name;
 
         for (var n = 2; ; n++) {
             var candidate = $"{name}-{n}";
-            if ((!existing.Profiles.ContainsKey(candidate) || IsOnServer(existing, candidate, tenant)) && claimed.Add(candidate))
-                return candidate;
+            if (!existing.Profiles.ContainsKey(candidate) && claimed.Add(candidate)) return candidate;
         }
     }
 

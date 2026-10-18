@@ -349,11 +349,10 @@ public class TenantDiscoveryTests {
         await Assert.That(string.Join(",", regrouped.Select(t => t.ProfileName))).IsEqualTo("other,other");
     }
 
-    /// <summary>Two workspaces with one slug on one server keep the profiles they had, whichever order
-    /// discovery lists them in: a numbered profile on the server goes back to the same workspace rather
-    /// than the slug's profile going to whichever arrives first.</summary>
+    /// <summary>Of two workspaces with one slug on one server, the same one keeps the slug's profile
+    /// whichever order discovery lists them in, and the other never lands on it.</summary>
     [Test]
-    public async Task NameProfiles_keeps_same_slug_workspaces_on_their_profiles_in_any_order() {
+    public async Task NameProfiles_gives_the_slug_profile_to_the_same_workspace_in_any_order() {
         DiscoveredTenant a = new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", Origin = "https://a.example" };
         DiscoveredTenant b = new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "acme", Origin = "https://a.example" };
 
@@ -365,7 +364,7 @@ public class TenantDiscoveryTests {
             var byOrg = tenants.ToDictionary(t => t.OrganizationId!, t => t.ProfileName);
 
             await Assert.That(byOrg["org_a"]).IsEqualTo("acme");
-            await Assert.That(byOrg["org_b"]).IsEqualTo("acme-2");
+            await Assert.That(byOrg["org_b"]).IsNotEqualTo("acme");
         }
     }
 
