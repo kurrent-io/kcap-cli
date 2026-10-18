@@ -288,7 +288,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 policyJudge: policyJudge,
                 journal: ctx.Journal,
                 sessionNewMeta: descriptor.SessionNewMeta,
-                turnUsageReader: descriptor.TurnUsageReader
+                turnUsageReader: descriptor.TurnUsageReader,
+                subagentReader: descriptor.SubagentReader
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against

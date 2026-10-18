@@ -17,7 +17,9 @@ sealed record CommitRequest(
     Func<Action, Task<string?>>?        PublishTokens,
     // False for a login that must not claim the profile for this server (see LoginTarget.Foreign).
     bool                                WriteStamp = true,
-    CommitPrecondition?                 Precondition = null);
+    CommitPrecondition?                 Precondition = null,
+    // Publishes the config durably (flushed, directories synced); implies the strict read.
+    bool                                Durable = false);
 
 /// <summary>The ordered commit boundary: the before-commit hook is the last cancellable await, after which every publication is uncancellable.</summary>
 static class CommitBoundary {
@@ -54,7 +56,8 @@ static class CommitBoundary {
 
                 // A precondition is decided on what the file says, so an unreadable file must abort
                 // rather than be read as a fresh default and then published over.
-                if (request.Precondition is null) await ConfigMutator.MutateAsync(root, Mutation, CancellationToken.None);
+                if (request.Durable) await ConfigMutator.MutateStrictAsync(root, Mutation, durable: true, ct: CancellationToken.None);
+                else if (request.Precondition is null) await ConfigMutator.MutateAsync(root, Mutation, CancellationToken.None);
                 else await ConfigMutator.MutateStrictAsync(root, Mutation, CancellationToken.None);
             } catch (CommitPreconditionFailedException ex) {
                 progress.Error($"Error: {ex.Message}");
@@ -65,7 +68,7 @@ static class CommitBoundary {
 
                 return new AuthResult.Failed("config unreadable");
             } catch (Exception ex) {
-                // The config commit is the boundary's first durable step: if it threw, nothing was published.
+                // A durable publication's directory sync can throw after the rename, so a Failed commit may already be visible; the caller retries.
                 progress.Error($"Error: sign-in could not be saved: {ex.Message}");
 
                 return new AuthResult.Failed(ex.Message);

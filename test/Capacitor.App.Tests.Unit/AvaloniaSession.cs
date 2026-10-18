@@ -43,7 +43,7 @@ internal static class AvaloniaSession {
     }
 
     static AvaloniaScheduler? _uiScheduler;
-    static bool _immediatePinned;
+    static IScheduler? _pinned;
 
     static void EnsureReactiveUI() {
         if (_uiScheduler is null) {
@@ -53,9 +53,7 @@ internal static class AvaloniaSession {
             // headless session is not Dispatcher.UIThread.
             _uiScheduler = new AvaloniaScheduler(Dispatcher.UIThread);
         }
-        RxSchedulers.MainThreadScheduler = _immediatePinned
-            ? ImmediateScheduler.Instance
-            : _uiScheduler;
+        RxSchedulers.MainThreadScheduler = _pinned ?? _uiScheduler;
     }
 
     public static Task<T> DispatchAsync<T>(Func<T> body) =>
@@ -72,30 +70,29 @@ internal static class AvaloniaSession {
     /// also the flavor pin: it only compiles if the scheduler IS a System.Reactive IScheduler
     /// consumed by ObserveOn. (The ambient scheduler lives on `RxSchedulers`; this ReactiveUI line
     /// has no `RxApp` scheduler properties.)
-    public static async Task WithImmediateRxScheduler(Func<Task> body) {
+    public static Task WithImmediateRxScheduler(Func<Task> body) => WithRxScheduler(ImmediateScheduler.Instance, body);
+
+    static async Task WithRxScheduler(IScheduler scheduler, Func<Task> body) {
         // Start the process-wide session before snapshotting "prior": outside a dispatch nothing
         // has configured MainThreadScheduler yet, and the finally below would restore that
         // unconfigured default over the real one for every later test.
         _ = Session.Value;
 
         IScheduler prior = RxSchedulers.MainThreadScheduler;
-        _immediatePinned = true;
-        RxSchedulers.MainThreadScheduler = ImmediateScheduler.Instance;
+        _pinned = scheduler;
+        RxSchedulers.MainThreadScheduler = scheduler;
         try { await body(); } finally {
-            _immediatePinned = false;
+            _pinned = null;
             RxSchedulers.MainThreadScheduler = prior;
         }
     }
 
-    /// The standard wrapper for tests that need BOTH pieces at once: WithImmediateRxScheduler
-    /// nested INSIDE DispatchAsync. ObserveOn(RxSchedulers.MainThreadScheduler) projections need
-    /// the immediate scheduler to apply synchronously, while any Dispatcher.UIThread.InvokeAsync
-    /// hop needs the live pumped dispatcher loop DispatchAsync provides -- outside a Dispatch
-    /// frame the headless session's worker thread is blocked and a queued InvokeAsync never runs
-    /// (see TerminalTabViewModelTests' header comment for the full account).
+    /// The standard wrapper for UI tests: the body runs inside DispatchAsync, whose pumped loop a
+    /// Dispatcher.UIThread.InvokeAsync hop needs, with ObserveOn(RxSchedulers.MainThreadScheduler)
+    /// applying synchronously on the UI thread and marshalled to it from any other thread.
     public static Task RunOnUiAsync(Func<Task> body) =>
         DispatchAsync(async () => {
-            await WithImmediateRxScheduler(body);
+            await WithRxScheduler(new UiThreadImmediateScheduler(_uiScheduler!), body);
             return true;
         });
 

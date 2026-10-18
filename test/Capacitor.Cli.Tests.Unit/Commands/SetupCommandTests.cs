@@ -53,7 +53,7 @@ public class SetupCommandTests {
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root) {
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 
@@ -898,6 +898,17 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task NextSteps_for_the_local_installation_points_at_its_web_ui_instead_of_server_setup() {
+        var items = SetupCommand.NextStepItems(offerGuidedTour: true, localServerUrl: "http://localhost:9473");
+
+        await Assert.That(items.Count).IsEqualTo(2);
+        await Assert.That(items.Any(i => i.Question == SetupCommand.ServerSetupQuestion)).IsFalse();
+        await Assert.That(items[0].Question).IsEqualTo(SetupCommand.LocalServerQuestion);
+        await Assert.That(items[0].Answer).Contains("[cyan]http://localhost:9473[/]");
+        await Assert.That(items[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
+    }
+
+    [Test]
     public async Task GuidedTourCallToAction_prompt_is_a_trigger_in_the_skill_description() {
         // Vendors match a user's message against the frontmatter `description:` only — the body
         // is read after the skill fires. So asserting the phrase is somewhere in the file would
@@ -1456,7 +1467,7 @@ public class SetupCommandTests {
     // The environment they probe and the /auth/config cache they stub are both process-global, so no
     // cohort of key-holders can exclude the readers: bare.
 
-    static string[] SkipAllAgentInstallFlags => [
+    internal static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
         "--skip-cursor-hooks", "--skip-cursor-mcp",
         "--skip-copilot-hooks", "--skip-copilot-mcp", "--skip-copilot-instructions",

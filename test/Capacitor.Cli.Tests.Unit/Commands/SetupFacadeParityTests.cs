@@ -87,7 +87,7 @@ public class SetupFacadeParityTests {
             FakeImportRunner.Of(_ => throw new InvalidOperationException("these tests stop before the import step")),
             FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(),
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root);
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused);
 
     // ── Step 1: RunDiscoveryAsync (GitHub) ──────────────────────────────────
 
