@@ -85,8 +85,10 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
     /// token all land under one name. A profile already on the tenant's server keeps its own name:
     /// a hand-named profile is updated rather than twinned under the slug, and the `kcap use`
     /// habits and profile bindings that name it keep working. Among several on that server the
-    /// active one wins, then the slug's. No two tenants share a name: a slug another tenant
-    /// already claimed takes the first free numbered suffix.
+    /// active one wins, then the slug's. Profiles record no organization, so where tenants share a
+    /// server only a profile named for one of them is reused: handing out the rest would follow
+    /// discovery order and could swap their credentials between runs. No two tenants share a name:
+    /// a slug another tenant already claimed takes the first free numbered suffix.
     /// </summary>
     public static (DiscoveredTenant[] Tenants, DiscoveredTenant Picked) NameProfiles(
             ProfileConfig existing, DiscoveredTenant[] tenants, DiscoveredTenant picked) {
@@ -96,9 +98,11 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         // A tenant listed twice is one tenant: its rows share a name rather than claiming two.
         var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
 
+        bool AloneOnServer(int i) => !Enumerable.Range(0, tenants.Length).Any(k =>
+            first[k] == k && k != i && ServerIdentity.SameServer(tenants[k].Origin, tenants[i].Origin));
+
         // A profile already named for the tenant, under any of its rows' names, on its server is that
-        // tenant's whatever order the tenants arrive in; only then are the server's other profiles
-        // shared out.
+        // tenant's whatever order the tenants arrive in.
         for (var i = 0; i < tenants.Length; i++) {
             if (first[i] != i) continue;
 
@@ -110,7 +114,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         }
 
         for (var i = 0; i < tenants.Length; i++)
-            if (first[i] == i && names[i] is null && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
+            if (first[i] == i && names[i] is null && AloneOnServer(i) && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
                 names[i] = onServer;
 
         for (var i = 0; i < tenants.Length; i++)

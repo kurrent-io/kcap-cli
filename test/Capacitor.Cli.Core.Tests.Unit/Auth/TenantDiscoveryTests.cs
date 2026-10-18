@@ -304,11 +304,11 @@ public class TenantDiscoveryTests {
         await Assert.That(TenantDiscovery.NamesHold(existing, discovered, discovered[0], tenants, picked)).IsTrue();
     }
 
-    /// <summary>Two workspaces on one server each take one of the profiles already there before any new
-    /// name is made, and a profile already named for a workspace stays that workspace's whatever the
-    /// order they arrive in.</summary>
+    /// <summary>Workspaces sharing a server reuse only a profile named for one of them, whatever order
+    /// they arrive in; the server's other profiles belong to neither, so each unnamed workspace gets its
+    /// own new profile rather than one picked by discovery order.</summary>
     [Test]
-    public async Task NameProfiles_shares_out_the_profiles_already_on_a_server() {
+    public async Task NameProfiles_reuses_only_named_profiles_on_a_shared_server() {
         var existing = new ProfileConfig {
             ActiveProfile = "work",
             Profiles = new Dictionary<string, Profile> {
@@ -324,7 +324,11 @@ public class TenantDiscoveryTests {
 
         var (tenants, _) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
 
-        await Assert.That(string.Join(",", tenants.Select(t => t.ProfileName))).IsEqualTo("work,other");
+        await Assert.That(string.Join(",", tenants.Select(t => t.ProfileName))).IsEqualTo("one,two");
+
+        var (reversed, _) = TenantDiscovery.NameProfiles(existing, [discovered[1], discovered[0]], discovered[0]);
+
+        await Assert.That(string.Join(",", reversed.Select(t => t.ProfileName))).IsEqualTo("two,one");
 
         DiscoveredTenant[] named = [
             new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "other", Origin = "https://a.example" },
