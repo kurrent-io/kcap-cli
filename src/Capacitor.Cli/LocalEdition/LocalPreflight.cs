@@ -169,7 +169,8 @@ sealed class LocalPreflight(LocalRoot root, ConfigRoot config, LocalPlatform pla
             existing = parent;
         }
 
-        CanonicalPath.TryResolve(existing, out var resolved);
+        if (!CanonicalPath.TryResolve(existing, out var resolved) || string.IsNullOrEmpty(resolved))
+            throw Refuse(LocalInstallFailureCode.UnsafeRoot, $"{existing} cannot be resolved (too many symbolic links). Set {LocalRoot.EnvVar} to a directory under your home.");
 
         return remainder.Count == 0 ? resolved : Path.Combine([resolved, .. remainder]);
     }

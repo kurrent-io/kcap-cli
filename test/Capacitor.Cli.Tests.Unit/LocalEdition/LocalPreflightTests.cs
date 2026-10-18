@@ -143,6 +143,19 @@ public class LocalPreflightTests {
 
     [Test]
     [ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
+    public async Task A_root_under_a_symlink_cycle_is_refused() {
+        var a = Tmp.PathTo("a");
+        var b = Tmp.PathTo("b");
+        Directory.CreateSymbolicLink(a, b);
+        Directory.CreateSymbolicLink(b, a);
+
+        var failure = await Refusal(() => Preflight(new(Path.Combine(a, "local"))).Check(Version));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.UnsafeRoot);
+    }
+
+    [Test]
+    [ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
     public async Task A_world_writable_ancestor_is_refused() {
         File.SetUnixFileMode(Tmp.Path, (UnixFileMode)0b111_111_111);
 
