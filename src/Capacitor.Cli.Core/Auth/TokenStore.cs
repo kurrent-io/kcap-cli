@@ -384,10 +384,14 @@ public sealed class TokenStore(
 
         File.Move(LegacyTokenPath, target);
 
-        // A Windows move keeps the ACL the file inherited from the config directory until the
-        // directory's DACL is propagated again.
-        if (OperatingSystem.IsWindows()) SecureTokenDir();
-        else File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        // A Windows move keeps the file's own ACL: what it inherited from the config directory until
+        // the directory's DACL is propagated again, and any explicit grant for good.
+        if (OperatingSystem.IsWindows()) {
+            SecureTokenDir();
+            try { OwnerOnlyDirectory.InheritOnly(target); } catch { /* keeps the file's access */ }
+        } else {
+            File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     /// <summary>

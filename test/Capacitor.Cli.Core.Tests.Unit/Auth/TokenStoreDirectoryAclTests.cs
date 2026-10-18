@@ -5,8 +5,8 @@ using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
-/// <summary>Each test first grants every local user read on the config root, so a token that merely
-/// inherited its ACL would be readable by them.</summary>
+/// <summary>Each test first grants every local user read, on the config root or on the token itself, so a
+/// token that kept that ACL would be readable by them.</summary>
 [RunOn(OS.Windows)]
 [SupportedOSPlatform("windows")]
 public class TokenStoreDirectoryAclTests {
@@ -28,6 +28,17 @@ public class TokenStoreDirectoryAclTests {
     public async Task A_migrated_legacy_token_loses_the_grants_it_inherited_from_the_config_directory() {
         WindowsAcl.GrantUsersRead(Config.Directory);
         var legacy = Config.CreateFile("tokens.json", JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+        await Assert.That(WindowsAcl.Identities(legacy)).Contains(WindowsAcl.Users.Value);
+
+        await AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a");
+
+        await Assert.That(WindowsAcl.Identities(Path.Combine(TokensDir, "a.json"))).IsEquivalentTo(WindowsAcl.OwnerOnly);
+    }
+
+    [Test]
+    public async Task A_migrated_legacy_token_loses_an_explicit_grant_of_its_own() {
+        var legacy = Config.CreateFile("tokens.json", JsonSerializer.Serialize(MakeTokens("legacy"), CapacitorJsonContext.Default.StoredTokens));
+        WindowsAcl.GrantUsersReadOnFile(legacy);
         await Assert.That(WindowsAcl.Identities(legacy)).Contains(WindowsAcl.Users.Value);
 
         await AuthFixtures.NewTokenStore(Config.Root).MigrateLegacyAsync("a");

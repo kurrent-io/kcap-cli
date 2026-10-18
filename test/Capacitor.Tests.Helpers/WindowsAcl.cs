@@ -36,6 +36,14 @@ public static class WindowsAcl {
         info.SetAccessControl(security);
     }
 
+    /// <summary>Adds an explicit read grant for every local user on one file.</summary>
+    public static void GrantUsersReadOnFile(string file) {
+        var info     = new FileInfo(file);
+        var security = info.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(Users, FileSystemRights.Read, AccessControlType.Allow));
+        info.SetAccessControl(security);
+    }
+
     static FileSystemSecurity Security(string path) =>
         Directory.Exists(path) ? new DirectoryInfo(path).GetAccessControl() : new FileInfo(path).GetAccessControl();
 }

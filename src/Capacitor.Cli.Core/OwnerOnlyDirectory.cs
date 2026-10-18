@@ -22,6 +22,15 @@ public static class OwnerOnlyDirectory {
         File.SetUnixFileMode(path, OwnerOnlyMode);
     }
 
+    /// <summary>Drops every explicit grant on <paramref name="file"/>, leaving only what it inherits from
+    /// its directory. For a file moved in, whose own ACL <see cref="Ensure"/> does not touch.</summary>
+    [SupportedOSPlatform("windows")]
+    public static void InheritOnly(string file) {
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: false, preserveInheritance: false);
+        new FileInfo(file).SetAccessControl(security);
+    }
+
     [SupportedOSPlatform("windows")]
     static DirectorySecurity OwnerOnlySecurity() {
         var security = new DirectorySecurity();
