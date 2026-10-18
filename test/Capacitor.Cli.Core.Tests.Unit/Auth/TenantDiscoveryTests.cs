@@ -242,6 +242,40 @@ public class TenantDiscoveryTests {
         await Assert.That(merged.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
     }
 
+    /// <summary>
+    /// A tenant whose server an existing profile already names takes that profile's name, the
+    /// active one first among twins; a tenant on a server no profile names keeps its slug. The
+    /// merge then leaves one profile per server.
+    /// </summary>
+    [Test]
+    public async Task NameProfiles_reuses_the_profile_already_on_the_tenants_server() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "kurrent",
+            Profiles = new Dictionary<string, Profile> {
+                ["default"]   = new(),
+                ["kurrent"]   = new() { ServerUrl = "https://kurrent.kcap.ai", DefaultVisibility = "private" },
+                ["eventuous"] = new() { ServerUrl = "https://eventuous.kcap.ai/" },
+                ["evt-twin"]  = new() { ServerUrl = "https://eventuous.kcap.ai" },
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { Provider = "WorkOS", OrganizationId = "org_k", Slug = "kurrent-io", Origin = "https://kurrent.kcap.ai" },
+            new() { Provider = "WorkOS", OrganizationId = "org_e", Slug = "Eventuous",  Origin = "https://eventuous.kcap.ai" },
+            new() { Provider = "WorkOS", OrganizationId = "org_c", Slug = "contoso",    Origin = "https://contoso.kcap.ai" },
+        ];
+
+        var (tenants, picked) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(tenants.Select(t => t.ProfileName)).IsEquivalentTo(["kurrent", "eventuous", "contoso"]);
+        await Assert.That(picked.ProfileName).IsEqualTo("kurrent");
+
+        var merged = TenantDiscovery.MergeProfiles(existing, tenants, picked);
+
+        await Assert.That(merged.Profiles.Keys).IsEquivalentTo(["default", "kurrent", "eventuous", "evt-twin", "contoso"]);
+        await Assert.That(merged.ActiveProfile).IsEqualTo("kurrent");
+        await Assert.That(merged.Profiles["kurrent"].DefaultVisibility).IsEqualTo("private");
+    }
+
     // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them
     // away sends them to the wrong sign-in.
     [Test]

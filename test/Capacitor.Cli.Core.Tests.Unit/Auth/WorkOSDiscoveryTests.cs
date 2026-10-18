@@ -57,6 +57,34 @@ public class WorkOSDiscoveryTests {
         await Assert.That(cfg.Profiles["eventuous"].ServerUrl).IsEqualTo("https://eventuous.kcap.ai");
     }
 
+    /// <summary>Signing in to a tenant a hand-named profile already points at saves the token and the
+    /// stamp under that profile and keeps it active, rather than minting a slug-named twin.</summary>
+    [Test]
+    public async Task PublishAsync_saves_under_the_hand_named_profile_on_the_same_server() {
+        await ConfigMutator.MutateAsync(Config.Root, _ => new ProfileConfig {
+            ActiveProfile = "kurrent",
+            Profiles      = new() { ["kurrent"] = new() { ServerUrl = "https://kurrent.kcap.ai" } }
+        });
+        var tenant = new DiscoveredTenant {
+            Provider = "WorkOS", OrganizationId = "org_k", Slug = "kurrent-io", DisplayName = "Kurrent", Origin = "https://kurrent.kcap.ai"
+        };
+        var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_k", AccessToken = "acc2", RefreshToken = "rt2" };
+
+        var result = await WorkOSDiscovery.PublishAsync(
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root),
+            new WorkOSDiscoveryFlow.Ready([tenant], tenant, switched, "client_d", "Ada"), new RecordingAuthProgress(),
+            beforeCommit: null, TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(((AuthResult.Committed)result).CredentialSaved).IsTrue();
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("kurrent"))!.AccessToken).IsEqualTo("acc2");
+
+        var cfg = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(cfg.Profiles.Keys).IsEquivalentTo(["kurrent"]);
+        await Assert.That(cfg.ActiveProfile).IsEqualTo("kurrent");
+        await Assert.That(cfg.Profiles["kurrent"].AuthProvider).IsNotNull();
+    }
+
     /// <summary>A removed tenant whose organization survives is still listed by the proxy; picking it
     /// would configure a host that only 404s, so the account is treated as having no workspace.</summary>
     [Test]

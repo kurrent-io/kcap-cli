@@ -503,9 +503,13 @@ public sealed class OnboardingFacade(
                 : Fail(outcome.ErrorMessage, ct, reason);
         }
 
+        var (tenants, picked) = ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var current)
+            ? TenantDiscovery.NameProfiles(current, outcome.Tenants, outcome.Picked!)
+            : (outcome.Tenants, outcome.Picked!);
+
         var identities = new List<AuthIdentity>();
 
-        foreach (var tenant in outcome.Tenants) {
+        foreach (var tenant in tenants) {
             if (!ServerIdentity.TryCanonicalizeForStamping(tenant.Origin, out var canonical, out var identityError)) {
                 return Fail($"Error: {identityError}", identityError, ct);
             }
@@ -513,16 +517,14 @@ public sealed class OnboardingFacade(
             identities.Add(new(tenant.ProfileName, canonical));
         }
 
-        var picked = outcome.Picked!;
-
         if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError)
             return Fail(settleError, settleError, ct);
 
         var request = new CommitRequest(
             identities, AuthProvider.GitHubApp, picked.ProfileName,
             identities.First(i => i.Profile == picked.ProfileName).CanonicalServer,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, outcome.Tenants, picked),
-            PublishTokens: saved => ExchangeEveryTenantAsync(outcome.Tenants, picked, accessToken, saved));
+            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
+            PublishTokens: saved => ExchangeEveryTenantAsync(tenants, picked, accessToken, saved));
 
         return await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
     }

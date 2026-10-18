@@ -78,6 +78,33 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         return new(result.Tenants, picked, null);
     }
 
+    /// <summary>
+    /// Names each tenant's profile before anything is written, so the config, the stamp and the
+    /// token all land under one name. A profile already on the tenant's server keeps its own name:
+    /// a hand-named profile is updated rather than twinned under the slug, and the `kcap use`
+    /// habits and profile bindings that name it keep working. Among several on that server the
+    /// active one wins, then the slug's.
+    /// </summary>
+    public static (DiscoveredTenant[] Tenants, DiscoveredTenant Picked) NameProfiles(
+            ProfileConfig existing, DiscoveredTenant[] tenants, DiscoveredTenant picked) {
+        var named = tenants.Select(t => t with { ProfileName = ProfileNameFor(existing, t) }).ToArray();
+
+        return (named, picked with { ProfileName = ProfileNameFor(existing, picked) });
+    }
+
+    static string ProfileNameFor(ProfileConfig existing, DiscoveredTenant tenant) {
+        var onServer = existing.Profiles
+            .Where(p => ServerIdentity.SameServer(p.Value.ServerUrl, tenant.Origin))
+            .Select(p => p.Key)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        if (onServer.Contains(existing.ActiveName, StringComparer.Ordinal)) return existing.ActiveName;
+        if (onServer.Count == 0 || onServer.Contains(tenant.ProfileName, StringComparer.Ordinal)) return tenant.ProfileName;
+
+        return onServer[0];
+    }
+
     public static ProfileConfig MergeProfiles(
             ProfileConfig      existing,
             DiscoveredTenant[] discovered,

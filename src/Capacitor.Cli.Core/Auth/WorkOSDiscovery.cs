@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.Cli.Core.Auth;
@@ -225,7 +226,9 @@ public static class WorkOSDiscovery {
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
             TimeProvider                                                time,
             CancellationToken                                           ct) {
-        var picked = ready.Picked;
+        var (tenants, picked) = ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var current)
+            ? TenantDiscovery.NameProfiles(current, ready.Tenants, ready.Picked)
+            : (ready.Tenants, ready.Picked);
 
         if (!ServerIdentity.TryCanonicalizeForStamping(picked.Origin, out var canonical, out var identityError)) {
             progress.Error($"Error: {identityError}");
@@ -253,7 +256,7 @@ public static class WorkOSDiscovery {
 
         var request = new CommitRequest(
             [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
+            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
             PublishTokens: async saved => {
                 var outcome = await store.SaveGuardedAsync(
                     picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
