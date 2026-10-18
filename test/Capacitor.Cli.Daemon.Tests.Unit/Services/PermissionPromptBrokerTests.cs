@@ -475,6 +475,73 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.OwedCountForTest).IsEqualTo(1);
     }
 
+    /// A prompt still pending at the turn's end may have been allowed in the terminal with its
+    /// report overtaken by Stop, so retiring it there owes that report like an allow does, or the
+    /// report would pass for the next turn's identical prompt's terminal answer.
+    [Test]
+    public async Task A_prompt_retired_at_turn_end_is_still_owed_its_completion() {
+        var time = new FakeTimeProvider();
+        var broker = new PermissionPromptBroker(time);
+        _ = broker.Register(Prompt("r-terminal", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(1);
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+        time.Advance(TimeSpan.FromSeconds(5));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// A call allowed while its scope is suspended is discarded unrecorded, so the suspension has
+    /// to outlive the turn that discarded it: the previous turn's lapse says nothing about a call
+    /// that finished later. A turn's end with nothing discarded since is what lets it lapse.
+    [Test]
+    public async Task A_call_allowed_while_suspended_keeps_the_scope_suspended_until_a_later_turn_lapses() {
+        var time = new FakeTimeProvider();
+        var broker = new PermissionPromptBroker(time);
+        for (var i = 0; i <= PermissionPromptBroker.MaxOwedPerScope; i++) {
+            _ = broker.Register(Prompt($"r-{i}", "Bash", $$$"""{"command":"cmd {{{i}}}"}"""));
+            await Assert.That(broker.TrySettle($"r-{i}", Allow, "allow", "app")).IsTrue();
+        }
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(0);
+        time.Advance(TimeSpan.FromSeconds(10));
+        _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
+        time.Advance(PermissionPromptBroker.OwedGraceAfterTurn);
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(1);
+        time.Advance(PermissionPromptBroker.OwedGraceAfterTurn + TimeSpan.FromSeconds(1));
+        var later = broker.Register(Prompt("r-later", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(later, "the fallback restored")).Outcome).IsEqualTo("withdrawn");
+    }
+
+    /// A suspension that has lapsed is gone whatever touches the ledger next: an allow after it
+    /// is owed its completion like any other.
+    [Test]
+    public async Task An_allow_after_a_suspension_has_lapsed_is_owed_normally() {
+        var time = new FakeTimeProvider();
+        var broker = new PermissionPromptBroker(time);
+        for (var i = 0; i <= PermissionPromptBroker.MaxOwedPerScope; i++) {
+            _ = broker.Register(Prompt($"r-{i}", "Bash", $$$"""{"command":"cmd {{{i}}}"}"""));
+            await Assert.That(broker.TrySettle($"r-{i}", Allow, "allow", "app")).IsTrue();
+        }
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(0);
+        time.Advance(PermissionPromptBroker.OwedGraceAfterTurn + TimeSpan.FromSeconds(1));
+        _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(1);
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+    }
+
     [Test]
     public async Task Correlate_after_settlement_is_a_no_op_and_broadcasts_nothing() {
         var broker = new PermissionPromptBroker();

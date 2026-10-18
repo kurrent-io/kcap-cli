@@ -50,8 +50,8 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
     readonly TimeProvider _time = time ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly List<Owed> _owed = [];
-    /// Scopes whose ledger overflowed, so their fallback is off until a turn's end has lapsed; the
-    /// value is that lapse, null until the turn ends.
+    /// Scopes whose ledger overflowed, so their fallback is off; the value is the lapse a turn's
+    /// end set, null until a turn ends with nothing discarded since.
     readonly Dictionary<Scope, DateTimeOffset?> _suspended = new();
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
@@ -171,18 +171,20 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
     /// Withdraws what a finished turn left pending in the session: the main agent's own requests
     /// for a null subagentId, otherwise that subagent's. A background subagent's prompt outlives
     /// the parent's turn, which is why the scope matters. Unlike an exit, a turn's end says nothing
-    /// about the agent's next request. The turn's owed completions start their grace period here.
+    /// about the agent's next request. A prompt still pending here may have been allowed in the
+    /// terminal with its report overtaken by Stop, so it is owed that report like an allow; then
+    /// the scope's owed completions, and its suspension, start their grace period.
     public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
         lock (_gate) {
             PurgeLapsedLocked();
-            var scope  = new Scope(agentId, sessionId, subagentId);
-            var lapses = _time.GetUtcNow() + OwedGraceAfterTurn;
-            foreach (var o in _owed) if (o.Scope == scope) o.LapsesAt ??= lapses;
-            if (_suspended.TryGetValue(scope, out var suspendedUntil) && suspendedUntil is null) _suspended[scope] = lapses;
+            var scope   = new Scope(agentId, sessionId, subagentId);
             var settled = 0;
             foreach (var e in _pending.Values.Where(e =>
                          e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
-                if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled)) settled++;
+                if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled, owesCompletion: true)) settled++;
+            var lapses = _time.GetUtcNow() + OwedGraceAfterTurn;
+            foreach (var o in _owed) if (o.Scope == scope) o.LapsesAt ??= lapses;
+            if (_suspended.TryGetValue(scope, out var suspendedUntil) && suspendedUntil is null) _suspended[scope] = lapses;
             return settled;
         }
     }
@@ -199,9 +201,15 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
 
     // Caller holds _gate. A scope past the cap is one whose reports are not arriving; forgetting
     // any of them could let a late one pass for a terminal answer, so the scope's fallback goes
-    // instead, and its ledger with it, until a turn's end has lapsed.
+    // instead, and its ledger with it. Every completion discarded while suspended re-arms the
+    // suspension: it lapses only a grace period after a turn's end with nothing discarded since,
+    // because a call allowed under suspension reports on its own clock, not the earlier turn's.
     void OweLocked(Owed owed) {
-        if (_suspended.ContainsKey(owed.Scope)) return;
+        PurgeLapsedLocked();
+        if (_suspended.ContainsKey(owed.Scope)) {
+            _suspended[owed.Scope] = null;
+            return;
+        }
         if (_owed.Count(o => o.Scope == owed.Scope) >= MaxOwedPerScope) {
             _owed.RemoveAll(o => o.Scope == owed.Scope);
             _suspended[owed.Scope] = null;
