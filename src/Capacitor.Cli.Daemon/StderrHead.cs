@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Capacitor.Cli.Daemon.Harness;
+namespace Capacitor.Cli.Daemon;
 
 /// <summary>The start of what a child wrote to stderr, one line per row, never longer than its cap.
 /// Over-cap output is dropped, never rotated: this explains a failed launch or an unexpected exit,

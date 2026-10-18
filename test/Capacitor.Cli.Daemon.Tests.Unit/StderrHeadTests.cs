@@ -1,6 +1,4 @@
-using Capacitor.Cli.Daemon.Harness;
-
-namespace Capacitor.Cli.Daemon.Tests.Unit.Harness;
+namespace Capacitor.Cli.Daemon.Tests.Unit;
 
 /// <summary>Pins that <see cref="StderrHead"/> never holds more than its cap, whether the excess
 /// arrives as many lines or as one long one, and that it keeps the start, not the end.</summary>
