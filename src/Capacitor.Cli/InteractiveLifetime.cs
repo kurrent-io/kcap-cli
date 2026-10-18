@@ -100,13 +100,17 @@ static class InteractiveLifetime {
     /// <summary>Written raw rather than through Spectre: this runs on the way out of a signal handler,
     /// where taking a renderer's locks is the last thing worth doing. It goes to stderr so a machine
     /// reader of stdout (<c>--json</c>) never sees an escape sequence.</summary>
-    static void ShowCursor() => ShowCursor(Console.Error, Console.IsErrorRedirected);
+    static void ShowCursor() =>
+        ShowCursor(Console.Error, Console.IsErrorRedirected, Console.Out, Console.IsOutputRedirected);
 
-    internal static void ShowCursor(TextWriter error, bool errorRedirected) {
+    /// <summary>Prefers stderr, so <c>--json</c> stdout carries nothing but event lines; falls back to a terminal
+    /// stdout when stderr is redirected, since that is where the cursor was hidden.</summary>
+    internal static void ShowCursor(TextWriter error, bool errorRedirected, TextWriter output, bool outputRedirected) {
         try {
             if (!errorRedirected) error.Write("\u001b[?25h");
+            else if (!outputRedirected) output.Write("\u001b[?25h");
         } catch {
-            // A closed or detached stderr is exactly the case with no cursor to restore.
+            // A closed or detached stream is exactly the case with no cursor to restore.
         }
     }
 

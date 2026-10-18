@@ -26,14 +26,34 @@ public class InteractiveLifetimeTests {
     }
 
     [Test]
-    public async Task ShowCursor_writes_to_a_terminal_stderr_only() {
-        var terminal   = new StringWriter();
-        var redirected = new StringWriter();
+    public async Task ShowCursor_prefers_a_terminal_stderr() {
+        var error  = new StringWriter();
+        var output = new StringWriter();
 
-        InteractiveLifetime.ShowCursor(terminal, errorRedirected: false);
-        InteractiveLifetime.ShowCursor(redirected, errorRedirected: true);
+        InteractiveLifetime.ShowCursor(error, errorRedirected: false, output, outputRedirected: false);
 
-        await Assert.That(terminal.ToString()).IsEqualTo("\u001b[?25h");
-        await Assert.That(redirected.ToString()).IsEqualTo("");
+        await Assert.That(error.ToString()).IsEqualTo("\u001b[?25h");
+        await Assert.That(output.ToString()).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task ShowCursor_falls_back_to_a_terminal_stdout_when_stderr_is_redirected() {
+        var error  = new StringWriter();
+        var output = new StringWriter();
+
+        InteractiveLifetime.ShowCursor(error, errorRedirected: true, output, outputRedirected: false);
+
+        await Assert.That(error.ToString()).IsEqualTo("");
+        await Assert.That(output.ToString()).IsEqualTo("\u001b[?25h");
+    }
+
+    [Test]
+    public async Task ShowCursor_writes_nothing_when_both_streams_are_redirected() {
+        var error  = new StringWriter();
+        var output = new StringWriter();
+
+        InteractiveLifetime.ShowCursor(error, errorRedirected: true, output, outputRedirected: true);
+
+        await Assert.That(error.ToString() + output.ToString()).IsEqualTo("");
     }
 }
