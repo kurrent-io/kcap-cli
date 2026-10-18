@@ -117,7 +117,7 @@ internal static class WizardComposition {
         var auth   = new WizardAuthService(BuildOperation(options.Root, options.TokenStore, options.HttpFactory, options.Proxy,
         options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
-        var welcome  = new WelcomeStepViewModel();
+        var edition  = new EditionStepViewModel(options.Bridges.Telemetry.Funnel);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time);
@@ -175,7 +175,7 @@ internal static class WizardComposition {
                 signIn.Satisfied ? options.ResolveIdentity()?.Server : null,
                 daemon.Problem);
         }, options.UrlOpener);
-        IWizardStep[] steps = [welcome, signIn, harnesses, history, done];
+        IWizardStep[] steps = [edition, signIn, harnesses, history, done];
 
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface,
             startAt: options.AlreadyAuthenticated ? WizardStepId.Harnesses : null);

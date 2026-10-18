@@ -634,7 +634,7 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
-                WizardStepId.Welcome, WizardStepId.SignIn,
+                WizardStepId.Edition, WizardStepId.SignIn,
                 WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
@@ -885,7 +885,7 @@ public class WizardStartupTests {
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await graph.ViewModel.PendingEnterForTesting;
 
-            graph.ViewModel.TryGoTo(WizardStepId.SignIn);
+            await graph.Steps.OfType<EditionStepViewModel>().Single().SignInCommand.Execute().ToTask();
             await WizardFixtures.WaitUntilAsync(
                 () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
 
@@ -909,7 +909,7 @@ public class WizardStartupTests {
         var graph = WizardComposition.BuildGraph(harness.Options());
         await graph.ViewModel.PendingEnterForTesting;
 
-        graph.ViewModel.TryGoTo(WizardStepId.SignIn);
+        await graph.Steps.OfType<EditionStepViewModel>().Single().SignInCommand.Execute().ToTask();
         await WizardFixtures.WaitUntilAsync(
             () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
 
@@ -998,7 +998,7 @@ public class WizardStartupTests {
     static (OnboardingViewModel Wizard, WizardLifecycleSurface Surface) NewShell() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
         var wizard = new OnboardingViewModel(
-            [new StubStep(WizardStepId.Welcome, "Connect to Capacitor")], CancellationToken.None, surface);
+            [new StubStep(WizardStepId.Edition, "Connect to Capacitor")], CancellationToken.None, surface);
 
         return (wizard, surface);
     }
@@ -1047,7 +1047,7 @@ public class WizardStartupTests {
         });
 
         await Assert.That(rendered.Text).IsEqualTo("a daemon mutation needs attention (some_token)");
-        // The line shows only on Done, so it stays hidden on Welcome.
+        // The line shows only on Done, so it stays hidden on the first step.
         await Assert.That(rendered.IsVisible).IsFalse();
     }
 
