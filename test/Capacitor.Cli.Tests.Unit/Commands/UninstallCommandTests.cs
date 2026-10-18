@@ -688,9 +688,8 @@ public class UninstallCommandTests {
     [Arguments(true)]
     public async Task Uninstall_deletes_the_daemon_state_directory(bool keepConfig) {
         await using var fixture = await Fixture.CreateAsync();
-        var consent = Path.Combine(Daemons.Directory, "vscode", "consent.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(consent)!);
-        await File.WriteAllTextAsync(consent, "{}");
+        Daemons.CreateFile("vscode.lock", "x");
+        Daemons.CreateFile("vscode/consent.json", "{}");
 
         var exit = await RunUninstall(fixture, args: keepConfig ? ["--keep-config"] : []);
 

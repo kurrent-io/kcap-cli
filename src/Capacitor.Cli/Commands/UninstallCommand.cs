@@ -260,8 +260,9 @@ public sealed class UninstallCommand(
         // as the registry: a re-run has to find and stop what is still running.
         if (!hadFailures && Directory.Exists(store.Directory)) {
             try {
-                Directory.Delete(store.Directory, recursive: true);
-                await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+                await Console.Out.WriteLineAsync(store.DeleteOwned()
+                    ? $"Removed daemon state directory: {store.Directory}"
+                    : $"Removed kcap's daemon state from {store.Directory}; other files there were left in place.");
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
                 hadFailures = true;

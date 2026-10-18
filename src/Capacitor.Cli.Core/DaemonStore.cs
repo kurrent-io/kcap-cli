@@ -4,7 +4,8 @@ namespace Capacitor.Cli.Core;
 
 /// <summary>
 /// Where every daemon on this machine keeps its on-disk state, and what each piece is called.
-/// Ask it for a path by daemon name; it never reads or writes those files itself.
+/// Ask it for a path by daemon name. It reads or writes those files only to list names and to
+/// remove them at uninstall.
 /// Passed explicitly to everything that needs it — there is no ambient default.
 ///
 /// <para>The production directory is a <b>fixed location</b> under the home directory
@@ -56,38 +57,54 @@ public sealed partial class DaemonStore(string directory) {
         return collapsed.Length == 0 ? "daemon" : collapsed;
     }
 
+    const string LockExtension = "lock";
+    const string PidExtension = "pid";
+    const string StartExtension = "start";
+    const string RestartPendingExtension = "restart-pending";
+    const string VersionExtension = "version";
+    const string SocketExtension = "sock";
+    const string ServiceLockExtension = "service-lock";
+    const string ServiceTxnExtension = "service-txn";
+
+    /// <summary>Every suffix a per-name file here carries, so cleanup can tell this store's files from
+    /// anything else in a directory it was handed.</summary>
+    static readonly string[] OwnedExtensions = [
+        LockExtension, PidExtension, StartExtension, RestartPendingExtension,
+        VersionExtension, SocketExtension, ServiceLockExtension, ServiceTxnExtension
+    ];
+
     /// <summary>The daemon-held flock file. Content = instance_id GUID.</summary>
-    public string LockPath(string daemonName) => File(daemonName, "lock");
+    public string LockPath(string daemonName) => File(daemonName, LockExtension);
 
     /// <summary>The PID file. Content = PID + optional StartTicks line.</summary>
-    public string PidPath(string daemonName) => File(daemonName, "pid");
+    public string PidPath(string daemonName) => File(daemonName, PidExtension);
 
     /// <summary>
     /// The CLI-side start lock — the brief critical-section lock the <c>kcap daemon start</c>
     /// supervisor takes around its check-spawn-write-PID sequence. Distinct from
     /// <see cref="LockPath"/>, which the daemon itself holds for its entire lifetime.
     /// </summary>
-    public string StartLockPath(string daemonName) => File(daemonName, "start");
+    public string StartLockPath(string daemonName) => File(daemonName, StartExtension);
 
     /// <summary>The "restart pending" marker (queued restart-after-update state).</summary>
-    public string RestartPendingPath(string daemonName) => File(daemonName, "restart-pending");
+    public string RestartPendingPath(string daemonName) => File(daemonName, RestartPendingExtension);
 
     /// <summary>
     /// The version marker — freely readable (unlike the exclusively-flocked <see cref="LockPath"/>)
     /// and holding the running daemon's version, so <c>kcap daemon status</c> can report it without a
     /// socket round-trip.
     /// </summary>
-    public string VersionPath(string daemonName) => File(daemonName, "version");
+    public string VersionPath(string daemonName) => File(daemonName, VersionExtension);
 
     /// <summary>Local control socket, colocated with the lock/pid files. macOS caps the whole path at
     /// 103 chars, and a long temp directory plus a long name silently stops binding.</summary>
-    public string SocketPath(string daemonName) => File(daemonName, "sock");
+    public string SocketPath(string daemonName) => File(daemonName, SocketExtension);
 
     /// <summary>The cross-process lock around one service transaction (install/replace/start).</summary>
-    public string ServiceLockPath(string daemonName) => File(daemonName, "service-lock");
+    public string ServiceLockPath(string daemonName) => File(daemonName, ServiceLockExtension);
 
     /// <summary>The crash-visible record of an in-flight service transaction.</summary>
-    public string ServiceTxnPath(string daemonName) => File(daemonName, "service-txn");
+    public string ServiceTxnPath(string daemonName) => File(daemonName, ServiceTxnExtension);
 
     /// <summary>The consent decision log. Under the state directory rather than a suffixed file,
     /// because it rotates.</summary>
@@ -107,6 +124,57 @@ public sealed partial class DaemonStore(string directory) {
 
     string File(string daemonName, string extension) =>
         Path.Combine(Directory, $"{Sanitize(daemonName)}.{extension}");
+
+    /// <summary>
+    /// Deletes every per-name file this store names and each state directory beside one, then the
+    /// directory itself when nothing else is left. The directory can come from the environment, so it
+    /// is never assumed to be kcap's alone: a file or directory this store did not name is left in
+    /// place. A name whose lock a running daemon holds is left whole, because unlinking a held lock
+    /// lets the next start take a second lock on a fresh file. Returns whether the directory is gone.
+    /// </summary>
+    public bool DeleteOwned() {
+        if (!System.IO.Directory.Exists(Directory)) return true;
+
+        var names = System.IO.Directory.EnumerateFiles(Directory)
+            .Where(f => OwnedExtensions.Contains(Path.GetExtension(f).TrimStart('.')))
+            .Select(Path.GetFileNameWithoutExtension)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var name in names) DeleteName(name);
+
+        if (System.IO.Directory.EnumerateFileSystemEntries(Directory).Any()) return false;
+
+        System.IO.Directory.Delete(Directory);
+
+        return true;
+    }
+
+    void DeleteName(string name) {
+        var lockPath = File(name, LockExtension);
+        FileStream? held = null;
+
+        if (System.IO.File.Exists(lockPath)) {
+            try {
+                // Taking the lock proves no daemon holds it; closing the handle deletes the file.
+                held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+            } catch (IOException) {
+                return;
+            }
+        }
+
+        using (held) {
+            foreach (var extension in OwnedExtensions) {
+                if (extension == LockExtension) continue;
+
+                var path = File(name, extension);
+                if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+            }
+
+            var state = Path.Combine(Directory, name);
+            if (System.IO.Directory.Exists(state)) System.IO.Directory.Delete(state, recursive: true);
+        }
+    }
 
     /// <summary>Ensures the directory exists. Safe to call repeatedly.</summary>
     public void EnsureDirectory() => System.IO.Directory.CreateDirectory(Directory);

@@ -112,4 +112,56 @@ public class DaemonStoreTests {
 
         await Assert.That(daemons.Store.SocketPath(longestNameInUse).Length).IsLessThanOrEqualTo(103);
     }
+
+    /// <summary>Pins that cleanup takes only what the store names, so a daemons directory handed in from
+    /// the environment never costs the files around it.</summary>
+    [Test]
+    public async Task DeleteOwned_removes_only_the_stores_own_entries() {
+        using var daemons = new TempDaemonStore();
+        var store = daemons.Store;
+        foreach (var path in new[] { store.LockPath("vscode"), store.PidPath("vscode"), store.ServiceLockPath("vscode"), store.StartLockPath("old") })
+            await File.WriteAllTextAsync(path, "x");
+        Directory.CreateDirectory(store.StateDirectory("vscode"));
+        await File.WriteAllTextAsync(Path.Combine(store.StateDirectory("vscode"), "consent.json"), "{}");
+        var foreignFile = Path.Combine(store.Directory, "settings.json");
+        var foreignDir  = Path.Combine(store.Directory, "gh");
+        await File.WriteAllTextAsync(foreignFile, "{}");
+        Directory.CreateDirectory(foreignDir);
+
+        var gone = store.DeleteOwned();
+
+        await Assert.That(gone).IsFalse();
+        await Assert.That(Directory.EnumerateFileSystemEntries(store.Directory).Order()).IsEquivalentTo(new[] { foreignDir, foreignFile }.Order());
+    }
+
+    /// <summary>Pins that a running daemon's lock survives cleanup: unlinking a held lock would let the
+    /// next start take a second lock on a fresh file.</summary>
+    [Test]
+    public async Task DeleteOwned_leaves_a_name_whose_lock_is_held() {
+        using var daemons = new TempDaemonStore();
+        var store = daemons.Store;
+        daemons.CreateFile("busy.pid", "1");
+        daemons.CreateFile("busy/consent.json", "{}");
+        daemons.CreateFile("idle.lock", "x");
+
+        bool gone;
+        using (new FileStream(daemons.CreateFile("busy.lock", "x"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            gone = store.DeleteOwned();
+
+        await Assert.That(gone).IsFalse();
+        await Assert.That(File.Exists(store.LockPath("busy"))).IsTrue();
+        await Assert.That(File.Exists(store.PidPath("busy"))).IsTrue();
+        await Assert.That(Directory.Exists(store.StateDirectory("busy"))).IsTrue();
+        await Assert.That(File.Exists(store.LockPath("idle"))).IsFalse();
+    }
+
+    [Test]
+    public async Task DeleteOwned_removes_the_directory_once_nothing_else_is_there() {
+        using var daemons = new TempDaemonStore();
+        await File.WriteAllTextAsync(daemons.Store.LockPath("vscode"), "x");
+        Directory.CreateDirectory(daemons.Store.StateDirectory("vscode"));
+
+        await Assert.That(daemons.Store.DeleteOwned()).IsTrue();
+        await Assert.That(Directory.Exists(daemons.Store.Directory)).IsFalse();
+    }
 }
