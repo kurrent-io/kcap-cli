@@ -293,10 +293,10 @@ public class SessionAttentionTrackerTests {
         await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "cleared with the permission");
     }
 
-    /// A reply sent from the app answers the open question, though the stream lists it as open until
-    /// the agent's tool result is ingested; a permission is not answered by text.
+    /// A delivered reply answers the question open when it went out, though the stream lists it as
+    /// open until the agent's tool result is ingested; a permission is not answered by text.
     [Test]
-    public async Task A_sent_reply_settles_the_questions_and_leaves_a_permission_lit() {
+    public async Task A_delivered_reply_settles_the_open_questions_and_leaves_a_permission_lit() {
         using var h = new Harness();
         h.Connect();
         h.Detail = _ => Snapshot([Question("t1")]);
@@ -304,35 +304,41 @@ public class SessionAttentionTrackerTests {
         h.Time.Advance(TimeSpan.FromMilliseconds(100));
         await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "attention on");
 
-        h.Tracker.InputSent("s1");
+        h.Tracker.ReplySending("s1")();
         await Assert.That(h.Sessions).DoesNotContain("s1");
         h.Detail = _ => Snapshot([Question("t1"), Permission("r1")]);
         h.Lane.PermissionPendingSubject.OnNext("s1");
         h.Time.Advance(TimeSpan.FromMilliseconds(100));
         await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "the permission");
 
-        h.Tracker.InputSent("s1");
+        h.Tracker.ReplySending("s1")();
         await Assert.That(h.Sessions).Contains("s1");
         h.Lane.PermissionRespondedSubject.OnNext(new PermissionRespondedPing("s1", "r1"));
         await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "cleared with the permission");
     }
 
-    /// The reconciliation in flight when the reply goes out holds a snapshot from before it, so the
-    /// question it lists for the first time was already answered.
+    /// A question listed after the reply went out may have been asked after it, so its delivery
+    /// settles only the questions open at sending.
     [Test]
-    public async Task A_question_first_listed_by_a_read_the_reply_overtook_never_lights() {
+    public async Task A_question_listed_while_the_reply_is_in_flight_stays_lit() {
         using var h = new Harness();
         h.Connect();
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        h.DetailTask = async _ => { await gate.Task; return Snapshot([Question("t1")]); };
+        h.Detail = _ => Snapshot([Question("t1")]);
         h.Lane.PermissionPendingSubject.OnNext("s1");
         h.Time.Advance(TimeSpan.FromMilliseconds(100));
-        await WaitUntilAsync(() => h.Fetches == 1, what: "the fetch");
+        await WaitUntilAsync(() => h.Sessions.Contains("s1"), what: "attention on");
 
-        h.Tracker.InputSent("s1");
-        gate.SetResult();
-        await Task.Delay(100);
+        var delivered = h.Tracker.ReplySending("s1");
+        h.Detail = _ => Snapshot([Question("t1"), Question("t2")]);
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => h.Fetches == 2, what: "the read listing the new question");
+        delivered();
 
-        await Assert.That(h.Sessions).DoesNotContain("s1");
+        await Assert.That(h.Sessions).Contains("s1");
+        h.Detail = _ => Snapshot([Question("t1")]);
+        h.Lane.PermissionPendingSubject.OnNext("s1");
+        h.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => !h.Sessions.Contains("s1"), what: "the answered question stays settled");
     }
 }

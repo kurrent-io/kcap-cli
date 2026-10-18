@@ -98,16 +98,26 @@ public sealed class SessionAttentionTracker : IDisposable {
         }
     }
 
-    /// A reply the app delivered answers the session's open questions. A reconciliation still owed
-    /// took or will take its snapshot before the stream records the answer, so it settles them too.
-    public void InputSent(string sessionId) {
+    /// Captures the session's open questions as a reply goes out; the returned action settles
+    /// those, and only those, once the reply is delivered. A question first listed after the
+    /// capture cannot be told from one asked after the reply, so it stays lit.
+    public Action ReplySending(string sessionId) {
+        string[] answered;
         lock (_lock) {
-            if (_disposed || !_sessions.TryGetValue(sessionId, out var s)) return;
-            SettleQuestions(s);
-            if (s.Dirty) s.SettlesQuestions = true;
-            Prune(sessionId, s);
-            Publish();
+            if (_disposed || !_sessions.TryGetValue(sessionId, out var known) || known.Questions.Count == 0) return static () => { };
+            answered = [.. known.Questions];
         }
+        return () => {
+            lock (_lock) {
+                if (_disposed) return;
+                _settledQuestions.UnionWith(answered);
+                if (!_sessions.TryGetValue(sessionId, out var s)) return;
+                s.Ids.ExceptWith(answered);
+                s.Questions.ExceptWith(answered);
+                Prune(sessionId, s);
+                Publish();
+            }
+        };
     }
 
     // Caller holds _lock.

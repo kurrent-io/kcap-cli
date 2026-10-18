@@ -346,9 +346,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// Set by the workspace hosting this chat; the card's fallback sends the user there.
     public Action? ShowTerminal { get; set; }
-    /// Told the session id of every prompt the channel accepted: a reply answers the session's open
-    /// questions, and no permission response will ever say so.
-    public Action<string>? InputSent { get; init; }
+    /// Called with the session id as a prompt goes out; the action it returns runs only if the
+    /// channel accepts the prompt. A reply answers the session's open questions, and no permission
+    /// response will ever say so.
+    public Func<string, Action>? InputSending { get; init; }
     volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
@@ -733,6 +734,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _sending = queued;
             _unechoed.Add(queued);
             if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
+            var delivered = _sessionId is { Length: > 0 } sid ? InputSending?.Invoke(sid) : null;
             ChatSendOutcome outcome;
             try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
@@ -760,7 +762,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (outcome == ChatSendOutcome.Accepted) {
                 ClearSentDraft(queued);
                 Tray.RemoveAll(chipIds);
-                if (_sessionId is { Length: > 0 } sent) InputSent?.Invoke(sent);
+                delivered?.Invoke();
             }
             if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);

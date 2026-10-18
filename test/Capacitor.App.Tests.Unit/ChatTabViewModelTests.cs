@@ -1488,21 +1488,26 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// Only a prompt the channel accepted can have answered the session's open questions.
+    /// The session is captured as each prompt goes out, and only a prompt the channel accepted can
+    /// have answered its open questions.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Only_an_accepted_send_reports_its_session() {
+    public async Task Only_an_accepted_send_reports_its_session_as_answered() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
             var time = new FakeTimeProvider();
+            var sending = new List<string>();
             var answered = new List<string>();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
                 new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
-                sessionId: new BehaviorSubject<string?>("s1")) { InputSent = answered.Add };
+                sessionId: new BehaviorSubject<string?>("s1")) {
+                InputSending = sid => { sending.Add(sid); return () => answered.Add(sid); },
+            };
 
             chat.ComposerText = "refused";
             var send = chat.SendCommand.Execute().ToTask();
+            await Assert.That(sending).IsEquivalentTo(["s1"]);
             input.Pending!.SetResult(ChatSendOutcome.Rejected);
             await send;
             await Assert.That(answered).IsEmpty();
