@@ -114,7 +114,7 @@ public class DaemonStoreTests {
     }
 
     /// <summary>Pins that cleanup takes everything a daemon leaves, including state with no daemon file
-    /// beside it and a half-written temp file, and then the directory.</summary>
+    /// beside it, a half-written temp file and a daemon named like another's lock, then the directory.</summary>
     [Test]
     public async Task DeleteAll_removes_every_entry_and_the_directory() {
         using var daemons = new TempDaemonStore();
@@ -124,6 +124,8 @@ public class DaemonStoreTests {
         daemons.CreateFile("vscode/consent.json", "{}");
         daemons.CreateFile("affirmed/reviewers.json", "{}");
         daemons.CreateFile("old.start");
+        daemons.CreateFile("foo.lock.pid", "1");
+        daemons.CreateFile("foo.lock/consent.json", "{}");
 
         await Assert.That(daemons.Store.DeleteAll()).IsTrue();
         await Assert.That(Directory.Exists(daemons.Directory)).IsFalse();

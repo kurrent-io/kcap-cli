@@ -143,6 +143,8 @@ public sealed partial class DaemonStore(string directory) {
             .Where(e => e.LinkTarget is null)
             .SelectMany(NamesIn)
             .SelectMany(name => LockExtensions.Select(extension => File(name, extension)))
+            // A daemon may be named like another's lock file; its state directory is not a lock.
+            .Where(path => !System.IO.Directory.Exists(path))
             .Distinct(StringComparer.Ordinal)
             .ToList();
         var held = new List<FileStream>();
@@ -154,7 +156,7 @@ public sealed partial class DaemonStore(string directory) {
                 try {
                     // Delete sharing lets the lock file go while it is still held.
                     held.Add(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Delete));
-                } catch (IOException) {
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
                     return false;
                 }
             }
