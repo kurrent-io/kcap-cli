@@ -1102,7 +1102,7 @@ public class SignInStepViewModelTests {
     public async Task The_pane_renders_sign_in_with_the_work_account_first() {
         var (workAccount, urlBox, urlBoxShown, statusShown) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, localOffered: false);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel);
             var vm = new OnboardingViewModel([edition, h.Vm]);
             await vm.PendingEnterForTesting;
 
@@ -1139,7 +1139,7 @@ public class SignInStepViewModelTests {
         var (box, submit, link, provisioning) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             GateProvisioning(h, InviteRequired);
-            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, localOffered: false);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel);
             var vm = new OnboardingViewModel([edition, h.Vm]);
             await vm.PendingEnterForTesting;
 

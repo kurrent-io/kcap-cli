@@ -76,9 +76,7 @@ internal sealed record WizardGraphOptions(
     // The name the profile already carries, or null when none was ever saved.
     Func<string?>?                                                               ConfiguredDaemonName = null,
     // Names other machines' daemons hold on this account; best-effort, empty when unknown.
-    Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>>? HeldDaemonNames = null,
-    // The first screen offers the local edition; off until the local install exists.
-    bool                                                                         LocalEditionOffered = false);
+    Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>>? HeldDaemonNames = null);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
@@ -119,7 +117,7 @@ internal static class WizardComposition {
         var auth   = new WizardAuthService(BuildOperation(options.Root, options.TokenStore, options.HttpFactory, options.Proxy,
         options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
-        var edition  = new EditionStepViewModel(options.Bridges.Telemetry.Funnel, options.LocalEditionOffered);
+        var edition  = new EditionStepViewModel(options.Bridges.Telemetry.Funnel);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time);

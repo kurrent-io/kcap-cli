@@ -12,7 +12,6 @@
         <DataTemplate DataType="vm:EditionStepViewModel">
             <StackPanel Spacing="12">
                 <Button x:Name="LocalEditionButton" Classes="frEditionCard" Command="{Binding ChooseLocalCommand}"
-                        IsVisible="{Binding LocalOffered}"
                         AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
                         <app:AppIcon Kind="Laptop" Size="16" VerticalAlignment="Top" Margin="0,1,0,0" />

@@ -7,8 +7,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <summary>
 /// The first page: what Capacitor is, and which edition this machine sets up. Cloud and "already
 /// have a workspace" both continue to Sign-in. Local stops on this page with a notice: that is
-/// where the local install takes over once it exists, and until then the choice is offered only
-/// when the composition root asks for it.
+/// where the local install takes over once it exists.
 /// </summary>
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string LocalTitle = "For you, locally";
@@ -24,9 +23,8 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     bool                 _offered;
     EditionChoice?       _choice;
 
-    public EditionStepViewModel(SetupFunnel funnel, bool localOffered) {
-        _funnel      = funnel;
-        LocalOffered = localOffered;
+    public EditionStepViewModel(SetupFunnel funnel) {
+        _funnel = funnel;
 
         ChooseLocalCommand = ReactiveCommand.Create(() => Choose(EditionChoice.Local));
         ChooseCloudCommand = ReactiveCommand.Create(() => Choose(EditionChoice.Cloud));
@@ -44,8 +42,6 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public string Lede =>
         "Capacitor records the sessions your coding agents run on this machine and gives them tools to search " +
         "that history, so what you already worked out is there the next time you need it.";
-
-    public bool LocalOffered { get; }
 
     public EditionChoice? Choice {
         get => _choice;
@@ -66,7 +62,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public Task OnEnterAsync(CancellationToken ct) {
         if (!_offered) {
             _offered = true;
-            _funnel.EditionOffered(LocalOffered);
+            _funnel.EditionOffered();
         }
 
         return Task.CompletedTask;
@@ -76,8 +72,6 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
         Task.FromResult(direction != WizardNavigation.Next || Choice is EditionChoice.Cloud or EditionChoice.ExistingWorkspace);
 
     void Choose(EditionChoice choice) {
-        if (choice == EditionChoice.Local && !LocalOffered) return;
-
         Choice = choice;
         _funnel.EditionChosen(choice.Wire());
 

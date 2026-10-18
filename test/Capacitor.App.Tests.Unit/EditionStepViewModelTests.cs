@@ -24,7 +24,7 @@ public class EditionStepViewModelTests {
         var probe = Probe();
 
         var current = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel, localOffered: true);
+            var edition = new EditionStepViewModel(probe.Funnel);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Done)]);
             await vm.PendingEnterForTesting;
 
@@ -47,7 +47,7 @@ public class EditionStepViewModelTests {
         var probe = Probe();
 
         var (pending, afterChoice, afterNext) = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel, localOffered: true);
+            var edition = new EditionStepViewModel(probe.Funnel);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
             await vm.PendingEnterForTesting;
 
@@ -68,29 +68,11 @@ public class EditionStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Local_is_inert_when_not_offered() {
-        var probe = Probe();
-
-        var choice = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel, localOffered: false);
-            await edition.OnEnterAsync(CancellationToken.None);
-            await edition.ChooseLocalCommand.Execute().ToTask();
-
-            return edition.Choice;
-        });
-
-        await Assert.That(choice).IsNull();
-        await Assert.That(probe.Captured("cli_setup_edition_chosen")).IsEmpty();
-        await Assert.That(probe.Only("cli_setup_edition_offered").Properties["local_offered"]!.GetValue<bool>()).IsFalse();
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task Coming_back_offers_once_and_records_each_choice() {
         var probe = Probe();
 
         var current = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel, localOffered: true);
+            var edition = new EditionStepViewModel(probe.Funnel);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
             await vm.PendingEnterForTesting;
 
@@ -111,26 +93,24 @@ public class EditionStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task The_wizard_opens_on_the_edition_choice_with_local_behind_its_gate(bool offered) {
-        await AvaloniaSession.DispatchAsync(async () => {
+    public async Task The_wizard_opens_on_the_edition_choice() {
+        var current = await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
-            var graph = WizardComposition.BuildGraph(harness.Options() with { LocalEditionOffered = offered });
+            var graph = WizardComposition.BuildGraph(harness.Options());
             await graph.ViewModel.PendingEnterForTesting;
 
-            var edition = graph.ViewModel.Current as EditionStepViewModel;
-            await Assert.That(edition).IsNotNull();
-            await Assert.That(edition!.LocalOffered).IsEqualTo(offered);
+            return graph.ViewModel.Current;
         });
+
+        await Assert.That(current).IsTypeOf<EditionStepViewModel>();
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_pane_shows_the_cards_in_place_of_next_and_the_cloud_card_reaches_sign_in() {
         var (localShown, cloudShown, signInShown, nextShown, after) = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, localOffered: false);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
             await vm.PendingEnterForTesting;
 
@@ -158,7 +138,7 @@ public class EditionStepViewModelTests {
             return (local, cloudVisible, signIn, next, current);
         });
 
-        await Assert.That(localShown ?? false).IsFalse();
+        await Assert.That(localShown).IsTrue();
         await Assert.That(cloudShown).IsTrue();
         await Assert.That(signInShown).IsTrue();
         await Assert.That(nextShown).IsFalse();

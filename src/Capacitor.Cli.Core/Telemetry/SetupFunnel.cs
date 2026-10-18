@@ -36,8 +36,7 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
         });
 
     /// <summary>The app wizard's first screen came up; the denominator for the edition branch.</summary>
-    public void EditionOffered(bool localOffered) =>
-        Emit("cli_setup_edition_offered", new JsonObject { ["local_offered"] = localOffered });
+    public void EditionOffered() => Emit("cli_setup_edition_offered", new JsonObject());
 
     /// <summary>
     /// The funnel's first branch: <c>local</c>, <c>cloud</c> or <c>existing_workspace</c>. A run that
