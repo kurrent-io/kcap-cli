@@ -716,7 +716,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             if (account.Vendor is HarnessId.Codex)
                 CodexConfigToml.RegisterKcapMcpServers(AccountLayouts.Codex(env.Home, account.Directory).ConfigToml, env.ResolveMcpBinaryPath);
 
-            if (MarkerIsCurrent(account)) return [];
+            if (MarkerIsCurrent(account) && !RefusedByCodex(account)) return [];
         }
 
         return AccountWiring.Wire(account, env.Home, options);
@@ -740,6 +740,11 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         HarnessId.Codex  => CodexHooksInstaller.IsInstalled(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson),
         _                => false,
     };
+
+    // A byte-order mark makes Codex refuse the file whatever the marker says.
+    bool RefusedByCodex(VendorAccount account) =>
+        account.Vendor is HarnessId.Codex
+     && CodexHooksInstaller.StartsWithByteOrderMark(AccountLayouts.Codex(env.Home, account.Directory).UserHooksJson);
 
     bool MarkerIsCurrent(VendorAccount account) => account.Vendor switch {
         HarnessId.Claude => ClaudePluginInstaller.ReadMarker(AccountLayouts.Claude(env.Home, account.Directory).UserSettings) == CapacitorVersion.Current(),
