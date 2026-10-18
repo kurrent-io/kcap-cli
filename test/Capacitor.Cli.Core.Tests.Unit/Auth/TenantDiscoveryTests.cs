@@ -305,13 +305,15 @@ public class TenantDiscoveryTests {
     }
 
     /// <summary>A tenant the discovery service lists twice is still one profile: rows match on the
-    /// provider's own id even when their slugs differ, and two organizations stay apart.</summary>
+    /// provider's own id even when their slugs differ, while two organizations, or one organization
+    /// on two servers, stay apart.</summary>
     [Test]
     public async Task NameProfiles_gives_a_repeated_tenant_one_name() {
         DiscoveredTenant[] discovered = [
             new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme",     Origin = "https://a.example" },
             new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme-old", Origin = "https://a.example/" },
             new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "acme",     Origin = "https://b.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme",     Origin = "https://staging.example" },
         ];
 
         var (tenants, picked) = TenantDiscovery.NameProfiles(ProfileConfig.Fresh(), discovered, discovered[1]);
@@ -319,9 +321,10 @@ public class TenantDiscoveryTests {
         await Assert.That(tenants[0].ProfileName).IsEqualTo("acme");
         await Assert.That(tenants[1].ProfileName).IsEqualTo("acme");
         await Assert.That(tenants[2].ProfileName).IsEqualTo("acme-2");
+        await Assert.That(tenants[3].ProfileName).IsEqualTo("acme-3");
         await Assert.That(picked.ProfileName).IsEqualTo("acme");
         await Assert.That(TenantDiscovery.MergeProfiles(ProfileConfig.Fresh(), tenants, picked).Profiles.Keys)
-            .IsEquivalentTo(["default", "acme", "acme-2"]);
+            .IsEquivalentTo(["default", "acme", "acme-2", "acme-3"]);
     }
 
     // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them

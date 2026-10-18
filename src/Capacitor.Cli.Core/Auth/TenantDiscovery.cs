@@ -125,17 +125,16 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
             && now.Select(t => t.ProfileName).SequenceEqual(named.Select(t => t.ProfileName), StringComparer.Ordinal);
     }
 
-    /// <summary>Rows naming one tenant: the same provider-qualified id (a WorkOS organization, a
-    /// GitHub org), whatever slug each carries; rows without one match on name and server.</summary>
+    /// <summary>Rows naming one tenant on one server: the same provider-qualified id (a WorkOS
+    /// organization, a GitHub org), whatever slug each carries; rows without one match on name. One
+    /// id on two servers is two profiles.</summary>
     static bool SameTenant(DiscoveredTenant a, DiscoveredTenant b) {
-        if (a.IsWorkOS != b.IsWorkOS) return false;
+        if (a.IsWorkOS != b.IsWorkOS || !(a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin))) return false;
 
         var idA = a.IsWorkOS ? a.OrganizationId : a.OrgId != 0 ? a.OrgId.ToString(CultureInfo.InvariantCulture) : null;
         var idB = b.IsWorkOS ? b.OrganizationId : b.OrgId != 0 ? b.OrgId.ToString(CultureInfo.InvariantCulture) : null;
 
-        if (!string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB)) return idA == idB;
-
-        return a.ProfileName == b.ProfileName && (a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin));
+        return !string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB) ? idA == idB : a.ProfileName == b.ProfileName;
     }
 
     static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant) {
