@@ -46,13 +46,12 @@ public sealed class StatusCommand(
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
 
+        var codexHooks = harnesses.Of<CodexHarness>().Paths.UserHooksJson;
         var codexGap = harnesses.FirstOrDefault(h => h.Id == HarnessId.Codex) is { } codex
-            ? CodexHooksDetailLine(harnesses.Of<CodexHarness>().Paths.UserHooksJson, wired: codex.Signals.IsWired)
+            ? CodexHooksDetailLine(codexHooks, wired: codex.Signals.IsWired)
             : null;
 
-        // A Codex file Codex refuses is wired to kcap and runs nothing, so it reads as unwired here.
-        var line = BuildHooksStatusLine(
-            harnesses.Select(h => (h.Id, h.Signals.IsWired && !(h.Id == HarnessId.Codex && codexGap is not null))));
+        var line = BuildHooksStatusLine(harnesses.Select(h => (h.Id, HooksRun(h.Id, h.Signals.IsWired, codexHooks))));
 
         await Console.Out.WriteLineAsync(line);
 
@@ -117,7 +116,7 @@ public sealed class StatusCommand(
             profiles.Name, server, auth, current, advisory, bundled,
             [.. harnesses.Select(h => {
                 var installed = harnesses.Detected(h.Id);
-                var wired     = h.Signals.IsWired;
+                var wired     = HooksRun(h.Id, h.Signals.IsWired, harnesses.Of<CodexHarness>().Paths.UserHooksJson);
 
                 return new StatusHarnessJson(
                     h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null,
@@ -540,10 +539,11 @@ public sealed class StatusCommand(
             : $"{HarnessRegistry.LabelOf(HarnessId.Muse)}: hooks missing for {string.Join(", ", missing)}. Run `kcap plugin install --muse`";
     }
 
-    /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
-    /// claim every event is missing, and re-running the install cannot fix it. It is reported for an
-    /// installed but unwired Muse too, since an unparseable file is what keeps it from reading as wired;
-    /// missing hooks are reported only once wired, where the not-configured line does not already.</summary>
+    /// <summary>Whether a harness's hooks actually run: a Codex file Codex refuses for its byte-order
+    /// mark is wired to kcap yet runs nothing, so both the line and the JSON report it unwired.</summary>
+    internal static bool HooksRun(HarnessId id, bool wired, string codexHooksPath) =>
+        wired && !(id == HarnessId.Codex && CodexHooksInstaller.StartsWithByteOrderMark(codexHooksPath));
+
     /// <summary>The line naming why Codex runs none of kcap's hooks although they are installed, or
     /// null when nothing stops it.</summary>
     internal static string? CodexHooksDetailLine(string hooksPath, bool wired) =>
@@ -551,6 +551,10 @@ public sealed class StatusCommand(
             ? $"{HarnessRegistry.LabelOf(HarnessId.Codex)}: {hooksPath} starts with a UTF-8 byte-order mark, so Codex ignores every hook in it. Run `kcap plugin install --codex` to rewrite it without one"
             : null;
 
+    /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
+    /// claim every event is missing, and re-running the install cannot fix it. It is reported for an
+    /// installed but unwired Muse too, since an unparseable file is what keeps it from reading as wired;
+    /// missing hooks are reported only once wired, where the not-configured line does not already.</summary>
     internal static string? MuseHooksDetailLine(string settingsPath, bool detected, bool wired) {
         if (!detected && !wired) return null;
 

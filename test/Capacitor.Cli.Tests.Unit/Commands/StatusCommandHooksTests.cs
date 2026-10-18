@@ -181,6 +181,9 @@ public class StatusCommandHooksTests {
         await Assert.That(line).Contains("kcap plugin install --codex");
         await Assert.That(StatusCommand.CodexHooksDetailLine(clean, wired: true)).IsNull();
         await Assert.That(StatusCommand.CodexHooksDetailLine(bom, wired: false)).IsNull();
+        await Assert.That(StatusCommand.HooksRun(HarnessId.Codex, wired: true, bom)).IsFalse();
+        await Assert.That(StatusCommand.HooksRun(HarnessId.Codex, wired: true, clean)).IsTrue();
+        await Assert.That(StatusCommand.HooksRun(HarnessId.Claude, wired: true, bom)).IsTrue();
     }
 
     /// Every harness the build knows appears on the line — a tenth would too, since the line is
