@@ -731,7 +731,6 @@ jobs:
           files: release-artifacts/*
           generate_release_notes: true
           prerelease: ${{ steps.disttag.outputs.TAG == 'beta' }}
-          make_latest: ${{ steps.disttag.outputs.TAG == 'latest' }}
 
   # The script installer's manifests, served by kcap-web from the bucket's cli/ prefix. The
   # archives stay on the GitHub Release: the checksum and the bytes it covers come from two hosts.
