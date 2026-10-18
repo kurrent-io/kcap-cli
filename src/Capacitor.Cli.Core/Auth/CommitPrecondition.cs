@@ -20,10 +20,13 @@ public abstract record CommitPrecondition {
 
     /// Every profile with a server names <paramref name="Url"/>: a local setup that repoints the
     /// active profile must not leave another profile's credential behind a different server.
-    public sealed record OnlyServer(string Url) : CommitPrecondition {
+    /// <paramref name="Canonicalize"/> rewrites each profile's URL before the comparison, so another
+    /// spelling of the local installation's own origin counts as the same server.
+    public sealed record OnlyServer(string Url, Func<string?, string?>? Canonicalize = null) : CommitPrecondition {
         internal override void Check(ProfileConfig config, string profile) {
             foreach (var (name, other) in config.Profiles) {
-                if (string.IsNullOrWhiteSpace(other.ServerUrl) || ServerIdentity.SameServer(other.ServerUrl, Url)) continue;
+                if (string.IsNullOrWhiteSpace(other.ServerUrl)) continue;
+                if (ServerIdentity.SameServer(Canonicalize is null ? other.ServerUrl : Canonicalize(other.ServerUrl), Url)) continue;
 
                 throw new CommitPreconditionFailedException(
                     $"profile '{name}' points at {other.ServerUrl}; local setup needs every profile on {Url}; nothing saved.");

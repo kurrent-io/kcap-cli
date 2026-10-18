@@ -79,14 +79,18 @@ static class LocalSetupCommit {
             _ => InstallRegistry.Empty,
         };
 
-    /// <summary>Points the profile at the server, durably, only if it still names no other server. <paramref name="next"/> ends the failure message.</summary>
+    /// <summary>Points the profile at the server in its canonical spelling, durably, only if no profile names another
+    /// server; a loopback alias of the installation's origin is the same server. <paramref name="next"/> ends the
+    /// failure message.</summary>
     public static async Task PublishProfileAsync(SetupDetails details, string next) {
-        var url = details.ServerUrl;
+        var url       = details.ServerUrl;
+        var endpoints = new LocalEndpoints(new StateRead<InstallRegistry>.Present(
+            InstallRegistry.Empty.WithActive(new(details.InstallationId, details.Port, url, details.Version))));
 
         var request = new CommitRequest(
             [new AuthIdentity(details.Profile, url)], AuthProvider.None, details.Profile, url,
             ConfigMutation: c => CommitBoundary.PointProfileAtServer(c, details.Profile, url),
-            PublishTokens: null, Precondition: new CommitPrecondition.OnlyServer(url), Durable: true);
+            PublishTokens: null, Precondition: new CommitPrecondition.OnlyServer(url, endpoints.Canonicalize), Durable: true);
 
         var result = await CommitBoundary.CommitAsync(new ConfigRoot(details.ConfigDir), request, null, NoAuthProgress.Instance, CancellationToken.None);
 

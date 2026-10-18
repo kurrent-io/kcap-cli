@@ -483,6 +483,25 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task Reuse_commits_over_loopback_aliases_and_rewrites_the_target_to_canonical() {
+        var first = await Install();
+        var port  = first.Port;
+
+        File.WriteAllText(ConfigPath,
+            "{\"version\":2,\"active_profile\":\"default\",\"profiles\":{" +
+            $"\"default\":{{\"server_url\":\"http://127.0.0.1:{port}\"}}," +
+            $"\"other\":{{\"server_url\":\"http://[::1]:{port}\"}}}}}}");
+
+        var second = await Install(new(false, false));
+
+        var profiles = ConfigMutator.LoadPure(ConfigPath).Profiles;
+
+        await Assert.That(second).IsEqualTo(first);
+        await Assert.That(profiles["default"].ServerUrl).IsEqualTo(first.ServerUrl);
+        await Assert.That(profiles["other"].ServerUrl).IsEqualTo($"http://[::1]:{port}");
+    }
+
+    [Test]
     public async Task Reuse_reinstalls_a_missing_unit_file_of_its_own_installation() {
         await Install();
         File.Delete(Path.Combine(LaunchAgents, LocalServerUnit.ProductionLabel + ".plist"));
