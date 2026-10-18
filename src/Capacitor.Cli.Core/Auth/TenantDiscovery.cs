@@ -83,26 +83,61 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
     /// token all land under one name. A profile already on the tenant's server keeps its own name:
     /// a hand-named profile is updated rather than twinned under the slug, and the `kcap use`
     /// habits and profile bindings that name it keep working. Among several on that server the
-    /// active one wins, then the slug's.
+    /// active one wins, then the slug's. No two tenants share a name: a slug another tenant
+    /// already claimed takes the first free numbered suffix.
     /// </summary>
     public static (DiscoveredTenant[] Tenants, DiscoveredTenant Picked) NameProfiles(
             ProfileConfig existing, DiscoveredTenant[] tenants, DiscoveredTenant picked) {
-        var named = tenants.Select(t => t with { ProfileName = ProfileNameFor(existing, t) }).ToArray();
+        var claimed = new HashSet<string>(StringComparer.Ordinal);
+        var names   = new string?[tenants.Length];
 
-        return (named, picked with { ProfileName = ProfileNameFor(existing, picked) });
+        for (var i = 0; i < tenants.Length; i++)
+            if (ProfileOnServer(existing, tenants[i]) is { } onServer && claimed.Add(onServer))
+                names[i] = onServer;
+
+        for (var i = 0; i < tenants.Length; i++)
+            names[i] ??= Unclaimed(existing, claimed, tenants[i].ProfileName);
+
+        var named = tenants.Select((t, i) => t with { ProfileName = names[i]! }).ToArray();
+        var index = Array.IndexOf(tenants, picked);
+
+        return (named, index >= 0
+            ? named[index]
+            : picked with { ProfileName = ProfileOnServer(existing, picked) ?? picked.ProfileName });
     }
 
-    static string ProfileNameFor(ProfileConfig existing, DiscoveredTenant tenant) {
+    /// <summary>Whether naming <paramref name="tenants"/> against <paramref name="config"/> still gives
+    /// the names in <paramref name="named"/>: the commit checks it under the config lock, because a
+    /// profile written after the names were chosen can change them.</summary>
+    public static bool NamesHold(
+            ProfileConfig config, DiscoveredTenant[] tenants, DiscoveredTenant picked,
+            DiscoveredTenant[] named, DiscoveredTenant namedPicked) {
+        var (now, nowPicked) = NameProfiles(config, tenants, picked);
+
+        return nowPicked.ProfileName == namedPicked.ProfileName
+            && now.Select(t => t.ProfileName).SequenceEqual(named.Select(t => t.ProfileName), StringComparer.Ordinal);
+    }
+
+    static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant) {
         var onServer = existing.Profiles
-            .Where(p => ServerIdentity.SameServer(p.Value.ServerUrl, tenant.Origin))
+            .Where(p => !string.IsNullOrWhiteSpace(p.Value.ServerUrl) && ServerIdentity.SameServer(p.Value.ServerUrl, tenant.Origin))
             .Select(p => p.Key)
             .Order(StringComparer.Ordinal)
             .ToList();
 
+        if (onServer.Count == 0) return null;
         if (onServer.Contains(existing.ActiveName, StringComparer.Ordinal)) return existing.ActiveName;
-        if (onServer.Count == 0 || onServer.Contains(tenant.ProfileName, StringComparer.Ordinal)) return tenant.ProfileName;
 
-        return onServer[0];
+        return onServer.Contains(tenant.ProfileName, StringComparer.Ordinal) ? tenant.ProfileName : onServer[0];
+    }
+
+    static string Unclaimed(ProfileConfig existing, HashSet<string> claimed, string name) {
+        if (claimed.Add(name)) return name;
+
+        for (var n = 2; ; n++) {
+            var candidate = $"{name}-{n}";
+            if (!existing.Profiles.ContainsKey(candidate) && claimed.Add(candidate)) return candidate;
+        }
     }
 
     public static ProfileConfig MergeProfiles(

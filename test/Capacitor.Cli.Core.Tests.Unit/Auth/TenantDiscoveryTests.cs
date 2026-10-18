@@ -276,6 +276,34 @@ public class TenantDiscoveryTests {
         await Assert.That(merged.Profiles["kurrent"].DefaultVisibility).IsEqualTo("private");
     }
 
+    /// <summary>
+    /// Two tenants never share a profile: a slug that names the profile another tenant reuses for
+    /// its own server takes a numbered suffix rather than repointing that profile, and a profile with
+    /// no server matches none.
+    /// </summary>
+    [Test]
+    public async Task NameProfiles_never_gives_two_tenants_one_name() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "default",
+            Profiles = new Dictionary<string, Profile> {
+                ["default"] = new(),
+                ["acme"]    = new() { ServerUrl = "https://a.example" },
+                ["acme-2"]  = new() { ServerUrl = "" },
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { OrgId = 1, OrgLogin = "acme",    Origin = "https://b.example" },
+            new() { OrgId = 2, OrgLogin = "acme-io", Origin = "https://a.example" },
+        ];
+
+        var (tenants, picked) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(tenants[0].ProfileName).IsEqualTo("acme-3");
+        await Assert.That(tenants[1].ProfileName).IsEqualTo("acme");
+        await Assert.That(picked.ProfileName).IsEqualTo("acme-3");
+        await Assert.That(TenantDiscovery.NamesHold(existing, discovered, discovered[0], tenants, picked)).IsTrue();
+    }
+
     // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them
     // away sends them to the wrong sign-in.
     [Test]

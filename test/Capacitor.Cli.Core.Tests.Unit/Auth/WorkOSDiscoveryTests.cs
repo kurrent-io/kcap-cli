@@ -85,6 +85,38 @@ public class WorkOSDiscoveryTests {
         await Assert.That(cfg.Profiles["kurrent"].AuthProvider).IsNotNull();
     }
 
+    /// <summary>A hand-named profile for the tenant's server written after the names were chosen, but
+    /// before the commit took the config lock, is found under the lock: the commit is prepared again
+    /// under that name instead of writing a slug-named twin.</summary>
+    [Test]
+    public async Task PublishAsync_renames_when_a_profile_for_the_server_lands_before_the_commit() {
+        var tenant = new DiscoveredTenant {
+            Provider = "WorkOS", OrganizationId = "org_k", Slug = "kurrent-io", DisplayName = "Kurrent", Origin = "https://kurrent.kcap.ai"
+        };
+        var switched = new WorkOSAuthResponse { User = new() { Id = "user_x" }, OrganizationId = "org_k", AccessToken = "acc2", RefreshToken = "rt2" };
+        var offered  = new List<string>();
+
+        var result = await WorkOSDiscovery.PublishAsync(
+            Config.Root, AuthFixtures.NewTokenStore(Config.Root),
+            new WorkOSDiscoveryFlow.Ready([tenant], tenant, switched, "client_d", "Ada"), new RecordingAuthProgress(),
+            beforeCommit: async (identities, ct) => {
+                offered.Add(identities.Single().Profile);
+                if (offered.Count == 1)
+                    await ConfigMutator.MutateAsync(Config.Root, c => c with {
+                        Profiles = new(c.Profiles) { ["kurrent"] = new() { ServerUrl = "https://kurrent.kcap.ai" } }
+                    }, ct);
+            },
+            TimeProvider.System, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<AuthResult.Committed>();
+        await Assert.That(offered).IsEquivalentTo(["kurrent-io", "kurrent"]);
+        await Assert.That((await AuthFixtures.NewTokenStore(Config.Root).LoadAsync("kurrent"))!.AccessToken).IsEqualTo("acc2");
+
+        var cfg = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(cfg.Profiles.ContainsKey("kurrent-io")).IsFalse();
+        await Assert.That(cfg.ActiveProfile).IsEqualTo("kurrent");
+    }
+
     /// <summary>A removed tenant whose organization survives is still listed by the proxy; picking it
     /// would configure a host that only 404s, so the account is treated as having no workspace.</summary>
     [Test]
