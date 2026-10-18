@@ -8,8 +8,9 @@ namespace Capacitor.Cli.LocalEdition;
 /// cannot decide it: a case-insensitive volume and symlinked ancestors give one directory many names,
 /// and a case-sensitive volume gives one spelling's twin a different directory.</summary>
 static class LocalRootIdentity {
-    /// <summary>Call while holding the lifecycle lease: the probe writes into the root.</summary>
-    public static RootMatch Compare(LocalRoot root, string other) {
+    /// <summary>With <paramref name="mayWrite"/>, call while holding the lifecycle lease: the probe writes into the root.
+    /// Without it, two spellings that resolve differently but both exist are <see cref="RootMatch.Unknown"/>.</summary>
+    public static RootMatch Compare(LocalRoot root, string other, bool mayWrite = true) {
         if (CanonicalPath.TryResolve(root.Directory, out var mine)
          && CanonicalPath.TryResolve(other, out var theirs)
          && string.Equals(mine, theirs, StringComparison.Ordinal))
@@ -17,6 +18,7 @@ static class LocalRootIdentity {
 
         try {
             if (!Present(other)) return RootMatch.Different;
+            if (!mayWrite) return RootMatch.Unknown;
 
             // A nonce created here is visible under `other` only if both names reach one directory.
             var name  = $".identity-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}";
@@ -44,7 +46,7 @@ static class LocalRootIdentity {
         }
     }
 
-    public static OwnerDecision Decide(LocalRoot root, UnitOwner owner) {
+    public static OwnerDecision Decide(LocalRoot root, UnitOwner owner, bool mayWrite = true) {
         var matches = new List<RootMatch>(2);
 
         foreach (var reading in new[] { owner.Loaded, owner.OnDisk }) {
@@ -52,7 +54,7 @@ static class LocalRootIdentity {
                 case OwnerReading.Absent:
                     break;
                 case OwnerReading.Root r:
-                    matches.Add(Compare(root, r.Path));
+                    matches.Add(Compare(root, r.Path, mayWrite));
                     break;
                 default:
                     return OwnerDecision.Unknown;

@@ -78,15 +78,29 @@ public class LocalStackTests {
         await Assert.That(state.Owner).IsEqualTo(OwnerDecision.Ours);
     }
 
+    /// <summary>Telling another existing root from this one by another spelling takes a probe written into the root,
+    /// which only the lease may do.</summary>
     [Test]
-    public async Task Read_of_an_installation_whose_unit_serves_another_root_is_not_ours() {
+    public async Task Read_cannot_tell_an_existing_other_root_apart_and_writes_nothing() {
         PublishActive();
         Service.OwnerOverride = new(new OwnerReading.Root(Tmp.CreateDir("other")), OwnerReading.Absent.Instance);
+        var before = Directory.GetFileSystemEntries(Root.Directory);
 
         var state = (LocalStackState.Installed)Stack.Read();
 
         await Assert.That(state.UnitAbsent).IsFalse();
-        await Assert.That(state.Owner).IsEqualTo(OwnerDecision.NotOurs);
+        await Assert.That(state.Owner).IsEqualTo(OwnerDecision.Unknown);
+        await Assert.That(Directory.GetFileSystemEntries(Root.Directory)).IsEquivalentTo(before);
+    }
+
+    [Test]
+    public async Task RunAsync_probes_an_existing_other_root_and_finds_it_not_ours() {
+        PublishActive();
+        Service.OwnerOverride = new(new OwnerReading.Root(Tmp.CreateDir("other")), OwnerReading.Absent.Instance);
+
+        var seen = await Stack.RunAsync(new RecordingProgress<LocalInstallEvent>(), (_, state, _) => Task.FromResult(state), CancellationToken.None);
+
+        await Assert.That(((LocalStackState.Installed)seen).Owner).IsEqualTo(OwnerDecision.NotOurs);
     }
 
     [Test]

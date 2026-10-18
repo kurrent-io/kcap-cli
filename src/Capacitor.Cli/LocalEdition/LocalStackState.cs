@@ -18,10 +18,9 @@ abstract record LocalStackState {
     public sealed record Interrupted(string Operation, string Phase) : LocalStackState;
 
     /// <summary>The registry's active installation. The unit is per user, so <paramref name="Readings"/> may name
-    /// another root's job; act on the unit only when <see cref="Owner"/> is <see cref="OwnerDecision.Ours"/>.</summary>
-    public sealed record Installed(LocalInstallation Installation, LocalServerUnit Unit, UnitOwner Readings) : LocalStackState {
+    /// another root's job; act on the unit only when <paramref name="Owner"/> is <see cref="OwnerDecision.Ours"/>.</summary>
+    public sealed record Installed(LocalInstallation Installation, LocalServerUnit Unit, UnitOwner Readings, OwnerDecision Owner)
+        : LocalStackState {
         public bool UnitAbsent => Readings is { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent };
-
-        public OwnerDecision Owner => LocalRootIdentity.Decide(Unit.Root, Readings);
     }
 }

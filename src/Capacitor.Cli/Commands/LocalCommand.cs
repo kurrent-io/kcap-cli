@@ -2,8 +2,8 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary><c>kcap local</c>: runs and removes the local installation that <c>kcap setup --local</c> made. A
-/// subcommand reaches the installation through <see cref="LocalEdition.ILocalStackFactory"/>.</summary>
+/// <summary>The <c>kcap local</c> group, for the installation <c>kcap setup --local</c> made. A subcommand reaches it
+/// through <see cref="LocalEdition.ILocalStackFactory"/>.</summary>
 static class LocalCommand {
     public static async Task<int> HandleAsync(string[] args) {
         var sub = args.Length > 1 ? args[1] : null;

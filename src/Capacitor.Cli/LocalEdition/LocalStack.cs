@@ -12,12 +12,13 @@ sealed class LocalStack(LocalRoot root, UserHome home, ILocalServerService servi
 
     public ILocalServerService Service => service;
 
-    /// <summary>No lock and no writes, so another command may be changing what this reads.</summary>
+    /// <summary>No lock and no writes, so another command may be changing what this reads. Without the identity probe
+    /// a unit naming this root by another spelling is <see cref="OwnerDecision.Unknown"/>.</summary>
     public LocalStackState Read() =>
         LocalStateFiles.ReadJournal(root) switch {
             StateRead<LifecycleJournalEntry>.Present(var entry)             => new LocalStackState.Interrupted(entry.Operation, entry.Phase),
             StateRead<LifecycleJournalEntry>.Unreadable(var path, var why)  => new LocalStackState.Unreadable(path, why),
-            _                                                               => ReadRegistry(),
+            _                                                               => ReadRegistry(mayWrite: false),
         };
 
     /// <summary>Runs <paramref name="command"/> under the lifecycle lease, after an interrupted setup has been finished
@@ -30,16 +31,17 @@ sealed class LocalStack(LocalRoot root, UserHome home, ILocalServerService servi
         var recovery  = new LocalSetupRecovery(service, home, local, time, progress, _ => { });
         var lifecycle = new LocalLifecycle(root, [recovery], time);
 
-        return lifecycle.RunAsync(LeaseWait, (lease, token) => command(lease, ReadRegistry(), token), ct);
+        return lifecycle.RunAsync(LeaseWait, (lease, token) => command(lease, ReadRegistry(mayWrite: true), token), ct);
     }
 
-    LocalStackState ReadRegistry() {
+    LocalStackState ReadRegistry(bool mayWrite) {
         switch (LocalStateFiles.ReadRegistry(root)) {
             case StateRead<InstallRegistry>.Unreadable(var path, var reason):
                 return new LocalStackState.Unreadable(path, reason);
             case StateRead<InstallRegistry>.Present { Value.Active: { } active }:
                 var unit = LocalServerUnit.ForInstallation(root, active.Port);
-                return new LocalStackState.Installed(active, unit, service.Owner(unit));
+                var readings = service.Owner(unit);
+                return new LocalStackState.Installed(active, unit, readings, LocalRootIdentity.Decide(root, readings, mayWrite));
             default:
                 return LocalStackState.NotInstalled.Instance;
         }
