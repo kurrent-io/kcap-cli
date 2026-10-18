@@ -32,6 +32,7 @@ public class AgentOrchestratorResumeOnBootTests {
         public TaskCompletionSource? Gate { get; set; }
         public bool ExitBeforeHandshake { get; init; }
         public bool PtyStyle { get; init; }
+        public string? ResumeToken { get; init; }
         public int? ExitImmediatelyWith { get; init; }
         public int InFlight => Volatile.Read(ref _inFlight);
         public int MaxInFlight => Volatile.Read(ref _maxInFlight);
@@ -55,7 +56,7 @@ public class AgentOrchestratorResumeOnBootTests {
                 if (PtyStyle)
                     return new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null);
 
-                var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path };
+                var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path, VendorResumeToken = ResumeToken };
 
                 return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
             } finally {
@@ -223,6 +224,31 @@ public class AgentOrchestratorResumeOnBootTests {
         var agent = f.Orch.GetAgentForTest("resume-pty")!;
         await Assert.That(agent.SessionId).IsEqualTo("session-resume-pty");
         await Assert.That(agent.VendorSession).IsEqualTo("vendor-session-1");
+    }
+
+    /// <summary>A runtime whose resume takes something other than the session id records that token, and
+    /// the next resume of the entry hands it back.</summary>
+    [Test]
+    public async Task A_runtimes_resume_token_is_recorded_and_handed_to_the_next_resume() {
+        var f = Build(new ResumableFactory { ResumeToken = "/sessions/pi-1.jsonl" });
+        await using var _ = f.Orch;
+        Entry(f, "pi-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Orch.GetAgentForTest("pi-1")!.VendorSession).IsEqualTo("/sessions/pi-1.jsonl");
+        var recorded = f.Orch.ResumeLedger!.TryRead("pi-1")!;
+        await Assert.That(recorded.VendorSession).IsEqualTo("/sessions/pi-1.jsonl");
+
+        var next = Build(new ResumableFactory { ResumeToken = "/sessions/pi-1.jsonl" });
+        await using var __ = next.Orch;
+        next.Orch.ResumeLedger!.Write(recorded with { State = ResumeState.Resuming, ResumingAt = recorded.UpdatedAt });
+
+        next.Orch.LoadResumeLedger();
+        await next.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(next.Factory.Contexts.Single().ResumeSessionId).IsEqualTo("/sessions/pi-1.jsonl");
     }
 
     [Test]

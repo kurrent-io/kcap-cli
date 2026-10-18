@@ -186,6 +186,9 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// or when Pi omits it.</summary>
     internal volatile string? SessionFile;
 
+    /// <summary>Pi's <c>--session</c> takes the session file, not its id.</summary>
+    public string? VendorResumeToken => SessionFile;
+
     /// <summary>See <see cref="_sessionId"/> — same cross-thread reasoning. Null means the
     /// handshake's <c>get_state</c> did not carry a model (see <see cref="ExtractModelId"/>) — NEVER
     /// backfilled with <see cref="_requestedModel"/>, since <see cref="ResolvedModel"/> is read as a
