@@ -10,6 +10,9 @@ interface IOutgoingRecorders {
     /// alive afterwards; what failed has been printed.</summary>
     Task<bool> StopAsync();
 
+    /// <summary>Where this process finds watchers: <c>KCAP_WATCHER_DIR</c>, or its config root's.</summary>
+    string WatcherDirectory { get; }
+
     /// <summary>One line per daemon or watcher still alive. Prints nothing and stops nothing.</summary>
     IReadOnlyList<string> Live();
 }

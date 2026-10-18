@@ -77,4 +77,23 @@ public class PendingLaunchStatusTests {
 
         await Assert.That(orch.StatusNotifierForTest.Version).IsGreaterThan(v0);
     }
+
+    /// <summary>A launch counts once whether it is still pending, published while still pending, or published alone,
+    /// so an uninstall's idle check never sees a running launch as nothing.</summary>
+    [Test]
+    public async Task The_busy_count_holds_a_launch_through_its_publish() {
+        await using var orch = Build();
+        var clock = new AgentActivityClock(TimeProvider.System);
+
+        await Assert.That(orch.BusyForStatus()).IsEqualTo(0);
+
+        var pending = orch.TrackPendingLaunch("p1", LaunchKind.Default, null, null, clock);
+        await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
+
+        orch.SeedAgentForTest("p1", status: "Starting", activityClock: clock);
+        await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
+
+        pending.Dispose();
+        await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
+    }
 }

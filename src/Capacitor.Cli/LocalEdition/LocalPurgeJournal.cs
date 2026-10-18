@@ -15,12 +15,14 @@ static class LocalPurgeJournal {
     public const string PortKey      = "port";
     public const string ServerUrlKey = "server_url";
     public const string ConfigDirKey = "config_dir";
+    public const string WatcherDirKey = "watcher_dir";
 
-    public static IReadOnlyDictionary<string, string> Build(LocalInstallation installation, string configDir) =>
+    public static IReadOnlyDictionary<string, string> Build(LocalInstallation installation, string configDir, string watcherDir) =>
         new Dictionary<string, string>(StringComparer.Ordinal) {
             [PortKey]      = installation.Port.ToString(CultureInfo.InvariantCulture),
             [ServerUrlKey] = installation.ServerUrl,
             [ConfigDirKey] = configDir,
+            [WatcherDirKey] = watcherDir,
         };
 
     /// <summary>False, with the offending field named in <paramref name="error"/>, for anything this build would not
@@ -31,7 +33,7 @@ static class LocalPurgeJournal {
 
         if (error.Length > 0) return false;
 
-        details = new(entry.InstallationId!, port, entry.Details[ServerUrlKey], entry.Details[ConfigDirKey]);
+        details = new(entry.InstallationId!, port, entry.Details[ServerUrlKey], entry.Details[ConfigDirKey], entry.Details[WatcherDirKey]);
 
         return true;
     }
@@ -58,6 +60,9 @@ static class LocalPurgeJournal {
 
         if (!d.TryGetValue(ConfigDirKey, out var configDir) || !Path.IsPathFullyQualified(configDir))
             return "config_dir: not an absolute path";
+
+        if (!d.TryGetValue(WatcherDirKey, out var watcherDir) || !Path.IsPathFullyQualified(watcherDir))
+            return "watcher_dir: not an absolute path";
 
         return "";
     }

@@ -57,6 +57,16 @@ internal partial class AgentOrchestrator {
             .Select(p => new PendingLaunchDto(
                 p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage))];
 
+    /// <summary>Agents running or starting. Pending launches are read before the agents: a launch is published before it
+    /// leaves the pending set, so one that moves between the two reads is in the second.</summary>
+    internal int BusyForStatus() {
+        var pending = _pendingLaunches.Keys.ToList();
+        var agents  = _agents.ToArray();
+
+        return agents.Count(a => a.Value.Status is "Starting" or "Running")
+             + pending.Count(id => !agents.Any(a => a.Key == id));
+    }
+
     internal List<AgentStatusDto> SnapshotAgentsForStatus() =>
         [.. _agents.Values
             .OrderBy(a => a.CreatedAt)

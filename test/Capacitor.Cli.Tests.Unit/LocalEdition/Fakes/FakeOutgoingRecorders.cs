@@ -3,7 +3,9 @@ using Capacitor.Cli.Commands;
 namespace Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
 
 /// <summary>Daemons and watchers as an uninstall sees them; each call appends its name to the shared log.</summary>
-sealed class FakeOutgoingRecorders(List<string> log) : IOutgoingRecorders {
+sealed class FakeOutgoingRecorders(List<string> log, string watcherDirectory = "/watchers") : IOutgoingRecorders {
+    public string WatcherDirectory { get; set; } = watcherDirectory;
+
     public List<string> Busy { get; } = [];
 
     public bool StopSucceeds { get; set; } = true;

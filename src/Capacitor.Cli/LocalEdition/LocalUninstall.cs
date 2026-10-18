@@ -48,7 +48,7 @@ sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoin
         // Stopped, not removed: a purge deletes nothing until its retirement is durable.
         await LocalStackStop.RunAsync(lease.Root, unit, service, home, removeUnit: false, ct);
 
-        var entry = LocalPurge.Begin(lease, installation, configDir);
+        var entry = LocalPurge.Begin(lease, installation, configDir, recorders.WatcherDirectory);
         FaultPoints.Hit("purge:begun");
 
         await LocalPurge.FinishAsync(lease, entry, service, home, ct);

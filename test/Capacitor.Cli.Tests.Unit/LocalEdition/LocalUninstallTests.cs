@@ -429,6 +429,20 @@ public class LocalUninstallTests {
         await Assert.That(JournalAbsent()).IsFalse();
     }
 
+    [Test]
+    public async Task A_purge_whose_watchers_were_in_another_directory_is_left_for_that_directory() {
+        await InstallAsync();
+        await CrashAfterRetiredAsync();
+        Recorders.WatcherDirectory = "/elsewhere/watchers";
+
+        var refused = await Assert.ThrowsAsync<LocalLifecycleException>(
+            () => Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None));
+
+        await Assert.That(refused!.Message).Contains("KCAP_WATCHER_DIR=/watchers");
+        await Assert.That(_log).IsEmpty();
+        await Assert.That(JournalAbsent()).IsFalse();
+    }
+
     /// <summary>Setup cannot stop them without printing into its JSON events, so it leaves the purge to the command
     /// that can.</summary>
     [Test]

@@ -13,33 +13,23 @@ sealed class OutgoingRecorders(
     static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(5);
 
     /// <summary>A launch still starting is counted too: it is not in the agent table until its runtime answers. A
-    /// daemon that cannot give a complete snapshot, including one too old to report its pending launches, counts as
-    /// busy.</summary>
+    /// daemon that cannot give that count, including one too old to report it, counts as busy.</summary>
     public async Task<IReadOnlyList<string>> BusyAsync() {
         var busy = new List<string>();
 
         foreach (var name in LiveDaemons()) {
-            // A snapshot reads its agents before its pending launches, so a launch published between the two reads is in
-            // neither. It is in the agents of the next one, unless it has ended: idle twice running is idle.
-            if (await RunningAsync(name) is not 0 and var first) {
-                busy.Add(Describe(name, first));
-                continue;
+            switch ((await LocalControlProbe.ProbeAsync(store, name, time, ProbeBudget)).Snapshot?.Busy) {
+                case null:
+                    busy.Add($"daemon '{name}': it cannot say whether agents are running");
+                    break;
+                case > 0 and var running:
+                    busy.Add($"daemon '{name}': {running} agent(s) running or starting");
+                    break;
             }
-
-            if (await RunningAsync(name) is not 0 and var second) busy.Add(Describe(name, second));
         }
 
         return busy;
     }
-
-    /// <summary>Agents running or starting, or null when the daemon gives no complete snapshot.</summary>
-    async Task<int?> RunningAsync(string name) =>
-        (await LocalControlProbe.ProbeAsync(store, name, time, ProbeBudget)).Snapshot is { Pending: { } pending } snapshot
-            ? snapshot.Daemon.ActiveAgents + pending.Count
-            : null;
-
-    static string Describe(string name, int? running) =>
-        running is { } count ? $"daemon '{name}': {count} agent(s) running or starting" : $"daemon '{name}': its agents cannot be listed";
 
     public async Task<bool> StopAsync() {
         var stopped = true;
@@ -73,6 +63,8 @@ sealed class OutgoingRecorders(
 
         return stopped;
     }
+
+    public string WatcherDirectory => watchers.GetWatcherDir();
 
     public IReadOnlyList<string> Live() => [
         .. LiveDaemons().Select(n => $"Daemon '{n}'"),

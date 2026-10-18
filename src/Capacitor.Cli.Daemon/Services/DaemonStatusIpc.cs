@@ -71,7 +71,8 @@ internal sealed class DaemonStatusIpc(
                 ConnectionText(connection.HubState), config.MaxConcurrentAgents, active,
                 Environment.ProcessId, config.InstanceId, config.SupportedVendors, config.VendorModels),
             agents,
-            orchestrator.SnapshotPendingForStatus());
+            orchestrator.SnapshotPendingForStatus(),
+            orchestrator.BusyForStatus());
         return JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.DaemonStatusDto);
     }
 

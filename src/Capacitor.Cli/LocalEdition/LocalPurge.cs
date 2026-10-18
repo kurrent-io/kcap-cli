@@ -13,9 +13,9 @@ namespace Capacitor.Cli.LocalEdition;
 /// </summary>
 static class LocalPurge {
     /// <summary>Under the lease, with the unit stopped and nothing alive.</summary>
-    public static LifecycleJournalEntry Begin(LifecycleLease lease, LocalInstallation installation, string configDir) =>
+    public static LifecycleJournalEntry Begin(LifecycleLease lease, LocalInstallation installation, string configDir, string watcherDir) =>
         lease.Begin(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, installation.Id,
-            LocalPurgeJournal.Build(installation, Path.GetFullPath(configDir)));
+            LocalPurgeJournal.Build(installation, Path.GetFullPath(configDir), Path.GetFullPath(watcherDir)));
 
     /// <summary>From either phase to a cleared journal. A failure leaves the journal, so the next lifecycle command
     /// carries on from it.</summary>
