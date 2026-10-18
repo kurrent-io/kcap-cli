@@ -173,7 +173,7 @@ next work or said they are done with or parking that work.
 | `claim_loose_end` | `loose_end_id` | Claim for the working `session_id` (current session by default); keep the returned `claim_id`. |
 | `release_loose_end` | `claim_id` | Give unfinished work back without closing it; working `session_id` defaults to this session. |
 | `close_loose_end` | `loose_end_id` | Complete work; pass `claim_id` for claimed work. Working `session_id` defaults to this session. `declare_loose_end`'s `declaration_id` also works as `loose_end_id`; if that is refused as `loose_end_not_found`, find the end by its text in `list_loose_ends`. |
-| `reopen_loose_end` | `loose_end_id` | Undo a close. A `declaration_id` also works as `loose_end_id`. |
+| `reopen_loose_end` | `loose_end_id` | Undo a close. A `declaration_id` also works as `loose_end_id`, with the same fallback (`status` closed). |
 | `declare_work_breakdown` | `parent_id`, `part_ids` | Declare parent → parts. |
 | `retract_work_breakdown` | `parent_id`, `part_ids` | Detach parts from the parent. |
 | `declare_work_relation` | `from_id`, `to_id`, `relation_kind` (`blocks`\|`blocked_by`) | Declare a dependency. |
