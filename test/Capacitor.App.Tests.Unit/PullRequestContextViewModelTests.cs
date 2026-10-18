@@ -67,6 +67,28 @@ public class PullRequestContextViewModelTests {
         }
     });
 
+    /// A refresh queued behind a list read that then stops retries has nothing left to run it, so
+    /// it must not keep the card reading.
+    [Test]
+    public Task A_refresh_queued_behind_a_read_that_stops_retries_is_dropped() => RunOnUiAsync(async () => {
+        var h = new Harness(primary: () => new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        try {
+            h.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Source.ListFailure = "retries_stopped";
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 1, what: "the list read");
+
+            h.Vm.PrimaryRepositoryArrived();
+            h.Source.ListGate.SetResult();
+
+            await WaitUntilAsync(() => h.Vm.Notice.StartsWith("This session's pull requests are unavailable", StringComparison.Ordinal), what: "retries stopped");
+            await Assert.That(h.Vm.IsReading).IsFalse();
+        } finally {
+            await h.Dispose();
+        }
+    });
+
     [Test]
     public Task Teardown_does_not_wait_for_a_stalled_branch_lookup_or_publish_its_result() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
