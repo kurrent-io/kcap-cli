@@ -1,3 +1,4 @@
+using TUnit.Core.Enums;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -21,7 +22,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <c>kcap setup --local</c> through <see cref="SetupCommand.HandleAsync"/>, over a real installer whose unit, server
 /// and bundle are fakes. Console, the Spectre singleton, <c>KCAP_URL</c> and the interrupt seam are process-global.
 /// </summary>
-[NotInParallel]
+[NotInParallel, ExcludeOn(OS.Windows)]
 internal sealed class SetupLocalArmTests {
     const string Version = "1.3.0";
 

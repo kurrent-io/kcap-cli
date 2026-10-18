@@ -1,3 +1,4 @@
+using TUnit.Core.Enums;
 using System.Formats.Tar;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
@@ -138,7 +139,7 @@ public class LocalBundleUnpackerTests {
         await AssertRefused("kcap-server");
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task A_non_executable_kcap_server_is_refused() {
         Write(Archive, ("./kcap-server", TarEntryType.RegularFile, "x", null, UnixFileMode.UserRead | UnixFileMode.UserWrite));
         await AssertRefused("kcap-server");

@@ -7,9 +7,12 @@ using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
 using TUnit.Assertions.Enums;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 
+// The local edition runs on macOS and Linux; its unit, modes and symlinks have no Windows counterpart yet.
+[ExcludeOn(OS.Windows)]
 public class LocalInstallerTests {
     const string Version = "1.2.3";
 

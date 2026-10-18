@@ -6,11 +6,13 @@ using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 
 /// <summary>A first setup is stopped at a named point, as a crash would stop it; the next setup's recovery must then
 /// finish or undo it from the journal alone.</summary>
+[ExcludeOn(OS.Windows)]
 public class LocalSetupRecoveryTests {
     const string Version = "1.2.3";
 
