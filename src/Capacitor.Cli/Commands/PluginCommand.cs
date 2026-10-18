@@ -394,7 +394,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             // Codex set after the last full install is otherwise never registered.
             // Never fail the npm install path.
             if (defaultInstalled) {
-                if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()) {
+                // A byte-order mark makes Codex refuse the file whatever the marker says.
+                if (CodexHooksInstaller.ReadMarker(hooksPath) != CapacitorVersion.Current()
+                 || CodexHooksInstaller.StartsWithByteOrderMark(hooksPath)) {
                     if (InstallCodexHooks(hooksPath))
                         await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
                     else

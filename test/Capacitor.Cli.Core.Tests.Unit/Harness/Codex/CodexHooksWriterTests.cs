@@ -42,9 +42,10 @@ public class CodexHooksWriterTests {
     /// the entries as they are still rewrites it without one.
     [Test]
     public async Task Install_rewrites_a_file_that_starts_with_a_byte_order_mark() {
-        var hooks = Tmp.PathTo("hooks.json");
-        CodexHooksWriter.Install(hooks);
-        await File.WriteAllBytesAsync(hooks, [0xEF, 0xBB, 0xBF, .. await File.ReadAllBytesAsync(hooks)]);
+        var clean = Tmp.PathTo("clean.json");
+        CodexHooksWriter.Install(clean);
+        var hooks = Tmp.CreateFile("hooks.json", "\uFEFF" + await File.ReadAllTextAsync(clean));
+        await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooks)).IsTrue();
 
         await Assert.That(CodexHooksWriter.Install(hooks)).IsEqualTo(SettingsEdit.Changed);
         await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooks)).IsFalse();
