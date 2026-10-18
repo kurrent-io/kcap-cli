@@ -4,9 +4,10 @@ namespace Capacitor.App.Views;
 
 /// Brand marks for the harness picker and agent chip: one filled path per vendor on a 24x24
 /// viewBox, the same marks the server's vendor chip draws. Simple Icons (CC0) where it has the
-/// brand, else LobeHub Icons (MIT) or the vendor's own SVG. Vendors without an entry fall back to
-/// the monogram tile. Parsed per call, never cached statically -- Geometry is an AvaloniaObject with
-/// thread affinity, the same trap MainWindowViewModel.Paint documents for brushes.
+/// brand, else LobeHub Icons (MIT; its notice ships as Assets/LobeHub-Icons-LICENSE.txt) or the
+/// vendor's own SVG. Vendors without an entry fall back to the monogram tile. Parsed per call,
+/// never cached statically -- Geometry is an AvaloniaObject with thread affinity, the same trap
+/// MainWindowViewModel.Paint documents for brushes.
 public static class VendorIcons {
     static readonly Dictionary<string, string> PathData = new(StringComparer.OrdinalIgnoreCase) {
         ["claude"] =
