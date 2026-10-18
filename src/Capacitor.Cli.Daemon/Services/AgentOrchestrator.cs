@@ -2829,15 +2829,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };
-            if (resume is not null) {
-                resume.Agent = agent;
-                ReplayPersistedRing(agent);
+            if (resume is null) {
+                capacity.Publish(agent);
+            } else if (!TryPublishResumed(agent, resume, capacity)) {
+                await AbandonWithdrawnResumeAsync(agent, journal);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
-            capacity.Publish(agent);
             published = true;
             storeLease?.Keep();
             if (resume is null) WriteLedger(agent, cmd, "server", consent);
-            else WriteResumedLedger(agent, resume.Entry);
             hold.Dispose();
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record

@@ -389,6 +389,58 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumingClaims().Any(c => c.AgentId == waiting)).IsFalse();
     }
 
+    /// <summary>A stop while the runtime is still handshaking finds no published agent to mark; the
+    /// attempt itself has to give up, or it would publish the agent and rewrite its entry afterwards.</summary>
+    [Test]
+    public async Task A_stop_while_the_runtime_handshakes_publishes_nothing_and_writes_no_entry() {
+        var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var f = Build(factory);
+        await using var _ = f.Orch;
+        Entry(f, "handshake-1");
+        var continued = 0;
+        f.Orch.ContinueEntry = (_, _, _) => {
+            Interlocked.Increment(ref continued);
+            return Task.FromResult(ResumeOutcome.Interrupted);
+        };
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => factory.InFlight == 1);
+
+        await f.Orch.HandleStopAgent("handshake-1");
+        factory.Gate.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.GetAgentForTest("handshake-1")).IsNull();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("handshake-1")).IsNull();
+        await Assert.That(continued).IsEqualTo(0);
+        await Assert.That(f.Server.ShutdownReports.Any(r => r.Reason.StartsWith("resume_failed", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(f.Orch.LedgerOnlyAgents()).IsEmpty();
+    }
+
+    /// <summary>An end-agents shutdown ends a resumed agent still inside its readiness window and a
+    /// candidate still waiting for the lane, so neither comes back on the next start.</summary>
+    [Test]
+    public async Task An_end_agents_shutdown_during_recovery_leaves_no_ledger_entries() {
+        var f = Build(configure: c => {
+            c.ResumeConcurrency     = 1;
+            c.ResumeReadinessWindow = TimeSpan.FromSeconds(30);
+        });
+        Entry(f, "ending-1");
+        Entry(f, "ending-2");
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("ending-1") is not null || f.Orch.GetAgentForTest("ending-2") is not null);
+
+        f.Orch.ShutdownIntent = ShutdownIntent.EndAgents;
+        await f.Orch.DisposeAsync();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.ResumeLedger!.ReadAll()).IsEmpty();
+        await Assert.That(f.Factory.Contexts.Count).IsEqualTo(1);
+    }
+
     [Test]
     public async Task A_start_that_throws_tries_continue_once_then_interrupts_and_reports_resume_failed() {
         var f = Build(new ResumableFactory { ExitBeforeHandshake = true });

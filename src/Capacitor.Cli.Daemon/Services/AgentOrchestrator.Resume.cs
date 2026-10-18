@@ -51,6 +51,28 @@ internal partial class AgentOrchestrator {
         }
     }
 
+    /// <summary>One resume in flight, keyed by its entry's agent id. A stop of that id or an end-agents
+    /// shutdown withdraws it: it then publishes no agent and writes no entry.</summary>
+    sealed class ResumeAttempt(CancellationToken outer) : IDisposable {
+        readonly CancellationTokenSource _cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
+
+        /// <summary>Read and set under the ledger lock.</summary>
+        public bool Withdrawn { get; set; }
+
+        public CancellationToken Token => _cts.Token;
+
+        /// <summary>Called outside the ledger lock: cancellation runs its callbacks inline.</summary>
+        public void Cancel() {
+            try {
+                _cts.Cancel();
+            } catch (ObjectDisposedException) {
+                // The attempt finished first.
+            }
+        }
+
+        public void Dispose() => _cts.Dispose();
+    }
+
     internal static readonly byte[] RestartMarker = "\r\n── kcap daemon restarted; session resumed ──\r\n"u8.ToArray();
 
     internal ShutdownIntent ShutdownIntent { get; set; } = ShutdownIntent.KeepAgents;
@@ -140,11 +162,38 @@ internal partial class AgentOrchestrator {
         using var parkBudget = new CancellationTokenSource(ShutdownReportBudget, _time);
         var       keep       = ShutdownIntent == ShutdownIntent.KeepAgents;
 
+        if (!keep) WithdrawRecoveryForEndAgents();
+
         await Task.WhenAll(live.Select(agent =>
             !keep                      ? TerminateForShutdownAsync(agent)
           : IsInteractive(agent)       ? PrepareForShutdownResumeAsync(agent)
           : IsResumableReviewer(agent) ? ParkForShutdownAsync(agent, parkBudget.Token)
           :                              TerminateForShutdownAsync(agent)));
+    }
+
+    /// <summary>An end-agents shutdown ends what recovery holds too: every live agent loses its pending
+    /// resume, so its teardown removes its entry and worktree, and every queued or in-flight resume is
+    /// withdrawn with its entry and ring.</summary>
+    void WithdrawRecoveryForEndAgents() {
+        List<ResumeAttempt> withdrawn = [];
+
+        lock (_ledgerLock) {
+            foreach (var agent in _agents.Values) agent.ResumePending = false;
+
+            foreach (var agentId in _resumeCandidates.Keys.Concat(_resumeAttempts.Keys).Distinct(StringComparer.Ordinal).ToList()) {
+                _resumeCandidates.TryRemove(agentId, out _);
+
+                if (_resumeAttempts.TryGetValue(agentId, out var attempt)) {
+                    attempt.Withdrawn = true;
+                    withdrawn.Add(attempt);
+                }
+
+                // A resumed agent already live under this id deletes its own entry in its teardown.
+                if (!_agents.ContainsKey(agentId)) DeleteLedger(agentId);
+            }
+        }
+
+        foreach (var attempt in withdrawn) attempt.Cancel();
     }
 
     async Task PrepareForShutdownResumeAsync(AgentInstance agent) {
@@ -395,6 +444,9 @@ internal partial class AgentOrchestrator {
         /// <summary>The instance the launch built, once it exists.</summary>
         public AgentInstance? Agent { get; set; }
 
+        /// <summary>The ledger entry whose resume this launch is: a withdrawal of it stops the launch.</summary>
+        public string AttemptOf { get; init; } = Entry.AgentId;
+
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
         public string       Origin    => Entry.Launch.Origin;
@@ -409,6 +461,9 @@ internal partial class AgentOrchestrator {
     static readonly TimeSpan InterruptedRetention = TimeSpan.FromDays(30);
 
     readonly ConcurrentDictionary<string, ResumeLedgerEntry> _resumeCandidates = new(StringComparer.Ordinal);
+
+    /// <summary>Guarded by <see cref="_ledgerLock"/>.</summary>
+    readonly Dictionary<string, ResumeAttempt> _resumeAttempts = new(StringComparer.Ordinal);
     readonly List<ResumeLedgerEntry> _resumeOrder = [];
     readonly List<(ResumeLedgerEntry Entry, string Reason)> _interruptedAtBoot = [];
     string[] _ledgerWorktrees = [];
@@ -517,10 +572,14 @@ internal partial class AgentOrchestrator {
     /// <summary>`kcap agent stop` of an agent the daemon is not running: deletes its entry and ring and
     /// withdraws it from the resume lane. False when there is a live agent or no entry.</summary>
     internal bool TryDiscardResumeEntry(string agentId) {
-        if (ResumeLedger is not { } ledger || _agents.ContainsKey(agentId)) return false;
+        if (ResumeLedger is not { } ledger) return false;
 
+        ResumeAttempt? attempt;
+
+        // Under the lock a resume publishes under: either the agent is live and its own stop applies,
+        // or the attempt is withdrawn before it can publish.
         lock (_ledgerLock) {
-            if (TryReadLedger(agentId) is null) return false;
+            if (_agents.ContainsKey(agentId) || TryReadLedger(agentId) is null) return false;
 
             _resumeCandidates.TryRemove(agentId, out _);
 
@@ -530,9 +589,45 @@ internal partial class AgentOrchestrator {
                 LogResumeLedgerFailed(ex, "deleting", agentId);
                 return false;
             }
+
+            if (_resumeAttempts.TryGetValue(agentId, out attempt)) attempt.Withdrawn = true;
         }
 
+        attempt?.Cancel();
+
         return true;
+    }
+
+    bool IsWithdrawn(string agentId) {
+        lock (_ledgerLock) return _resumeAttempts.TryGetValue(agentId, out var attempt) && attempt.Withdrawn;
+    }
+
+    /// <summary>Publishes a resumed agent and rewrites its entry unless its attempt was withdrawn, in
+    /// one step under the ledger lock a withdrawal takes.</summary>
+    bool TryPublishResumed(AgentInstance agent, ResumeLaunch resume, CapacityReservation capacity) {
+        lock (_ledgerLock) {
+            if (IsWithdrawn(resume.AttemptOf)) return false;
+
+            resume.Agent = agent;
+            ReplayPersistedRing(agent);
+            capacity.Publish(agent);
+            WriteResumedLedger(agent, resume.Entry);
+
+            return true;
+        }
+    }
+
+    /// <summary>Ends the runtime a withdrawn resume started before anything else learned of it.</summary>
+    async Task AbandonWithdrawnResumeAsync(AgentInstance agent, TranscriptJournal? journal) {
+        try {
+            await agent.Runtime.TerminateAsync(ShutdownTerminateGrace);
+            await agent.Runtime.DisposeAsync();
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "terminating a withdrawn resume", agent.Id);
+        }
+
+        agent.ReadCts.Dispose();
+        await DiscardFailedLaunchJournalAsync(journal, agent.Id);
     }
 
     /// <summary>Every owned worktree the ledger names, interrupted entries included: a later manual
@@ -556,19 +651,33 @@ internal partial class AgentOrchestrator {
     async Task RunResumeThroughLaneAsync(ResumeLedgerEntry entry, CancellationToken ct) {
         await ResumeLane.WaitAsync(ct);
 
-        try {
-            // A stop while the entry waited for the lane withdrew it.
-            if (!_resumeCandidates.ContainsKey(entry.AgentId)) return;
+        ResumeAttempt? attempt = null;
 
-            await ResumeEntryAsync(entry, ct);
+        try {
+            lock (_ledgerLock) {
+                // A stop while the entry waited for the lane withdrew it.
+                if (!_resumeCandidates.ContainsKey(entry.AgentId)) return;
+
+                attempt = new ResumeAttempt(ct);
+                _resumeAttempts[entry.AgentId] = attempt;
+            }
+
+            await ResumeEntryAsync(entry, attempt.Token);
+        } catch (OperationCanceledException) when (attempt is not null && IsWithdrawn(entry.AgentId) && !ct.IsCancellationRequested) {
+            // The withdrawal already removed the entry.
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogResumeFailed(ex, entry.AgentId);
 
             // Left resuming with no candidate, the entry would be invisible to `agent ls` and refused by
             // `agent resume` until the next boot.
-            if (!_agents.ContainsKey(entry.AgentId)) InterruptEntry(entry.AgentId, ex.GetType().Name);
+            if (!_agents.ContainsKey(entry.AgentId) && !IsWithdrawn(entry.AgentId)) InterruptEntry(entry.AgentId, ex.GetType().Name);
         } finally {
-            _resumeCandidates.TryRemove(entry.AgentId, out _);
+            lock (_ledgerLock) {
+                if (attempt is not null) _resumeAttempts.Remove(entry.AgentId);
+                _resumeCandidates.TryRemove(entry.AgentId, out _);
+            }
+
+            attempt?.Dispose();
             ResumeLane.Release();
         }
     }
@@ -624,13 +733,16 @@ internal partial class AgentOrchestrator {
             // The stop's own teardown ends the agent and removes what it kept.
             if (reason == StoppedDuringResume) return ResumeOutcome.Stopped;
 
-            entry = RecordFailedAttempt(entry, LastErrorOf(reason, exitCode));
+            if (RecordFailedAttempt(entry, LastErrorOf(reason, exitCode)) is not { } failed) return ResumeOutcome.Stopped;
+
+            entry = failed;
         } else {
             reason = NativeResumeUnsupported;
         }
 
         var outcome = await ContinueEntry(entry, reason, ct);
         if (outcome != ResumeOutcome.Interrupted) return outcome;
+        if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
 
         InterruptEntry(entry.AgentId, LastErrorOf(reason, exitCode));
         if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
@@ -658,6 +770,8 @@ internal partial class AgentOrchestrator {
 
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry));
         var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume);
+
+        if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
         if (outcome.Kind == CommandOutcomeKind.LaunchRejected)
             return (outcome.RejectReason == CommandRejectedReason.DaemonCapacity ? "daemon_capacity" : "launch_rejected", null);
@@ -708,8 +822,15 @@ internal partial class AgentOrchestrator {
         var summary = await ReadPreviousSummaryAsync(entry.SessionId, ct);
         var prompt  = ContinuePrompt.Build(entry.Launch.Prompt, entry.SessionId, reason, summary, LastAlive(entry, null));
 
-        if (await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt) is not { } agent)
-            return ResumeOutcome.Interrupted;
+        var agent = await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt);
+
+        if (IsWithdrawn(entry.AgentId)) {
+            if (agent is not null) await StopAgentCoreAsync(agent);
+
+            return ResumeOutcome.Stopped;
+        }
+
+        if (agent is null) return ResumeOutcome.Interrupted;
 
         // The successor's own entry now holds the worktree.
         DeleteLedger(entry.AgentId);
@@ -755,7 +876,7 @@ internal partial class AgentOrchestrator {
         var successor = entry with {
             AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow()
         };
-        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry));
+        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
         var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch);
 
@@ -893,10 +1014,15 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    ResumeLedgerEntry RecordFailedAttempt(ResumeLedgerEntry entry, string reason) {
+    /// <summary>Null when the attempt was withdrawn: its entry is gone and must stay gone.</summary>
+    ResumeLedgerEntry? RecordFailedAttempt(ResumeLedgerEntry entry, string reason) {
         var failed = entry with { Attempts = entry.Attempts + 1, LastError = reason, UpdatedAt = _time.GetUtcNow() };
 
-        lock (_ledgerLock) TryWriteLedger(entry.AgentId, () => failed);
+        lock (_ledgerLock) {
+            if (IsWithdrawn(entry.AgentId)) return null;
+
+            TryWriteLedger(entry.AgentId, () => failed);
+        }
 
         return failed;
     }

@@ -215,6 +215,42 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)!.State).IsEqualTo(ResumeState.Interrupted);
     }
 
+    /// <summary>A stop while the continue waits on the previous session's summary withdraws it before
+    /// any successor starts.</summary>
+    [Test]
+    public async Task A_stop_while_the_summary_is_read_starts_no_successor() {
+        var arrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        _server.Given(Request.Create().WithPath($"/api/sessions/{OldSession}/summary").UsingGet())
+            .RespondWith(Response.Create().WithCallback(_ => {
+                arrived.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(30));
+
+                return new WireMock.ResponseMessage {
+                    StatusCode = 200,
+                    BodyData = new WireMock.Util.BodyData {
+                        DetectedBodyType = WireMock.Types.BodyType.String,
+                        BodyAsString     = $$"""{"session_id":"{{OldSession}}","status":"ended","title":"Wire the widget"}"""
+                    }
+                };
+            }));
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f);
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.WaitBoundedAsync(arrived.Task, "the summary request");
+
+        await f.Orch.HandleStopAgent(OldAgent);
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        release.Set();
+
+        await Assert.That(f.Factory.Starts).IsEmpty();
+        await Assert.That(f.Orch.ResumeLedger!.ReadAll()).IsEmpty();
+        await Assert.That(f.Server.ShutdownReports).IsEmpty();
+    }
+
     /// <summary>The successor's session id arrives by discovery well after the readiness window, and
     /// the takeover still runs once it does.</summary>
     [Test]
