@@ -226,6 +226,29 @@
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource FrAccentHoverBrush}" />
     </Style>
+    <!-- A whole card as one choice: the edition screen's two editions. -->
+    <Style Selector="Button.frEditionCard">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Padding" Value="20,18" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Background" Value="{StaticResource FrSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.frEditionCard /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource FrSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
+    <Style Selector="Button.frEditionCard:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frEditionCard:pressed /template/ ContentPresenter#PART_ContentPresenter,
+                     Button.frEditionCard:focus-visible /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource FrSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource FrAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+    </Style>
     <Style Selector="Button.frCompact">
         <Setter Property="Padding" Value="14,9" />
         <Setter Property="FontFamily" Value="{StaticResource FrMonoFont}" />

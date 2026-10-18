@@ -1102,14 +1102,16 @@ public class SignInStepViewModelTests {
     public async Task The_pane_renders_sign_in_with_the_work_account_first() {
         var (workAccount, urlBox, urlBoxShown, statusShown) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            var vm = new OnboardingViewModel([new WelcomeStepViewModel(), h.Vm]);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, localOffered: false);
+            var vm = new OnboardingViewModel([edition, h.Vm]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            await vm.NextCommand.Execute().ToTask(); // Welcome -> Sign in
+            await edition.ChooseCloudCommand.Execute().ToTask(); // Edition -> Sign in
+            await vm.PendingAdvanceForTesting;
             Dispatcher.UIThread.RunJobs();
 
             var button = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "WorkAccountButton");
@@ -1137,14 +1139,16 @@ public class SignInStepViewModelTests {
         var (box, submit, link, provisioning) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             GateProvisioning(h, InviteRequired);
-            var vm = new OnboardingViewModel([new WelcomeStepViewModel(), h.Vm]);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, localOffered: false);
+            var vm = new OnboardingViewModel([edition, h.Vm]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            await vm.NextCommand.Execute().ToTask(); // Welcome -> Sign in
+            await edition.ChooseCloudCommand.Execute().ToTask(); // Edition -> Sign in
+            await vm.PendingAdvanceForTesting;
             var exec = h.SignIn();
             await ConfirmCreateAsync(h);
             await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");

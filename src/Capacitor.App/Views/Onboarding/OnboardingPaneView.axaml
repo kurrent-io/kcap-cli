@@ -9,28 +9,47 @@
     <!-- Per-step templates, selected by ViewModel type; the ContentControl below deliberately
          sets no ContentTemplate, which would win over every one of these. -->
     <UserControl.DataTemplates>
-        <DataTemplate DataType="vm:WelcomeStepViewModel">
-            <Border Classes="frCard">
-                <StackPanel Spacing="14">
-                    <TextBlock Classes="frMicro" Text="WHAT SETUP DOES ON THIS MACHINE" />
-                    <ItemsControl x:Name="WelcomeItems" ItemsSource="{x:Static vm:WelcomeStepViewModel.Items}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:WelcomeItem">
-                                <Border Classes="frRowRule" Padding="2,11">
-                                    <Grid ColumnDefinitions="180,*" ColumnSpacing="14">
-                                        <TextBlock Classes="frLabel" Text="{Binding Title}" />
-                                        <TextBlock Grid.Column="1" Classes="frDetail" FontSize="12.5" Text="{Binding Detail}" />
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Classes="frNote">
-                        <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
-                            Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor, or run kcap setup in your terminal." />
-                    </TextBlock>
+        <DataTemplate DataType="vm:EditionStepViewModel">
+            <StackPanel Spacing="12">
+                <Button x:Name="LocalEditionButton" Classes="frEditionCard" Command="{Binding ChooseLocalCommand}"
+                        IsVisible="{Binding LocalOffered}"
+                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                        <app:AppIcon Kind="Laptop" Size="16" VerticalAlignment="Top" Margin="0,1,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <TextBlock Classes="frLabel" Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
+                            <TextBlock Classes="frDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
+                        </StackPanel>
+                    </Grid>
+                </Button>
+                <Border Classes="frCallout" IsVisible="{Binding LocalPending}">
+                    <TextBlock x:Name="LocalUnavailableText" Classes="frBody"
+                               Text="{x:Static vm:EditionStepViewModel.LocalUnavailable}" />
+                </Border>
+
+                <Button x:Name="CloudEditionButton" Classes="frEditionCard" Command="{Binding ChooseCloudCommand}"
+                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.CloudTitle}">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                        <app:AppIcon Kind="Users" Size="16" VerticalAlignment="Top" Margin="0,1,0,0" />
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <TextBlock Classes="frLabel" Text="{x:Static vm:EditionStepViewModel.CloudTitle}" />
+                            <TextBlock Classes="frDetail" Text="{x:Static vm:EditionStepViewModel.CloudDetail}" />
+                        </StackPanel>
+                    </Grid>
+                </Button>
+
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Classes="frBody" Text="Already have a workspace?" VerticalAlignment="Center" />
+                    <Button x:Name="ExistingWorkspaceButton" Classes="frLink" Content="Sign in"
+                            AutomationProperties.Name="Already have a workspace? Sign in"
+                            Command="{Binding SignInCommand}" />
                 </StackPanel>
-            </Border>
+
+                <TextBlock Classes="frNote" Margin="0,6,0,0">
+                    <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
+                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor, or run kcap setup in your terminal." />
+                </TextBlock>
+            </StackPanel>
         </DataTemplate>
 
         <DataTemplate DataType="vm:SignInStepViewModel">

@@ -112,6 +112,10 @@ public partial class App : Application {
     // received, for seeing what the emulator was given.
     static readonly string? PtyDumpPath = Environment.GetEnvironmentVariable("KCAP_APP_PTY_DUMP");
 
+    // KCAP_APP_LOCAL_EDITION=1 offers the local edition on the wizard's first screen. Off by default:
+    // the choice reaches a placeholder until the app can install the local stack.
+    static readonly bool LocalEditionOffered = Environment.GetEnvironmentVariable("KCAP_APP_LOCAL_EDITION") == "1";
+
     // Both are app-lifetime and BOTH exist before any graph does: OnShutdownRequested latches and
     // drains them whether or not StartAsync ever got as far as building a window. The gate
     // is shared by every MainWindowViewModel the coordinator builds — including one built between
@@ -1044,7 +1048,8 @@ public partial class App : Application {
             ShutdownToken: _shutdown.Token,
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
-            HeldDaemonNames: HeldDaemonNamesAsync));
+            HeldDaemonNames: HeldDaemonNamesAsync,
+            LocalEditionOffered: LocalEditionOffered));
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
