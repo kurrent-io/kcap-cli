@@ -412,6 +412,7 @@ internal partial class AgentOrchestrator {
     readonly List<ResumeLedgerEntry> _resumeOrder = [];
     readonly List<(ResumeLedgerEntry Entry, string Reason)> _interruptedAtBoot = [];
     string[] _ledgerWorktrees = [];
+    string[] _ledgerAgentIds  = [];
 
     SemaphoreSlim? _resumeLane;
 
@@ -449,6 +450,7 @@ internal partial class AgentOrchestrator {
         entries = [.. entries.Where(e => e.State != ResumeState.Interrupted || now - e.UpdatedAt <= InterruptedRetention)];
 
         _ledgerWorktrees = [.. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+        _ledgerAgentIds  = [.. entries.Select(e => e.AgentId)];
 
         foreach (var entry in entries) {
             if (entry.State == ResumeState.Interrupted) continue;

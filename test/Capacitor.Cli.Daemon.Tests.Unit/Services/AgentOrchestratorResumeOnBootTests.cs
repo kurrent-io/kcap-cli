@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -496,6 +497,26 @@ public class AgentOrchestratorResumeOnBootTests {
         var keep = f.Orch.LedgerWorktreePaths();
         await Assert.That(keep).Contains(candidate.Launch.WorktreePath);
         await Assert.That(keep).Contains(interrupted.Launch.WorktreePath);
+    }
+
+    /// <summary>The boot sweep runs before any ledgered agent publishes, so the ledger alone has to keep
+    /// the attachment directories a resumed vendor session still refers to.</summary>
+    [Test]
+    public async Task The_attachment_sweep_keeps_ledgered_agents_and_removes_unknown_ones() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "attach-1");
+        Entry(f, "attach-2", state: ResumeState.Interrupted);
+        var candidate   = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("attach-1")).FullName;
+        var interrupted = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("attach-2")).FullName;
+        var unknown     = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("unknown-1")).FullName;
+
+        f.Orch.LoadResumeLedger();
+        f.Orch.AttachmentStore.SweepOrphans(f.Orch.IsLiveAttachmentStem, NullLogger.Instance);
+
+        await Assert.That(Directory.Exists(candidate)).IsTrue();
+        await Assert.That(Directory.Exists(interrupted)).IsTrue();
+        await Assert.That(Directory.Exists(unknown)).IsFalse();
     }
 
     [Test]

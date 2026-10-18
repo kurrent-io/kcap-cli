@@ -999,8 +999,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// Antigravity turn's child exiting and the next one starting, when no PID record exists.
     internal bool IsLiveJournalStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
 
-    /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem.
-    internal bool IsLiveAttachmentStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
+    /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem. An
+    /// agent the loaded resume ledger names is live too: the sweep runs before any of them publishes.
+    internal bool IsLiveAttachmentStem(string stem) =>
+        _agents.Keys.Concat(_ledgerAgentIds).Any(id => AgentFileNames.For(id) == stem);
 
     /// Mutation FIRST, Pulse() second — always (a pulse published before its mutation lets a
     /// subscriber read the new version, snapshot the OLD state, and wait forever). These
