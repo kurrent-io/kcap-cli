@@ -1452,10 +1452,23 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         try {
             await _installed.Connection.NotifyAsync("session/cancel", cancelParams).ConfigureAwait(false);
         } catch (Exception ex) when (Phase != RuntimePhase.Running) {
-            // A graceful-stop notify against a dead or mid-swap connection is expected while
-            // reconnecting/terminal — swallow and log (reconnect spec §9); the hard stop path
-            // (TerminateAsync) is what actually ends the incident.
+            // A notify against a dead or mid-swap connection is expected while reconnecting; the hard
+            // stop (TerminateAsync) is what ends the incident.
             _logger.LogDebug(ex, "ACP: session/cancel against a non-running connection; ignoring.");
+        }
+
+        // session/cancel ends the turn, not the process; the agent exits on stdin EOF. The stop is marked
+        // intentional first, or that exit would read as a crash and open a reconnect.
+        AcpConnection connection;
+        lock (_reconnectLock) {
+            _intentionalStop = true;
+            connection       = _installed.Connection;
+        }
+
+        try {
+            await connection.CloseInputAsync().ConfigureAwait(false);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: closing stdin during graceful stop failed; falling through to terminate.");
         }
     }
 

@@ -496,6 +496,27 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
         }
     }
 
+    /// <summary>Closes only the write stream: the EOF that asks an ACP agent to exit, while the read loop
+    /// still sees the agent's own last frames and its exit. Best-effort; a later write fails as a
+    /// torn-down transport.</summary>
+    public async Task CloseInputAsync() {
+        if (Volatile.Read(ref _disposed) != 0) return;
+
+        // A write stuck on a peer that stopped reading must not hold back the EOF that ends it.
+        bool gated;
+        try {
+            gated = await _writeGate.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+        } catch (ObjectDisposedException) {
+            return;
+        }
+
+        try {
+            await _writeStream.DisposeAsync().ConfigureAwait(false);
+        } finally {
+            if (gated) _writeGate.Release();
+        }
+    }
+
     void FaultAllPending(Exception ex) {
         foreach (var id in _pending.Keys) {
             if (_pending.TryRemove(id, out var tcs))

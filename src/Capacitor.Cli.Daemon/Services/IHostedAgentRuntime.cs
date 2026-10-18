@@ -130,7 +130,8 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// <summary>
     /// Request a graceful stop <b>before</b> <see cref="TerminateAsync"/>. PTY runtimes send the
     /// CLI's "/exit" so it can fire its own session-end hook; the ACP runtime sends
-    /// <c>session/cancel</c>. Best-effort — the orchestrator falls through to terminate.
+    /// <c>session/cancel</c> and closes the agent's stdin. Best-effort — the orchestrator falls
+    /// through to terminate.
     /// </summary>
     Task RequestGracefulStopAsync();
 

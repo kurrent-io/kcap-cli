@@ -83,6 +83,9 @@ public class AcpHostedAgentRuntimeTests {
 
         public void StartFakeAgentLoop() => _fakeRunTask = Fake.RunAsync(Cts.Token);
 
+        /// <summary>Completes when the fake reads EOF on its stdin, or is cancelled.</summary>
+        public Task FakeRunTask => _fakeRunTask;
+
         public async ValueTask DisposeAsync() {
             Cts.Cancel();
             try {
@@ -367,8 +370,10 @@ public class AcpHostedAgentRuntimeTests {
             .IsEqualTo("more");
     }
 
+    /// <summary>An ACP agent exits when its stdin closes, and session/cancel alone leaves it running,
+    /// so a stop that only cancelled would always wait out the orchestrator's grace and be killed.</summary>
     [Test]
-    public async Task RequestGracefulStopAsync_sends_session_cancel_notification() {
+    public async Task RequestGracefulStopAsync_cancels_the_turn_then_closes_stdin() {
         await using var h = new Harness();
         h.StartFakeAgentLoop();
 
@@ -376,10 +381,8 @@ public class AcpHostedAgentRuntimeTests {
 
         await h.Runtime.RequestGracefulStopAsync().WaitAsync(HangGuard);
 
-        // session/cancel is a notification (no id) — give the fake's read loop a moment to record it.
-        var deadline = DateTime.UtcNow + HangGuard;
-        while (!h.Fake.ReceivedCalls.Any(c => c.Method == "session/cancel") && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
+        // The fake's read loop ends only on EOF, and it has read every frame written before that.
+        await h.FakeRunTask.WaitAsync(HangGuard);
 
         var cancelCall = h.Fake.ReceivedCalls.SingleOrDefault(c => c.Method == "session/cancel");
         await Assert.That(cancelCall.Method).IsEqualTo("session/cancel");
