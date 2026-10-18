@@ -1555,6 +1555,8 @@ kcap plugin install --codex --if-installed           # refresh Codex hooks and a
 kcap plugin install --if-installed                   # refresh Claude plugin registration only if previously installed (used by npm postinstall)
 ```
 
+Codex rejects a `hooks.json` that starts with a UTF-8 byte-order mark and runs none of its hooks — an editor that saves "UTF-8 with BOM" (PowerShell 5.1's `Set-Content -Encoding utf8` among them) adds one. `kcap status` then shows `Codex ✗` with a line naming the file, and `kcap plugin install --codex` (or its `--if-installed` refresh) rewrites it without the mark.
+
 Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--copilot`, `--gemini`, `--pi`, `--opencode` — writes these skills under `~/.agents/skills/` (`--skills` installs them alone; Kiro and Antigravity get their own copies, and the bare Claude install uses the plugin bundle). Opt out per vendor with `--skip-<vendor>-skills`:
 
 | Skill | Wraps | Purpose |
