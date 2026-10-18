@@ -129,10 +129,24 @@ public class McpJudgeServerTests : IDisposable {
         using var first  = JsonDocument.Parse(await CallText("get_tool_result", Args(null)));
         using var second = JsonDocument.Parse(await CallText("get_tool_result", Args(first.RootElement.GetProperty("next_offset").GetInt32())));
 
-        await Assert.That(first.RootElement.GetProperty("output").GetString()!.Length).IsEqualTo(JudgeResultCap.MaxChars);
         await Assert.That(first.RootElement.GetProperty("tool").GetString()).IsEqualTo("Bash");
-        await Assert.That(second.RootElement.GetProperty("output").GetString()).IsEqualTo("TAIL");
+        await Assert.That(first.RootElement.GetProperty("output").GetString() + second.RootElement.GetProperty("output").GetString()).IsEqualTo(output);
         await Assert.That(second.RootElement.TryGetProperty("next_offset", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task get_tool_result_keeps_an_escaped_page_within_the_cap() {
+        var output = string.Concat(Enumerable.Repeat("\\n", 30_000));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc-123/tool-results/toolu_nl").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                $$"""{"call_id":"toolu_nl","tool":"Bash","is_error":false,"output_bytes":30000,"output":"{{output}}"}"""));
+
+        var text = await CallText("get_tool_result", new JsonObject { ["session_id"] = "abc-123", ["call_id"] = "toolu_nl" });
+        using var page = JsonDocument.Parse(text);
+
+        await Assert.That(text.Length).IsLessThanOrEqualTo(JudgeResultCap.MaxChars);
+        await Assert.That(page.RootElement.GetProperty("next_offset").GetInt32())
+            .IsEqualTo(page.RootElement.GetProperty("output").GetString()!.Length);
     }
 
     [Test]

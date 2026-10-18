@@ -9,6 +9,7 @@ public class JudgeTextTests {
     [Arguments("xx bar xx foo", "foo/bar", 3, "punctuation splits a query into words")]
     [Arguments("xx and xx needle", "x AND needle", 10, "an operator is not a word")]
     [Arguments("xx Foo/Bar", "foo/bar", 3, "the query verbatim first")]
+    [Arguments("red xx red fox", "\"red fox\" -cat", 7, "a quoted phrase before its words")]
     [Arguments("nothing here", "needle", 0, "no match keeps the head")]
     public async Task MatchAt_finds_where_the_server_matched(string text, string query, int expected, string because) =>
         await Assert.That(JudgeText.MatchAt(text, query)).IsEqualTo(expected).Because(because);

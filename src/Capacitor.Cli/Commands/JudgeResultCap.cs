@@ -30,32 +30,45 @@ static class JudgeResultCap {
     }
 
     /// <summary>The tool-result envelope with its <c>output</c> paged, so offsets count characters of the output itself and
-    /// every page stays one JSON document. A body that is not the envelope is paged as text.</summary>
+    /// every page stays one JSON document within <see cref="MaxChars"/> once escaped. A body that is not the envelope is paged
+    /// as text.</summary>
     public static string PageOutput(string body, int offset) {
+        if (offset == 0 && body.Length <= MaxChars) return body;
+
         JsonDocument doc;
         try { doc = JsonDocument.Parse(body); } catch (JsonException) { return Page(body, offset); }
 
         using (doc) {
             var root = doc.RootElement;
             if (root.Str("output") is not { } output) return Page(body, offset);
-            if (offset == 0 && output.Length <= MaxChars) return body;
             if (offset >= output.Length) return $"[offset {offset} is past the end: the output has {output.Length} characters]";
 
             var start = JudgeText.Boundary(output, offset);
+            var least = Math.Min(output.Length, start + (char.IsHighSurrogate(output[start]) ? 2 : 1));
             var end   = JudgeText.Boundary(output, Math.Min(output.Length, start + MaxChars));
 
-            using var stream = new MemoryStream();
-            using (var w = new Utf8JsonWriter(stream, Writer)) {
-                w.WriteStartObject();
-                foreach (var p in root.EnumerateObject().Where(p => p.Name != "output")) p.WriteTo(w);
-                w.WriteNumber("output_chars", output.Length);
-                w.WriteNumber("offset", start);
-                if (end < output.Length) w.WriteNumber("next_offset", end);
-                w.WriteString("output", output[start..end]);
-                w.WriteEndObject();
+            // Escaping can grow a page past the cap, so shrink by the overflow until it fits; each output character dropped
+            // removes at least one escaped character.
+            while (true) {
+                var page = Envelope(root, output, start, end);
+                if (page.Length <= MaxChars || end <= least) return page;
+                end = Math.Max(least, JudgeText.Boundary(output, end - (page.Length - MaxChars)));
             }
-
-            return Encoding.UTF8.GetString(stream.ToArray());
         }
+    }
+
+    static string Envelope(JsonElement root, string output, int start, int end) {
+        using var stream = new MemoryStream();
+        using (var w = new Utf8JsonWriter(stream, Writer)) {
+            w.WriteStartObject();
+            foreach (var p in root.EnumerateObject().Where(p => p.Name != "output")) p.WriteTo(w);
+            w.WriteNumber("output_chars", output.Length);
+            w.WriteNumber("offset", start);
+            if (end < output.Length) w.WriteNumber("next_offset", end);
+            w.WriteString("output", output[start..end]);
+            w.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 }
