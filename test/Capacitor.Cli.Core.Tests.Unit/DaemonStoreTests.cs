@@ -113,8 +113,8 @@ public class DaemonStoreTests {
         await Assert.That(daemons.Store.SocketPath(longestNameInUse).Length).IsLessThanOrEqualTo(103);
     }
 
-    /// <summary>Pins that cleanup takes only what the store names, so a daemons directory handed in from
-    /// the environment never costs the files around it.</summary>
+    /// <summary>Pins that cleanup takes every name's files and state, with or without a lock file, and
+    /// keeps the directory while anything it did not name is still there.</summary>
     [Test]
     public async Task DeleteOwned_removes_only_the_stores_own_entries() {
         using var daemons = new TempDaemonStore();

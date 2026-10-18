@@ -31,10 +31,12 @@ public sealed partial class DaemonStore(string directory) {
         if (Environment.GetEnvironmentVariable(DaemonsDirEnvVar) is { Length: > 0 } configured)
             return new(configured);
 
-        var home = UserHome.FromEnvironment().Path;
-
-        return new(Path.Combine(home, ".config", "kcap", "daemons"));
+        return new(DefaultDirectory(UserHome.FromEnvironment()));
     }
+
+    /// <summary>The fixed location every daemon uses unless <see cref="DaemonsDirEnvVar"/> moves it.
+    /// kcap owns everything in it.</summary>
+    public static string DefaultDirectory(UserHome home) => Path.Combine(home.Path, ".config", "kcap", "daemons");
 
     [GeneratedRegex(@"[^a-z0-9._-]")]
     private static partial Regex DisallowedChars();
@@ -126,11 +128,11 @@ public sealed partial class DaemonStore(string directory) {
         Path.Combine(Directory, $"{Sanitize(daemonName)}.{extension}");
 
     /// <summary>
-    /// Deletes every per-name file this store names and each state directory beside one, then the
-    /// directory itself when nothing else is left. The directory can come from the environment, so it
-    /// is never assumed to be kcap's alone: a file or directory this store did not name is left in
-    /// place. A name whose lock a running daemon holds is left whole, because unlinking a held lock
-    /// lets the next start take a second lock on a fresh file. Returns whether the directory is gone.
+    /// Deletes every per-name file and state directory here, then the directory itself when nothing
+    /// else is left. Each name is deleted under its own lock, created if absent, so a running daemon's
+    /// name is left whole and none can start under it meanwhile: unlinking a held lock would let the
+    /// next start take a second lock on a fresh file. Call it only on a directory kcap owns, which
+    /// <see cref="DefaultDirectory"/> is. Returns whether the directory is gone.
     /// </summary>
     public bool DeleteOwned() {
         if (!System.IO.Directory.Exists(Directory)) return true;
@@ -151,16 +153,13 @@ public sealed partial class DaemonStore(string directory) {
     }
 
     void DeleteName(string name) {
-        var lockPath = File(name, LockExtension);
-        FileStream? held = null;
+        FileStream held;
 
-        if (System.IO.File.Exists(lockPath)) {
-            try {
-                // Taking the lock proves no daemon holds it; closing the handle deletes the file.
-                held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
-            } catch (IOException) {
-                return;
-            }
+        try {
+            // Closing the handle deletes the lock file.
+            held = new FileStream(File(name, LockExtension), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        } catch (IOException) {
+            return;
         }
 
         using (held) {
