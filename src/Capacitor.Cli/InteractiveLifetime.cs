@@ -167,38 +167,38 @@ static class InteractiveLifetime {
 
         internal void Cancel() {
             try {
-                _cts.Cancel();
-            } catch {
-                // A cancellation callback that throws must not break the handler thread.
+                // Async so the command's rollback never runs on the signal or watchdog thread.
+                _ = _cts.CancelAsync().ContinueWith(static t => _ = t.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+            } catch (ObjectDisposedException) {
+                // Raced a Dispose that already took the exit.
             }
         }
 
         public void Dispose() {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
+            bool exit;
             lock (DeferralLock) {
                 if (ReferenceEquals(_live, this)) _live = null;
+                exit = Interrupted;
             }
 
-            var exit = Interrupted;
             _cts.Dispose();
 
             if (exit) ExitNow();
         }
     }
 
-    /// <summary>
-    /// The exit every interrupt path takes. <c>Environment.Exit</c> runs no <c>finally</c>, so anything a
-    /// command needs to say on its way out has to be said here. The browser setup flow uses it to tell the
-    /// server this machine has stopped listening, which is what stops the page going on to offer decisions
-    /// nobody will act on.
-    /// </summary>
     internal static void Interrupt(InterruptSource source) {
         Deferral? live;
-        lock (DeferralLock) live = _live;
+        bool      first = false;
+
+        lock (DeferralLock) {
+            live = _live;
+            if (live is not null) first = live.MarkInterrupted();
+        }
 
         if (live is not null) {
-            var first = live.MarkInterrupted();
             live.Cancel();
 
             if (first || source == InterruptSource.Watchdog) return;
@@ -207,6 +207,12 @@ static class InteractiveLifetime {
         ExitNow();
     }
 
+    /// <summary>
+    /// The exit every interrupt path takes. <c>Environment.Exit</c> runs no <c>finally</c>, so anything a
+    /// command needs to say on its way out has to be said here. The browser setup flow uses it to tell the
+    /// server this machine has stopped listening, which is what stops the page going on to offer decisions
+    /// nobody will act on.
+    /// </summary>
     static void ExitNow() {
         // First, and before the notice spends its budget on the network: a live region hides the cursor
         // for the duration of a render and gives it back on dispose, and no exit from here unwinds far

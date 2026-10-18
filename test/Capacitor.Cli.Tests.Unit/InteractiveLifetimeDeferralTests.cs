@@ -16,21 +16,27 @@ public class InteractiveLifetimeDeferralTests {
 
     [Test]
     public async Task First_interrupt_cancels_and_returns() {
-        var exits       = new List<int>();
-        var cancelled   = false;
-        var interrupted = false;
-        WithExitRecorder(e => {
-            using var deferral = InteractiveLifetime.Defer();
+        var  exits       = new List<int>();
+        bool cancelled   = false;
+        bool interrupted = false;
+        var  original    = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = exits.Add;
+
+        try {
+            var deferral = InteractiveLifetime.Defer();
             InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
-            exits.AddRange(e);
             cancelled   = deferral.Token.IsCancellationRequested;
             interrupted = deferral.Interrupted;
-            e.Clear(); // Dispose exits 130 after an interrupt
-        });
+            await Assert.That(exits).IsEmpty();
 
-        await Assert.That(exits).IsEmpty();
+            deferral.Dispose();
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
         await Assert.That(cancelled).IsTrue();
         await Assert.That(interrupted).IsTrue();
+        await Assert.That(exits).IsEquivalentTo([130]);
     }
 
     [Test]
@@ -106,10 +112,11 @@ public class InteractiveLifetimeDeferralTests {
         var exits = new List<int>();
         WithExitRecorder(e => {
             InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Watchdog);
+            InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
             exits.AddRange(e);
         });
 
-        await Assert.That(exits).IsEquivalentTo([130]);
+        await Assert.That(exits).IsEquivalentTo([130, 130]);
     }
 
     [Test]
