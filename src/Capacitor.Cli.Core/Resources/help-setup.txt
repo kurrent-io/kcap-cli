@@ -32,6 +32,22 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
+  --local                     Install and start a Capacitor server on this machine
+                              instead of using a hosted workspace (macOS on Apple
+                              silicon). See "Local edition" below. Cannot be
+                              combined with <tenant>, --server-url, --discover,
+                              --org, --slug, --tier, --invite-code, --device,
+                              --github or --muse-assistant.
+  --single-user               With --local: confirm this machine has one user.
+                              Required by --no-prompt and --json.
+  --yes                       With --local: confirm the install. Required by
+                              --no-prompt and --json for an install; reusing an
+                              existing installation needs no confirmation.
+  --json                      With --local: write one JSON object per line,
+                              ending with "committed" or "failed", and run only
+                              the server and login steps. Takes only --single-user,
+                              --yes and --no-update-check. With --discover: the
+                              workspace report.
   --daemon-name <name>        Daemon name. With --no-prompt, a name another
                               machine's daemon holds exits 1; otherwise it is the
                               prompt's suggestion, moved to a free variant if held
@@ -151,6 +167,17 @@ Options:
                               approved" with a retry hint. Run from the
                               connect-capacitor skill; see README → Unattended
                               setup → Muse Assistant.
+
+Local edition: `kcap setup --local` runs a Capacitor server on this machine
+instead of a hosted workspace, then continues with login, hooks and the daemon
+against it. macOS on Apple silicon only for now. The first version is for a
+machine with one user: on a shared machine, other OS users can open the web UI
+and act as its admin, so setup asks you to confirm that and the install itself
+(--single-user and --yes; --no-prompt and --json cannot ask and require both).
+Running it again reuses the existing installation. A machine with a profile for
+another server is refused for now, and musl builds of kcap are not supported.
+KCAP_LOCAL_BUNDLE_BASE_URL and KCAP_LOCAL_BUNDLE_VERSION redirect the download
+for development and pre-release builds; the manifest must still verify.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
