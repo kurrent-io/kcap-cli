@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
 using Capacitor.Cli.Core.Harness;
@@ -622,8 +621,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
     readonly TimeProvider            _time;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
-    readonly Lock                    _diagnosticsGate = new();
-    readonly StringBuilder           _diagnostics     = new();
+    readonly StderrHead              _diagnostics     = new(DiagnosticsCap);
 
     int _disposed;
 
@@ -664,7 +662,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
     }
 
     public string? Diagnostics {
-        get { lock (_diagnosticsGate) return _diagnostics.Length == 0 ? null : _diagnostics.ToString(); }
+        get => _diagnostics.Text;
     }
 
     /// <summary>
@@ -687,7 +685,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
 
             if (line is null) break;
 
-            if (!line.StartsWith('{')) Capture(line);
+            if (!line.StartsWith('{')) _diagnostics.Capture(line);
 
             yield return line;
         }
@@ -705,7 +703,7 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
                 if (line is null) break;      // EOF — the child exited and closed the stream
                 if (line.Length == 0) continue;
 
-                Capture(line);
+                _diagnostics.Capture(line);
                 LogStderrShape(line.Length);
             }
         } catch (OperationCanceledException) {
@@ -714,14 +712,6 @@ internal sealed partial class AgyTurnProcess : IAgyTurnProcess, IAgyTurnDiagnost
             // Pipe torn down on teardown — expected.
         } catch (ObjectDisposedException) {
             // Stream disposed out from under the read — expected.
-        }
-    }
-
-    void Capture(string line) {
-        lock (_diagnosticsGate) {
-            if (_diagnostics.Length >= DiagnosticsCap) return;
-
-            _diagnostics.Append(line).Append('\n');
         }
     }
 
