@@ -45,17 +45,15 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
         AnsiConsole.MarkupLine($"  {Markup.Escape(SingleUserNotice)}");
 
-        if (!args.SingleUser) {
-            if (!canAsk) return await FailAsync(MissingSingleUser);
-            if (!Ask("Continue?")) return Declined();
-        }
+        if (!canAsk && MissingAnswer(args, plan, root) is { } missing) return await FailAsync(missing);
+
+        if (!args.SingleUser && !Ask("Continue?")) return Declined();
 
         var confirmed = args.Yes;
 
         // A reuse asks nothing, and passes on no confirmation: a plan that becomes an install under the lease
         // must still be refused for want of one.
         if (!confirmed && plan.Hint != PlanHint.Reuse) {
-            if (!canAsk) return await FailAsync(MissingYes(plan.Version, root));
             if (!Ask($"Install Capacitor local {plan.Version} in {root}?")) return Declined();
 
             confirmed = true;
