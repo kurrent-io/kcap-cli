@@ -68,7 +68,7 @@ public class LocalSetupRecoveryTests {
 
     /// <summary>The failure, or null when the setup committed. Once a roll-forward has committed, the setup goes on to
     /// reuse that installation; only the recovery is under test here.</summary>
-    async Task<LocalInstallFailure?> Run(LocalInstaller? installer = null, LocalRoot? root = null) {
+    async Task<LocalInstallFailure?> Run(LocalInstaller? installer = null) {
         try {
             await (installer ?? Installer()).InstallAsync(Yes, _events, CancellationToken.None);
             return null;
@@ -391,7 +391,7 @@ public class LocalSetupRecoveryTests {
         // Setup B, under another root, installs and commits while A's journal waits.
         var rootB = LocalRoot.Resolve(Path.Combine(Home.Path, "rootB"), Home);
         await Assert.That(await Run(Installer(rootB, new(Tmp.PathTo("cfgB")), new FakeLocalServer([], rootB),
-            new FakeBundle(Tmp.PathTo("bundleB.tar.gz"), Version)), rootB)).IsNull();
+            new FakeBundle(Tmp.PathTo("bundleB.tar.gz"), Version)))).IsNull();
 
         var plistB = File.ReadAllText(Plist);
         var owner  = Service.Owner(LocalServerUnit.ForInstallation(rootB, 0));

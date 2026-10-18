@@ -501,6 +501,24 @@ public class LocalInstallerTests {
         var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
         Service.OwnerOverride = new(other, other);
         _log.Clear();
+        File.WriteAllText(ConfigPath, File.ReadAllText(ConfigPath).Replace("\"default\":{", "\"default\":{\"note\":1,", StringComparison.Ordinal));
+
+        var before = File.ReadAllBytes(ConfigPath);
+
+        var failure = await Failure(new(false, false));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(_log).DoesNotContain("start");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(File.ReadAllBytes(ConfigPath).SequenceEqual(before)).IsTrue();
+    }
+
+    [Test]
+    public async Task Reuse_never_starts_or_publishes_over_a_unit_of_unknown_owner() {
+        await Install();
+        Service.OwnerOverride = new(new OwnerReading.Unreadable("launchctl failed"), OwnerReading.Absent.Instance);
+        _log.Clear();
+        File.WriteAllText(ConfigPath, File.ReadAllText(ConfigPath).Replace("\"default\":{", "\"default\":{\"note\":1,", StringComparison.Ordinal));
 
         var before = File.ReadAllBytes(ConfigPath);
 
@@ -563,6 +581,7 @@ public class LocalInstallerTests {
     [Test]
     public async Task A_cancel_before_the_reuse_publish_changes_nothing() {
         await Install();
+        File.WriteAllText(ConfigPath, File.ReadAllText(ConfigPath).Replace("\"default\":{", "\"default\":{\"note\":1,", StringComparison.Ordinal));
 
         var before = File.ReadAllBytes(ConfigPath);
 
