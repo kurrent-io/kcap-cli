@@ -61,11 +61,21 @@ public sealed class MarkdownView : ContentControl {
         Content = _viewer;
     }
 
-    public bool HasSelection => MarkViewSelection.HasSelection(_viewer);
+    public bool HasSelection => Content is SelectableTextBlock plain
+        ? !string.IsNullOrEmpty(plain.SelectedText)
+        : MarkViewSelection.HasSelection(_viewer);
 
-    public Task CopySelectionAsync() => MarkViewSelection.CopyAsync(_viewer);
+    public Task CopySelectionAsync() {
+        if (Content is not SelectableTextBlock plain) return MarkViewSelection.CopyAsync(_viewer);
 
-    public void SelectAll() => _viewer.SelectAll();
+        plain.Copy();
+        return Task.CompletedTask;
+    }
+
+    public void SelectAll() {
+        if (Content is SelectableTextBlock plain) plain.SelectAll();
+        else _viewer.SelectAll();
+    }
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
     /// a change, and the markdown it already holds is not one.
@@ -79,7 +89,7 @@ public sealed class MarkdownView : ContentControl {
             Content = _viewer;
         } catch (ArgumentException e) when (e.Message.Contains("too deeply nested", StringComparison.Ordinal)) {
             _viewer.Markdown = null;
-            Content = new TextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
+            Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
     }
 

@@ -533,6 +533,8 @@ public class MarkdownViewTests {
                 var view = (MarkdownView)root;
                 await Assert.That(All<MarkdownViewer>(root)).IsEmpty();
                 await Assert.That(All<TextBlock>(root).Select(Reads)).IsEquivalentTo([deep]);
+                view.SelectAll();
+                await Assert.That(view.HasSelection).IsTrue();
 
                 view.Flavor = flavor == MarkdownFlavor.Chat ? MarkdownFlavor.GitHub : MarkdownFlavor.Chat;
                 view.Text = "**bold**";
