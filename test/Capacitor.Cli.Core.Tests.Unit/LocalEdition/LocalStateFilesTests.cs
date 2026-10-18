@@ -80,6 +80,14 @@ public class LocalStateFilesTests {
         await Assert.That(new FileInfo(Root.RegistryPath).LinkTarget).IsNull();
     }
 
+    /// <summary>An unset <see cref="ServerStart"/> must read as the refusing value.</summary>
+    [Test]
+    public async Task An_unset_server_start_refuses() {
+        ServerStart unset = default;
+
+        await Assert.That(unset).IsEqualTo(ServerStart.Deny);
+    }
+
     /// <summary>The server's bootstrap reads <c>phase</c> and starts on <c>"allow"</c>, starts fenced on
     /// <c>"fenced"</c> and refuses anything else; these names and values are a contract with it.</summary>
     [Test]
