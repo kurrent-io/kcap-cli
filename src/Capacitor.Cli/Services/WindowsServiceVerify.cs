@@ -94,6 +94,8 @@ sealed class WindowsServiceVerify(
 
         if (!manager.Uninstall(retireServiceId, out var retireError)) {
             Say($"retire: {retireError}");
+            // The old daemon keeps running, so it must not stay fenced; its abort deletes the marker.
+            if (fence is not null) await fence.AbortAsync(FenceWait, CancellationToken.None);
             return RetireRefusal("uninstall_failed");
         }
 

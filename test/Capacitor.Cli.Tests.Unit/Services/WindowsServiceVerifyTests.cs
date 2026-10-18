@@ -23,6 +23,7 @@ public class WindowsServiceVerifyTests {
         public bool OldRegistered;
         public bool OldRunning;
         public int? OldJobPid = OldDaemonPid;
+        public bool OldUninstallFails;
         public readonly List<string> Calls = [];
 
         public string Describe() => "fake task";
@@ -50,6 +51,10 @@ public class WindowsServiceVerifyTests {
 
         public bool Uninstall(string serviceId, out string? error) {
             Calls.Add($"uninstall:{serviceId}");
+            if (serviceId != Id && OldUninstallFails) {
+                error = "Access is denied.";
+                return false;
+            }
             if (serviceId == Id) Registered = UnitPresent = Running = false;
             else OldRegistered = OldRunning = false;
             error = null;
@@ -295,6 +300,20 @@ public class WindowsServiceVerifyTests {
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
         await Assert.That(manager.Calls).DoesNotContain("uninstall:old-name");
         await Assert.That(manager.OldRegistered).IsTrue();
+    }
+
+    /// A failed uninstall leaves the old daemon running, so the fence it committed is undone.
+    [Test]
+    public async Task A_rename_whose_old_task_cannot_be_uninstalled_aborts_the_committed_fence() {
+        var manager = new FakeManager { OldRegistered = true, OldRunning = true, OldUninstallFails = true };
+
+        var exit = await Verify(manager, unitEnv: Retired("work"))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).IsEquivalentTo(
+            ["fence-acquire:old-name", "install", "fence-commit", "uninstall:old-name", "fence-abort", "fence-close"],
+            TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
 
     /// The task manager finds an installed task without the wrapper under this config root, so a task

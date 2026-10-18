@@ -202,26 +202,28 @@ public sealed class DaemonEnabler : ReactiveObject {
         }
 
         var outcome = await RunMutationAsync(MutationVerb.Replace, ct, retiring).ConfigureAwait(true);
-        if (outcome is not MutationOutcome.Failed { ExitCode: VerifyExitCodes.RetireRefused or VerifyExitCodes.Contended }) return;
+        var unchanged = outcome is MutationOutcome.Failed { ExitCode: VerifyExitCodes.RetireRefused or VerifyExitCodes.Contended };
+        // Any other failure keeps the name, so a retry retires it if its service is still installed.
+        if (unchanged || outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) _replacedName = null;
+        if (!unchanged) return;
 
         await ClassifyAsync(ct).ConfigureAwait(true);
         if (!Satisfied) await RunAffordanceAsync(ct).ConfigureAwait(true);
     }
 
-    /// The replaced name's service id, when its service is installed and the CLI can retire it. Asked
-    /// once per replaced name.
+    /// The replaced name's service id, when its service is installed and the CLI can retire it. A name
+    /// with nothing to retire is forgotten.
     async Task<string?> RetireTargetAsync(CancellationToken ct) {
         if (_replacedName is not { } replaced) return null;
-        _replacedName = null;
 
         var retiring = DaemonStore.Sanitize(replaced);
-        if (retiring == DaemonStore.Sanitize(_request!.DaemonName)) return null;
+        var target   = retiring != DaemonStore.Sanitize(_request!.DaemonName)
+                    && await _cli.ServiceStatusAsync(replaced, ct).ConfigureAwait(true) is { } old
+                    && (old.UnitPresent || ServiceStateClassifier.Parse(old.State) is ServiceState.Installed or ServiceState.Running)
+                    && await _cli.SupportsServiceRetireAsync(ct).ConfigureAwait(true);
 
-        if (await _cli.ServiceStatusAsync(replaced, ct).ConfigureAwait(true) is not { } old
-            || !(old.UnitPresent || ServiceStateClassifier.Parse(old.State) is ServiceState.Installed or ServiceState.Running))
-            return null;
-
-        return await _cli.SupportsServiceRetireAsync(ct).ConfigureAwait(true) ? retiring : null;
+        if (!target) _replacedName = null;
+        return target ? retiring : null;
     }
 
     async Task<bool> SaveNameAsync(CancellationToken ct) {

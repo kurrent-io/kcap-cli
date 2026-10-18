@@ -1110,6 +1110,28 @@ public class DaemonEnablerTests {
         await Assert.That(satisfied).IsTrue();
     }
 
+    /// A failure that is not a refused retire may have changed nothing, so the retry still retires the
+    /// old service.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retry_after_an_unrelated_failure_still_retires_the_old_service() {
+        var requests = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = await RenamedHarnessAsync(OwnedRunning());
+            h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(h.Lane.Requests.Count == 1
+                ? new MutationOutcome.Failed(VerifyExitCodes.ReadinessTimeout, "verify_readiness_timeout", RecoverySurface.Attention)
+                : new MutationOutcome.Succeeded());
+
+            await h.Ensure();
+            await h.Ensure();
+
+            return h.Lane.Requests.ToList();
+        });
+
+        await Assert.That(requests.Count).IsEqualTo(2);
+        await Assert.That(requests[0].RetireServiceId).IsEqualTo("old-mac");
+        await Assert.That(requests[1].RetireServiceId).IsEqualTo("old-mac");
+    }
+
     /// Only a name the save replaced is retired: the profile's first name has no predecessor.
     [Test]
     [NotInParallel("AvaloniaSession")]
