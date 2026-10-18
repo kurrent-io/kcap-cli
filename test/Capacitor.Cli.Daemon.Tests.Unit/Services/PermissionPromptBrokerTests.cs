@@ -362,16 +362,19 @@ public class PermissionPromptBrokerTests {
         await Assert.That((await WaitBounded(next, "the second completion is the terminal answer")).Outcome).IsEqualTo("withdrawn");
     }
 
-    /// A denied call never runs, so it owes no completion; the next identical call's completion is
-    /// a terminal answer to its own prompt.
+    /// A deny settled here does not prove the tool never ran: the terminal can have allowed the
+    /// same prompt first, with the card still showing, so the call is owed its report like an
+    /// allow's. The cost of a report that never comes is one card left until the turn's end.
     [Test]
-    public async Task A_denied_prompt_is_owed_no_completion() {
+    public async Task A_prompt_denied_here_is_still_owed_the_completion_the_terminal_may_have_started() {
         var broker = new PermissionPromptBroker();
         _ = broker.Register(Prompt("r-denied", "Bash", """{"command":"ls"}"""));
         await Assert.That(broker.TrySettle("r-denied", PermissionSettlements.DenyDecision, "deny", "app")).IsTrue();
         var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
 
-        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
         await Assert.That((await WaitBounded(next, "the pending prompt")).Outcome).IsEqualTo("withdrawn");
     }
 
@@ -386,6 +389,17 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
         await Assert.That(next.IsCompleted).IsFalse();
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// Only the completion report's own settlement owes nothing: the report is the completion.
+    [Test]
+    public async Task A_withdrawal_by_a_completion_report_owes_no_further_completion() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Prompt("r-terminal", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(0);
     }
 
     /// A turn's end is not proof that every completion has been reported: the hook that reports a
@@ -453,7 +467,7 @@ public class PermissionPromptBrokerTests {
         var broker = new PermissionPromptBroker();
         const string question = """{"questions":[{"question":"Pick","options":[{"label":"A"}]}]}""";
         _ = broker.Register(Prompt("r-seen", "AskUserQuestion", question));
-        await Assert.That(broker.TrySettle("r-seen", PermissionSettlements.DenyDecision, "withdrawn", "tool_settled", owesCompletion: true)).IsTrue();
+        await Assert.That(broker.TrySettle("r-seen", PermissionSettlements.DenyDecision, "withdrawn", "tool_settled")).IsTrue();
         var next = broker.Register(Prompt("r-next", "AskUserQuestion", question));
 
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "AskUserQuestion", Input(question))).IsFalse();

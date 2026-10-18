@@ -78,10 +78,8 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
         }
     }
 
-    /// <param name="owesCompletion">True when the tool ran and its hook may still report it: the
-    /// app withdraws on transcript evidence, ahead of that report.</param>
-    public bool TrySettle(string requestId, PermissionDecision decision, string outcome, string source, bool owesCompletion = false) {
-        lock (_gate) return SettleLocked(requestId, decision, outcome, source, owesCompletion);
+    public bool TrySettle(string requestId, PermissionDecision decision, string outcome, string source) {
+        lock (_gate) return SettleLocked(requestId, decision, outcome, source);
     }
 
     public bool TrySettleIfNoSubscriber(string requestId, PermissionDecision decision, string outcome, string source) {
@@ -158,7 +156,7 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
                     .FirstOrDefault();
             }
             return entry is not null
-                && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled);
+                && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled, isCompletionReport: true);
         }
     }
 
@@ -172,8 +170,8 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
     /// for a null subagentId, otherwise that subagent's. A background subagent's prompt outlives
     /// the parent's turn, which is why the scope matters. Unlike an exit, a turn's end says nothing
     /// about the agent's next request. A prompt still pending here may have been allowed in the
-    /// terminal with its report overtaken by Stop, so it is owed that report like an allow; then
-    /// the scope's owed completions, and its suspension, start their grace period.
+    /// terminal with its report overtaken by Stop, so it is owed that report like any settlement;
+    /// then the scope's owed completions, and its suspension, start their grace period.
     public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
         lock (_gate) {
             PurgeLapsedLocked();
@@ -181,7 +179,7 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
             var settled = 0;
             foreach (var e in _pending.Values.Where(e =>
                          e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
-                if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled, owesCompletion: true)) settled++;
+                if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled)) settled++;
             var lapses = _time.GetUtcNow() + OwedGraceAfterTurn;
             foreach (var o in _owed) if (o.Scope == scope) o.LapsesAt ??= lapses;
             if (_suspended.TryGetValue(scope, out var suspendedUntil) && suspendedUntil is null) _suspended[scope] = lapses;
@@ -225,12 +223,14 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
         foreach (var scope in _suspended.Where(kv => kv.Value is { } at && at <= now).Select(kv => kv.Key).ToList()) _suspended.Remove(scope);
     }
 
-    // Caller holds _gate. Instance-scoped removal, the consent broker's discipline. An allowed
-    // call runs with the input the decision settled on, which is what its completion reports.
-    bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source, bool owesCompletion = false) {
+    // Caller holds _gate. Instance-scoped removal, the consent broker's discipline. Every
+    // settlement but the completion report's own owes that report: the terminal can answer a
+    // prompt the daemon still shows, so a deny or a withdrawal here does not prove the tool never
+    // ran. An allowed call runs with the input the decision settled on, which is what it reports.
+    bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source, bool isCompletionReport = false) {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
-        if ((decision.Behavior == PermissionSettlements.Allow || owesCompletion) && ReportsCompletions(entry.Dto.Vendor))
+        if (!isCompletionReport && ReportsCompletions(entry.Dto.Vendor))
             OweLocked(new Owed(new Scope(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId), entry.Dto.ToolName, decision.UpdatedInput ?? entry.Dto.ToolInput));
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
