@@ -577,8 +577,8 @@ internal sealed class CursorImportSource : IImportSource {
                 progress:      ctx.Progress,
                 abortDelivery: () => _markers.IsQuarantined(quarantineIdentity));
         } catch (SessionImporter.TranscriptDeliveryAbortedException) {
-            // Quarantine tripped mid-delivery — no children/remaining batches (we return before
-            // reaching them).
+            // Quarantine tripped, or the server blocked a batch at a gap: no remaining batches or
+            // children, so a re-run resumes from the server's watermark.
             return await CloseAndFailAsync();
         } catch {
             return ImportOutcome.Failed;

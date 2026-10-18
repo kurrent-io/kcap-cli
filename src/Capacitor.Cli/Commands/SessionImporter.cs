@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -580,9 +581,10 @@ static class SessionImporter {
     }
 
     /// <summary>
-    /// Thrown by <see cref="SendTranscriptBatches"/> when its <c>abortDelivery</c> predicate trips.
-    /// Distinct from a generic send failure so Cursor's best-effort session-end (see
-    /// <see cref="CursorImportSource.ImportSessionAsync"/>) can catch it ahead of a broader catch-all.
+    /// Thrown by <see cref="SendTranscriptBatches"/> when its <c>abortDelivery</c> predicate trips, or
+    /// when the server blocks a Cursor batch at a gap (409). Distinct from a generic send failure so
+    /// Cursor's best-effort session-end (see <see cref="CursorImportSource.ImportSessionAsync"/>) can
+    /// catch it ahead of a broader catch-all.
     /// </summary>
     internal sealed class TranscriptDeliveryAbortedException : Exception;
 
@@ -623,6 +625,11 @@ static class SessionImporter {
 
         try {
             using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, time);
+
+            // A blocked Cursor batch leaves the server's watermark at the gap; any later batch would
+            // move it past the blocked lines, and the next import resumes from the watermark.
+            if (vendor is HarnessId.Cursor && resp.StatusCode is HttpStatusCode.Conflict)
+                throw new TranscriptDeliveryAbortedException();
 
             loss = resp.IsSuccessStatusCode ? null : $"HTTP {(int)resp.StatusCode}";
         } catch (HttpRequestException ex) {
