@@ -37,16 +37,20 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
         public bool Fails { get; init; }
 
+        /// <summary>Holds the start until released; the wait observes the start token.</summary>
+        public TaskCompletionSource? Gate { get; set; }
+
         /// <summary>A terminal runtime: its session id is learned by discovery, not at publish.</summary>
         public bool PtyStyle { get; init; }
 
         /// <summary>A terminal runtime that exits this long after it starts.</summary>
         public TimeSpan? ExitsAfter { get; init; }
 
-        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+        public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             int reports;
             lock (server.ShutdownReports) reports = server.ShutdownReports.Count;
             Starts.Enqueue((ctx, reports));
+            if (Gate is { } gate) await gate.Task.WaitAsync(ct);
 
             if (Fails) throw new InvalidOperationException("the agent exited before its handshake");
 
@@ -54,15 +58,15 @@ public class AgentOrchestratorContinueTests : IDisposable {
                 var exiting = new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true) { ExitCode = 1 };
                 _ = Task.Delay(after, CancellationToken.None).ContinueWith(_ => exiting.ExitGate.TrySetResult(), TaskScheduler.Default);
 
-                return Task.FromResult(new HostedRuntimeStart(exiting, McpConfigPath: null, Transcript: null));
+                return new HostedRuntimeStart(exiting, McpConfigPath: null, Transcript: null);
             }
 
             if (PtyStyle)
-                return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null));
+                return new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null);
 
             var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path, AcpSessionId = NewSession };
 
-            return Task.FromResult(new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime));
+            return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
         }
     }
 
@@ -285,6 +289,29 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(f.Factory.Starts).IsEmpty();
         await Assert.That(f.Orch.ResumeLedger!.ReadAll()).IsEmpty();
         await Assert.That(f.Server.ShutdownReports).IsEmpty();
+    }
+
+    /// <summary>A keep-agents shutdown that cancels the successor's start leaves the entry resumable: the
+    /// shutdown interrupted it, not a failed continuation.</summary>
+    [Test]
+    public async Task A_shutdown_during_the_successors_start_leaves_the_entry_resuming() {
+        ServeOldSession();
+        var f = Build();
+        f.Factory.Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var _ = f.Orch;
+        Entry(f);
+        using var stopping = new CancellationTokenSource();
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(stopping.Token);
+        await WaitHarness.PollUntilAsync(() => f.Factory.Starts.Count == 1);
+
+        await stopping.CancelAsync();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)!.State).IsEqualTo(ResumeState.Resuming);
+        await Assert.That(f.Server.ShutdownReports).IsEmpty();
+        await Assert.That(f.Server.LaunchFailedCalls).IsEmpty();
     }
 
     /// <summary>The successor's session id arrives by discovery well after the readiness window, and

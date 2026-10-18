@@ -878,6 +878,9 @@ internal partial class AgentOrchestrator {
             return ResumeOutcome.Stopped;
         }
 
+        // A start the shutdown cancelled is no failed continuation: the entry stays resumable.
+        ct.ThrowIfCancellationRequested();
+
         if (agent is null) return ResumeOutcome.Interrupted;
 
         // A stop of the successor itself ends the agent it continued too.
