@@ -290,12 +290,8 @@ public static partial class DaemonRunner {
         // reviewer-home sweeps. Computed once here so every consumer agrees on the exact same directory.
         var coverageStateDir = config.Store.StateDirectory(config.Name);
 
-        // Best-effort, never throws: on a brand-new daemon name nothing has created this directory yet
-        // (LaunchConsentStore's ctor — the previous sole creator — only runs below, and not at all on
-        // the expectation-mismatch arm), so without this an expectation-mismatch refusal on a fresh
-        // name would have nowhere to write its marker. Same fail-soft posture as BootRefusalMarker.TryWrite
-        // itself — a failure here just means that call's own containment swallows the write too.
-        try { Directory.CreateDirectory(coverageStateDir); } catch { /* best-effort */ }
+        // Before the boot checks: an expectation-mismatch refusal on a fresh name writes its marker here.
+        PrepareStateDirectory(coverageStateDir, Console.Error);
 
         // Pre-host boot checks — see RunBootChecksAsync. Both refusal arms return BEFORE the host is
         // built, before any ServerConnection/token use of any kind, so a misdirected or un-consented
@@ -1183,6 +1179,18 @@ public static partial class DaemonRunner {
     /// win, and a deliberate refusal isn't a crash. A manual daemon keeps 2 for scripts.
     /// </summary>
     internal static int LockRefusalExit(bool supervised) => supervised ? 0 : 2;
+
+    /// <summary>Makes the state directory owner-only, warning instead of refusing: a refusal would brick a
+    /// daemon whose state sits where no ACL or mode can be set.</summary>
+    internal static void PrepareStateDirectory(string stateDir, TextWriter warnings) {
+        try {
+            OwnerOnlyDirectory.Ensure(stateDir);
+        } catch (Exception ex) {
+            warnings.WriteLine(
+                $"kcap-daemon: warning: could not make the state directory {stateDir} owner-only ({ex.GetType().Name}: {ex.Message}); "
+                + "its contents keep the access its location grants.");
+        }
+    }
 
     /// <summary>Same rationale as <see cref="LockRefusalExit"/>, for the server's <c>NameInUse</c>
     /// rejection (manual daemons keep 3).</summary>
