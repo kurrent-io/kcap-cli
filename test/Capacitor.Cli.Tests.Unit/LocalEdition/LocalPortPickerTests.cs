@@ -24,7 +24,7 @@ public class LocalPortPickerTests {
         await Assert.That(LocalPortPicker.Choose(Retiring(9473), _ => true)).IsNotEqualTo(9473);
 
     [Test]
-    public async Task A_retired_fallback_is_skipped() {
+    public async Task The_first_free_fallback_after_a_busy_default_is_taken() {
         var seen = new List<int>();
         var port = LocalPortPicker.Choose(InstallRegistry.Empty, p => {
             seen.Add(p);
