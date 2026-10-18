@@ -206,6 +206,31 @@ public class CodexHostedAgentRuntimeFactoryTests {
         await Assert.That(pty.StartCalls).IsEqualTo(1);
     }
 
+    /// <summary>A resumed local session was a terminal; on a daemon whose interactive launches go to
+    /// app-server it must come back as one, or <c>agent attach</c> has nothing to attach to.</summary>
+    [Test]
+    public async Task A_resume_requesting_pty_starts_the_pty_launcher_on_a_daemon_opted_into_app_server() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = Factory(pty, appServerActive: true, appServerInteractive: true);
+        var resumed = Ctx(isReviewFlow: false, wt.Path) with { ResumeSessionId = "thread-1", RequestedTransport = "pty" };
+
+        await Assert.That(factory.UsesAppServer(resumed)).IsFalse();
+        await factory.StartAsync(resumed, CancellationToken.None);
+
+        await Assert.That(pty.StartCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_resume_requesting_app_server_takes_app_server_without_the_interactive_opt_in() {
+        using var wt = new TempDir();
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, appServerInteractive: false);
+        var resumed = Ctx(isReviewFlow: false, wt.Path) with { RequestedTransport = "app-server" };
+
+        await Assert.That(factory.UsesAppServer(resumed)).IsTrue();
+        await Assert.That(factory.UsesAppServer(Ctx(isReviewFlow: false, wt.Path))).IsFalse();
+    }
+
     [Test]
     [Arguments(null)]
     [Arguments("pty")]

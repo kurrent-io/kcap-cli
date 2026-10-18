@@ -2646,7 +2646,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Journal: journal,
                 FlowRole: isReviewFlow ? cmd.FlowRole : null,
                 IsPrivate: isPrivate,
-                PinnedSessionId: pinnedSessionId
+                PinnedSessionId: pinnedSessionId,
+                RequestedTransport: resume?.Entry.Transport
             );
 
             HostedRuntimeStart start;

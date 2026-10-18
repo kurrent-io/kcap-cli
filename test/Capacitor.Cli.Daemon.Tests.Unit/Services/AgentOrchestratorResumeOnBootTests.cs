@@ -128,6 +128,7 @@ public class AgentOrchestratorResumeOnBootTests {
         var ctx = f.Factory.Contexts.Single();
         await Assert.That(ctx.AgentId).IsEqualTo("resume-1");
         await Assert.That(ctx.ResumeSessionId).IsEqualTo("vendor-session-1");
+        await Assert.That(ctx.RequestedTransport).IsEqualTo(entry.Transport);
         await Assert.That(ctx.Prompt).IsEqualTo(ResumeNudge.Build(entry.ResumingAt!.Value, "build the thing"));
         await Assert.That(ctx.Worktree.Path).IsEqualTo(entry.Launch.WorktreePath);
         await Assert.That(ctx.Worktree.Branch).IsEqualTo("capacitor/custom-resume-1");

@@ -287,5 +287,8 @@ internal sealed record RuntimeStartContext(
         bool                IsPrivate = false,
         // The vendor session id minted for a fresh interactive launch of a vendor that accepts one up
         // front. Null for every other launch.
-        string?             PinnedSessionId = null
+        string?             PinnedSessionId = null,
+        // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
+        // more than one transport starts it on that one. Null for a fresh launch.
+        string?             RequestedTransport = null
     );

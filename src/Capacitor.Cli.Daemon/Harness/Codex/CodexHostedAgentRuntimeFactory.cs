@@ -103,11 +103,18 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
     /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
     /// function the daemon advertises to the server — which refuses a registration whose transport
-    /// differs from the advertisement.</para></summary>
+    /// differs from the advertisement.</para>
+    ///
+    /// <para>A resume names the transport its agent ran on and keeps it, whatever the interactive
+    /// setting: a local session was a terminal and must stay attachable.</para></summary>
     internal bool UsesAppServer(RuntimeStartContext ctx) =>
         _config.CodexAppServerActive
-     && (ctx.IsReviewFlow
-         || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
+     && ctx.RequestedTransport switch {
+            CodexTransportDecision.Pty       => false,
+            CodexTransportDecision.AppServer => true,
+            _ => ctx.IsReviewFlow
+              || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer)
+        };
 
     public bool SupportsRestartResume(string? runtimeTransport) => true;
 
