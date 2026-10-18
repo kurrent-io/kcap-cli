@@ -574,7 +574,12 @@ internal partial class AgentOrchestrator {
 
     /// <summary>`kcap agent stop` of an agent the daemon is not running: deletes its entry and ring and
     /// withdraws it from the resume lane. False when there is a live agent or no entry.</summary>
-    internal bool TryDiscardResumeEntry(string agentId) {
+    internal bool TryDiscardResumeEntry(string agentId) => TryDiscardResumeEntry(agentId, out _);
+
+    /// <summary>As above; <paramref name="live"/> is the agent published under the id when that is why
+    /// nothing was discarded, so a caller that missed it a moment earlier can stop it as live.</summary>
+    internal bool TryDiscardResumeEntry(string agentId, out AgentInstance? live) {
+        live = null;
         if (ResumeLedger is not { } ledger) return false;
 
         ResumeAttempt? attempt;
@@ -582,7 +587,7 @@ internal partial class AgentOrchestrator {
         // Under the lock a resume publishes under: either the agent is live and its own stop applies,
         // or the attempt is withdrawn before it can publish.
         lock (_ledgerLock) {
-            if (_agents.ContainsKey(agentId) || TryReadLedger(agentId) is null) return false;
+            if (_agents.TryGetValue(agentId, out live) || TryReadLedger(agentId) is null) return false;
 
             _resumeCandidates.TryRemove(agentId, out _);
 

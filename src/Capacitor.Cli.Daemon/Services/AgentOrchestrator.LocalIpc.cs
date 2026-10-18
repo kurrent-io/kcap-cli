@@ -165,7 +165,15 @@ internal partial class AgentOrchestrator {
         // live one. StopByPidRecordAsync itself stays policy-free (it's shared with the
         // server-origin HandleStopAgent path); the decision is made here, before it ever runs.
         // An agent a restart left resuming or interrupted has no process, only its ledger entry.
-        var discarded = TryDiscardResumeEntry(agentId);
+        var discarded = TryDiscardResumeEntry(agentId, out var late);
+
+        if (late is not null) {
+            // Its resume published between the live check above and the discard.
+            var ok = await StopAgentCoreAsync(late);
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
 
         if (_pidRecords is null || !_pidRecords.TryRead(agentId, out var found)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(discarded)}"), ct);

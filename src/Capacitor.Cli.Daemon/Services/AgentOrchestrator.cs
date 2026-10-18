@@ -3966,14 +3966,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
             // An agent a restart left resuming or interrupted has only its ledger entry; a private one is
-            // never the server's to stop.
-            if (TryReadLedger(agentId) is { Launch.IsPrivate: false }) TryDiscardResumeEntry(agentId);
+            // never the server's to stop. One whose resume published since the miss is stopped as live.
+            AgentInstance? late;
 
-            // Phase B (D4 §6.4(3)): no in-memory agent — this may be a survivor of a PRIOR
-            // daemon incarnation the server is still trying to stop (S2). Fall back to the PID record:
-            // reap by exact identity if a matching live process is still there.
-            await TryStopByPidRecordAsync(agentId);
-            return;
+            if (TryReadLedger(agentId) is not { Launch.IsPrivate: false } || TryDiscardResumeEntry(agentId, out late) || late is null) {
+                // No in-memory agent: this may be a survivor of a prior daemon incarnation the server is
+                // still trying to stop. Fall back to the PID record: reap by exact identity if a matching
+                // live process is still there.
+                await TryStopByPidRecordAsync(agentId);
+                return;
+            }
+
+            agent = late;
         }
 
         // Defence-in-depth: a --private agent is invisible to the server (unregistered, not in

@@ -156,6 +156,24 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
     }
 
+    /// <summary>A stop that missed the live table while the resume published finds the agent inside the
+    /// discard's lock: nothing is discarded, and the agent comes back to be stopped as live.</summary>
+    [Test]
+    public async Task A_discard_of_a_published_resume_hands_back_the_live_agent() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-live");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var discarded = f.Orch.TryDiscardResumeEntry("resume-live", out var live);
+
+        await Assert.That(discarded).IsFalse();
+        await Assert.That(live).IsSameReferenceAs(f.Orch.GetAgentForTest("resume-live"));
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-live")).IsNotNull();
+    }
+
     [Test]
     public async Task A_resumed_claude_agent_keeps_its_permission_mode() {
         var f = Build(new ResumableFactory { Vendor = "claude", PtyStyle = true });
