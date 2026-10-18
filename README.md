@@ -167,7 +167,7 @@ At a glance — each links to its section below:
 
 | Command | What it does |
 |---------|--------------|
-| [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon |
+| [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon (`--local` runs the server on this machine) |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
@@ -210,6 +210,7 @@ kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.
 kcap setup --server-url <url> --no-prompt    # CI / scripted
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
+kcap setup --local                           # run a Capacitor server on this machine
 ```
 
 The install scripts run `kcap setup` after a first install, so this is usually how you met it; re-run it any time.
@@ -282,6 +283,32 @@ everyone:
   only Claude Code has slash commands — the skill ships with the plugin and is also installed for
   Codex and the other `~/.agents/skills/` agents (plus Kiro and Antigravity) as `kcap-guided-tour`.
   This item only appears when an agent was detected and one of them carries the skill.
+
+#### Local edition
+
+`kcap setup --local` installs and starts a Capacitor server on this machine instead of using a hosted workspace, then carries on with the usual login, hooks and daemon steps against it. It is macOS on Apple silicon only for now.
+
+The first version is for a machine with one user: on a shared machine, other OS users can open the web UI and act as its admin. Setup therefore asks you to confirm that (`--single-user`) and to confirm the install itself (`--yes`); `--no-prompt` and `--json` cannot ask, so they require both for an install. Re-running `kcap setup --local` reuses the existing installation, which needs no confirmation beyond `--single-user`.
+
+- A machine that already has a profile for another server is refused for now.
+- Builds of kcap for musl Linux are not supported.
+- `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
+
+`--json` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. It accepts only `--single-user`, `--yes` and `--no-update-check`:
+
+```json
+{"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
+{"v":1,"event":"port_chosen","port":9473}
+{"v":1,"event":"downloading","url":"https://…","bytes":84213760}
+{"v":1,"event":"verified","sha256":"…"}
+{"v":1,"event":"starting","unit":"…"}
+{"v":1,"event":"ready","server_url":"http://localhost:9473"}
+{"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"…","port":9473,"version":"0.13.0"}
+```
+
+A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed`, or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+
+For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
 
 #### Unattended setup
 

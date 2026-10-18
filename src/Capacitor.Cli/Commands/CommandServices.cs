@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.MuseAssistant;
+using Capacitor.Cli.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -129,6 +130,7 @@ public static class CommandServices {
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddTransient<ILocalInstallerFactory, LocalInstallerFactory>();
         services.AddSingleton<ChosenServerHttp>();
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();

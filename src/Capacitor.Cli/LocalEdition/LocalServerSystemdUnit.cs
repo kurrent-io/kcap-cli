@@ -51,5 +51,6 @@ static class LocalServerSystemdUnit {
     public static string[] ResetFailedArgs(LocalServerUnit unit) => ["--user", "reset-failed", unit.SystemdName];
     public static string[] DisableNowArgs(LocalServerUnit unit)  => ["--user", "disable", "--now", unit.SystemdName];
     public static string[] RestartArgs(LocalServerUnit unit)     => ["--user", "restart", unit.SystemdName];
+    public static string[] ShowArgs(LocalServerUnit unit)        => ["--user", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "Environment", unit.SystemdName];
     public static string[] IsActiveArgs(LocalServerUnit unit)    => ["--user", "is-active", unit.SystemdName];
 }
