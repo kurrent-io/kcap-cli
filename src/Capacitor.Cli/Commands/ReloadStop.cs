@@ -6,9 +6,9 @@ enum ReloadStop {
     Exited,
     /// <summary>It accepted the shutdown and was still exiting at the end of the wait.</summary>
     Overran,
-    /// <summary>It predates the shutdown frame and accepted a restart instead.</summary>
+    /// <summary>It closed the socket on the shutdown frame and accepted the restart sent in its place.</summary>
     Restarting,
-    /// <summary>It predates the shutdown frame and refused the restart.</summary>
+    /// <summary>It closed the socket on the shutdown frame and refused the restart sent in its place.</summary>
     RestartRefused,
     /// <summary>It did not answer the shutdown request.</summary>
     NoAnswer,

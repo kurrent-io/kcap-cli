@@ -292,7 +292,9 @@ both.
 - Kcap continue: always a new agent id and a new session. Once the successor has stayed alive
   through the readiness window, the daemon ends the old pair explicitly,
   `AgentStatusChanged(Completed)` and `EndAgentSession` with the new reason `superseded`, so nothing
-  is left active forever and the server never sees a live agent change its session id. Until then
+  is left active forever and the server never sees a live agent change its session id. An older
+  server maps the unknown end reason to `Other` and still ends the session, so the `superseded`
+  label waits on the server change but the end itself does not. Until then
   the old entry keeps the worktree, and a successor that dies inside the window leaves it
   interrupted. The continue-session design's choice stands: no continuation link is written; the
   work items and plans are the shared state, and `SessionTakeover` attaches them.
