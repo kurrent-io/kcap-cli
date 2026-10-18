@@ -103,7 +103,7 @@ sealed class SessionTakeover(AgentSessions local, TimeProvider time) {
 
         var body = await read.Content.ReadAsStringAsync(ct);
 
-        if (WorkContextReader.IsPlanGate((int)read.StatusCode, ParseWorkItemError(body)))
+        if (read.StatusCode == HttpStatusCode.Forbidden && WorkContextReader.IsPlanGate((int)read.StatusCode, ParseWorkItemError(body)))
             return new JsonObject { ["status"] = "not_in_plan", ["items"] = new JsonArray() };
 
         if (!read.IsSuccessStatusCode)
