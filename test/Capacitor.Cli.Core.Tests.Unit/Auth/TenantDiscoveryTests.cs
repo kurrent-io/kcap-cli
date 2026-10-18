@@ -304,6 +304,28 @@ public class TenantDiscoveryTests {
         await Assert.That(TenantDiscovery.NamesHold(existing, discovered, discovered[0], tenants, picked)).IsTrue();
     }
 
+    /// <summary>Two workspaces on one server each take one of the profiles already there, the active
+    /// one going to the first, before any new name is made.</summary>
+    [Test]
+    public async Task NameProfiles_shares_out_the_profiles_already_on_a_server() {
+        var existing = new ProfileConfig {
+            ActiveProfile = "work",
+            Profiles = new Dictionary<string, Profile> {
+                ["default"] = new(),
+                ["work"]    = new() { ServerUrl = "https://a.example" },
+                ["other"]   = new() { ServerUrl = "https://a.example" },
+            }
+        };
+        DiscoveredTenant[] discovered = [
+            new() { Provider = "WorkOS", OrganizationId = "org_1", Slug = "one", Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "two", Origin = "https://a.example" },
+        ];
+
+        var (tenants, _) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
+
+        await Assert.That(tenants.Select(t => t.ProfileName)).IsEquivalentTo(["work", "other"]);
+    }
+
     /// <summary>A tenant the discovery service lists twice is still one profile: rows match on the
     /// provider's own id even when their slugs differ, while two organizations, or one organization
     /// on two servers, stay apart.</summary>

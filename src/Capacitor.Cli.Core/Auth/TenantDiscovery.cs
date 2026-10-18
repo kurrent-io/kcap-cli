@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Globalization;
 using Capacitor.Cli.Core.Config;
 using Config_Profile = Capacitor.Cli.Core.Config.Profile;
@@ -96,7 +97,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
 
         for (var i = 0; i < tenants.Length; i++)
-            if (first[i] == i && ProfileOnServer(existing, tenants[i]) is { } onServer && claimed.Add(onServer))
+            if (first[i] == i && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
                 names[i] = onServer;
 
         for (var i = 0; i < tenants.Length; i++)
@@ -110,7 +111,7 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
 
         return (named, index >= 0
             ? named[index]
-            : picked with { ProfileName = ProfileOnServer(existing, picked) ?? picked.ProfileName });
+            : picked with { ProfileName = ProfileOnServer(existing, picked, FrozenSet<string>.Empty) ?? picked.ProfileName });
     }
 
     /// <summary>Whether naming <paramref name="tenants"/> against <paramref name="config"/> still gives
@@ -137,9 +138,12 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         return !string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB) ? idA == idB : a.ProfileName == b.ProfileName;
     }
 
-    static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant) {
+    /// <summary>An existing profile on the tenant's server that no other tenant has taken: the active
+    /// one first, then the slug's, then the first by name.</summary>
+    static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant, IReadOnlySet<string> claimed) {
         var onServer = existing.Profiles
-            .Where(p => !string.IsNullOrWhiteSpace(p.Value.ServerUrl) && ServerIdentity.SameServer(p.Value.ServerUrl, tenant.Origin))
+            .Where(p => !claimed.Contains(p.Key)
+                     && !string.IsNullOrWhiteSpace(p.Value.ServerUrl) && ServerIdentity.SameServer(p.Value.ServerUrl, tenant.Origin))
             .Select(p => p.Key)
             .Order(StringComparer.Ordinal)
             .ToList();
