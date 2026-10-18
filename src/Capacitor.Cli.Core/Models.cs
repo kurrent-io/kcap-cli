@@ -1559,7 +1559,7 @@ public readonly record struct AcpEventEnvelope(
         string? RepoBranch    = null,
 
         // The subagent an event belongs to, and on subagent_started its role; null for the hosted
-        // agent's own events. A server that predates them records a subagent's events as the parent's.
+        // agent's own events. A server without these fields records a subagent's events as the parent's.
         string? AgentId   = null,
         string? AgentType = null
     );

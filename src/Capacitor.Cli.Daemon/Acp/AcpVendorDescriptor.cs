@@ -546,7 +546,7 @@ internal static class AcpVendorDescriptors {
         SupportsReconnectResume: false,
         SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
         TurnUsageReader:     GrokTurnUsage.Read,
-        SubagentReader:      GrokSubagents.Read
+        SubagentReader:      GrokSubagentSignals.Read
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).

@@ -110,24 +110,32 @@ public class GrokHostedLaunchTests {
 
     /// <summary>Grok runs a subagent as its own ACP session on the parent's connection, so its updates
     /// carry the child's sessionId; recorded as the parent's, its tool calls and replies would read as
-    /// the hosted agent's own.</summary>
+    /// the hosted agent's own. A subagent's own subagent is announced under the subagent's sessionId,
+    /// and a session never announced is no agent's.</summary>
     [Test]
     public async Task A_subagents_events_are_recorded_as_the_subagents() {
-        const string child   = "01a14f26-a703-7de1-aa37-7eda7334fe82";
-        const string agentId = "01a14f26a7037de1aa377eda7334fe82";
+        const string child      = "01a14f26-a703-7de1-aa37-7eda7334fe82";
+        const string agentId    = "01a14f26a7037de1aa377eda7334fe82";
+        const string grandchild = "01a14f26-b000-7000-8000-000000000001";
         var parent = FakeAcpAgent.FixedSessionId;
 
         JsonElement Frame(string json) => JsonDocument.Parse(json).RootElement.Clone();
         JsonElement Update(string sid, string update) =>
             Frame("""{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":""" + $"\"{sid}\",\"update\":{update}}}}}");
-        JsonElement Grok(string update) =>
-            Frame("""{"jsonrpc":"2.0","method":"_x.ai/session_notification","params":{"sessionId":""" + $"\"{parent}\",\"update\":{update}}}}}");
+        JsonElement Grok(string update, string? sid = null) =>
+            Frame("""{"jsonrpc":"2.0","method":"_x.ai/session_notification","params":{"sessionId":""" + $"\"{sid ?? parent}\",\"update\":{update}}}}}");
 
         var fake = new FakeAcpAgent();
         fake.EnqueuePromptScript([
             Grok($$"""{"sessionUpdate":"subagent_spawned","subagent_id":"{{child}}","parent_session_id":"{{parent}}","child_session_id":"{{child}}","subagent_type":"general-purpose"}"""),
             Update(child, """{"sessionUpdate":"tool_call","toolCallId":"c1","title":"read_file","kind":"read","status":"pending"}"""),
             Update(child, """{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello probe"}}"""),
+            Update(child, """{"sessionUpdate":"session_info_update","title":"Subagent title"}"""),
+            Update(child, """{"sessionUpdate":"usage_update","used":1000,"size":256000}"""),
+            Update(child, """{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"child-only","description":"x"}]}"""),
+            Grok($$"""{"sessionUpdate":"subagent_spawned","child_session_id":"{{grandchild}}","subagent_type":"explore"}""", sid: child),
+            Update(grandchild, """{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"nested"}}"""),
+            Update("01a14f26-ffff-7fff-8fff-ffffffffffff", """{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"stray"}}"""),
             Grok($$"""{"sessionUpdate":"subagent_finished","subagent_id":"{{child}}","child_session_id":"{{child}}","status":"completed"}"""),
             Update(parent, """{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}"""),
         ], JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
@@ -143,19 +151,28 @@ public class GrokHostedLaunchTests {
             timeProvider: TimeProvider.System);
 
         var start     = await factory.StartAsync(Ctx() with { Prompt = "hi" }, cts.Token).WaitAsync(HangGuard);
+        var commands  = new List<string>();
+        start.Runtime.OnCommandsAvailable = list => { lock (commands) commands.AddRange(list.Select(c => c.Name)); };
         var envelopes = ((AcpHostedAgentRuntime)start.Runtime).Envelopes;
 
         var seen = new List<AcpEventEnvelope>();
         while (!seen.Any(e => e is { Kind: AcpEventKind.AssistantText, Text: "done" }))
             seen.Add(await envelopes.ReadAsync().AsTask().WaitAsync(HangGuard));
 
-        var started = seen.Single(e => e.Kind == AcpEventKind.SubagentStarted);
-        await Assert.That(started.AgentId).IsEqualTo(agentId);
-        await Assert.That(started.AgentType).IsEqualTo("general-purpose");
+        var started = seen.Where(e => e.Kind == AcpEventKind.SubagentStarted).ToList();
+        await Assert.That(started.Select(e => (e.AgentId, e.AgentType)))
+            .IsEquivalentTo(new[] { ((string?)agentId, (string?)"general-purpose"), (grandchild.Replace("-", ""), "explore") });
         await Assert.That(seen.Single(e => e.Kind == AcpEventKind.ToolCall).AgentId).IsEqualTo(agentId);
         await Assert.That(seen.Single(e => e is { Kind: AcpEventKind.AssistantText, Text: "hello probe" }).AgentId).IsEqualTo(agentId);
         await Assert.That(seen.Single(e => e.Kind == AcpEventKind.SubagentCompleted).AgentId).IsEqualTo(agentId);
         await Assert.That(seen.Single(e => e is { Kind: AcpEventKind.AssistantText, Text: "done" }).AgentId).IsNull();
+        await Assert.That(seen.Single(e => e is { Kind: AcpEventKind.AssistantText, Text: "nested" }).AgentId)
+            .IsEqualTo(grandchild.Replace("-", ""));
+        await Assert.That(seen.Any(e => e.Text?.Contains("stray") == true)).IsFalse();
+        await Assert.That(seen.Any(e => e.Kind is AcpEventKind.SessionTitle or AcpEventKind.Usage)).IsFalse();
+        bool childCommandsPublished;
+        lock (commands) childCommandsPublished = commands.Contains("child-only");
+        await Assert.That(childCommandsPublished).IsFalse();
 
         await start.Runtime.DisposeAsync();
         await cts.CancelAsync();

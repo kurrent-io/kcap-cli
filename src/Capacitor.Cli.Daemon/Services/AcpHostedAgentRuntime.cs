@@ -1506,10 +1506,15 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
 
         if (notification.Method != "session/update") {
-            if (!_suppressNotifications && IsThisSession(notification)) {
-                if (_turnUsageReader is { } readUsage)
+            if (!_suppressNotifications) {
+                var mine = IsThisSession(notification);
+
+                // A subagent's own usage is already in the hosted agent's turn.
+                if (mine && _turnUsageReader is { } readUsage)
                     EmitTurnUsage(readUsage(notification));
-                if (_subagentReader?.Invoke(notification) is { } signal)
+
+                // A subagent can start subagents of its own, announced under its sessionId.
+                if ((mine || SubagentOf(notification) is not null) && _subagentReader?.Invoke(notification) is { } signal)
                     HandleSubagentSignal(signal);
             }
             return;
@@ -1531,8 +1536,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             return;
         }
 
-        var reduced = Reduce(updateElement.Clone());
         var agentId = SubagentOf(notification);
+
+        // Another session's update is never the hosted agent's: one the vendor never announced as a
+        // subagent is dropped rather than recorded under the wrong agent.
+        if (agentId is null && IsForeignSession(notification)) {
+            _logger.LogDebug("ACP: dropped a session/update for an unannounced session.");
+            return;
+        }
+
+        var reduced = Reduce(updateElement.Clone());
 
         // The command list is not transcript content (the translator still drops it), so capture it
         // here and hand it to the picker path rather than emitting an envelope. A subagent's own list
@@ -1565,13 +1578,18 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     bool IsThisSession(AcpNotification notification) =>
         _sessionId is { Length: > 0 } sessionId && notification.Params?.Str("sessionId") == sessionId;
 
+    bool IsForeignSession(AcpNotification notification) =>
+        _sessionId is { Length: > 0 } sessionId
+     && notification.Params?.Str("sessionId") is { Length: > 0 } other
+     && other != sessionId;
+
     string? SubagentOf(AcpNotification notification) =>
         notification.Params?.Str("sessionId") is { } sessionId && _subagentAgentIds.TryGetValue(sessionId, out var agentId)
             ? agentId
             : null;
 
     void HandleSubagentSignal(AcpSubagentSignal signal) {
-        var agentId = signal.ChildSessionId.Replace("-", "", StringComparison.Ordinal);
+        var agentId = signal.AgentId;
 
         lock (_aggregationLock) {
             // Its start and finish are ordered against whatever text was streaming around them.
