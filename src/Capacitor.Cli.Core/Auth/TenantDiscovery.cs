@@ -91,12 +91,18 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         var claimed = new HashSet<string>(StringComparer.Ordinal);
         var names   = new string?[tenants.Length];
 
+        // A tenant listed twice is one tenant: its rows share a name rather than claiming two.
+        var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
+
         for (var i = 0; i < tenants.Length; i++)
-            if (ProfileOnServer(existing, tenants[i]) is { } onServer && claimed.Add(onServer))
+            if (first[i] == i && ProfileOnServer(existing, tenants[i]) is { } onServer && claimed.Add(onServer))
                 names[i] = onServer;
 
         for (var i = 0; i < tenants.Length; i++)
-            names[i] ??= Unclaimed(existing, claimed, tenants[i].ProfileName);
+            if (first[i] == i) names[i] ??= Unclaimed(existing, claimed, tenants[i].ProfileName);
+
+        for (var i = 0; i < tenants.Length; i++)
+            names[i] ??= names[first[i]];
 
         var named = tenants.Select((t, i) => t with { ProfileName = names[i]! }).ToArray();
         var index = Array.IndexOf(tenants, picked);
@@ -117,6 +123,9 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         return nowPicked.ProfileName == namedPicked.ProfileName
             && now.Select(t => t.ProfileName).SequenceEqual(named.Select(t => t.ProfileName), StringComparer.Ordinal);
     }
+
+    static bool SameTenant(DiscoveredTenant a, DiscoveredTenant b) =>
+        a.ProfileName == b.ProfileName && (a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin));
 
     static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant) {
         var onServer = existing.Profiles

@@ -304,6 +304,22 @@ public class TenantDiscoveryTests {
         await Assert.That(TenantDiscovery.NamesHold(existing, discovered, discovered[0], tenants, picked)).IsTrue();
     }
 
+    /// <summary>A tenant the discovery service lists twice is still one profile.</summary>
+    [Test]
+    public async Task NameProfiles_gives_a_repeated_tenant_one_name() {
+        DiscoveredTenant[] discovered = [
+            new() { OrgId = 1, OrgLogin = "acme", Origin = "https://a.example" },
+            new() { OrgId = 1, OrgLogin = "acme", Origin = "https://a.example/" },
+        ];
+
+        var (tenants, picked) = TenantDiscovery.NameProfiles(ProfileConfig.Fresh(), discovered, discovered[1]);
+
+        await Assert.That(tenants.Select(t => t.ProfileName)).IsEquivalentTo(["acme", "acme"]);
+        await Assert.That(picked.ProfileName).IsEqualTo("acme");
+        await Assert.That(TenantDiscovery.MergeProfiles(ProfileConfig.Fresh(), tenants, picked).Profiles.Keys)
+            .IsEquivalentTo(["default", "acme"]);
+    }
+
     // A rejected token is the provider's rejection. Telling a WorkOS user that GitHub turned them
     // away sends them to the wrong sign-in.
     [Test]

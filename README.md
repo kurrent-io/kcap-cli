@@ -2260,6 +2260,8 @@ kcap profile remove work
 
 `kcap profile remove` also deletes the profile's saved sign-in (`~/.config/kcap/tokens/<name>.json`). The active profile cannot be removed — select another with `kcap use <name> --global` first.
 
+Discovery (`kcap setup`, `kcap login --discover`) saves each workspace under the profile that already points at its server — the active one when several do — so a profile you named yourself keeps its name. A workspace no profile points at gets a profile named after its slug, with a numbered suffix if another workspace in the same sign-in already took that name.
+
 The `--remote` flag associates a profile with git remote patterns. When you open a repo whose remote matches a pattern, that profile activates automatically.
 
 #### Switching profiles
