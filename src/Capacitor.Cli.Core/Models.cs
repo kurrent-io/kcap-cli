@@ -1454,6 +1454,14 @@ public static class AcpEventKind {
     /// existing additive folds (session totals, per-model attribution, cost) count them unchanged. An
     /// older server treats it as an unrecognised Kind (dropped, cursor still advances).</summary>
     public const string TokenUsage         = "token_usage";
+
+    /// <summary>A subagent the hosted agent started: <see cref="AcpEventEnvelope.AgentId"/> names it,
+    /// <see cref="AcpEventEnvelope.AgentType"/> its role. Its own events then carry that
+    /// <see cref="AcpEventEnvelope.AgentId"/>. An older server treats it as an unrecognised Kind.</summary>
+    public const string SubagentStarted    = "subagent_started";
+
+    /// <summary>The subagent named by <see cref="AcpEventEnvelope.AgentId"/> finished.</summary>
+    public const string SubagentCompleted  = "subagent_completed";
 }
 
 /// <summary>
@@ -1548,7 +1556,12 @@ public readonly record struct AcpEventEnvelope(
         string? RepoOwner     = null,
         string? RepoName      = null,
         string? RepoRemoteUrl = null,
-        string? RepoBranch    = null
+        string? RepoBranch    = null,
+
+        // The subagent an event belongs to, and on subagent_started its role; null for the hosted
+        // agent's own events. A server that predates them records a subagent's events as the parent's.
+        string? AgentId   = null,
+        string? AgentType = null
     );
 
 /// <summary>

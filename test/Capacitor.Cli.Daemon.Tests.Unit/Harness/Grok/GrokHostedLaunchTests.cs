@@ -108,6 +108,61 @@ public class GrokHostedLaunchTests {
         await fake.DisposeAsync();
     }
 
+    /// <summary>Grok runs a subagent as its own ACP session on the parent's connection, so its updates
+    /// carry the child's sessionId; recorded as the parent's, its tool calls and replies would read as
+    /// the hosted agent's own.</summary>
+    [Test]
+    public async Task A_subagents_events_are_recorded_as_the_subagents() {
+        const string child   = "01a14f26-a703-7de1-aa37-7eda7334fe82";
+        const string agentId = "01a14f26a7037de1aa377eda7334fe82";
+        var parent = FakeAcpAgent.FixedSessionId;
+
+        JsonElement Frame(string json) => JsonDocument.Parse(json).RootElement.Clone();
+        JsonElement Update(string sid, string update) =>
+            Frame("""{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":""" + $"\"{sid}\",\"update\":{update}}}}}");
+        JsonElement Grok(string update) =>
+            Frame("""{"jsonrpc":"2.0","method":"_x.ai/session_notification","params":{"sessionId":""" + $"\"{parent}\",\"update\":{update}}}}}");
+
+        var fake = new FakeAcpAgent();
+        fake.EnqueuePromptScript([
+            Grok($$"""{"sessionUpdate":"subagent_spawned","subagent_id":"{{child}}","parent_session_id":"{{parent}}","child_session_id":"{{child}}","subagent_type":"general-purpose"}"""),
+            Update(child, """{"sessionUpdate":"tool_call","toolCallId":"c1","title":"read_file","kind":"read","status":"pending"}"""),
+            Update(child, """{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello probe"}}"""),
+            Grok($$"""{"sessionUpdate":"subagent_finished","subagent_id":"{{child}}","child_session_id":"{{child}}","status":"completed"}"""),
+            Update(parent, """{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}}"""),
+        ], JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
+        using var cts = new CancellationTokenSource();
+        var run = fake.RunAsync(cts.Token);
+
+        var factory = new AcpHostedAgentRuntimeFactory(
+            descriptor: AcpVendorDescriptors.Grok,
+            config: new DaemonConfig(),
+            loggerFactory: NullLoggerFactory.Instance,
+            connection: new StubServerConnection(),
+            connectionSource: _ => (fake.ClientWriteStream, fake.ClientReadStream, new FakeAcpProcess()),
+            timeProvider: TimeProvider.System);
+
+        var start     = await factory.StartAsync(Ctx() with { Prompt = "hi" }, cts.Token).WaitAsync(HangGuard);
+        var envelopes = ((AcpHostedAgentRuntime)start.Runtime).Envelopes;
+
+        var seen = new List<AcpEventEnvelope>();
+        while (!seen.Any(e => e is { Kind: AcpEventKind.AssistantText, Text: "done" }))
+            seen.Add(await envelopes.ReadAsync().AsTask().WaitAsync(HangGuard));
+
+        var started = seen.Single(e => e.Kind == AcpEventKind.SubagentStarted);
+        await Assert.That(started.AgentId).IsEqualTo(agentId);
+        await Assert.That(started.AgentType).IsEqualTo("general-purpose");
+        await Assert.That(seen.Single(e => e.Kind == AcpEventKind.ToolCall).AgentId).IsEqualTo(agentId);
+        await Assert.That(seen.Single(e => e is { Kind: AcpEventKind.AssistantText, Text: "hello probe" }).AgentId).IsEqualTo(agentId);
+        await Assert.That(seen.Single(e => e.Kind == AcpEventKind.SubagentCompleted).AgentId).IsEqualTo(agentId);
+        await Assert.That(seen.Single(e => e is { Kind: AcpEventKind.AssistantText, Text: "done" }).AgentId).IsNull();
+
+        await start.Runtime.DisposeAsync();
+        await cts.CancelAsync();
+        try { await run.WaitAsync(HangGuard); } catch (OperationCanceledException) { }
+        await fake.DisposeAsync();
+    }
+
     [Test]
     public async Task Other_vendors_send_no_session_new_meta() {
         await Assert.That(AcpVendorDescriptors.OpenCode.SessionNewMeta is null).IsTrue();
