@@ -4,7 +4,7 @@ using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>Step 1 of <c>kcap setup --local</c> in a terminal: the preflight, the two answers, then the install
+/// <summary>The install of <c>kcap setup --local</c> in a terminal: the preflight, the two answers, then the install
 /// rendered as status lines.</summary>
 sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args) {
     public const string SingleUserNotice =
