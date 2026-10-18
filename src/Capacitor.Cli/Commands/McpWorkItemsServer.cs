@@ -1191,7 +1191,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         new("close_loose_end",
             "Mark a loose end done once its work is finished, so it leaves the user's next work. Name it by the "
-          + "loose_end_id from list_loose_ends or get_next_work, or by the declaration_id declare_loose_end returned. "
+          + "loose_end_id from list_loose_ends or get_next_work, or pass the declaration_id declare_loose_end returned as loose_end_id. "
           + "If a declaration_id is refused as loose_end_not_found, find the end with list_loose_ends and retry with its loose_end_id. "
           + "For claimed work, pass the current claim_id and working session. "
           + "Starting work is not completion: use claim_loose_end instead. A later sighting of the same work reopens it.",

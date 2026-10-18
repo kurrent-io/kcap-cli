@@ -185,9 +185,11 @@ mcp workitems:
                                 repo_hash defaults to this checkout; pass
                                 next_cursor back as cursor).
       close_loose_end          Mark a finished loose end done (loose_end_id,
-                                or the declaration_id declare_loose_end
-                                returned); a later sighting reopens it.
-      reopen_loose_end         Undo a close (loose_end_id or declaration_id).
+                                which also takes the declaration_id
+                                declare_loose_end returned); a later sighting
+                                reopens it.
+      reopen_loose_end         Undo a close (loose_end_id, which also takes a
+                                declaration_id).
       list_work_item_evals     List the evaluations of a work item you can
                                 read (work_item_id; pass next_cursor back as
                                 cursor).
