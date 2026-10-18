@@ -1337,7 +1337,8 @@ sealed class SetupCommand(
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
-            importResult.PasteBlock);
+            importResult.PasteBlock,
+            LocalEndpoints.Read(localRoot).Classify(serverUrl) is LocalEndpointClass.Local ? serverUrl : null);
 
         // Same fields as Result.AnyHooksInstalled, counted instead of OR'd: CodingAgentsStep
         // doesn't surface a count directly, so this sums the per-vendor hook-install outcomes
@@ -1356,11 +1357,11 @@ sealed class SetupCommand(
     }
 
     /// <summary>The closing "Next steps" box: a question per item, its answer indented beneath.</summary>
-    static void WriteNextSteps(bool offerGuidedTour, string? handoffPaste) {
+    static void WriteNextSteps(bool offerGuidedTour, string? handoffPaste, string? localServerUrl) {
         var rows = new List<IRenderable>();
 
         // Padder, not a "  " prefix: these lines wrap, and a prefix indents only the first of them.
-        foreach (var (question, answer) in NextStepItems(offerGuidedTour, handoffPaste)) {
+        foreach (var (question, answer) in NextStepItems(offerGuidedTour, handoffPaste, localServerUrl)) {
             if (rows.Count > 0) rows.Add(Text.Empty);
 
             rows.Add(new Markup($"[bold]{Markup.Escape(question)}[/]"));
@@ -1376,12 +1377,17 @@ sealed class SetupCommand(
     }
 
     /// <summary>The box's (question, answer-markup) pairs, split from the write so copy is testable.
-    /// <paramref name="handoffPaste"/> lands above the guided-tour item, when offered.</summary>
+    /// <paramref name="handoffPaste"/> lands above the guided-tour item, when offered. A
+    /// <paramref name="localServerUrl"/> replaces the hosted server-setup item: the local installation
+    /// has no server setup to complete.</summary>
     internal static List<(string Question, string Answer)> NextStepItems(
-            bool offerGuidedTour, string? handoffPaste = null) {
+            bool offerGuidedTour, string? handoffPaste = null, string? localServerUrl = null) {
         var items = new List<(string, string)> {
-            (ServerSetupQuestion,
-             $"{Markup.Escape(ServerSetupAction)}\n[cyan]{Markup.Escape(ServerSetupDocsUrl)}[/]"),
+            localServerUrl is null
+                ? (ServerSetupQuestion,
+                   $"{Markup.Escape(ServerSetupAction)}\n[cyan]{Markup.Escape(ServerSetupDocsUrl)}[/]")
+                : (LocalServerQuestion,
+                   $"{Markup.Escape(LocalServerAction)}\n[cyan]{Markup.Escape(localServerUrl)}[/]"),
         };
 
         if (handoffPaste is not null) {
@@ -1478,8 +1484,8 @@ sealed class SetupCommand(
         "Open a coding agent to follow the import and its evals? (setup will finish after you close the agent)";
 
     /// <summary>
-    /// Server setup lives in the dashboard, so this can only be pointed at. Always printed: who owns
-    /// the server is not knowable here, so the reader self-selects on the question. Says "server",
+    /// Server setup lives in the dashboard, so this can only be pointed at. Printed for every server but
+    /// the local installation: who owns it is not knowable here, so the reader self-selects on the question. Says "server",
     /// never "workspace" — that word means the local tree everywhere else in this CLI.
     /// </summary>
     internal const string ServerSetupQuestion = "Did you create this Capacitor server?";
@@ -1488,6 +1494,10 @@ sealed class SetupCommand(
 
     internal const string ServerSetupDocsUrl =
         "https://capacitor.kurrent.io/docs/getting-started/setup-server/";
+
+    internal const string LocalServerQuestion = "Where is your local Capacitor server?";
+
+    internal const string LocalServerAction = "Open it in a browser:";
 
     /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no

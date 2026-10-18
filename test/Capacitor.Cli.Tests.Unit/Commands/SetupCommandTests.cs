@@ -898,6 +898,17 @@ public class SetupCommandTests {
     }
 
     [Test]
+    public async Task NextSteps_for_the_local_installation_points_at_its_web_ui_instead_of_server_setup() {
+        var items = SetupCommand.NextStepItems(offerGuidedTour: true, localServerUrl: "http://localhost:9473");
+
+        await Assert.That(items.Count).IsEqualTo(2);
+        await Assert.That(items.Any(i => i.Question == SetupCommand.ServerSetupQuestion)).IsFalse();
+        await Assert.That(items[0].Question).IsEqualTo(SetupCommand.LocalServerQuestion);
+        await Assert.That(items[0].Answer).Contains("[cyan]http://localhost:9473[/]");
+        await Assert.That(items[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
+    }
+
+    [Test]
     public async Task GuidedTourCallToAction_prompt_is_a_trigger_in_the_skill_description() {
         // Vendors match a user's message against the frontmatter `description:` only — the body
         // is read after the skill fires. So asserting the phrase is somewhere in the file would
