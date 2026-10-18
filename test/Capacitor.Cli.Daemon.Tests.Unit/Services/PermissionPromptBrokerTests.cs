@@ -556,6 +556,22 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
     }
 
+    /// A gone agent reports nothing more and ends no more turns, so an entry owed on its behalf
+    /// could never be collected or lapse; its departure leaves the ledger empty and keeps it so.
+    [Test]
+    public async Task A_withdrawn_agent_is_owed_nothing_then_or_later() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Prompt("r-pending", "Bash", """{"command":"ls"}"""));
+        _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"pwd"}"""));
+        await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
+
+        broker.WithdrawForAgent("a1");
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(0);
+
+        broker.ExpectCompletion("a1", "s1", subagentId: null, "Bash", Input("""{"command":"ls"}"""));
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Correlate_after_settlement_is_a_no_op_and_broadcasts_nothing() {
         var broker = new PermissionPromptBroker();

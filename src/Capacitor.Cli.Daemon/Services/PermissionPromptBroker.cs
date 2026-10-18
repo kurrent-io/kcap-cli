@@ -197,12 +197,15 @@ internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
     static DateTimeOffset RequestedAt(PermissionPendingDto dto) =>
         DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) ? at : DateTimeOffset.MaxValue;
 
-    // Caller holds _gate. A scope past the cap is one whose reports are not arriving; forgetting
-    // any of them could let a late one pass for a terminal answer, so the scope's fallback goes
-    // instead, and its ledger with it. Every completion discarded while suspended re-arms the
-    // suspension: it lapses only a grace period after a turn's end with nothing discarded since,
-    // because a call allowed under suspension reports on its own clock, not the earlier turn's.
+    // Caller holds _gate. A gone agent reports nothing more and ends no more turns, so an entry
+    // owed on its behalf could neither be collected nor lapse. A scope past the cap is one whose
+    // reports are not arriving; forgetting any of them could let a late one pass for a terminal
+    // answer, so the scope's fallback goes instead, and its ledger with it. Every completion
+    // discarded while suspended re-arms the suspension: it lapses only a grace period after a
+    // turn's end with nothing discarded since, because a call allowed under suspension reports on
+    // its own clock, not the earlier turn's.
     void OweLocked(Owed owed) {
+        if (_withdrawnAgents.Contains(owed.Scope.AgentId)) return;
         PurgeLapsedLocked();
         if (_suspended.ContainsKey(owed.Scope)) {
             _suspended[owed.Scope] = null;
