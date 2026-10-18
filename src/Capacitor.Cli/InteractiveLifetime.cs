@@ -98,12 +98,15 @@ static class InteractiveLifetime {
     }
 
     /// <summary>Written raw rather than through Spectre: this runs on the way out of a signal handler,
-    /// where taking a renderer's locks is the last thing worth doing.</summary>
-    static void ShowCursor() {
+    /// where taking a renderer's locks is the last thing worth doing. It goes to stderr so a machine
+    /// reader of stdout (<c>--json</c>) never sees an escape sequence.</summary>
+    static void ShowCursor() => ShowCursor(Console.Error, Console.IsErrorRedirected);
+
+    internal static void ShowCursor(TextWriter error, bool errorRedirected) {
         try {
-            if (!Console.IsOutputRedirected) Console.Out.Write("\u001b[?25h");
+            if (!errorRedirected) error.Write("\u001b[?25h");
         } catch {
-            // A closed or detached stdout is exactly the case with no cursor to restore.
+            // A closed or detached stderr is exactly the case with no cursor to restore.
         }
     }
 
