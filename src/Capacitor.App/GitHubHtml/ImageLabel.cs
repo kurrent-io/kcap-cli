@@ -12,10 +12,14 @@ public static class ImageLabel {
         return "image";
     }
 
+    /// The longest file name common filesystems allow; anything longer is not a file name.
+    const int MaxFileName = 255;
+
     static string? FileName(string? url) {
-        if (string.IsNullOrWhiteSpace(url)) return null;
+        if (string.IsNullOrWhiteSpace(url) || url.AsSpan().TrimStart().StartsWith("data:", StringComparison.OrdinalIgnoreCase)) return null;
         var path = Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.AbsolutePath : url.Split('?', '#')[0];
         path = path.TrimEnd('/');
-        return Uri.UnescapeDataString(path[(path.LastIndexOf('/') + 1)..]);
+        var name = Uri.UnescapeDataString(path[(path.LastIndexOf('/') + 1)..]);
+        return name.Length <= MaxFileName ? name : null;
     }
 }
