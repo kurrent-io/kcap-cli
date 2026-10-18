@@ -40,6 +40,9 @@ public sealed class MachineNameViewModel : ReactiveObject {
         set => this.RaiseAndSetIfChanged(ref _daemonName, value);
     }
 
+    /// The configured name the last save replaced, or null when it kept the one already there.
+    public string? ReplacedName { get; private set; }
+
     /// Set when a save fails, so the refusal is visible, not just logged.
     public string? Message {
         get => _message;
@@ -53,6 +56,7 @@ public sealed class MachineNameViewModel : ReactiveObject {
             Message = "Enter a name for this machine.";
             return false;
         }
+        string? previous = null;
         try {
             await ConfigMutator.MutateAsync(_config, c => {
                 var resolvedName = _resolveProfileName?.Invoke();
@@ -60,6 +64,7 @@ public sealed class MachineNameViewModel : ReactiveObject {
                     ? resolvedName
                     : string.IsNullOrWhiteSpace(c.ActiveProfile) ? "default" : c.ActiveProfile;
                 var profile    = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
+                previous       = profile.Daemon?.Name;
 
                 profile = profile with {
                     Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = name }
@@ -73,8 +78,9 @@ public sealed class MachineNameViewModel : ReactiveObject {
             return false;
         }
 
-        Message = null;
-        Saved   = true;
+        Message      = null;
+        Saved        = true;
+        ReplacedName = string.IsNullOrWhiteSpace(previous) || previous == name ? null : previous;
 
         return true;
     }

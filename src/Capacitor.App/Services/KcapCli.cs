@@ -55,6 +55,9 @@ public interface IKcapCli {
     /// timeout, or a parse failure) — never a fabricated snapshot.
     Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct);
 
+    /// The same read for another daemon name's service.
+    Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct);
+
     Task<bool> SupportsServiceRetireAsync(CancellationToken ct);
 
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
@@ -141,11 +144,13 @@ public sealed class KcapCli : IKcapCli {
         return result.ExitCode == 0 && !result.TimedOut ? CliResolver.ParseVersion(result.Stdout) : null;
     }
 
-    public async Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) {
+    public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) => ServiceStatusAsync(_daemonName, ct);
+
+    public async Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) {
         if (CliPath is not { } cliPath) return null;
 
         var result = await Run(cliPath,
-                ["daemon", "service", "status", "--name", _daemonName, "--json"],
+                ["daemon", "service", "status", "--name", daemonName, "--json"],
                 new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: StatusTimeout), ct)
             .ConfigureAwait(false);
 

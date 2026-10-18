@@ -1165,10 +1165,12 @@ sealed class SetupCommand(
         // Save config
         var activeName     = "default";
         var defaultProfile = new Profile();
+        string? previousDaemonName = null;
 
         await ConfigMutator.MutateAsync(config, c => {
-            activeName     = c.ActiveName;
-            defaultProfile = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
+            activeName         = c.ActiveName;
+            defaultProfile     = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
+            previousDaemonName = defaultProfile.Daemon?.Name;
 
             defaultProfile = defaultProfile with {
                 ServerUrl          = serverUrl,
@@ -1197,7 +1199,8 @@ sealed class SetupCommand(
         // The posture offers no harness, so there is nothing for a daemon to launch.
         if (!museAssistant) {
             AnsiConsole.MarkupLine("  Running the agent daemon as a background service, so this machine stays reachable…");
-            daemonService = await EnsureDaemonServiceAsync(serverUrl, saved, browserAnswers.FlowId, browserAnswers.FlowStillLive);
+            daemonService = await EnsureDaemonServiceAsync(
+                serverUrl, saved, previousDaemonName, browserAnswers.FlowId, browserAnswers.FlowStillLive);
         }
 
         var finalTokens = await store.LoadAsync(activeName);
@@ -1778,8 +1781,8 @@ sealed class SetupCommand(
     /// <summary>Installs or starts the daemon service, and answers the browser when it asked for one. The
     /// heartbeat spans the ensure, which can outlast the browser's staleness window.</summary>
     async Task<FirstRunMachineActionResult> EnsureDaemonServiceAsync(
-            string serverUrl, ProfileContext saved, string? flowId, bool flowStillLive) {
-        if (flowId is null) return await SetupDaemonService.EnsureAsync(config, saved, home, time);
+            string serverUrl, ProfileContext saved, string? previousName, string? flowId, bool flowStillLive) {
+        if (flowId is null) return await EnsureAsync();
 
         FirstRunMachineActionResult? result = null;
 
@@ -1799,7 +1802,7 @@ sealed class SetupCommand(
                 AnsiConsole.MarkupLine(
                     "  [dim]Could not tell the browser about the daemon service: the stored token is not usable.[/]");
 
-                return await SetupDaemonService.EnsureAsync(config, saved, home, time);
+                return await EnsureAsync();
             }
 
             var channel = new FirstRunFlowClient(deferred, time);
@@ -1808,7 +1811,7 @@ sealed class SetupCommand(
             // would take that back.
             using var beat = flowStillLive ? FirstRunHeartbeat.Start(channel, serverUrl, flowId, time) : null;
 
-            var ensured = await SetupDaemonService.EnsureAsync(config, saved, home, time);
+            var ensured = await EnsureAsync();
             result = ensured;
             await SetupDaemonService.ReportAsync(channel, serverUrl, flowId, ensured);
         } catch (Exception ex) when (ex is not OperationCanceledException) {
@@ -1816,7 +1819,14 @@ sealed class SetupCommand(
                 $"  [yellow]![/] Could not tell the browser about the daemon service: {Markup.Escape(ex.Message)}");
         }
 
-        return result ?? await SetupDaemonService.EnsureAsync(config, saved, home, time);
+        return result ?? await EnsureAsync();
+
+        async Task<FirstRunMachineActionResult> EnsureAsync() {
+            var (ensured, renameLine) = await SetupDaemonService.EnsureAsync(config, saved, home, time, previousName);
+            if (renameLine is not null) AnsiConsole.MarkupLine(renameLine);
+
+            return ensured;
+        }
     }
 
     /// <inheritdoc cref="ChosenServerHttp.For"/>
