@@ -57,7 +57,7 @@ public class PullRequestContextViewModelTests {
             await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
             repository = new("github", "github.com", "example", "repo", "hash");
 
-            h.Vm.PrimaryRepositoryArrived();
+            h.Vm.PrimaryRepositoryChanged();
             h.Time.Advance(TimeSpan.FromSeconds(3));
 
             await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "the second list");
@@ -79,7 +79,7 @@ public class PullRequestContextViewModelTests {
             h.Vm.SetForeground(true);
             await WaitUntilAsync(() => h.Source.Lists == 1, what: "the list read");
 
-            h.Vm.PrimaryRepositoryArrived();
+            h.Vm.PrimaryRepositoryChanged();
             h.Source.ListGate.SetResult();
 
             await WaitUntilAsync(() => h.Vm.Notice.StartsWith("This session's pull requests are unavailable", StringComparison.Ordinal), what: "retries stopped");

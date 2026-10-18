@@ -44,9 +44,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public PullRequestRepository? PrimaryRepository {
         get => _primaryRepository;
         private set {
-            var arrived = _primaryRepository is null && value is not null;
+            var changed = value is not null && value != _primaryRepository;
             _primaryRepository = value;
-            if (arrived) PullRequests?.PrimaryRepositoryArrived();
+            if (changed) PullRequests?.PrimaryRepositoryChanged();
         }
     }
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);

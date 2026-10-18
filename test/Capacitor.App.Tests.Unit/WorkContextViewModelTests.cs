@@ -1294,10 +1294,10 @@ public class WorkContextViewModelTests {
     }
 
     /// The pull requests listed before the summary named the primary repository list again when
-    /// it arrives, and a later read naming the same repository does not list them again.
+    /// it arrives and again when it names another one, but not for a read repeating the same one.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_primary_repository_arriving_relists_the_pull_requests_once() {
+    public async Task The_pull_requests_relist_when_the_primary_repository_arrives_or_changes() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var source = new FakePullRequestSource(h.Time);
@@ -1326,6 +1326,15 @@ public class WorkContextViewModelTests {
                 await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
                 await AdvanceUntilListedAsync(3);
                 await Assert.That(source.Lists).IsEqualTo(2);
+
+                h.Source.Enqueue(ReadyWith(null, summary: summary with {
+                    PullRequests = [Pr("owner", "repo", 3, "https://ghe.example/owner/repo/pull/3", "Fix") with { RepoHash = "hash1" }],
+                }));
+                h.Vm.Reconnected();
+                await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+                await AdvanceUntilListedAsync(3);
+                await Assert.That(source.Lists).IsEqualTo(3);
+                await Assert.That(source.Descriptions[^1].Repository!.Host).IsEqualTo("ghe.example");
             } finally {
                 await pullRequests.TeardownAsync();
                 await h.Vm.TeardownAsync();
