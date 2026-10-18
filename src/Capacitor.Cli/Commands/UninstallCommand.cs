@@ -84,7 +84,9 @@ public sealed class UninstallCommand(
         }
 
         // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
-        var ownsDaemonDir = PathsEqual(store.Directory, DaemonStore.DefaultDirectory(home));
+        // A link there could lead anywhere, so only the real directory counts as kcap's.
+        var ownsDaemonDir = PathsEqual(store.Directory, DaemonStore.DefaultDirectory(home))
+                         && new DirectoryInfo(store.Directory).LinkTarget is null;
         if (ownsDaemonDir)
             await Console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 
@@ -260,9 +262,9 @@ public sealed class UninstallCommand(
 
         // Holds the daemons' locks and their granted consent. Kept after a failure for the same reason
         // as the registry: a re-run has to find and stop what is still running. A directory
-        // KCAP_DAEMONS_DIR moved may be shared, so nothing in it is assumed to be kcap's.
+        // KCAP_DAEMONS_DIR moved, or a link, may be shared, so nothing in it is assumed to be kcap's.
         if (!ownsDaemonDir) {
-            await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: {DaemonStore.DaemonsDirEnvVar} named it.");
+            await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
         } else if (!hadFailures && Directory.Exists(store.Directory)) {
             try {
                 await Console.Out.WriteLineAsync(store.DeleteOwned()

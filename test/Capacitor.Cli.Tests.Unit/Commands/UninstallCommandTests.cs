@@ -699,6 +699,22 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(store.Directory)).IsFalse();
     }
 
+    /// <summary>Pins that a default daemons directory which is a link is never cleaned: its target could
+    /// be anywhere.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Uninstall_leaves_a_linked_daemons_directory() {
+        await using var fixture = await Fixture.CreateAsync();
+        var store = new DaemonStore(DaemonStore.DefaultDirectory(fixture.UserHome));
+        Directory.CreateDirectory(Path.GetDirectoryName(store.Directory)!);
+        Directory.CreateSymbolicLink(store.Directory, Daemons.Directory);
+        var lockFile = Daemons.CreateFile("vscode.lock", "x");
+
+        var exit = await RunUninstall(fixture, store: store);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(File.Exists(lockFile)).IsTrue();
+    }
+
     /// <summary>Pins that a daemons directory KCAP_DAEMONS_DIR moved is never cleaned: it may be shared,
     /// so nothing in it can be taken for kcap's.</summary>
     [Test]
