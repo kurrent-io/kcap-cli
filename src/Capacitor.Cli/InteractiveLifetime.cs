@@ -76,7 +76,7 @@ static class InteractiveLifetime {
         try {
             Console.CancelKeyPress += static (_, e) => {
                 e.Cancel = true; // we own termination below
-                Interrupt();
+                Interrupt(InterruptSource.Signal);
             };
         } catch {
             // Some hosts don't support CancelKeyPress; the watchdog still covers us.
@@ -87,7 +87,7 @@ static class InteractiveLifetime {
         try {
             _sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, static ctx => {
                 ctx.Cancel = true;
-                Interrupt();
+                Interrupt(InterruptSource.Signal);
             });
         } catch {
             // best effort
@@ -96,7 +96,7 @@ static class InteractiveLifetime {
         try {
             _sighup = PosixSignalRegistration.Create(PosixSignal.SIGHUP, static ctx => {
                 ctx.Cancel = true;
-                Interrupt();
+                Interrupt(InterruptSource.Signal);
             });
         } catch {
             // best effort
@@ -124,13 +124,90 @@ static class InteractiveLifetime {
         }
     }
 
+    internal enum InterruptSource {
+        /// <summary>Ctrl+C, SIGTERM or SIGHUP: a person or supervisor asking us to stop.</summary>
+        Signal,
+
+        /// <summary>The parent-liveness poll, which repeats every interval for as long as the parent is gone.</summary>
+        Watchdog
+    }
+
+    // Test seam; Environment.Exit in production.
+    internal static Action<int> Exit = Environment.Exit;
+
+    static readonly object DeferralLock = new();
+    static Deferral?       _live;
+
+    /// <summary>
+    /// Turns interrupts into a cancelled <see cref="Deferral.Token"/> so a command can roll back and say its
+    /// last words; disposing the scope then exits 130 if one arrived. A second signal exits at once, and
+    /// watchdog repeats only cancel again. Only one scope may be live.
+    /// </summary>
+    internal static Deferral Defer() {
+        lock (DeferralLock) {
+            if (_live is not null) throw new InvalidOperationException("An interrupt deferral is already live.");
+
+            return _live = new Deferral();
+        }
+    }
+
+    internal sealed class Deferral : IDisposable {
+        readonly CancellationTokenSource _cts = new();
+        int                              _interrupted;
+        int                              _disposed;
+
+        internal Deferral() { }
+
+        public CancellationToken Token => _cts.Token;
+
+        public bool Interrupted => Volatile.Read(ref _interrupted) != 0;
+
+        /// <summary>True when this was the first interrupt received.</summary>
+        internal bool MarkInterrupted() => Interlocked.Exchange(ref _interrupted, 1) == 0;
+
+        internal void Cancel() {
+            try {
+                _cts.Cancel();
+            } catch {
+                // A cancellation callback that throws must not break the handler thread.
+            }
+        }
+
+        public void Dispose() {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+            lock (DeferralLock) {
+                if (ReferenceEquals(_live, this)) _live = null;
+            }
+
+            var exit = Interrupted;
+            _cts.Dispose();
+
+            if (exit) ExitNow();
+        }
+    }
+
     /// <summary>
     /// The exit every interrupt path takes. <c>Environment.Exit</c> runs no <c>finally</c>, so anything a
     /// command needs to say on its way out has to be said here. The browser setup flow uses it to tell the
     /// server this machine has stopped listening, which is what stops the page going on to offer decisions
     /// nobody will act on.
     /// </summary>
-    static void Interrupt() {
+    internal static void Interrupt(InterruptSource source) {
+        Deferral? live;
+        lock (DeferralLock) live = _live;
+
+        if (live is not null) {
+            var first = live.MarkInterrupted();
+            live.Cancel();
+
+            if (first || source == InterruptSource.Watchdog) return;
+        }
+
+        ExitNow();
+    }
+
+    static void ExitNow() {
         // First, and before the notice spends its budget on the network: a live region hides the cursor
         // for the duration of a render and gives it back on dispose, and no exit from here unwinds far
         // enough to dispose one - which leaves the shell with no cursor after an interrupted import or
@@ -139,7 +216,7 @@ static class InteractiveLifetime {
 
         FirstRunInterruptRelinquish.RunBeforeExit(ExitNoticeBudget);
 
-        Environment.Exit(InterruptExitCode);
+        Exit(InterruptExitCode);
     }
 
     static void StartParentWatchdog(int? parentPid) {
@@ -154,7 +231,7 @@ static class InteractiveLifetime {
                 Thread.Sleep(ParentPollInterval);
 
                 if (!ProcessHelpers.IsProcessAlive(ppid)) {
-                    Interrupt();
+                    Interrupt(InterruptSource.Watchdog);
                 }
             }
         }) {
