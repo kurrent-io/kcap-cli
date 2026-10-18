@@ -447,6 +447,9 @@ internal partial class AgentOrchestrator {
         /// <summary>The ledger entry whose resume this launch is: a withdrawal of it stops the launch.</summary>
         public string AttemptOf { get; init; } = Entry.AgentId;
 
+        /// <summary>A continuation writes its entry only once it takes the worktree over.</summary>
+        public bool DefersLedger { get; init; }
+
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
         public string       Origin    => Entry.Launch.Origin;
@@ -611,7 +614,7 @@ internal partial class AgentOrchestrator {
             resume.Agent = agent;
             ReplayPersistedRing(agent);
             capacity.Publish(agent);
-            WriteResumedLedger(agent, resume.Entry);
+            if (!resume.DefersLedger) WriteResumedLedger(agent, resume.Entry);
 
             return true;
         }
@@ -812,17 +815,37 @@ internal partial class AgentOrchestrator {
 
     string ServerBase => _config.ServerUrl.TrimEnd('/');
 
-    /// <summary>Starts a fresh agent under a new id in the entry's worktree, then ends the entry's agent
-    /// and session as superseded; the successor's session takes over the old one's work items and plans
-    /// once its id is known. <see cref="ResumeOutcome.Interrupted"/>, with nothing reported, when the
-    /// fresh agent does not launch: the lane's failed-resume report is then the old agent's only end.</summary>
+    /// <summary>Starts a fresh agent under a new id in the entry's worktree and, once it has stayed alive
+    /// through <see cref="DaemonConfig.ResumeReadinessWindow"/>, hands it the worktree and ends the entry's
+    /// agent and session as superseded; the successor's session takes over the old one's work items and
+    /// plans once its id is known. Until that handover the entry keeps the worktree.
+    /// <see cref="ResumeOutcome.Interrupted"/>, with nothing reported, when the successor does not launch
+    /// or does not survive the window: the lane's failed-resume report is then the old agent's only end.
+    /// <see cref="ResumeOutcome.Stopped"/>, with the entry left resuming, when a shutdown begins first.</summary>
     internal async Task<ResumeOutcome> ContinueEntryAsync(ResumeLedgerEntry entry, string reason, CancellationToken ct) {
         ct.ThrowIfCancellationRequested();
 
         var summary = await ReadPreviousSummaryAsync(entry.SessionId, ct);
         var prompt  = ContinuePrompt.Build(entry.Launch.Prompt, entry.SessionId, reason, summary, LastAlive(entry, null));
 
-        var agent = await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt);
+        var launch   = await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt);
+        var agent    = launch?.Agent;
+        var survived = false;
+
+        if (agent is not null) {
+            try {
+                survived = await SurvivesReadinessAsync(agent, ct);
+            } catch (OperationCanceledException) when (IsWithdrawn(entry.AgentId)) {
+                // Handled with any other withdrawal below.
+            }
+        }
+
+        if (survived && TryHandOverContinuation(entry, launch!.Entry, agent!)) {
+            await ReportSupersededAsync(entry, ct);
+            if (entry.SessionId is { } previous) StartContinuationTakeover(agent!, previous);
+
+            return ResumeOutcome.Continued;
+        }
 
         if (IsWithdrawn(entry.AgentId)) {
             if (agent is not null) await StopAgentCoreAsync(agent);
@@ -832,17 +855,37 @@ internal partial class AgentOrchestrator {
 
         if (agent is null) return ResumeOutcome.Interrupted;
 
-        // The successor's own entry now holds the worktree.
-        DeleteLedger(entry.AgentId);
+        // A stop of the successor itself ends the agent it continued too.
+        if (agent.StopRequested) {
+            DeleteLedger(entry.AgentId);
+            await ReportSupersededAsync(entry, ct);
 
-        // A private agent was never registered, so the server holds no agent to end.
-        if (!entry.Launch.IsPrivate)
-            await _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
+            return ResumeOutcome.Stopped;
+        }
 
-        if (entry.SessionId is { } previous) StartContinuationTakeover(agent, previous);
-
-        return ResumeOutcome.Continued;
+        return _shutdownCts.IsCancellationRequested ? ResumeOutcome.Stopped : ResumeOutcome.Interrupted;
     }
+
+    /// <summary>Gives the worktree to a successor that passed readiness: its own entry is written and
+    /// the continued one deleted in one step under the ledger lock, so a stop or a shutdown sees one owner.</summary>
+    bool TryHandOverContinuation(ResumeLedgerEntry entry, ResumeLedgerEntry successor, AgentInstance agent) {
+        lock (_ledgerLock) {
+            if (IsWithdrawn(entry.AgentId) || agent.IsCleanupStarted || agent.StopRequested || _shutdownCts.IsCancellationRequested)
+                return false;
+
+            agent.ResumePending = false;
+            WriteResumedLedger(agent, successor);
+            DeleteLedger(entry.AgentId);
+
+            return true;
+        }
+    }
+
+    /// <summary>A private agent was never registered, so the server holds no agent to end.</summary>
+    Task ReportSupersededAsync(ResumeLedgerEntry entry, CancellationToken ct) =>
+        entry.Launch.IsPrivate
+            ? Task.CompletedTask
+            : _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
 
     /// <summary>Runs the takeover off the lane, once, as soon as the successor has both its own session
     /// id and the session it continues: either may arrive first, the id at publish or by discovery.</summary>
@@ -860,9 +903,10 @@ internal partial class AgentOrchestrator {
         _ = TakeOverAsync(agent.Id, previous, current, _shutdownCts.Token);
     }
 
-    /// <summary>The launched successor, or null when it did not launch; a successor that did not
-    /// launch leaves no ledger entry behind.</summary>
-    async Task<AgentInstance?> LaunchContinuationAsync(ResumeLedgerEntry entry, string agentId, string prompt) {
+    /// <summary>The successor's launch once its agent is published, or null when it did not launch. It
+    /// keeps its pending resume and writes no entry until the handover, so its teardown leaves the
+    /// worktree to the entry it continues.</summary>
+    async Task<ResumeLaunch?> LaunchContinuationAsync(ResumeLedgerEntry entry, string agentId, string prompt) {
         using var admission = _admission.TryAdmit();
         if (admission is null) return null;
 
@@ -876,21 +920,11 @@ internal partial class AgentOrchestrator {
         var successor = entry with {
             AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow()
         };
-        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId };
+        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
         var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch);
 
-        if (launch.Agent is { } agent && outcome.Kind == CommandOutcomeKind.LaunchExecuted) {
-            lock (_ledgerLock) {
-                if (!agent.IsCleanupStarted) {
-                    if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
-                    return agent;
-                }
-            }
-        }
-
-        DiscardFailedLaunchLedger(agentId);
-        return null;
+        return launch.Agent is not null && outcome.Kind == CommandOutcomeKind.LaunchExecuted ? launch : null;
     }
 
     /// <summary>The previous session as the server summarises it, or null on any failure or after

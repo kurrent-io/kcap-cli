@@ -40,12 +40,22 @@ public class AgentOrchestratorContinueTests : IDisposable {
         /// <summary>A terminal runtime: its session id is learned by discovery, not at publish.</summary>
         public bool PtyStyle { get; init; }
 
+        /// <summary>A terminal runtime that exits this long after it starts.</summary>
+        public TimeSpan? ExitsAfter { get; init; }
+
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             int reports;
             lock (server.ShutdownReports) reports = server.ShutdownReports.Count;
             Starts.Enqueue((ctx, reports));
 
             if (Fails) throw new InvalidOperationException("the agent exited before its handshake");
+
+            if (ExitsAfter is { } after) {
+                var exiting = new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true) { ExitCode = 1 };
+                _ = Task.Delay(after, CancellationToken.None).ContinueWith(_ => exiting.ExitGate.TrySetResult(), TaskScheduler.Default);
+
+                return Task.FromResult(new HostedRuntimeStart(exiting, McpConfigPath: null, Transcript: null));
+            }
 
             if (PtyStyle)
                 return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null));
@@ -58,10 +68,12 @@ public class AgentOrchestratorContinueTests : IDisposable {
 
     sealed record Fixture(AgentOrchestrator Orch, CaptureServerConnection Server, ContinueFactory Factory, DaemonConfig Config, string Repo);
 
-    Fixture Build(bool resumeSupported = false, bool fails = false, bool ptyStyle = false) {
+    Fixture Build(
+            bool resumeSupported = false, bool fails = false, bool ptyStyle = false, TimeSpan? exitsAfter = null,
+            TimeSpan? readinessWindow = null) {
         var repo   = Tmp.CreateDir("repo");
         var server = new CaptureServerConnection();
-        var factory = new ContinueFactory(server) { ResumeSupported = resumeSupported, Fails = fails, PtyStyle = ptyStyle };
+        var factory = new ContinueFactory(server) { ResumeSupported = resumeSupported, Fails = fails, PtyStyle = ptyStyle, ExitsAfter = exitsAfter };
         DaemonConfig? captured = null;
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
@@ -70,7 +82,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
                 captured = c;
                 c.InstanceId = "instance-now";
                 c.ServerUrl = _server.Url!;
-                c.ResumeReadinessWindow = TimeSpan.FromMilliseconds(100);
+                c.ResumeReadinessWindow = readinessWindow ?? TimeSpan.FromMilliseconds(100);
             });
 
         // A loaded suite can hold a stub's answer past the production budget.
@@ -79,16 +91,18 @@ public class AgentOrchestratorContinueTests : IDisposable {
         return new Fixture(orch, server, factory, captured!, repo);
     }
 
-    ResumeLedgerEntry Entry(Fixture f, bool isPrivate = false) {
-        var stamp  = TimeProvider.System.GetUtcNow();
+    ResumeLedgerEntry Entry(Fixture f, bool isPrivate = false, bool standalone = false) {
+        var stamp    = TimeProvider.System.GetUtcNow();
+        var worktree = Tmp.CreateDir("wt-old");
+        if (standalone) Directory.CreateDirectory(Path.Combine(worktree, ".git"));
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
-            WorktreePath: Tmp.CreateDir("wt-old"), Work: WorkLocation.OwnedWorktree,
+            WorktreePath: worktree, Work: WorkLocation.OwnedWorktree,
             GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null, PermissionPreset: null,
             McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
-            WorktreeBranch: "capacitor/custom-old", WorktreeIsStandalone: false, WorktreeSourceRepo: f.Repo);
+            WorktreeBranch: "capacitor/custom-old", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, OldAgent, "daemon-1", stamp, stamp, "cursor", "acp",
             OldSession, VendorSession: null, launch, ResumeState.Resuming, Attempts: 0, LastError: null,
@@ -213,6 +227,27 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
             .IsEquivalentTo(new[] { (OldAgent, "Failed", "resume_failed:native_resume_unsupported") });
         await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)!.State).IsEqualTo(ResumeState.Interrupted);
+    }
+
+    /// <summary>A successor that fails during startup has not taken over: the worktree, with the
+    /// interrupted agent's uncommitted work, stays, and so does the entry, now interrupted. It is a
+    /// standalone copy, so a cleanup that treated it as the successor's would delete it outright.</summary>
+    [Test]
+    public async Task A_successor_that_exits_inside_the_readiness_window_keeps_the_worktree_and_interrupts_the_entry() {
+        var f = Build(exitsAfter: TimeSpan.FromMilliseconds(300), readinessWindow: TimeSpan.FromSeconds(5));
+        await using var _ = f.Orch;
+        var entry = Entry(f, standalone: true);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        var successor = f.Factory.Starts.Single().Ctx.AgentId;
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest(successor) is null);
+
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsTrue();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)!.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(successor)).IsNull();
+        await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
+            .IsEquivalentTo(new[] { (OldAgent, "Failed", "resume_failed:native_resume_unsupported") });
     }
 
     /// <summary>A stop while the continue waits on the previous session's summary withdraws it before
