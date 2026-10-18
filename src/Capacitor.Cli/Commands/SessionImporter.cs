@@ -630,7 +630,7 @@ static class SessionImporter {
             // move it past the blocked lines, and the next import resumes from the watermark.
             if (vendor is HarnessId.Cursor && resp.StatusCode is HttpStatusCode.Conflict) {
                 // The server accepted every line before its next_line_number.
-                var blockedAt = BlockedAt(await resp.Content.ReadAsStringAsync(), first, last);
+                var blockedAt = BlockedAt(await resp.Content.ReadAsStringAsync(), batch.LineNumbers);
                 if (blockedAt > first) progress?.Report(new BatchFlushed(agentId, batch.LineNumbers.Count(n => n < blockedAt)));
                 progress?.Report(new BatchDropped(sessionId, agentId, blockedAt, last, "HTTP 409: the server blocked this batch at a gap"));
                 throw new TranscriptDeliveryAbortedException();
@@ -655,12 +655,15 @@ static class SessionImporter {
         return flushed;
     }
 
-    /// <summary>The first line a 409 left unaccepted, or the batch's first line when the body does not
-    /// name one inside the batch.</summary>
-    static int BlockedAt(string body, int first, int last) {
+    /// <summary>The first posted line a 409 left unaccepted, or the batch's first line when the body
+    /// does not name one inside the batch. A blank source line is never posted, so the server's
+    /// frontier can name one; the drop starts at the next line that was sent.</summary>
+    static int BlockedAt(string body, IReadOnlyList<int> lineNumbers) {
+        var first = lineNumbers[0];
+
         try {
             var next = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.TranscriptBatchAck).NextLineNumber;
-            return next > first && next <= last ? next : first;
+            return next > first && next <= lineNumbers[^1] ? lineNumbers.First(n => n >= next) : first;
         } catch (JsonException) {
             return first;
         }
