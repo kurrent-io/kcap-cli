@@ -425,6 +425,23 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task A_unit_not_provably_ours_is_never_restarted() {
+        Server.WhileAllowed = FakeAuthConfig.Forbidden;
+        LiftProbesExhaustThePoll();
+        Tmp.CreateDir("other");
+        var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
+
+        LocalInstallFailure failure;
+        using (Record(p => { if (p == "setup:after-allowed") Service.OwnerOverride = new(other, other); }))
+            failure = await Failure();
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.RecoveryFailed);
+        await Assert.That(JournalPhase()).IsEqualTo(LocalSetupJournal.Allowed);
+        await Assert.That(_log).DoesNotContain("stop");
+        await Assert.That(_log).DoesNotContain("start");
+    }
+
+    [Test]
     public async Task A_lift_proven_after_restart_completes() {
         Server.WhileAllowed = FakeAuthConfig.Forbidden;
         Service.OnStart     = () => Server.WhileAllowed = FakeAuthConfig.Lifted;
