@@ -119,6 +119,11 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public bool SupportsRestartResume(string? runtimeTransport) => true;
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+        // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
+        if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !UsesAppServer(ctx))
+            return Task.FromException<HostedRuntimeStart>(
+                new InvalidOperationException("codex: a reviewer resume requires the app-server route; refusing to start a PTY session."));
+
         return UsesAppServer(ctx) ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
     }
 

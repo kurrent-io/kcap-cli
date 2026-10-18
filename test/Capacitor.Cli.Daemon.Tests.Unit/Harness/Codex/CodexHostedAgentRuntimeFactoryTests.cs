@@ -222,6 +222,17 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
+    public async Task A_reviewer_resume_without_the_app_server_route_refuses_to_start_a_pty_session() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = Factory(pty, appServerActive: false);
+
+        await Assert.That(() => factory.StartAsync(Ctx(isReviewFlow: true, wt.Path) with { ResumeSessionId = "thread-parked-1" }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(pty.StartCalls).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task A_resume_requesting_app_server_takes_app_server_without_the_interactive_opt_in() {
         using var wt = new TempDir();
         var factory = Factory(new RecordingPtyFactory(), appServerActive: true, appServerInteractive: false);
