@@ -150,4 +150,39 @@ public class DaemonStoreTests {
         await Assert.That(File.Exists(pid)).IsTrue();
         await Assert.That(File.Exists(state)).IsTrue();
     }
+
+    /// <summary>Pins that a cleanup stopped by a held lock leaves every other lock file too: deleting one
+    /// would strip a stopped daemon's state of its lock.</summary>
+    [Test]
+    public async Task DeleteAll_keeps_earlier_locks_when_a_later_one_is_held() {
+        using var daemons = new TempDaemonStore();
+        var idleLock = daemons.CreateFile("aaa.lock", "x");
+        var idlePid  = daemons.CreateFile("aaa.pid", "1");
+        var busyLock = daemons.CreateFile("zzz.lock", "x");
+
+        bool gone;
+        using (new FileStream(busyLock, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            gone = daemons.Store.DeleteAll();
+
+        await Assert.That(gone).IsFalse();
+        await Assert.That(File.Exists(idleLock)).IsTrue();
+        await Assert.That(File.Exists(idlePid)).IsTrue();
+        await Assert.That(daemons.Store.DeleteAll()).IsTrue();
+    }
+
+    /// <summary>Pins that a link in the directory is removed, never followed: its target, wherever it is,
+    /// survives, and a dangling one does not stop the cleanup.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task DeleteAll_removes_links_without_touching_their_targets() {
+        using var daemons = new TempDaemonStore();
+        using var outside = new TempDir("outside");
+        var target = outside.CreateFile("keep.lock", "mine");
+        File.CreateSymbolicLink(Path.Combine(daemons.Directory, "evil.lock"), target);
+        File.CreateSymbolicLink(Path.Combine(daemons.Directory, "gone.pid"), Path.Combine(outside.Path, "missing"));
+        Directory.CreateSymbolicLink(Path.Combine(daemons.Directory, "state"), outside.Path);
+
+        await Assert.That(daemons.Store.DeleteAll()).IsTrue();
+        await Assert.That(await File.ReadAllTextAsync(target)).IsEqualTo("mine");
+        await Assert.That(Directory.Exists(daemons.Directory)).IsFalse();
+    }
 }

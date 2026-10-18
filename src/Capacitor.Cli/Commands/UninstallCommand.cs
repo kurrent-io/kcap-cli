@@ -84,9 +84,11 @@ public sealed class UninstallCommand(
         }
 
         // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
-        // A link there could lead anywhere, so only the real directory counts as kcap's.
+        // A link there could lead anywhere, so only the real directory counts as kcap's. A linked
+        // ~/.config is allowed: dotfile managers link it, and kcap/ inside it is still kcap's.
         var ownsDaemonDir = PathsEqual(store.Directory, DaemonStore.DefaultDirectory(home))
-                         && new DirectoryInfo(store.Directory).LinkTarget is null;
+                         && new DirectoryInfo(store.Directory).LinkTarget is null
+                         && new DirectoryInfo(Path.GetDirectoryName(store.Directory)!).LinkTarget is null;
         if (ownsDaemonDir)
             await Console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 

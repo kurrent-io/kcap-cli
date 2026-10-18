@@ -125,54 +125,69 @@ public sealed partial class DaemonStore(string directory) {
         Path.Combine(Directory, $"{Sanitize(daemonName)}.{extension}");
 
     /// <summary>
-    /// Deletes everything in the directory, then the directory, unless a daemon, a start or a service
-    /// transaction holds one of its locks: then nothing it holds is touched. All three locks of every
-    /// name an entry could carry are held until the rest is gone, so none can be taken
-    /// meanwhile; unlinking a held lock lets the next taker lock a fresh file. Entries that appear
+    /// Deletes everything in the directory, then the directory, or nothing at all when a daemon, a start
+    /// or a service transaction holds one of its locks. All three locks of every name an entry could
+    /// carry are held until the rest is gone, so none can be taken meanwhile; unlinking a held lock lets
+    /// the next taker lock a fresh file. A link is removed itself, never followed. Entries that appear
     /// after the snapshot are left. Call it only on a directory kcap owns, which
     /// <see cref="DefaultDirectory"/> is. Returns whether the directory is gone.
     /// </summary>
     public bool DeleteAll() {
-        if (!System.IO.Directory.Exists(Directory)) return true;
+        var root = new DirectoryInfo(Directory);
+        if (!root.Exists) return true;
+        // Checked here as well as by the caller: a link swapped in since then could lead anywhere.
+        if (root.LinkTarget is not null) return false;
 
-        var entries = System.IO.Directory.EnumerateFileSystemEntries(Directory).ToList();
+        var entries = root.EnumerateFileSystemInfos().ToList();
         var locks = entries
+            .Where(e => e.LinkTarget is null)
             .SelectMany(NamesIn)
             .SelectMany(name => LockExtensions.Select(extension => File(name, extension)))
             .Distinct(StringComparer.Ordinal)
             .ToList();
-        var held = new List<FileStream>();
+        var held    = new List<FileStream>();
+        var created = new List<string>();
+        var deleted = false;
 
         try {
             foreach (var path in locks) {
+                if (new FileInfo(path).LinkTarget is not null) return false;
+                if (!System.IO.File.Exists(path)) created.Add(path);
+
                 try {
-                    // Closing the handle deletes the lock file.
-                    held.Add(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose));
+                    // Delete sharing lets the lock file go while it is still held.
+                    held.Add(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Delete));
                 } catch (IOException) {
                     return false;
                 }
             }
 
-            foreach (var entry in entries.Except(locks, StringComparer.Ordinal)) {
-                if (System.IO.Directory.Exists(entry)) System.IO.Directory.Delete(entry, recursive: true);
-                else if (System.IO.File.Exists(entry)) System.IO.File.Delete(entry);
+            foreach (var entry in entries) {
+                if (locks.Contains(entry.FullName, StringComparer.Ordinal)) continue;
+
+                if (entry is DirectoryInfo directory && entry.LinkTarget is null) directory.Delete(recursive: true);
+                else entry.Delete();
             }
+
+            foreach (var path in locks) System.IO.File.Delete(path);
+            deleted = true;
         } finally {
             foreach (var stream in held) stream.Dispose();
+            if (!deleted) foreach (var path in created) System.IO.File.Delete(path);
         }
 
-        if (System.IO.Directory.EnumerateFileSystemEntries(Directory).Any()) return false;
+        if (root.EnumerateFileSystemInfos().Any()) return false;
 
-        System.IO.Directory.Delete(Directory);
+        root.Delete();
 
         return true;
     }
 
     /// <summary>Every daemon name an entry could belong to: a directory's own name, or each dotted prefix
     /// of a file's, since a name may itself contain dots.</summary>
-    static IEnumerable<string> NamesIn(string entry) {
-        var name = Path.GetFileName(entry);
-        if (System.IO.Directory.Exists(entry)) return [name];
+    static IEnumerable<string> NamesIn(FileSystemInfo entry) {
+        var name = entry.Name;
+        if (entry is DirectoryInfo) return [name];
 
         return Enumerable.Range(1, name.Length - 1).Where(i => name[i] == '.').Select(i => name[..i]);
     }
