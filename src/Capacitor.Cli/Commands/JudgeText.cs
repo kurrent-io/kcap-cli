@@ -12,25 +12,38 @@ static class JudgeText {
 
     /// <summary>Where a search query matched: the query verbatim (the server's substring lane), else its earliest quoted
     /// phrase, else the earliest of its words, split on punctuation as the server's tokenizer does, with negated words and
-    /// operators skipped. Whole words are preferred to substrings throughout. 0 when nothing is found.</summary>
+    /// operators and negated phrases skipped. Whole words are preferred to substrings throughout. 0 when nothing is found.</summary>
     public static int MatchAt(string text, string query) {
-        string[] phrase = [query.Trim()];
-        var      quoted = Regex.Matches(query, "\"([^\"]+)\"").Select(m => m.Groups[1].Value.Trim()).ToArray();
-        var      words  = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+        // A negated phrase names text the row must not hold, so neither it nor its words may anchor the window.
+        var      positive = Regex.Replace(query, "-\"[^\"]*\"", " ");
+        string[] phrase   = [query.Trim()];
+        var      quoted   = Regex.Matches(positive, "\"([^\"]+)\"").Select(m => m.Groups[1].Value.Trim()).ToArray();
+        var      words    = positive.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
             .Where(t => !t.StartsWith('-'))
-            .SelectMany(t => Regex.Split(t, @"[^\p{L}\p{N}]+"))
-            .Where(w => w.Length > 0 && !Operators.Contains(w, StringComparer.OrdinalIgnoreCase))
+            .SelectMany(Words)
+            .Where(w => !Operators.Contains(w, StringComparer.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        string[][] tiers = [phrase, quoted, words];
 
-        foreach (var tier in tiers)
-            if (tier.Select(t => WordAt(text, t)).Min() is { } whole) return whole;
+        if (WordAt(text, phrase[0]) is { } wholeQuery) return wholeQuery;
+        if (quoted.Select(q => PhraseAt(text, q)).Min() is { } wholePhrase) return wholePhrase;
+        if (words.Select(w => WordAt(text, w)).Min() is { } wholeWord) return wholeWord;
 
-        foreach (var tier in tiers)
+        foreach (var tier in new[] { phrase, quoted, words })
             if (tier.Select(t => SubstringAt(text, t)).Min() is { } part) return part;
 
         return 0;
+    }
+
+    static string[] Words(string text) => Regex.Split(text, @"[^\p{L}\p{N}]+").Where(w => w.Length > 0).ToArray();
+
+    // The phrase's words in order with any run of punctuation between them, as the index reads adjacent lexemes.
+    static int? PhraseAt(string text, string phrase) {
+        var words = Words(phrase);
+        if (words.Length == 0) return null;
+        var m = Regex.Match(text, $@"(?<![\p{{L}}\p{{N}}]){string.Join(@"[^\p{L}\p{N}]+", words.Select(Regex.Escape))}(?![\p{{L}}\p{{N}}])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return m.Success ? m.Index : null;
     }
 
     static int? SubstringAt(string text, string term) =>
