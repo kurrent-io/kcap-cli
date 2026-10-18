@@ -45,7 +45,7 @@ sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, Http
 
             if (entry.Phase == LocalSetupJournal.Committing) await LocalSetupCommit.PublishAsync(lease, entry, details);
 
-            await LocalSetupCommit.ConfirmAsync(lease, details, service, home, local, time);
+            await LocalSetupCommit.ConfirmAsync(lease, details, service, home, local, time, LocalInstallFailureCode.RecoveryFailed);
         } catch (Exception ex) when (ex is not LocalInstallFailure) {
             throw new LocalInstallFailure(LocalInstallFailureCode.CommitFailed,
                 $"Setup could not finish its commit ({ex.Message}). Nothing was removed; run kcap setup --local again to finish it.");

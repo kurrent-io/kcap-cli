@@ -20,7 +20,7 @@ static class LocalSetupCommit {
         if (entry.Phase == LocalSetupJournal.Committing) await PublishAsync(lease, entry, details);
         else if (entry.Phase != LocalSetupJournal.Allowed) throw new ArgumentException($"A {entry.Phase} setup has nothing to roll forward.", nameof(entry));
 
-        return await ConfirmAsync(lease, details, service, home, local, time);
+        return await ConfirmAsync(lease, details, service, home, local, time, LocalInstallFailureCode.CommitFailed);
     }
 
     /// <summary>Registry, profile, then <c>allowed</c>: the server may start unfenced only once both are durable.</summary>
@@ -38,14 +38,15 @@ static class LocalSetupCommit {
         return allowed;
     }
 
-    /// <summary>Proves the lift, restarting the unit once when polling proves nothing, then clears the journal.</summary>
+    /// <summary>Proves the lift, restarting the unit once when polling proves nothing, then clears the journal. A unit
+    /// not provably this installation's is never restarted; that refusal fails with <paramref name="restartRefused"/>.</summary>
     public static async Task<LocalInstallEvent.Committed> ConfirmAsync(LifecycleLease lease, SetupDetails details, ILocalServerService service,
-        UserHome home, HttpClient local, TimeProvider time) {
+        UserHome home, HttpClient local, TimeProvider time, LocalInstallFailureCode restartRefused) {
         if (!await LiftedAsync(local, details.ServerUrl, time)) {
             // The restart is not itself proof: only an unfenced answer counts.
             var unit = LocalServerUnit.ForInstallation(lease.Root, details.Port);
 
-            await RestartAsync(lease.Root, unit, service, home);
+            await RestartAsync(lease.Root, unit, service, home, restartRefused);
             await LocalServerReadiness.WaitAsync(local, unit, LocalServerReadiness.StartBudget, time, CancellationToken.None);
 
             if (!await LiftedAsync(local, details.ServerUrl, time))
@@ -59,11 +60,11 @@ static class LocalSetupCommit {
     }
 
     /// <summary>The unit is per user: one that names another root, or that cannot be read, is never stopped.</summary>
-    static async Task RestartAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home) {
+    static async Task RestartAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home, LocalInstallFailureCode refused) {
         using var _ = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, CancellationToken.None);
 
         if (LocalRootIdentity.Decide(root, service.Owner(unit)) != OwnerDecision.Ours)
-            throw new LocalInstallFailure(LocalInstallFailureCode.RecoveryFailed,
+            throw new LocalInstallFailure(refused,
                 $"The local server did not confirm it left setup mode, and the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was not restarted. The setup journal is kept; run kcap setup --local again to finish it.");
 
         await service.StopAsync(unit, CancellationToken.None);

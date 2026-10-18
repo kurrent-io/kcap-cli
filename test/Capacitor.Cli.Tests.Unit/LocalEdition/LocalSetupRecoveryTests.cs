@@ -194,6 +194,38 @@ public class LocalSetupRecoveryTests {
     }
 
     [Test]
+    public async Task A_reuse_failure_after_a_successful_recovery_is_a_failed_start() {
+        await CrashAt("setup:after-committing");
+        Service.OnStart = () => throw new LocalLifecycleException("launchctl kickstart failed");
+
+        var failure = await Recover();
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(failure?.Code).IsEqualTo(LocalInstallFailureCode.StartFailed);
+    }
+
+    [Test]
+    public async Task A_restart_refused_during_recovery_is_a_failed_recovery() {
+        await CrashAt($"renamed:{Root.JournalPath}", after: "setup:after-profile");
+        await Assert.That(JournalPhase()).IsEqualTo(LocalSetupJournal.Allowed);
+
+        Tmp.CreateDir("other");
+        var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
+        Server.WhileAllowed = FakeAuthConfig.Forbidden;
+        Server.OnRequest = path => {
+            if (path != "/auth/config") return;
+            Service.OwnerOverride = new(other, other);
+            _time.Advance(TimeSpan.FromSeconds(11));
+        };
+
+        var failure = await Recover();
+
+        await Assert.That(failure?.Code).IsEqualTo(LocalInstallFailureCode.RecoveryFailed);
+        await Assert.That(JournalPhase()).IsEqualTo(LocalSetupJournal.Allowed);
+        await Assert.That(RecoveryLog).DoesNotContain("stop");
+    }
+
+    [Test]
     public async Task Registry_renamed_then_crash_is_republished_before_allowed() {
         await CrashAt($"renamed:{Root.RegistryPath}");
 

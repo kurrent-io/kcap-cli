@@ -198,6 +198,19 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task A_failure_after_a_cancel_reports_cancelled() {
+        using var cts = new CancellationTokenSource();
+        Service.InstallFailure = new InvalidOperationException("launchctl bootstrap failed");
+
+        LocalInstallFailure failure;
+        using (Record(p => { if (p == $"renamed:{Root.JournalPath}" && JournalPhase() == LocalSetupJournal.Unit) cts.Cancel(); }))
+            failure = await Failure(ct: cts.Token);
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.Cancelled);
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
     public async Task A_failed_unload_keeps_the_unit_journal_and_deletes_nothing() {
         Server.WhileFenced       = FakeAuthConfig.Lifted;
         Service.UninstallFailure = new LocalLifecycleException("the label is still loaded");
@@ -421,7 +434,7 @@ public class LocalInstallerTests {
         using (Record(p => { if (p == "setup:after-allowed") Service.OwnerOverride = new(other, other); }))
             failure = await Failure();
 
-        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.RecoveryFailed);
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.CommitFailed);
         await Assert.That(JournalPhase()).IsEqualTo(LocalSetupJournal.Allowed);
         await Assert.That(_log).DoesNotContain("stop");
         await Assert.That(_log).DoesNotContain("start");

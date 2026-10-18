@@ -48,13 +48,18 @@ sealed class LocalInstaller(
 
         var hint      = Checks.Check(Version).Hint;
         var lifecycle = new LocalLifecycle(root, recoveries(this), time);
+        var recovered = false;
 
         try {
-            return await lifecycle.RunAsync(LeaseWait, (lease, token) => UnderLeaseAsync(lease, answers, token), ct);
+            return await lifecycle.RunAsync(LeaseWait, (lease, token) => {
+                recovered = true;
+                return UnderLeaseAsync(lease, answers, token);
+            }, ct);
         } catch (LocalLifecycleException ex) when (ex.InnerException is IOException) {
             throw new LocalInstallFailure(LocalInstallFailureCode.LifecycleBusy, ex.Message);
         } catch (LocalLifecycleException ex) {
-            throw new LocalInstallFailure(hint == PlanHint.Recover ? LocalInstallFailureCode.RecoveryFailed : LocalInstallFailureCode.StartFailed, ex.Message);
+            var code = hint == PlanHint.Recover && !recovered ? LocalInstallFailureCode.RecoveryFailed : LocalInstallFailureCode.StartFailed;
+            throw new LocalInstallFailure(code, ex.Message);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw new LocalInstallFailure(LocalInstallFailureCode.Cancelled, "Setup was cancelled.");
         } catch (Exception ex) when (ex is not LocalInstallFailure) {
@@ -251,10 +256,10 @@ sealed class LocalInstaller(
 
     static LocalInstallFailure Classify(Exception ex, CancellationToken ct) =>
         ex switch {
-            LocalInstallFailure failure                                    => failure,
-            LocalBundleException bundle                                    => new(bundle.Code, bundle.Message),
-            OperationCanceledException when ct.IsCancellationRequested     => new(LocalInstallFailureCode.Cancelled, "Setup was cancelled."),
-            _                                                              => new(LocalInstallFailureCode.StartFailed, ex.Message),
+            _ when ct.IsCancellationRequested => new(LocalInstallFailureCode.Cancelled, "Setup was cancelled."),
+            LocalInstallFailure failure       => failure,
+            LocalBundleException bundle       => new(bundle.Code, bundle.Message),
+            _                                 => new(LocalInstallFailureCode.StartFailed, ex.Message),
         };
 
     static InstallRegistry Registry(LifecycleLease lease) =>
