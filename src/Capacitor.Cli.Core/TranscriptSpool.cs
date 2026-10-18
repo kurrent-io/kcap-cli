@@ -18,7 +18,7 @@ public sealed partial class TranscriptSpool(string spoolDir, TimeProvider time, 
     public const long DefaultCapBytes = 8_388_608; // 8 MB per session
 
     // Named here rather than on ConfigRoot, for the same reason as HookSpool's.
-    const string DirName = "transcript-spool";
+    public const string DirName = "transcript-spool";
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory.</summary>

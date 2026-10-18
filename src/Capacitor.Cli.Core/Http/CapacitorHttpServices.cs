@@ -42,8 +42,10 @@ public static class CapacitorHttpServices {
             ObservationHeaderHandler.ProcessVersion,
             sp.GetRequiredService<ProfileContext>().Effective?.UpdateCheck == false));
         services.AddTransient(sp => new UnauthorizedRecoveryHandler(sp.GetRequiredService<ICredentialSource>()));
+        services.AddTransient(sp => new LocalDestinationHandler(sp.GetRequiredService<CapacitorServer>()));
 
         services.AddHttpClient(CapacitorClients.Default)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
@@ -68,6 +70,7 @@ public static class CapacitorHttpServices {
         // hook that POSTs once cannot use what a second attempt would learn — its caller spools the
         // payload and the next invocation carries a credential the rotation would have minted anyway.
         services.AddHttpClient(CapacitorClients.Hook)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
@@ -84,6 +87,7 @@ public static class CapacitorHttpServices {
         // for the one the server served — and a hop that crosses origin drops the credential on the
         // way, so the substitute would not even be authenticated.
         services.AddHttpClient(CapacitorClients.Memory)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()

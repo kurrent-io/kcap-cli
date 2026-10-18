@@ -361,7 +361,7 @@ internal sealed class AgentCommand(
     /// non-answer: a closed connection, an Error frame, or an unexpected frame type. Only a real
     /// AgentList frame with an empty payload is a genuinely empty table, so only that maps to [].
     /// </summary>
-    static async Task<IReadOnlyList<AgentRow>?> FetchAgentsAsync(string sock) {
+    internal static async Task<IReadOnlyList<AgentRow>?> FetchAgentsAsync(string sock) {
         try {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
             await socket.ConnectAsync(new UnixDomainSocketEndPoint(sock));

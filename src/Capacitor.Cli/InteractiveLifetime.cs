@@ -42,7 +42,7 @@ static class InteractiveLifetime {
     /// same "no timeout, no signal awareness" gap as a Spectre prompt.
     /// </summary>
     public static bool IsInteractiveCommand(string command) => command is
-        "setup" or "login" or "profile" or "use" or "import" or "uninstall" or "feedback";
+        "setup" or "login" or "profile" or "use" or "import" or "uninstall" or "feedback" or "local";
 
     /// <summary>
     /// Installs the interrupt handlers and the parent-liveness watchdog. Best

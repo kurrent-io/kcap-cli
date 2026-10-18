@@ -62,7 +62,7 @@ public static class CommandServices {
                 sp.GetRequiredService<BinaryProbe>(),
                 sp.GetRequiredService<AccountStore>()));
 
-        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
+        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles, localRoot));
         services.AddCapacitorHttp(env, machine);
         services.AddCapacitorTelemetry(config, telemetryStartup);
 
@@ -109,6 +109,8 @@ public static class CommandServices {
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
+        services.AddTransient<IOutgoingRecorders, OutgoingRecorders>();
+        services.AddTransient<LocalCommand>();
         services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();

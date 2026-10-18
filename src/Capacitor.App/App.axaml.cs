@@ -99,7 +99,7 @@ public partial class App : Application {
         return _serverHttp ??= new ServiceCollection()
             .AddSingleton(_config)
             .AddSingleton(profiles)
-            .AddSingleton(new CapacitorServer(url, _config, profiles))
+            .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
             .AddCapacitorHttp(_serverEnv, _machineEnv)
             .BuildValidated();
     }
@@ -1493,7 +1493,7 @@ public partial class App : Application {
             await using var lane = new ServiceCollection()
                 .AddSingleton(_config)
                 .AddSingleton(profiles)
-                .AddSingleton(new CapacitorServer(url, _config, profiles))
+                .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
                 .AddCapacitorHttp(_serverEnv, _machineEnv)
                 .BuildValidated();
 

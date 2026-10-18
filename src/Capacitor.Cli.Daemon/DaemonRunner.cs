@@ -105,7 +105,8 @@ public static partial class DaemonRunner {
         // honors --server-url, KCAP_URL, KCAP_PROFILE.
         var serverEnv  = ProfileOverrides.FromEnvironment();
         var machineEnv = MachineAuth.FromEnvironment();
-        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv, LocalEndpoints.Read(LocalRoot.FromEnvironment(userHome)));
+        var localRoot  = LocalRoot.FromEnvironment(userHome);
+        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv, LocalEndpoints.Read(localRoot));
         config.Profiles  = profiles;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
@@ -350,7 +351,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(harnesses);
         builder.Services.AddSingleton(daemonLock);
-        builder.Services.AddDaemonHttp(configRoot, config, serverEnv, machineEnv);
+        builder.Services.AddDaemonHttp(configRoot, config, serverEnv, machineEnv, localRoot);
         builder.Services.AddSingleton<ServerConnection>();
 
         // The owner consent gate — policy store + append-only decision log share the

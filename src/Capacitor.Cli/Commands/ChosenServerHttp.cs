@@ -27,7 +27,7 @@ public sealed class ChosenServerHttp(
         return new ServiceCollection()
             .AddSingleton(config)
             .AddSingleton(context)
-            .AddSingleton(new CapacitorServer(context.Resolution.ServerUrl, config, context))
+            .AddSingleton(new CapacitorServer(context.Resolution.ServerUrl, config, context, localRoot))
             .AddCapacitorHttp(env, machine)
             .BuildValidated();
     }

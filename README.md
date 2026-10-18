@@ -211,6 +211,7 @@ kcap setup --server-url <url> --no-prompt    # CI / scripted
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 kcap setup --local                           # run a Capacitor server on this machine
+kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
 The install scripts run `kcap setup` after a first install, so this is usually how you met it; re-run it any time.
@@ -309,6 +310,17 @@ The first version is for a machine with one user: on a shared machine, other OS 
 A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed`, or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
 
 For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
+
+#### Removing the local edition
+
+```bash
+kcap local uninstall            # stop and remove the server, keep its data
+kcap local uninstall --purge    # also delete its data and retire its URL
+```
+
+`kcap local uninstall` refuses while a daemon is running agents, unless `--force` ends them with the daemon. It then stops every kcap daemon and watcher and removes the daemon service, stops the local server and verifies that nothing of it is still running, and only then removes the server's service and its `bin/` and `run/` directories. If anything cannot be stopped, nothing is removed. Its data, its identity and your profile stay, so `kcap setup --local` brings the same installation back on the same URL, downloading the version it was running.
+
+`--purge` goes on to retire the installation, then delete its `data/` and `logs/`, the pending recordings and the caches for it in the config directory, and clear the server URL of every profile there that points at it. A retired URL is never sent to again: a watcher still running, or a profile under another `KCAP_CONFIG_DIR`, is refused with an error naming the removed installation, and a later `kcap setup --local` creates a new installation on a new port. A purge that is interrupted is finished by the next `kcap local` command or `kcap setup --local`. `--yes` skips the confirmation.
 
 #### Unattended setup
 
