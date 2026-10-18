@@ -163,6 +163,26 @@ public class StatusCommandHooksTests {
         await Assert.That(StatusCommand.MuseHooksDetailLine(tmp.PathTo("absent/settings.json"), detected: true, wired: false)).IsNull();
     }
 
+    /// Codex refuses a hooks.json that starts with a byte-order mark and runs none of it, although
+    /// the kcap entries parse fine here, so only an installed file with the mark gets the line.
+    [Test]
+    public async Task CodexHooksDetailLine_names_a_byte_order_mark_codex_refuses() {
+        using var tmp   = new TempDir();
+        var       clean = tmp.PathTo("clean/hooks.json");
+        var       bom   = tmp.PathTo("bom/hooks.json");
+        CodexHooksWriter.Install(clean);
+        CodexHooksWriter.Install(bom);
+        await File.WriteAllBytesAsync(bom, [0xEF, 0xBB, 0xBF, .. await File.ReadAllBytesAsync(bom)]);
+
+        var line = StatusCommand.CodexHooksDetailLine(bom, wired: CodexHooksInstaller.ReferencesKcapHook(bom));
+
+        await Assert.That(line).IsNotNull();
+        await Assert.That(line!).Contains("byte-order mark");
+        await Assert.That(line).Contains("kcap plugin install --codex");
+        await Assert.That(StatusCommand.CodexHooksDetailLine(clean, wired: true)).IsNull();
+        await Assert.That(StatusCommand.CodexHooksDetailLine(bom, wired: false)).IsNull();
+    }
+
     /// Every harness the build knows appears on the line — a tenth would too, since the line is
     /// built from the registry rather than a parameter per vendor.
     [Test]

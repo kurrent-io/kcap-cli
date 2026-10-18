@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Services;
@@ -45,9 +46,17 @@ public sealed class StatusCommand(
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
 
-        var line = BuildHooksStatusLine(harnesses.Select(h => (h.Id, h.Signals.IsWired)));
+        var codexGap = harnesses.FirstOrDefault(h => h.Id == HarnessId.Codex) is { } codex
+            ? CodexHooksDetailLine(harnesses.Of<CodexHarness>().Paths.UserHooksJson, wired: codex.Signals.IsWired)
+            : null;
+
+        // A Codex file Codex refuses is wired to kcap and runs nothing, so it reads as unwired here.
+        var line = BuildHooksStatusLine(
+            harnesses.Select(h => (h.Id, h.Signals.IsWired && !(h.Id == HarnessId.Codex && codexGap is not null))));
 
         await Console.Out.WriteLineAsync(line);
+
+        if (codexGap is not null) await Console.Out.WriteLineAsync($"           {codexGap}");
 
         var accountLines = BuildAccountLines(
             accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
@@ -535,6 +544,13 @@ public sealed class StatusCommand(
     /// claim every event is missing, and re-running the install cannot fix it. It is reported for an
     /// installed but unwired Muse too, since an unparseable file is what keeps it from reading as wired;
     /// missing hooks are reported only once wired, where the not-configured line does not already.</summary>
+    /// <summary>The line naming why Codex runs none of kcap's hooks although they are installed, or
+    /// null when nothing stops it.</summary>
+    internal static string? CodexHooksDetailLine(string hooksPath, bool wired) =>
+        wired && CodexHooksInstaller.StartsWithByteOrderMark(hooksPath)
+            ? $"{HarnessRegistry.LabelOf(HarnessId.Codex)}: {hooksPath} starts with a UTF-8 byte-order mark, so Codex ignores every hook in it. Run `kcap plugin install --codex` to rewrite it without one"
+            : null;
+
     internal static string? MuseHooksDetailLine(string settingsPath, bool detected, bool wired) {
         if (!detected && !wired) return null;
 
