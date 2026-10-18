@@ -503,12 +503,7 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
         if (Volatile.Read(ref _disposed) != 0) return;
 
         // A write stuck on a peer that stopped reading must not hold back the EOF that ends it.
-        bool gated;
-        try {
-            gated = await _writeGate.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-        } catch (ObjectDisposedException) {
-            return;
-        }
+        var gated = await _writeGate.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
 
         try {
             await _writeStream.DisposeAsync().ConfigureAwait(false);
@@ -530,7 +525,9 @@ internal sealed partial class AcpConnection : IAsyncDisposable {
 
         FaultAllPending(new ObjectDisposedException(nameof(AcpConnection)));
 
-        _writeGate.Dispose();
+        // _writeGate is left undisposed: disposing a SemaphoreSlim neither completes nor times out a
+        // waiter already queued on it, which would strand CloseInputAsync's bounded wait. It holds no
+        // unmanaged state unless AvailableWaitHandle is touched, which nothing here does.
 
         await _writeStream.DisposeAsync().ConfigureAwait(false);
         await _readStream.DisposeAsync().ConfigureAwait(false);
