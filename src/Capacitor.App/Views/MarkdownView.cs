@@ -69,14 +69,15 @@ public sealed class MarkdownView : ContentControl {
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
     /// a change, and the markdown it already holds is not one.
-    /// Markdig throws from the parse for text nested past its depth limit; that text shows as
-    /// plain source, and the viewer is left holding nothing so a pipeline change cannot re-throw.
+    /// Markdig throws from the parse for text nested past its depth limit, with no type of its own to
+    /// catch; that text shows as plain source, and the viewer is left holding nothing so a pipeline
+    /// change cannot re-throw.
     void Render() {
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
             _viewer.Markdown = Text;
             Content = _viewer;
-        } catch (ArgumentException) {
+        } catch (ArgumentException e) when (e.Message.Contains("too deeply nested", StringComparison.Ordinal)) {
             _viewer.Markdown = null;
             Content = new TextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
