@@ -5,6 +5,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <param name="PathHazard">The login shell still cannot find kcap, so hooks record nothing.</param>
 /// <param name="Import">The history import, while it runs and after; null when none started.</param>
 /// <param name="WorkspaceUrl">The workspace this machine signed in to, or null.</param>
+/// <param name="DaemonProblem">Why the daemon is not running, or null while it is being set up.</param>
 public sealed record DoneFacts(
     IReadOnlyList<string> Recording,
     bool                  CodexRecording,
@@ -12,6 +13,7 @@ public sealed record DoneFacts(
     HistoryImportRun?     Import,
     bool                  DaemonRunning,
     string                MachineName,
-    string?               WorkspaceUrl) {
+    string?               WorkspaceUrl,
+    string?               DaemonProblem = null) {
     public static readonly DoneFacts Empty = new([], false, false, null, false, "this machine", null);
 }

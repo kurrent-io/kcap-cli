@@ -45,10 +45,6 @@
             <views:HistoryPaneView />
         </DataTemplate>
 
-        <DataTemplate DataType="vm:DaemonStepViewModel">
-            <views:DaemonPaneView />
-        </DataTemplate>
-
         <DataTemplate DataType="vm:DoneStepViewModel">
             <views:DonePaneView />
         </DataTemplate>
@@ -102,7 +98,7 @@
                                 IsVisible="{Binding NextVisible}" />
                     </Grid>
 
-                    <!-- Daemon step only. These lines name that step's action, and the other pages have none. -->
+                    <!-- Done page only: the daemon is enabled beside the steps, and its outcome lands here. -->
                     <TextBlock x:Name="LifecycleStatusText" Classes="frNote" Text="{Binding Surface.StatusText}"
                                IsVisible="{Binding ShowLifecycleStatus}" />
                     <TextBlock x:Name="LifecycleAttentionText" Classes="frError" Text="{Binding Surface.AttentionText}"

@@ -6,12 +6,11 @@ using Capacitor.Cli.Core.FirstRun;
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
 /// <summary>
-/// The daemon-service capability performed after setup writes its settings, rather than inside the
-/// browser leg.
+/// Setup's daemon service: always ensured, and reported to the browser only when it asked.
 ///
-/// <para>What these pin is mostly what it must NOT do: act when nothing was asked, report a refusal over
-/// a machine something was attempted on, or give up on a single failed report and leave the request
-/// outstanding under a screen saying it asked.</para>
+/// <para>What the report half pins is mostly what it must NOT do: report when nothing was asked, report a
+/// refusal over a machine something was attempted on, or give up on a single failed report and leave the
+/// request outstanding under a screen saying it asked.</para>
 /// </summary>
 public class SetupDaemonServiceTests {
     const string ServerUrl = "https://tenant.example";
@@ -56,46 +55,47 @@ public class SetupDaemonServiceTests {
             })]
         };
 
-    static Task<FirstRunMachineActionResult?> RunAsync(Channel channel, Func<Task<ServiceEnsureJson?>>? ladder = null) =>
-        SetupDaemonService.RunAsync(
-            channel, ServerUrl, FlowId,
+    static Task<FirstRunMachineActionResult> EnsureAsync(Func<Task<ServiceEnsureJson?>>? ladder = null) =>
+        SetupDaemonService.EnsureAsync(
             new ConfigRoot("/nonexistent-config-root"),
             new ProfileContext(new(ServerUrl, "default", null, null), new ProfileConfig()),
             new UserHome("/nonexistent-home"),
             TimeProvider.System,
             ladder ?? (() => Task.FromResult<ServiceEnsureJson?>(null)));
 
-    /// <summary>Nothing asked, so nothing runs — and nothing is reported, which is what keeps a flow that
-    /// declined the offer from carrying an outcome it never requested.</summary>
+    static Task ReportAsync(Channel channel, FirstRunMachineActionResult? result = null) =>
+        SetupDaemonService.ReportAsync(
+            channel, ServerUrl, FlowId,
+            result ?? new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.AlreadyEnabled, null));
+
+    static readonly FirstRunMachineActionResult Enabled = new(FirstRunMachineActionOutcomes.AlreadyEnabled, null);
+
+    /// <summary>Nothing asked, so nothing is reported, which keeps a flow from carrying an outcome it never
+    /// requested.</summary>
     [Test]
-    public async Task Nothing_outstanding_performs_and_reports_nothing() {
+    public async Task Nothing_outstanding_reports_nothing() {
         var channel = new Channel(View());
-        var ran     = false;
 
-        await RunAsync(channel, () => { ran = true; return Task.FromResult<ServiceEnsureJson?>(null); });
+        await ReportAsync(channel);
 
-        await Assert.That(ran).IsFalse();
         await Assert.That(channel.Reports).IsEmpty();
     }
 
-    /// <summary>A capability this step does not own is left alone: the shim is the live lane's, and
-    /// performing it here would perform it twice.</summary>
+    /// <summary>A capability this step does not own is left alone: the shim is the live lane's.</summary>
     [Test]
-    public async Task Another_capability_outstanding_is_not_this_step_s_to_perform() {
+    public async Task Another_capability_outstanding_is_not_this_step_s_to_answer() {
         var channel = new Channel(View(FirstRunMachineCapabilities.PathShim));
 
-        await RunAsync(channel);
+        await ReportAsync(channel);
 
         await Assert.That(channel.Reports).IsEmpty();
     }
 
-    /// <summary>A poll that answered nothing readable leaves the request where it is rather than acting on
-    /// a view this build could not read.</summary>
     [Test]
-    public async Task An_unreadable_poll_performs_nothing() {
+    public async Task An_unreadable_poll_reports_nothing() {
         var channel = new Channel(null);
 
-        await RunAsync(channel);
+        await ReportAsync(channel);
 
         await Assert.That(channel.Reports).IsEmpty();
     }
@@ -106,8 +106,7 @@ public class SetupDaemonServiceTests {
     public async Task The_outcome_is_reported_against_the_request_it_answers() {
         var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService));
 
-        await RunAsync(channel, () => Task.FromResult<ServiceEnsureJson?>(
-            new("kcap", "running", "none", "already_enabled")));
+        await ReportAsync(channel, Enabled);
 
         await Assert.That(channel.Reports.Count).IsEqualTo(1);
         await Assert.That(channel.Reports[0].Capability).IsEqualTo(FirstRunMachineCapabilities.DaemonService);
@@ -115,82 +114,50 @@ public class SetupDaemonServiceTests {
         await Assert.That(channel.Reports[0].Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyEnabled);
     }
 
-    /// <summary>No service manager on this platform attempted nothing, so it refuses rather than reporting
-    /// a transaction that failed.</summary>
+    /// <summary>No service manager on this platform attempted nothing, so it refuses rather than failing.</summary>
     [Test]
     public async Task A_platform_with_no_service_manager_refuses_rather_than_failing() {
-        var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService));
+        var result = await EnsureAsync();
 
-        await RunAsync(channel);
-
-        await Assert.That(channel.Reports[0].Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Refused);
-        await Assert.That(channel.Reports[0].Reason).IsEqualTo(FirstRunMachineActionReasons.UnsupportedPlatform);
+        await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Refused);
+        await Assert.That(result.Reason).IsEqualTo(FirstRunMachineActionReasons.UnsupportedPlatform);
     }
 
-    /// <summary>A ladder that threw attempted something, so it is a failure and not a refusal — and the
-    /// step still reports, because a screen left waiting on an outcome that threw is the state this lane
-    /// exists to avoid.</summary>
+    /// <summary>A ladder that threw attempted something, so it is a failure and not a refusal.</summary>
     [Test]
-    public async Task A_ladder_that_throws_is_reported_as_a_failure() {
-        var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService));
+    public async Task A_ladder_that_throws_is_a_failure() {
+        var result = await EnsureAsync(() => throw new InvalidOperationException("the manager query died"));
 
-        await RunAsync(channel, () => throw new InvalidOperationException("the manager query died"));
-
-        await Assert.That(channel.Reports.Count).IsEqualTo(1);
-        await Assert.That(channel.Reports[0].Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Failed);
-        await Assert.That(channel.Reports[0].Reason).IsNull();
+        await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.Failed);
+        await Assert.That(result.Reason).IsNull();
     }
 
-    /// <summary>
-    /// A refused report is retried, because there is no next tick here to retry on.
-    ///
-    /// <para><b>And the action is not repeated with it.</b> The ladder runs once; only the report is
-    /// retried — repeating a service transaction to deliver its own result would be a second mutation for
-    /// a message that failed.</para>
-    /// </summary>
     [Test]
-    public async Task A_refused_report_is_retried_without_repeating_the_action() {
+    public async Task The_ladder_outcome_is_returned_to_setup() {
+        var result = await EnsureAsync(() => Task.FromResult<ServiceEnsureJson?>(
+            new("kcap", "running", "none", "already_enabled")));
+
+        await Assert.That(result.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyEnabled);
+    }
+
+    /// <summary>A refused report is retried, because there is no next tick here to retry on.</summary>
+    [Test]
+    public async Task A_refused_report_is_retried() {
         var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService), 500, 200);
-        var runs    = 0;
 
-        await RunAsync(channel, () => {
-            runs++;
+        await ReportAsync(channel);
 
-            return Task.FromResult<ServiceEnsureJson?>(new("kcap", "running", "none", "already_enabled"));
-        });
-
-        await Assert.That(runs).IsEqualTo(1);
         await Assert.That(channel.Reports.Count).IsEqualTo(2);
     }
 
     /// <summary>A report nothing ever takes stops rather than looping: the request staying outstanding is
-    /// the honest reading, and the screen goes on saying it asked.</summary>
+    /// the honest reading.</summary>
     [Test]
     public async Task A_report_that_never_lands_gives_up_bounded() {
         var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService), 500, 500, 500, 500, 500);
 
-        await RunAsync(channel);
+        await ReportAsync(channel);
 
         await Assert.That(channel.Reports.Count).IsEqualTo(3);
-    }
-
-    /// <summary>Setup's closing line reads this: a service the ensure put in place must not be followed by
-    /// advice to start a second daemon by hand.</summary>
-    [Test]
-    public async Task The_performed_outcome_is_returned_to_setup() {
-        var channel = new Channel(View(FirstRunMachineCapabilities.DaemonService));
-
-        var result = await RunAsync(channel, () => Task.FromResult<ServiceEnsureJson?>(
-            new("kcap", "running", "none", "already_enabled")));
-
-        await Assert.That(result?.Outcome).IsEqualTo(FirstRunMachineActionOutcomes.AlreadyEnabled);
-    }
-
-    /// <summary>Nothing asked returns nothing, so setup keeps its ordinary closing advice.</summary>
-    [Test]
-    public async Task Nothing_outstanding_returns_no_outcome() {
-        var result = await RunAsync(new Channel(View()));
-
-        await Assert.That(result).IsNull();
     }
 }
