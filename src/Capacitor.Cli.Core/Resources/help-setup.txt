@@ -45,9 +45,12 @@ Options:
                               existing installation needs no confirmation.
   --json                      With --local: write one JSON object per line,
                               ending with "committed" or "failed", and run only
-                              the server and login steps. Takes only --single-user,
-                              --yes and --no-update-check. With --discover: the
-                              workspace report.
+                              the server and login steps. Exits 0 on "committed",
+                              1 on "failed", and 130 when an interrupt (Ctrl+C or
+                              SIGTERM) was received, whichever line came last.
+                              Takes only --single-user, --yes and
+                              --no-update-check. With --discover: the workspace
+                              report.
   --daemon-name <name>        Daemon name. With --no-prompt, a name another
                               machine's daemon holds exits 1; otherwise it is the
                               prompt's suggestion, moved to a free variant if held
@@ -174,8 +177,10 @@ against it. macOS on Apple silicon only for now. The first version is for a
 machine with one user: on a shared machine, other OS users can open the web UI
 and act as its admin, so setup asks you to confirm that and the install itself
 (--single-user and --yes; --no-prompt and --json cannot ask and require both).
-Running it again reuses the existing installation. A machine with a profile for
-another server is refused for now, and musl builds of kcap are not supported.
+Running it again reuses the existing installation. A failed or cancelled
+install removes what it created and keeps its logs/ directory. A machine with
+a profile for another server is refused for now, and musl builds of kcap are
+not supported.
 KCAP_LOCAL_BUNDLE_BASE_URL and KCAP_LOCAL_BUNDLE_VERSION redirect the download
 for development and pre-release builds; the manifest must still verify.
 

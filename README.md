@@ -298,15 +298,15 @@ The first version is for a machine with one user: on a shared machine, other OS 
 
 ```json
 {"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
-{"v":1,"event":"port_chosen","port":5100}
+{"v":1,"event":"port_chosen","port":9473}
 {"v":1,"event":"downloading","url":"https://…","bytes":84213760}
 {"v":1,"event":"verified","sha256":"…"}
 {"v":1,"event":"starting","unit":"…"}
-{"v":1,"event":"ready","server_url":"http://127.0.0.1:5100"}
-{"v":1,"event":"committed","server_url":"http://127.0.0.1:5100","installation_id":"…","port":5100,"version":"0.13.0"}
+{"v":1,"event":"ready","server_url":"http://localhost:9473"}
+{"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"…","port":9473,"version":"0.13.0"}
 ```
 
-A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}` and exit code 1; after `rolling_back` and `rolled_back` the machine is as it was. The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed`, or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
 
 For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
 
