@@ -96,4 +96,15 @@ public class PendingLaunchStatusTests {
         pending.Dispose();
         await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task The_busy_count_holds_a_launch_that_overlaps_another_ending() {
+        await using var orch = Build();
+        var running = orch.SeedAgentForTest("a", status: "Running");
+        using var pending = orch.TrackPendingLaunch("b", LaunchKind.Default, null, null, new AgentActivityClock(TimeProvider.System));
+
+        orch.SetAgentStatus(running, "Exited");
+
+        await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
+    }
 }
