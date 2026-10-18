@@ -330,6 +330,40 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(factory.MaxInFlight).IsEqualTo(2);
     }
 
+    /// <summary>Concurrent resumes reach the capacity check before either publishes, so the check has
+    /// to reserve the slot it grants.</summary>
+    [Test]
+    public async Task Concurrent_resumes_against_the_last_slot_launch_one_and_interrupt_the_other_for_capacity() {
+        var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var f = Build(factory, c => {
+            c.ResumeConcurrency   = 2;
+            c.MaxConcurrentAgents = 1;
+        });
+        await using var _ = f.Orch;
+        f.Orch.ContinueEntry = (_, _, _) => Task.FromResult(ResumeOutcome.Interrupted);
+        Entry(f, "slot-1");
+        Entry(f, "slot-2");
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await WaitHarness.PollUntilAsync(() => factory.InFlight >= 1);
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        await Assert.That(factory.InFlight).IsEqualTo(1);
+
+        factory.Gate.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        var launched = factory.Contexts.Single().AgentId;
+        var refused  = launched == "slot-1" ? "slot-2" : "slot-1";
+        await Assert.That(f.Orch.GetAgentForTest(launched)).IsNotNull();
+        await Assert.That(f.Orch.GetAgentForTest(refused)).IsNull();
+
+        var after = f.Orch.ResumeLedger!.TryRead(refused)!;
+        await Assert.That(after.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(after.LastError).IsEqualTo("daemon_capacity");
+    }
+
     /// <summary>A web-UI stop names an agent this daemon is not running yet; it withdraws the candidate so
     /// the lane never launches it.</summary>
     [Test]

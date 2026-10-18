@@ -1565,6 +1565,45 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// admission (fails closed) rather than minting processes beyond the budget.</summary>
     internal int EffectiveCount => _agents.Count + (_quarantine?.Count ?? 0);
 
+    readonly Lock _capacityLock = new();
+    int _capacityReservations;
+
+    /// <summary>A slot held from a launch's capacity check until it publishes, so concurrent launches
+    /// awaiting their handshakes cannot all pass the last free slot. Null when the daemon is full;
+    /// <see cref="DaemonConfig.MaxConcurrentAgents"/> 0 is unlimited and never refuses.</summary>
+    CapacityReservation? TryReserveCapacity() {
+        lock (_capacityLock) {
+            if (_config.MaxConcurrentAgents > 0 && EffectiveCount + _capacityReservations >= _config.MaxConcurrentAgents)
+                return null;
+
+            _capacityReservations++;
+            return new CapacityReservation(this);
+        }
+    }
+
+    /// <summary>Released exactly once: on dispose, or by <see cref="Publish"/>, which hands the slot to
+    /// the published agent under the same lock the check reads.</summary>
+    sealed class CapacityReservation(AgentOrchestrator owner) : IDisposable {
+        bool _released;
+
+        public void Publish(AgentInstance agent) {
+            lock (owner._capacityLock) {
+                owner.PublishAgent(agent);
+                Release();
+            }
+        }
+
+        public void Dispose() {
+            lock (owner._capacityLock) Release();
+        }
+
+        void Release() {
+            if (_released) return;
+            _released = true;
+            owner._capacityReservations--;
+        }
+    }
+
     /// <summary>Phase B (D4): this daemon's stable logical id = a hash of its name, written
     /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
     /// user is never mistaken for ours by the env-marker scan.</summary>
@@ -2338,9 +2377,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // one clock per launch, never three.
         var activityClock = CreateActivityClock();
 
+        CapacityReservation? capacity = null;
+
         try {
-            // MaxConcurrentAgents == 0 is unlimited: the gate is skipped entirely, never compared.
-            if (_config.MaxConcurrentAgents > 0 && EffectiveCount >= _config.MaxConcurrentAgents) {
+            capacity = TryReserveCapacity();
+            if (capacity is null) {
                 await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
@@ -2792,7 +2833,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 resume.Agent = agent;
                 ReplayPersistedRing(agent);
             }
-            PublishAgent(agent);
+            capacity.Publish(agent);
             published = true;
             storeLease?.Keep();
             if (resume is null) WriteLedger(agent, cmd, "server", consent);
@@ -3000,6 +3041,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // was torn down and no agent was ever registered; terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         } finally {
+            capacity?.Dispose();
+
             if (storeLease is not null) {
                 // Never drop a directory a LIVE incarnation under this id owns: a relaunch that fails
                 // before publishing finds the previous agent still holding the id, and that agent's
