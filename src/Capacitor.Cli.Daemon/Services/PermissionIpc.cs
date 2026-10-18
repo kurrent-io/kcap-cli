@@ -51,9 +51,10 @@ internal sealed class PermissionIpc(PermissionPromptBroker broker, ILogger<Permi
                 ack = new PermissionAckDto(false, "invalid resolve payload (decision must be allow|deny|withdraw)");
             } else {
                 // A withdrawn request still answers its hook, and that answer must be a deny: the
-                // tool has already run, so an allow could only ever apply to some later call.
+                // tool has already run, so an allow could only ever apply to some later call. That
+                // run's own hook may not have reported yet, so the broker is left owing the report.
                 var settled = dto.Decision == PermissionResolveDecisions.Withdraw
-                    ? broker.TrySettle(dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled)
+                    ? broker.TrySettle(dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled, owesCompletion: true)
                     : broker.TrySettle(dto.RequestId, new PermissionDecision(dto.Decision, dto.ApplyPermissions, dto.UpdatedInput), dto.Decision, PermissionSettlements.SourceApp);
                 ack = settled
                     ? new PermissionAckDto(true, null)

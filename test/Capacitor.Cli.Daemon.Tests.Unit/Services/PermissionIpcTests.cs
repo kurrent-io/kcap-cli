@@ -107,7 +107,8 @@ public class PermissionIpcTests {
 
     /// A withdraw is the app reporting the tool already ran (its result is in the transcript), so
     /// the settlement is withdrawn under the tool_settled source and the hook is answered deny —
-    /// a decision nothing reads any more, never an allow that could apply to a later call.
+    /// a decision nothing reads any more, never an allow that could apply to a later call. The
+    /// tool's own hook may still report that run, so the broker is left owing that report.
     [Test]
     public async Task Resolve_withdraw_settles_as_withdrawn_by_tool_settled_and_pushes_resolved() {
         var broker = new PermissionPromptBroker();
@@ -129,6 +130,7 @@ public class PermissionIpcTests {
         var resolved = ((PermissionStreamItem.Resolved)await reader.ReadAsync(new CancellationTokenSource(5000).Token)).Dto;
         await Assert.That(resolved.Outcome).IsEqualTo("withdrawn");
         await Assert.That(resolved.Source).IsEqualTo("tool_settled");
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(1);
     }
 
     [Test]

@@ -27,20 +27,39 @@ internal static class PermissionSettlements {
 /// TrySettle under one gate that replay/registration also takes, so a subscriber observes a
 /// request as nothing, or Pending then Resolved, never Pending alone. The withdrawn set is
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
-internal sealed class PermissionPromptBroker {
+internal sealed class PermissionPromptBroker(TimeProvider? time = null) {
     sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId);
-    /// A completion notice a scope is still owed: the call was allowed and will report once it ran.
-    sealed record Owed(string AgentId, string SessionId, string? SubagentId, string ToolName, JsonElement? ToolInput);
 
-    const int MaxOwed = 256;
+    /// The hook-reporting scope a prompt or a completion belongs to.
+    readonly record struct Scope(string AgentId, string SessionId, string? SubagentId);
 
+    /// A completion report a scope is still owed: the call ran, or will, and its hook reports it
+    /// once. Lapses a grace period after its turn ends, since no report can be in flight by then.
+    sealed class Owed(Scope scope, string toolName, JsonElement? toolInput) {
+        public Scope Scope { get; } = scope;
+        public string ToolName { get; } = toolName;
+        public JsonElement? ToolInput { get; } = toolInput;
+        public DateTimeOffset? LapsesAt { get; set; }
+    }
+
+    /// The hook that reports a completion has a 5s timeout and the relay a 1s cap, so a report
+    /// still in flight when the turn ends lands well inside this.
+    internal static readonly TimeSpan OwedGraceAfterTurn = TimeSpan.FromSeconds(30);
+    internal const int MaxOwedPerScope = 256;
+
+    readonly TimeProvider _time = time ?? TimeProvider.System;
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly List<Owed> _owed = [];
+    /// Scopes whose ledger overflowed, so their fallback is off until a turn's end has lapsed; the
+    /// value is that lapse, null until the turn ends.
+    readonly Dictionary<Scope, DateTimeOffset?> _suspended = new();
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
     readonly object _gate = new();
 
     public bool HasSubscriber => !_subscribers.IsEmpty;
+
+    internal int OwedCountForTest { get { lock (_gate) return _owed.Count; } }
 
     /// <param name="subagentId">The vendor's id for the subagent whose tool call this is, null for
     /// the main agent's own. Kept off the wire: only <see cref="WithdrawTurn"/> reads it.</param>
@@ -59,8 +78,10 @@ internal sealed class PermissionPromptBroker {
         }
     }
 
-    public bool TrySettle(string requestId, PermissionDecision decision, string outcome, string source) {
-        lock (_gate) return SettleLocked(requestId, decision, outcome, source);
+    /// <param name="owesCompletion">True when the tool ran and its hook may still report it: the
+    /// app withdraws on transcript evidence, ahead of that report.</param>
+    public bool TrySettle(string requestId, PermissionDecision decision, string outcome, string source, bool owesCompletion = false) {
+        lock (_gate) return SettleLocked(requestId, decision, outcome, source, owesCompletion);
     }
 
     public bool TrySettleIfNoSubscriber(string requestId, PermissionDecision decision, string outcome, string source) {
@@ -98,7 +119,8 @@ internal sealed class PermissionPromptBroker {
     public void WithdrawForAgent(string agentId) {
         lock (_gate) {
             _withdrawnAgents.Add(agentId);
-            _owed.RemoveAll(o => o.AgentId == agentId);
+            _owed.RemoveAll(o => o.Scope.AgentId == agentId);
+            foreach (var scope in _suspended.Keys.Where(s => s.AgentId == agentId).ToList()) _suspended.Remove(scope);
             foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId).ToList())
                 SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone);
         }
@@ -110,20 +132,25 @@ internal sealed class PermissionPromptBroker {
     /// carries a tool-use id is matched by it alone. One raised without an id (Claude's permission
     /// hook never sends one) is matched by tool name and input within the subagent scope the hook
     /// ran in, and only after the completions this scope is owed: a call allowed here runs and
-    /// reports too, and hooks run asynchronously, so its notice can land after an identical prompt
-    /// nobody has answered was raised. Among identical pending prompts the oldest goes first.
+    /// reports too, and hooks run asynchronously, so its report can land after an identical prompt
+    /// nobody has answered was raised. A report nothing accounts for and no prompt matches is
+    /// dropped; a false match would deny a live hook, so the fallback runs only while the ledger
+    /// is whole. Among identical pending prompts the oldest goes first.
     public bool TryWithdrawTool(
             string agentId, string sessionId, string? toolUseId, string? toolName = null, JsonElement? toolInput = null, string? subagentId = null) {
         lock (_gate) {
+            PurgeLapsedLocked();
             var own = _pending.Values.Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId);
             var entry = toolUseId is null ? null : own.FirstOrDefault(e => e.Dto.ToolUseId == toolUseId);
             if (entry is null && toolName is not null && toolInput is { } input) {
-                var owed = _owed.FindIndex(o => o.AgentId == agentId && o.SessionId == sessionId && o.SubagentId == subagentId
-                                             && o.ToolName == toolName && o.ToolInput is { } owedInput && JsonElement.DeepEquals(owedInput, input));
+                var scope = new Scope(agentId, sessionId, subagentId);
+                var owed = _owed.FindIndex(o => o.Scope == scope && o.ToolName == toolName
+                                             && o.ToolInput is { } owedInput && JsonElement.DeepEquals(owedInput, input));
                 if (owed >= 0) {
                     _owed.RemoveAt(owed);
                     return false;
                 }
+                if (_suspended.ContainsKey(scope)) return false;
                 entry = own
                     .Where(e => e.Dto.ToolUseId is null && e.SubagentId == subagentId && e.Dto.ToolName == toolName
                              && e.Dto.ToolInput is { } pendingInput && JsonElement.DeepEquals(pendingInput, input))
@@ -138,26 +165,20 @@ internal sealed class PermissionPromptBroker {
     /// A call allowed without a prompt (the launch policy's decision) still runs and reports, so
     /// the scope is owed its completion like an allowed prompt's.
     public void ExpectCompletion(string agentId, string sessionId, string? subagentId, string toolName, JsonElement? toolInput) {
-        lock (_gate) OweLocked(new Owed(agentId, sessionId, subagentId, toolName, toolInput));
-    }
-
-    static DateTimeOffset RequestedAt(PermissionPendingDto dto) =>
-        DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) ? at : DateTimeOffset.MaxValue;
-
-    // Caller holds _gate. Bounded because a call allowed and then never run (an interrupted turn)
-    // reports nothing; the turn's end clears its scope's leftovers before that.
-    void OweLocked(Owed owed) {
-        if (_owed.Count >= MaxOwed) _owed.RemoveAt(0);
-        _owed.Add(owed);
+        lock (_gate) OweLocked(new Owed(new Scope(agentId, sessionId, subagentId), toolName, toolInput));
     }
 
     /// Withdraws what a finished turn left pending in the session: the main agent's own requests
     /// for a null subagentId, otherwise that subagent's. A background subagent's prompt outlives
     /// the parent's turn, which is why the scope matters. Unlike an exit, a turn's end says nothing
-    /// about the agent's next request.
+    /// about the agent's next request. The turn's owed completions start their grace period here.
     public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
         lock (_gate) {
-            _owed.RemoveAll(o => o.AgentId == agentId && o.SessionId == sessionId && o.SubagentId == subagentId);
+            PurgeLapsedLocked();
+            var scope  = new Scope(agentId, sessionId, subagentId);
+            var lapses = _time.GetUtcNow() + OwedGraceAfterTurn;
+            foreach (var o in _owed) if (o.Scope == scope) o.LapsesAt ??= lapses;
+            if (_suspended.TryGetValue(scope, out var suspendedUntil) && suspendedUntil is null) _suspended[scope] = lapses;
             var settled = 0;
             foreach (var e in _pending.Values.Where(e =>
                          e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
@@ -170,13 +191,39 @@ internal sealed class PermissionPromptBroker {
         lock (_gate) return _pending.Values.Select(e => e.Dto).ToList();
     }
 
+    /// Only Claude's hooks report completions; another vendor's allow would never be collected.
+    static bool ReportsCompletions(string vendor) => vendor == "claude";
+
+    static DateTimeOffset RequestedAt(PermissionPendingDto dto) =>
+        DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) ? at : DateTimeOffset.MaxValue;
+
+    // Caller holds _gate. A scope past the cap is one whose reports are not arriving; forgetting
+    // any of them could let a late one pass for a terminal answer, so the scope's fallback goes
+    // instead, and its ledger with it, until a turn's end has lapsed.
+    void OweLocked(Owed owed) {
+        if (_suspended.ContainsKey(owed.Scope)) return;
+        if (_owed.Count(o => o.Scope == owed.Scope) >= MaxOwedPerScope) {
+            _owed.RemoveAll(o => o.Scope == owed.Scope);
+            _suspended[owed.Scope] = null;
+            return;
+        }
+        _owed.Add(owed);
+    }
+
+    // Caller holds _gate.
+    void PurgeLapsedLocked() {
+        var now = _time.GetUtcNow();
+        _owed.RemoveAll(o => o.LapsesAt is { } at && at <= now);
+        foreach (var scope in _suspended.Where(kv => kv.Value is { } at && at <= now).Select(kv => kv.Key).ToList()) _suspended.Remove(scope);
+    }
+
     // Caller holds _gate. Instance-scoped removal, the consent broker's discipline. An allowed
     // call runs with the input the decision settled on, which is what its completion reports.
-    bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source) {
+    bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source, bool owesCompletion = false) {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
-        if (decision.Behavior == PermissionSettlements.Allow)
-            OweLocked(new Owed(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolName, decision.UpdatedInput ?? entry.Dto.ToolInput));
+        if ((decision.Behavior == PermissionSettlements.Allow || owesCompletion) && ReportsCompletions(entry.Dto.Vendor))
+            OweLocked(new Owed(new Scope(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId), entry.Dto.ToolName, decision.UpdatedInput ?? entry.Dto.ToolInput));
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;

@@ -2,6 +2,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -387,18 +388,91 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
     }
 
-    /// A turn's end settles its accounts: a completion the turn never reported must not absorb the
-    /// next turn's terminal answer.
+    /// A turn's end is not proof that every completion has been reported: the hook that reports a
+    /// tool runs asynchronously, so a completion the turn still owes stays collectable for a grace
+    /// period and must not pass for the next turn's terminal answer meanwhile.
     [Test]
-    public async Task A_turn_end_forgets_the_completions_that_turn_was_owed() {
-        var broker = new PermissionPromptBroker();
+    public async Task A_turn_end_keeps_the_owed_completions_through_the_grace_period() {
+        var time = new FakeTimeProvider();
+        var broker = new PermissionPromptBroker(time);
         _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"ls"}"""));
         await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
         await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(0);
         var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+        time.Advance(PermissionPromptBroker.OwedGraceAfterTurn - TimeSpan.FromSeconds(1));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// Once the grace period has lapsed no report can still be coming (the hook's own timeout is
+    /// far shorter), so a completion the turn never collected is forgotten and the next identical
+    /// prompt's completion is its own terminal answer.
+    [Test]
+    public async Task An_owed_completion_lapses_once_the_grace_period_after_its_turn_has_passed() {
+        var time = new FakeTimeProvider();
+        var broker = new PermissionPromptBroker(time);
+        _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(0);
+        time.Advance(PermissionPromptBroker.OwedGraceAfterTurn + TimeSpan.FromSeconds(1));
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
 
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
         await Assert.That((await WaitBounded(next, "the next turn's prompt")).Outcome).IsEqualTo("withdrawn");
+    }
+
+    /// Forgetting an owed completion would let its late report pass for a terminal answer, so a
+    /// scope whose ledger overflows loses the fallback instead, until a turn's end has lapsed.
+    [Test]
+    public async Task A_scope_that_outgrows_its_ledger_suspends_the_fallback_rather_than_forgetting() {
+        var time = new FakeTimeProvider();
+        var broker = new PermissionPromptBroker(time);
+        for (var i = 0; i <= PermissionPromptBroker.MaxOwedPerScope; i++) {
+            _ = broker.Register(Prompt($"r-{i}", "Bash", $$$"""{"command":"cmd {{{i}}}"}"""));
+            await Assert.That(broker.TrySettle($"r-{i}", Allow, "allow", "app")).IsTrue();
+        }
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(1);
+        time.Advance(PermissionPromptBroker.OwedGraceAfterTurn + TimeSpan.FromSeconds(1));
+        var later = broker.Register(Prompt("r-later", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(later, "the fallback restored")).Outcome).IsEqualTo("withdrawn");
+    }
+
+    /// The app retires a prompt as soon as the transcript shows its tool's result, which can be
+    /// before that tool's own hook has reported; the report is still owed, or it would pass for
+    /// the answer to the next identical prompt.
+    [Test]
+    public async Task A_withdrawal_on_transcript_evidence_still_owes_the_tools_completion() {
+        var broker = new PermissionPromptBroker();
+        const string question = """{"questions":[{"question":"Pick","options":[{"label":"A"}]}]}""";
+        _ = broker.Register(Prompt("r-seen", "AskUserQuestion", question));
+        await Assert.That(broker.TrySettle("r-seen", PermissionSettlements.DenyDecision, "withdrawn", "tool_settled", owesCompletion: true)).IsTrue();
+        var next = broker.Register(Prompt("r-next", "AskUserQuestion", question));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "AskUserQuestion", Input(question))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "AskUserQuestion", Input(question))).IsTrue();
+    }
+
+    /// Only Claude's hooks report completions, so only its allows are owed one; another vendor's
+    /// would never be collected and would only crowd the ledger.
+    [Test]
+    public async Task Only_a_vendor_whose_hooks_report_completions_is_owed_them() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Prompt("r-codex", "Bash", """{"command":"ls"}""") with { Vendor = "codex" });
+        _ = broker.Register(Prompt("r-claude", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TrySettle("r-codex", Allow, "allow", "app")).IsTrue();
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(0);
+        await Assert.That(broker.TrySettle("r-claude", Allow, "allow", "app")).IsTrue();
+        await Assert.That(broker.OwedCountForTest).IsEqualTo(1);
     }
 
     [Test]
