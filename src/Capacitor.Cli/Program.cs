@@ -467,7 +467,7 @@ switch (command) {
     case "setup":
         return await Run<SetupCommand>().HandleAsync(args);
     case "local":
-        return await LocalCommand.HandleAsync(args);
+        return await Run<LocalCommand>().HandleAsync(args);
     case "muse-assistant":
         return await Run<MuseAssistantCommand>().HandleAsync(args);
     case "plugin":

@@ -34,6 +34,12 @@ sealed class LocalServerSystemdService(
             LocalServerOwnerReader.FromUnitFile(LocalServerSystemdUnit.UnitPath(home, unit)));
     }
 
+    public UnitActivity Activity(LocalServerUnit unit) {
+        var (exit, stdout, stderr) = _run("systemctl", LocalServerSystemdUnit.ActivityArgs(unit));
+
+        return LocalServerActivityReader.FromShow(exit, stdout, stderr);
+    }
+
     public void Install(LocalServerUnit unit) {
         unit.PrepareLogDirectory();
         _writeUnit(LocalServerSystemdUnit.UnitPath(home, unit), LocalServerSystemdUnit.Unit(unit), null);

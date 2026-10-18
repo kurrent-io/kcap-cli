@@ -38,6 +38,12 @@ sealed partial class LocalServerLaunchdService(
             LocalServerOwnerReader.FromPlist(LocalServerLaunchdUnit.PlistPath(home, unit)));
     }
 
+    public UnitActivity Activity(LocalServerUnit unit) {
+        var (exit, stdout, stderr) = _run("launchctl", LocalServerLaunchdUnit.PrintArgs(_uid, unit));
+
+        return LocalServerActivityReader.FromPrint(exit, stdout, stderr);
+    }
+
     public void Install(LocalServerUnit unit) {
         unit.PrepareLogDirectory();
 

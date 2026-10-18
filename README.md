@@ -17,7 +17,7 @@
 - [Desktop app](#desktop-app) — [macOS](#desktop-app-on-macos) · [Windows](#desktop-app-on-windows)
 - [What it records](#what-it-records)
 - [CLI commands](#cli-commands)
-  - Setup: [setup](#initial-setup) · [unattended](#unattended-setup) · [after setup](#after-setup) · [agent notes](#agent-specific-notes)
+  - Setup: [setup](#initial-setup) · [unattended](#unattended-setup) · [after setup](#after-setup) · [agent notes](#agent-specific-notes) · [local server](#local-server-kcap-local)
   - Approvals: [policy](#approval-policy)
   - Sessions: [recap](#session-recap) · [validate-plan](#plan-validation) · [hide](#hide-session) · [disable](#disable-recording) · [errors](#error-extraction) · [eval](#session-evaluation-llm-as-judge)
   - Reviewing: [review](#pr-review-with-full-context) · [curate](#curate-guidelines)
@@ -85,6 +85,7 @@ kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt
 - **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
 - **npm:** `npm install -g @kurrent/kcap`, then `kcap setup`. This needs Node.js; see [npm installs and upgrades](#npm-installs-and-upgrades) for npm 11's install-script gate.
 - **Desktop app:** on macOS or Windows the [desktop app](#desktop-app) bundles `kcap` and the daemon.
+- **Run the server on this machine:** `kcap setup --local` installs a Capacitor server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
 
 ## Desktop app
 
@@ -168,6 +169,7 @@ At a glance — each links to its section below:
 | Command | What it does |
 |---------|--------------|
 | [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon (`--local` runs the server on this machine) |
+| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, logs and web UI of the server `kcap setup --local` installed |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
@@ -370,6 +372,23 @@ If you run `kcap setup` outside any git working tree, it still completes — hoo
 > **OpenCode** likewise has no shell hooks: live capture uses a shipped OpenCode plugin. Run `kcap plugin install --opencode` (or accept the `kcap setup` prompt) to write `~/.config/opencode/plugins/kcap.ts`, which `opencode` auto-loads and streams each session live (`vendor=opencode`). Subagents (the `task` tool / `@agent`) are captured too — the plugin fetches each child session via the SDK and streams it, so it nests under the parent in the trace. Historical `kcap import --opencode` reads OpenCode's SQLite database (`~/.local/share/opencode/opencode.db`) and imports every transitive descendant session (children, grandchildren, and so on — see [Loading historical sessions](#loading-historical-sessions)), so it backfills sessions from before the plugin was installed.
 
 > **Codex** collab subagents (Codex CLI 0.146+, the `spawn_agent` collaboration tools) are captured too. Each subagent thread writes its own rollout under `~/.codex/sessions/`; the live watcher discovers children by the parent linkage in their rollout header and streams each one nested under the parent session, and `kcap import --codex` does the same for history — a subagent rollout never imports as a separate top-level session (see [Loading historical sessions](#loading-historical-sessions)).
+
+### Local server (`kcap local`)
+
+The server `kcap setup --local` installed runs as a per-user service (a launchd LaunchAgent on macOS) and starts at login. These commands manage it:
+
+```bash
+kcap local status          # explain its state and what to do about it
+kcap local start           # start it and wait until it is ready
+kcap local stop            # stop it, and keep it stopped across logins
+kcap local restart
+kcap local logs [-n 200]   # the end of the server's log, which holds Postgres's and KurrentDB's too
+kcap local open            # open the web UI in a browser
+```
+
+`kcap local status` reports the installation's version, port and root, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup that was interrupted. It also says when the stack is older than this `kcap`. It changes nothing, and exits 0 only when the server is running and ready.
+
+`start`, `stop` and `restart` wait for any other `kcap` that is changing the installation, and first finish or undo an interrupted setup. A stop persists: the server does not come back at the next login until `kcap local start`. The port is part of the installation's identity, so a server whose port another process holds cannot move to another one; stop that process instead. The logs are under `~/.config/kcap/local/logs`.
 
 ### Approval policy
 

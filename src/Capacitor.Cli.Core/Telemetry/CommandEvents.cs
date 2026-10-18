@@ -58,6 +58,7 @@ public static partial class CommandEvents {
         ["agent"]   = new(StringComparer.Ordinal) { "start", "stop", "list", "status" },
         ["page"]      = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
         ["artefact"]  = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
+        ["local"]     = new(StringComparer.Ordinal) { "help", "status", "start", "stop", "restart", "logs", "open" },
     };
 
     const int MaxFlags = 12;
