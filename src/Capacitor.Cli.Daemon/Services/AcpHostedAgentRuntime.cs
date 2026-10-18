@@ -1440,25 +1440,23 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     public async Task RequestGracefulStopAsync() {
-        if (_sessionId is not { Length: > 0 } sessionId) {
-            _logger.LogDebug("ACP runtime RequestGracefulStopAsync called before a session was established; nothing to cancel.");
-            return;
+        if (_sessionId is { Length: > 0 } sessionId) {
+            var cancelParams = JsonSerializer.SerializeToElement(
+                new SessionCancelParams(SessionId: sessionId),
+                CapacitorJsonContext.Default.SessionCancelParams);
+
+            try {
+                await _installed.Connection.NotifyAsync("session/cancel", cancelParams).ConfigureAwait(false);
+            } catch (Exception ex) when (Phase != RuntimePhase.Running) {
+                // A notify against a dead or mid-swap connection is expected while reconnecting; the hard
+                // stop (TerminateAsync) is what ends the incident.
+                _logger.LogDebug(ex, "ACP: session/cancel against a non-running connection; ignoring.");
+            }
         }
 
-        var cancelParams = JsonSerializer.SerializeToElement(
-            new SessionCancelParams(SessionId: sessionId),
-            CapacitorJsonContext.Default.SessionCancelParams);
-
-        try {
-            await _installed.Connection.NotifyAsync("session/cancel", cancelParams).ConfigureAwait(false);
-        } catch (Exception ex) when (Phase != RuntimePhase.Running) {
-            // A notify against a dead or mid-swap connection is expected while reconnecting; the hard
-            // stop (TerminateAsync) is what ends the incident.
-            _logger.LogDebug(ex, "ACP: session/cancel against a non-running connection; ignoring.");
-        }
-
-        // session/cancel ends the turn, not the process; the agent exits on stdin EOF. The stop is marked
-        // intentional first, or that exit would read as a crash and open a reconnect.
+        // session/cancel ends the turn, not the process, and a stop during startup has no turn at all:
+        // the agent exits on stdin EOF. The stop is marked intentional first, or that exit would read
+        // as a crash and open a reconnect.
         AcpConnection connection;
         lock (_reconnectLock) {
             _intentionalStop = true;

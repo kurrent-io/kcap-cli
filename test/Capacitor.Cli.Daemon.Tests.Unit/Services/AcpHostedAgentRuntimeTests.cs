@@ -370,6 +370,19 @@ public class AcpHostedAgentRuntimeTests {
             .IsEqualTo("more");
     }
 
+    /// <summary>A stop during startup has no session to cancel, but the agent is already running and
+    /// still has to be asked to exit.</summary>
+    [Test]
+    public async Task RequestGracefulStopAsync_before_a_session_still_closes_stdin() {
+        await using var h = new Harness();
+        h.StartFakeAgentLoop();
+
+        await h.Runtime.RequestGracefulStopAsync().WaitAsync(HangGuard);
+
+        await h.FakeRunTask.WaitAsync(HangGuard);
+        await Assert.That(h.Fake.ReceivedCalls.Any(c => c.Method == "session/cancel")).IsFalse();
+    }
+
     /// <summary>An ACP agent exits when its stdin closes, and session/cancel alone leaves it running,
     /// so a stop that only cancelled would always wait out the orchestrator's grace and be killed.</summary>
     [Test]
