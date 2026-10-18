@@ -439,6 +439,7 @@ public static partial class DaemonRunner {
         builder.Services.AddHttpClient("Attachments", client => client.BaseAddress = new Uri(config.ServerUrl));
 
         var promptRoot = Path.Combine(coverageStateDir, "prompts");
+        PromptFile.Sweep(promptRoot);
 
         builder.Services.AddSingleton<IHostedAgentLauncher, ClaudeLauncher>();
         builder.Services.AddSingleton<IHostedAgentLauncher, CodexLauncher>();

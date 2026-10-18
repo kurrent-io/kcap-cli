@@ -94,10 +94,15 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         string? promptFile = null;
         if (launcherCtx.Prompt is { Length: > 0 } prompt
             && launchArgs.Args.Contains(prompt)
-            && !(PromptFile.IsSlashCommand(prompt) && !PromptFile.Overflows(launchArgs.Args))) {
-            promptFile  = PromptFile.Write(promptRoot, ctx.AgentId, prompt);
-            launcherCtx = launcherCtx with { PromptFile = promptFile };
-            launchArgs  = launcher.BuildArgs(launcherCtx);
+            && !StaysInline(prompt, launchArgs.Args)) {
+            promptFile = PromptFile.Write(promptRoot, ctx.AgentId, prompt);
+            try {
+                launcherCtx = launcherCtx with { PromptFile = promptFile };
+                launchArgs  = launcher.BuildArgs(launcherCtx);
+            } catch {
+                PromptFile.Delete(promptFile);
+                throw;
+            }
             LogPromptMovedToFile(ctx.AgentId, prompt.Length);
         }
 
@@ -150,6 +155,11 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }
+
+    /// <summary>A slash command stays inline unless it is too long for a Windows command line, where
+    /// the spawn would fail outright.</summary>
+    static bool StaysInline(string prompt, IReadOnlyList<string> args) =>
+        PromptFile.IsSlashCommand(prompt) && !(OperatingSystem.IsWindows() && PromptFile.Overflows(args));
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
     partial void LogPrepareSoftFailure(Exception ex, string agentId);

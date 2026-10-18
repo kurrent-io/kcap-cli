@@ -184,9 +184,9 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
 
         try {
-            var file = Path.Combine(root, "agent-mode-1", "prompt.md");
+            var file = Path.Combine(root, AgentFileNames.For("agent-mode-1"), "prompt.md");
             await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
-            await Assert.That(pty.LastArgs).DoesNotContain("build it");
+            await Assert.That(pty.LastArgs.Any(a => a.Contains("build it", StringComparison.Ordinal))).IsFalse();
             await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo("build it");
 
             if (!OperatingSystem.IsWindows()) {
@@ -220,18 +220,38 @@ public class PtyHostedAgentRuntimeFactoryTests {
         }
     }
 
-    /// <summary>On Windows an overlong command line fails the spawn outright, so even a slash command
-    /// is better read from a file.</summary>
     [Test]
-    public async Task An_overlong_slash_command_is_read_from_a_file() {
+    public async Task A_prompt_that_starts_with_an_absolute_path_is_read_from_a_file() {
+        var (factory, pty, process, root) = NewPromptFactory();
+        var start = await factory.StartAsync(
+            BuildClaudeLaunchContext(null) with { Prompt = "/Users/me/notes.md has the plan" }, CancellationToken.None);
+
+        try {
+            var file = Path.Combine(root, AgentFileNames.For("agent-mode-1"), "prompt.md");
+            await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
+        } finally {
+            process.Exit();
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    /// <summary>An overlong command line fails a Windows spawn outright, so there even a slash command is
+    /// better read from a file; elsewhere it fits and keeps working as a command.</summary>
+    [Test]
+    public async Task An_overlong_slash_command_moves_to_a_file_only_on_Windows() {
         var (factory, pty, process, root) = NewPromptFactory();
         var prompt = "/" + LongPrompt;
         var start  = await factory.StartAsync(BuildClaudeLaunchContext(null) with { Prompt = prompt }, CancellationToken.None);
 
         try {
-            var file = Path.Combine(root, "agent-mode-1", "prompt.md");
-            await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
-            await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo(prompt);
+            if (OperatingSystem.IsWindows()) {
+                var file = Path.Combine(root, AgentFileNames.For("agent-mode-1"), "prompt.md");
+                await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
+                await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo(prompt);
+            } else {
+                await Assert.That(pty.LastArgs![^1]).IsEqualTo(prompt);
+                await Assert.That(Directory.Exists(root)).IsFalse();
+            }
         } finally {
             process.Exit();
             await start.Runtime.DisposeAsync();
