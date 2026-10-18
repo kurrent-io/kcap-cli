@@ -23,19 +23,16 @@ namespace Capacitor.Cli.Daemon.Services;
 /// settings-overlay glitch never blocks launch (same contract as before the refactor,
 /// <c>AgentOrchestrator.LogPrepareSoftFailure</c>).
 /// </summary>
-/// <param name="windows">Test seam for the platform; null reads the ambient OS.</param>
-/// <param name="promptRoot">Test seam for where an overlong prompt is written; null is the temp directory.</param>
+/// <param name="promptRoot">Where launch prompts are written. It must be owner-only, which the
+/// daemon's state directory is and a shared temp directory is not.</param>
 internal sealed partial class PtyHostedAgentRuntimeFactory(
         IHostedAgentLauncher                  launcher,
         IPtyProcessFactory                    ptyFactory,
         ILogger<PtyHostedAgentRuntimeFactory> logger,
         TimeProvider                          time,
-        bool?                                 windows    = null,
-        string?                               promptRoot = null
+        string                                promptRoot
     ) : IHostedAgentRuntimeFactory {
-    readonly bool _windows = windows ?? OperatingSystem.IsWindows();
-
-    public string Vendor             => launcher.Vendor;
+    public string Vendor            => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
     public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
@@ -94,11 +91,11 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         var launchArgs = launcher.BuildArgs(launcherCtx);
 
-        // Windows only: elsewhere the argument limit is far larger, and a prompt that fits keeps its
-        // usual place on the command line.
         string? promptFile = null;
-        if (_windows && launcherCtx.Prompt is { Length: > 0 } prompt && PromptFile.Overflows(launchArgs.Args)) {
-            promptFile  = PromptFile.Write(promptRoot ?? PromptFile.DefaultRoot, ctx.AgentId, prompt);
+        if (launcherCtx.Prompt is { Length: > 0 } prompt
+            && launchArgs.Args.Contains(prompt)
+            && !(PromptFile.IsSlashCommand(prompt) && !PromptFile.Overflows(launchArgs.Args))) {
+            promptFile  = PromptFile.Write(promptRoot, ctx.AgentId, prompt);
             launcherCtx = launcherCtx with { PromptFile = promptFile };
             launchArgs  = launcher.BuildArgs(launcherCtx);
             LogPromptMovedToFile(ctx.AgentId, prompt.Length);
@@ -157,6 +154,6 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
     partial void LogPrepareSoftFailure(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId}'s {Length}-character prompt is too long for the command line; it reads it from a file")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} reads its {Length}-character prompt from a file")]
     partial void LogPromptMovedToFile(string agentId, int length);
 }

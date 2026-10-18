@@ -132,7 +132,7 @@ internal sealed record LauncherContext(
     /// that passed the orchestrator's <c>ClaudePermissionModePolicy</c> guard.</summary>
     public string? PermissionMode { get; init; }
 
-    /// <summary>Set when <see cref="Prompt"/> is too long for the command line: the launcher passes
+    /// <summary>Set when <see cref="Prompt"/> is kept off the command line: the launcher passes
     /// <see cref="Services.PromptFile.Pointer"/> to this file in place of the prompt, and lets the agent
     /// read the file's directory.</summary>
     public string? PromptFile { get; init; }
