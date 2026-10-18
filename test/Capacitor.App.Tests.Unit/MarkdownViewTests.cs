@@ -533,10 +533,19 @@ public class MarkdownViewTests {
                 var view = (MarkdownView)root;
                 await Assert.That(All<MarkdownViewer>(root)).IsEmpty();
                 await Assert.That(All<TextBlock>(root).Select(Reads)).IsEquivalentTo([deep]);
+                var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+                All<SelectableTextBlock>(root).Single().Focus();
                 view.SelectAll();
                 await Assert.That(view.HasSelection).IsTrue();
+                await clipboard.SetTextAsync("stale");
+                var copy = Application.Current!.PlatformSettings!.HotkeyConfiguration.Copy[0];
+                window.KeyPressQwerty(PhysicalKey.C, (RawInputModifiers)copy.KeyModifiers);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                await clipboard.SetTextAsync("stale");
                 await view.CopySelectionAsync();
-                await Assert.That(await TopLevel.GetTopLevel(view)!.Clipboard!.TryGetTextAsync()).IsEqualTo(deep);
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
 
                 view.Flavor = flavor == MarkdownFlavor.Chat ? MarkdownFlavor.GitHub : MarkdownFlavor.Chat;
                 view.Text = "**bold**";

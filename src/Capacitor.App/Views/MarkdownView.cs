@@ -57,7 +57,7 @@ public sealed class MarkdownView : ContentControl {
             e.Handled = true;
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
-        MarkViewSelection.Attach(this, _viewer);
+        MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
