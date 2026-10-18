@@ -1192,7 +1192,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         new("close_loose_end",
             "Mark a loose end done once its work is finished, so it leaves the user's next work. Name it by the "
           + "loose_end_id from list_loose_ends or get_next_work, or pass the declaration_id declare_loose_end returned as loose_end_id. "
-          + "If a declaration_id is refused as loose_end_not_found, find the end with list_loose_ends and retry with its loose_end_id. "
+          + "If a declaration_id is refused as loose_end_not_found, find the end by its text in list_loose_ends and retry with its loose_end_id. "
           + "For claimed work, pass the current claim_id and working session. "
           + "Starting work is not completion: use claim_loose_end instead. A later sighting of the same work reopens it.",
             new("object", new() {
@@ -1203,7 +1203,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         new("reopen_loose_end",
             "Undo close_loose_end: put a closed loose end back in the user's next work. If a declaration_id is refused "
-          + "as loose_end_not_found, find the end with list_loose_ends (status closed) and retry with its loose_end_id.",
+          + "as loose_end_not_found, find the end by its text in list_loose_ends (status closed) and retry with its loose_end_id.",
             new("object", new() {
                 ["loose_end_id"] = new("string", "The closed end's loose_end_id, as list_loose_ends with status closed shows it, or the declaration_id declare_loose_end returned.")
             }, ["loose_end_id"]), McpToolAnnotations.Upsert),
