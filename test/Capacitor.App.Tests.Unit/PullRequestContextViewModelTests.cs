@@ -67,6 +67,31 @@ public class PullRequestContextViewModelTests {
         }
     });
 
+    /// A refresh queued behind the short gap cannot run while the pane is in the background, so
+    /// hiding the pane drops it; the return lists afresh with the current repository.
+    [Test]
+    public Task A_refresh_queued_when_the_pane_is_hidden_is_dropped_until_it_returns() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+            h.Vm.PrimaryRepositoryChanged();
+            await Assert.That(h.Vm.IsReading).IsTrue();
+
+            h.Vm.SetForeground(false);
+            await Assert.That(h.Vm.IsReading).IsFalse();
+
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 2, what: "the list on return");
+            await Assert.That(h.Source.Descriptions[^1].Repository).IsEqualTo(repository);
+        } finally {
+            await h.Dispose();
+        }
+    });
+
     /// A refresh queued behind a list read that then stops retries has nothing left to run it, so
     /// it must not keep the card reading.
     [Test]
