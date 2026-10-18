@@ -52,18 +52,14 @@ internal sealed class LocalSetupJsonLinesTests {
         await Assert.That(LocalSetupJsonLines.Failed(LocalInstallFailureCode.AnswerRequired, "Pass --single-user."))
                     .IsEqualTo("""{"v":1,"event":"failed","code":"answer_required","message":"Pass --single-user."}""");
 
-    public static IEnumerable<Func<(Exception Error, bool SawCommitting, LocalInstallFailureCode Code)>> Failures() {
-        yield return () => (new LocalInstallFailure(LocalInstallFailureCode.NotOurServer, "x"), false, LocalInstallFailureCode.NotOurServer);
-        yield return () => (new LocalBundleException(LocalInstallFailureCode.VerificationFailed, "x"), false, LocalInstallFailureCode.VerificationFailed);
-        yield return () => (new LocalLifecycleException("Another kcap lifecycle command is running."), true, LocalInstallFailureCode.LifecycleBusy);
-        yield return () => (new LocalLifecycleException("The lease could not be taken."), false, LocalInstallFailureCode.StartFailed);
-        yield return () => (new LocalLifecycleException("The lease could not be taken."), true, LocalInstallFailureCode.CommitFailed);
-        yield return () => (new OperationCanceledException(), false, LocalInstallFailureCode.Cancelled);
-        yield return () => (new InvalidOperationException("boom"), false, LocalInstallFailureCode.StartFailed);
+    public static IEnumerable<Func<(Exception Error, LocalInstallFailureCode Code)>> Failures() {
+        yield return () => (new LocalInstallFailure(LocalInstallFailureCode.NotOurServer, "x"), LocalInstallFailureCode.NotOurServer);
+        yield return () => (new LocalLifecycleException("The lease could not be taken."), LocalInstallFailureCode.StartFailed);
+        yield return () => (new InvalidOperationException("boom"), LocalInstallFailureCode.StartFailed);
     }
 
     [Test]
     [MethodDataSource(nameof(Failures))]
-    public async Task An_escaping_exception_maps_to_its_code(Exception error, bool sawCommitting, LocalInstallFailureCode code) =>
-        await Assert.That(LocalSetupJsonLines.Classify(error, sawCommitting).Code).IsEqualTo(code);
+    public async Task An_escaping_exception_maps_to_its_code(Exception error, LocalInstallFailureCode code) =>
+        await Assert.That(LocalSetupJsonLines.Classify(error).Code).IsEqualTo(code);
 }

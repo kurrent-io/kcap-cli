@@ -11,7 +11,6 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         "This first version is for a machine with one user: on a shared machine, other users can open the web UI and act as its admin.";
 
     string _version = "";
-    bool   _sawCommitting;
 
     /// <summary>The first answer a run that cannot ask is missing, or null when it has both. A reuse needs no
     /// confirmation: it installs nothing.</summary>
@@ -33,10 +32,10 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         LocalPlan      plan;
 
         try {
-            installer = factory.Create(progress);
+            installer = factory.Create();
             plan      = installer.Preflight();
         } catch (Exception ex) {
-            return await FailAsync(LocalSetupJsonLines.Classify(ex, sawCommitting: false).Message);
+            return await FailAsync(LocalSetupJsonLines.Classify(ex).Message);
         }
 
         _version = plan.Version;
@@ -70,7 +69,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
             return deferral.Interrupted ? (130, null) : (0, committed);
         } catch (Exception ex) {
-            return await FailAsync(LocalSetupJsonLines.Classify(ex, _sawCommitting).Message);
+            return await FailAsync(LocalSetupJsonLines.Classify(ex).Message);
         }
     }
 
@@ -90,8 +89,6 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
     }
 
     void Render(LocalInstallEvent e) {
-        if (e is LocalInstallEvent.Committing) _sawCommitting = true;
-
         var line = e switch {
             LocalInstallEvent.PreflightPassed { Plan: PlanHint.Reuse } p => $"Reusing the local installation in {p.Root}",
             LocalInstallEvent.PreflightPassed p => $"Installing Capacitor local {p.Version} in {p.Root}",

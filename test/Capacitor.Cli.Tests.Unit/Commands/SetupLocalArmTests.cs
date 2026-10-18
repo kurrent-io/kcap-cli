@@ -47,7 +47,7 @@ internal sealed class SetupLocalArmTests {
 
     /// <param name="wrap">Wraps <see cref="Server"/> as the installer's transport.</param>
     SetupCommand Command(Func<HttpMessageHandler, HttpMessageHandler>? wrap) {
-        var factory = new FakeLocalInstallerFactory(_ =>
+        var factory = new FakeLocalInstallerFactory(() =>
             new LocalInstaller(Root, Config.Root, Home, new FakeLocalServerService(_log, Home), Bundle.Client(), new HttpClient(wrap?.Invoke(Server) ?? Server),
                 Bundle.Key, MacArm, TimeProvider.System, _ => []) {
                 Version     = Version,

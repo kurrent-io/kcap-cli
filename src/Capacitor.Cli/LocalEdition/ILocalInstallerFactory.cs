@@ -1,6 +1,6 @@
 namespace Capacitor.Cli.LocalEdition;
 
 interface ILocalInstallerFactory {
-    /// <summary>An installer for one run, whose install and recoveries report to <paramref name="progress"/>.</summary>
-    LocalInstaller Create(IProgress<LocalInstallEvent> progress);
+    /// <summary>An installer for one run. Its recoveries report to the progress its install is given.</summary>
+    LocalInstaller Create();
 }

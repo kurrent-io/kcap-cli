@@ -2478,15 +2478,10 @@ sealed class SetupCommand(
     internal async Task<int> RunLocalJsonAsync(LocalSetupArgs args) {
         using var deferral = InteractiveLifetime.Defer();
 
-        var sawCommitting = false;
-        var progress = new SyncProgress<LocalInstallEvent>(e => {
-            if (e is LocalInstallEvent.Committing) sawCommitting = true;
-
-            WriteJsonLine(LocalSetupJsonLines.Line(e));
-        });
+        var progress = new SyncProgress<LocalInstallEvent>(e => WriteJsonLine(LocalSetupJsonLines.Line(e)));
 
         try {
-            var installer = localInstallers.Create(progress);
+            var installer = localInstallers.Create();
             var plan      = installer.Preflight();
 
             if (LocalSetupTerminal.MissingAnswer(args, plan, installer.RootDirectory) is { } missing) {
@@ -2499,7 +2494,7 @@ sealed class SetupCommand(
 
             return 0;
         } catch (Exception ex) {
-            var failure = LocalSetupJsonLines.Classify(ex, sawCommitting);
+            var failure = LocalSetupJsonLines.Classify(ex);
             WriteJsonLine(LocalSetupJsonLines.Failed(failure.Code, failure.Message));
 
             return 1;

@@ -28,18 +28,10 @@ static class LocalSetupJsonLines {
     public static string Failed(LocalInstallFailureCode code, string message) =>
         Render(new() { Event = "failed", Code = code.Wire(), Message = message });
 
-    /// <summary>The failure an exception escaping the install stands for. A lifecycle refusal after the
-    /// <c>committing</c> event may have committed, so it is never reported as a failed start.</summary>
-    public static LocalInstallFailure Classify(Exception ex, bool sawCommitting) =>
-        ex switch {
-            LocalInstallFailure failure => failure,
-            LocalBundleException bundle => new(bundle.Code, bundle.Message),
-            LocalLifecycleException busy when busy.Message.StartsWith("Another kcap", StringComparison.Ordinal)
-                => new(LocalInstallFailureCode.LifecycleBusy, busy.Message),
-            LocalLifecycleException other => new(sawCommitting ? LocalInstallFailureCode.CommitFailed : LocalInstallFailureCode.StartFailed, other.Message),
-            OperationCanceledException => new(LocalInstallFailureCode.Cancelled, "Setup was cancelled."),
-            _ => new(LocalInstallFailureCode.StartFailed, ex.Message),
-        };
+    /// <summary>The failure an exception escaping the installer stands for. The install itself throws only
+    /// <see cref="LocalInstallFailure"/>; anything else came from building the installer or its preflight.</summary>
+    public static LocalInstallFailure Classify(Exception ex) =>
+        ex as LocalInstallFailure ?? new(LocalInstallFailureCode.StartFailed, ex.Message);
 
     static string Render(LocalSetupLine line) => JsonSerializer.Serialize(line, LocalSetupJsonContext.Default.LocalSetupLine);
 }

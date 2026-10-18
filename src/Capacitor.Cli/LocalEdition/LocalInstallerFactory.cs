@@ -7,7 +7,7 @@ namespace Capacitor.Cli.LocalEdition;
 sealed class LocalInstallerFactory(
     LocalRoot root, ConfigRoot config, UserHome home, TimeProvider time, IHttpClientFactory http, LocalBundleClient bundles)
     : ILocalInstallerFactory {
-    public LocalInstaller Create(IProgress<LocalInstallEvent> progress) {
+    public LocalInstaller Create() {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
             throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
 
