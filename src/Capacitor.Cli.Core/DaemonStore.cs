@@ -126,8 +126,8 @@ public sealed partial class DaemonStore(string directory) {
 
     /// <summary>
     /// Deletes everything in the directory, then the directory, unless a daemon, a start or a service
-    /// transaction holds one of its locks: then nothing it holds is touched. Every lock, and the daemon
-    /// lock of every name an entry carries, is held until the rest is gone, so none can be taken
+    /// transaction holds one of its locks: then nothing it holds is touched. All three locks of every
+    /// name an entry could carry are held until the rest is gone, so none can be taken
     /// meanwhile; unlinking a held lock lets the next taker lock a fresh file. Entries that appear
     /// after the snapshot are left. Call it only on a directory kcap owns, which
     /// <see cref="DefaultDirectory"/> is. Returns whether the directory is gone.
@@ -137,8 +137,8 @@ public sealed partial class DaemonStore(string directory) {
 
         var entries = System.IO.Directory.EnumerateFileSystemEntries(Directory).ToList();
         var locks = entries
-            .Where(e => System.IO.File.Exists(e) && LockExtensions.Contains(Path.GetExtension(e).TrimStart('.')))
-            .Concat(entries.Select(e => File(System.IO.Directory.Exists(e) ? Path.GetFileName(e) : Path.GetFileNameWithoutExtension(e), LockExtension)))
+            .SelectMany(NamesIn)
+            .SelectMany(name => LockExtensions.Select(extension => File(name, extension)))
             .Distinct(StringComparer.Ordinal)
             .ToList();
         var held = new List<FileStream>();
@@ -166,6 +166,15 @@ public sealed partial class DaemonStore(string directory) {
         System.IO.Directory.Delete(Directory);
 
         return true;
+    }
+
+    /// <summary>Every daemon name an entry could belong to: a directory's own name, or each dotted prefix
+    /// of a file's, since a name may itself contain dots.</summary>
+    static IEnumerable<string> NamesIn(string entry) {
+        var name = Path.GetFileName(entry);
+        if (System.IO.Directory.Exists(entry)) return [name];
+
+        return Enumerable.Range(1, name.Length - 1).Where(i => name[i] == '.').Select(i => name[..i]);
     }
 
     /// <summary>Ensures the directory exists. Safe to call repeatedly.</summary>
