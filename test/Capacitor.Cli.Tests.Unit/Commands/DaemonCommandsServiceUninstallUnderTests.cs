@@ -43,11 +43,13 @@ public class DaemonCommandsServiceUninstallUnderTests {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
         using var child = DummyProcess.StartSleep(120);
         File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        // Set before the stand-in dies: a bootout that found it gone came after the request.
+        var asked    = 0;
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, "laptop", LocalFrame.ShutdownAck("stopping"),
-            afterReply: () => { child.Kill(); child.WaitForExit(); });
+            afterReply: () => { Volatile.Write(ref asked, 1); child.Kill(); child.WaitForExit(); });
         var askedFirst = new List<bool>();
         var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) {
-            OnBootout = _ => askedFirst.Add(received.IsCompleted),
+            OnBootout = _ => askedFirst.Add(Volatile.Read(ref asked) == 1),
         };
         using var console = ConsoleOutput.StartFullCapture();
 
@@ -65,11 +67,13 @@ public class DaemonCommandsServiceUninstallUnderTests {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         using var child = DummyProcess.StartSleep(120);
         File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        // Set before the stand-in dies: a bootout that found it gone came after the request.
+        var asked    = 0;
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, "solo", LocalFrame.ShutdownAck("stopping"),
-            afterReply: () => { child.Kill(); child.WaitForExit(); });
+            afterReply: () => { Volatile.Write(ref asked, 1); child.Kill(); child.WaitForExit(); });
         var askedFirst = new List<bool>();
         var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" }) {
-            OnBootout = _ => askedFirst.Add(received.IsCompleted),
+            OnBootout = _ => askedFirst.Add(Volatile.Read(ref asked) == 1),
         };
         using var console = ConsoleOutput.StartFullCapture();
 

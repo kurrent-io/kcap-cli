@@ -20,6 +20,12 @@ public class LocalControlShutdownTests {
         public CancellationToken ApplicationStopping => CancellationToken.None;
         public CancellationToken ApplicationStopped  => CancellationToken.None;
         public void StopApplication() => Interlocked.Increment(ref StopCalls);
+
+        /// <summary>The ack is written before the stop is requested, so a client that has read it can run ahead of the call.</summary>
+        public async Task WaitForStopAsync() {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (Volatile.Read(ref StopCalls) == 0 && DateTime.UtcNow < deadline) await Task.Delay(10);
+        }
     }
 
     sealed class SpyStrategy : IRestartStrategy {
@@ -123,6 +129,7 @@ public class LocalControlShutdownTests {
             await Assert.That(reply!.Type).IsEqualTo(FrameType.ShutdownAck);
             await Assert.That(reply.Text).IsEqualTo("stopping");
             await Assert.That(orch.ShutdownIntent).IsEqualTo(ShutdownIntent.EndAgents);
+            await lifetime.WaitForStopAsync();
             await Assert.That(lifetime.StopCalls).IsEqualTo(1);
             await Assert.That(spy.Calls).IsEqualTo(0);
         });
@@ -159,6 +166,7 @@ public class LocalControlShutdownTests {
             var reply = await send(LocalFrame.Shutdown(new ShutdownRequestDto("keep", "final")));
 
             await Assert.That(reply!.Type).IsEqualTo(FrameType.ShutdownAck);
+            await lifetime.WaitForStopAsync();
             await Assert.That(lifetime.StopCalls).IsEqualTo(1);
         });
 
