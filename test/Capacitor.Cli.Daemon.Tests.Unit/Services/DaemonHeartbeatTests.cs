@@ -34,10 +34,11 @@ public class DaemonHeartbeatTests {
     public async Task Loop_does_not_beat_before_the_first_interval() {
         using var tmp  = new TempDaemonStore();
         var       time = new FakeTimeProvider(Start);
-        using var beat = Create(tmp, time);
+        using var beat  = Create(tmp, time);
+        using var armed = Armed(beat);
 
         await beat.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        await Assert.That(await armed.WaitAsync(TimeSpan.FromSeconds(10))).IsTrue();
         time.Advance(DaemonHeartbeat.Interval - TimeSpan.FromSeconds(1));
         await Task.Delay(100);
 
@@ -50,18 +51,28 @@ public class DaemonHeartbeatTests {
     public async Task Loop_beats_once_per_interval() {
         using var tmp  = new TempDaemonStore();
         var       time = new FakeTimeProvider(Start);
-        using var beat = Create(tmp, time);
+        using var beat  = Create(tmp, time);
+        using var armed = Armed(beat);
 
         await beat.StartAsync(CancellationToken.None);
-        await Task.Delay(200);
+        await Assert.That(await armed.WaitAsync(TimeSpan.FromSeconds(10))).IsTrue();
 
         time.Advance(DaemonHeartbeat.Interval);
         await WaitForBeat(tmp, Start + DaemonHeartbeat.Interval);
 
+        await Assert.That(await armed.WaitAsync(TimeSpan.FromSeconds(10))).IsTrue();
         time.Advance(DaemonHeartbeat.Interval);
         await WaitForBeat(tmp, Start + DaemonHeartbeat.Interval * 2);
 
         await beat.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>Released each time the loop is about to await its interval.</summary>
+    static SemaphoreSlim Armed(DaemonHeartbeat beat) {
+        var armed = new SemaphoreSlim(0);
+        beat.OnArmedForTest = () => armed.Release();
+
+        return armed;
     }
 
     static DaemonHeartbeat Create(TempDaemonStore tmp, FakeTimeProvider time) =>

@@ -11,6 +11,10 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed class DaemonHeartbeat(DaemonConfig config, TimeProvider time, ILogger<DaemonHeartbeat> logger) : BackgroundService {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(60);
 
+    /// <summary>Test-only: invoked each time the loop is about to await its interval, so a fake clock is
+    /// advanced only once the timer exists. Null in production.</summary>
+    internal Action? OnArmedForTest;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken) {
         try {
             _ = config.Store;
@@ -24,7 +28,12 @@ internal sealed class DaemonHeartbeat(DaemonConfig config, TimeProvider time, IL
         using var timer = new PeriodicTimer(Interval, time);
 
         try {
-            while (await timer.WaitForNextTickAsync(stoppingToken)) Beat();
+            while (true) {
+                OnArmedForTest?.Invoke();
+                if (!await timer.WaitForNextTickAsync(stoppingToken)) break;
+
+                Beat();
+            }
         } catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
     }
 

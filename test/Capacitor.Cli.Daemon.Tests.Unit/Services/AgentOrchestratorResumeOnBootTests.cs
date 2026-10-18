@@ -540,6 +540,7 @@ public class AgentOrchestratorResumeOnBootTests {
     public async Task An_end_agents_shutdown_after_the_lane_was_cancelled_still_deletes_the_entry() {
         var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
         var f = Build(factory);
+        await using var _ = f.Orch;
         Entry(f, "drained-1");
         using var stopping = new CancellationTokenSource();
 

@@ -184,7 +184,8 @@ public class LocalControlAgentResumeTests {
                 File.SetUnixFileMode(dir, mode);
             }
 
-            await Assert.That(orch.ResumeLedger!.TryRead("agent-3")!.State).IsEqualTo(ResumeState.Interrupted);
-            await Assert.That(entry.Attempts).IsEqualTo(2);
+            var stored = orch.ResumeLedger!.TryRead("agent-3")!;
+            await Assert.That(stored.State).IsEqualTo(ResumeState.Interrupted);
+            await Assert.That(stored.Attempts).IsEqualTo(entry.Attempts);
         });
 }
