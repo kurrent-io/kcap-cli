@@ -68,12 +68,9 @@ public sealed partial class DaemonStore(string directory) {
     const string ServiceLockExtension = "service-lock";
     const string ServiceTxnExtension = "service-txn";
 
-    /// <summary>Every suffix a per-name file here carries, so cleanup can tell this store's files from
-    /// anything else in a directory it was handed.</summary>
-    static readonly string[] OwnedExtensions = [
-        LockExtension, PidExtension, StartExtension, RestartPendingExtension,
-        VersionExtension, SocketExtension, ServiceLockExtension, ServiceTxnExtension
-    ];
+    /// <summary>The suffixes of the files something holds an exclusive lock on: the daemon for its
+    /// lifetime, <c>daemon start</c> around a spawn, a service transaction around an install.</summary>
+    static readonly string[] LockExtensions = [LockExtension, StartExtension, ServiceLockExtension];
 
     /// <summary>The daemon-held flock file. Content = instance_id GUID.</summary>
     public string LockPath(string daemonName) => File(daemonName, LockExtension);
@@ -128,51 +125,47 @@ public sealed partial class DaemonStore(string directory) {
         Path.Combine(Directory, $"{Sanitize(daemonName)}.{extension}");
 
     /// <summary>
-    /// Deletes every per-name file and state directory here, then the directory itself when nothing
-    /// else is left. Each name is deleted under its own lock, created if absent, so a running daemon's
-    /// name is left whole and none can start under it meanwhile: unlinking a held lock would let the
-    /// next start take a second lock on a fresh file. Call it only on a directory kcap owns, which
+    /// Deletes everything in the directory, then the directory, unless a daemon, a start or a service
+    /// transaction holds one of its locks: then nothing it holds is touched. Every lock, and the daemon
+    /// lock of each state directory's name, is held until the rest is gone, so none can be taken
+    /// meanwhile; unlinking a held lock lets the next taker lock a fresh file. Entries that appear
+    /// after the snapshot are left. Call it only on a directory kcap owns, which
     /// <see cref="DefaultDirectory"/> is. Returns whether the directory is gone.
     /// </summary>
-    public bool DeleteOwned() {
+    public bool DeleteAll() {
         if (!System.IO.Directory.Exists(Directory)) return true;
 
-        var names = System.IO.Directory.EnumerateFiles(Directory)
-            .Where(f => OwnedExtensions.Contains(Path.GetExtension(f).TrimStart('.')))
-            .Select(Path.GetFileNameWithoutExtension)
-            .OfType<string>()
-            .ToHashSet(StringComparer.Ordinal);
+        var entries = System.IO.Directory.EnumerateFileSystemEntries(Directory).ToList();
+        var locks = entries
+            .Where(e => System.IO.File.Exists(e) && LockExtensions.Contains(Path.GetExtension(e).TrimStart('.')))
+            .Concat(entries.Where(System.IO.Directory.Exists).Select(d => File(Path.GetFileName(d), LockExtension)))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var held = new List<FileStream>();
 
-        foreach (var name in names) DeleteName(name);
+        try {
+            foreach (var path in locks) {
+                try {
+                    // Closing the handle deletes the lock file.
+                    held.Add(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose));
+                } catch (IOException) {
+                    return false;
+                }
+            }
+
+            foreach (var entry in entries.Except(locks, StringComparer.Ordinal)) {
+                if (System.IO.Directory.Exists(entry)) System.IO.Directory.Delete(entry, recursive: true);
+                else if (System.IO.File.Exists(entry)) System.IO.File.Delete(entry);
+            }
+        } finally {
+            foreach (var stream in held) stream.Dispose();
+        }
 
         if (System.IO.Directory.EnumerateFileSystemEntries(Directory).Any()) return false;
 
         System.IO.Directory.Delete(Directory);
 
         return true;
-    }
-
-    void DeleteName(string name) {
-        FileStream held;
-
-        try {
-            // Closing the handle deletes the lock file.
-            held = new FileStream(File(name, LockExtension), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
-        } catch (IOException) {
-            return;
-        }
-
-        using (held) {
-            foreach (var extension in OwnedExtensions) {
-                if (extension == LockExtension) continue;
-
-                var path = File(name, extension);
-                if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
-            }
-
-            var state = Path.Combine(Directory, name);
-            if (System.IO.Directory.Exists(state)) System.IO.Directory.Delete(state, recursive: true);
-        }
     }
 
     /// <summary>Ensures the directory exists. Safe to call repeatedly.</summary>

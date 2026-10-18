@@ -267,9 +267,12 @@ public sealed class UninstallCommand(
             await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
         } else if (!hadFailures && Directory.Exists(store.Directory)) {
             try {
-                await Console.Out.WriteLineAsync(store.DeleteOwned()
-                    ? $"Removed daemon state directory: {store.Directory}"
-                    : $"Removed kcap's daemon state from {store.Directory}; other files there were left in place.");
+                if (store.DeleteAll()) {
+                    await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+                } else {
+                    await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
+                    hadFailures = true;
+                }
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
                 hadFailures = true;

@@ -113,55 +113,41 @@ public class DaemonStoreTests {
         await Assert.That(daemons.Store.SocketPath(longestNameInUse).Length).IsLessThanOrEqualTo(103);
     }
 
-    /// <summary>Pins that cleanup takes every name's files and state, with or without a lock file, and
-    /// keeps the directory while anything it did not name is still there.</summary>
+    /// <summary>Pins that cleanup takes everything a daemon leaves, including state with no daemon file
+    /// beside it and a half-written temp file, and then the directory.</summary>
     [Test]
-    public async Task DeleteOwned_removes_only_the_stores_own_entries() {
+    public async Task DeleteAll_removes_every_entry_and_the_directory() {
         using var daemons = new TempDaemonStore();
-        var store = daemons.Store;
-        foreach (var path in new[] { store.LockPath("vscode"), store.PidPath("vscode"), store.ServiceLockPath("vscode"), store.StartLockPath("old") })
-            await File.WriteAllTextAsync(path, "x");
-        Directory.CreateDirectory(store.StateDirectory("vscode"));
-        await File.WriteAllTextAsync(Path.Combine(store.StateDirectory("vscode"), "consent.json"), "{}");
-        var foreignFile = Path.Combine(store.Directory, "settings.json");
-        var foreignDir  = Path.Combine(store.Directory, "gh");
-        await File.WriteAllTextAsync(foreignFile, "{}");
-        Directory.CreateDirectory(foreignDir);
+        daemons.CreateFile("vscode.lock", "x");
+        daemons.CreateFile("vscode.pid", "1");
+        daemons.CreateFile("vscode.service-txn.tmp", "{");
+        daemons.CreateFile("vscode/consent.json", "{}");
+        daemons.CreateFile("affirmed/reviewers.json", "{}");
+        daemons.CreateFile("old.start");
 
-        var gone = store.DeleteOwned();
-
-        await Assert.That(gone).IsFalse();
-        await Assert.That(Directory.EnumerateFileSystemEntries(store.Directory).Order()).IsEquivalentTo(new[] { foreignDir, foreignFile }.Order());
+        await Assert.That(daemons.Store.DeleteAll()).IsTrue();
+        await Assert.That(Directory.Exists(daemons.Directory)).IsFalse();
     }
 
-    /// <summary>Pins that a running daemon's lock survives cleanup: unlinking a held lock would let the
-    /// next start take a second lock on a fresh file.</summary>
+    /// <summary>Pins that a held lock stops the whole cleanup: unlinking it would let the next taker lock
+    /// a fresh file while the holder still runs.</summary>
     [Test]
-    public async Task DeleteOwned_leaves_a_name_whose_lock_is_held() {
+    [Arguments("busy.lock")]
+    [Arguments("busy.start")]
+    [Arguments("busy.service-lock")]
+    public async Task DeleteAll_deletes_nothing_while_a_lock_is_held(string lockFile) {
         using var daemons = new TempDaemonStore();
-        var store = daemons.Store;
-        daemons.CreateFile("busy.pid", "1");
-        daemons.CreateFile("busy/consent.json", "{}");
-        daemons.CreateFile("idle.lock", "x");
+        var pid   = daemons.CreateFile("busy.pid", "1");
+        var state = daemons.CreateFile("busy/consent.json", "{}");
+        var held  = daemons.CreateFile(lockFile, "x");
 
         bool gone;
-        using (new FileStream(daemons.CreateFile("busy.lock", "x"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
-            gone = store.DeleteOwned();
+        using (new FileStream(held, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            gone = daemons.Store.DeleteAll();
 
         await Assert.That(gone).IsFalse();
-        await Assert.That(File.Exists(store.LockPath("busy"))).IsTrue();
-        await Assert.That(File.Exists(store.PidPath("busy"))).IsTrue();
-        await Assert.That(Directory.Exists(store.StateDirectory("busy"))).IsTrue();
-        await Assert.That(File.Exists(store.LockPath("idle"))).IsFalse();
-    }
-
-    [Test]
-    public async Task DeleteOwned_removes_the_directory_once_nothing_else_is_there() {
-        using var daemons = new TempDaemonStore();
-        await File.WriteAllTextAsync(daemons.Store.LockPath("vscode"), "x");
-        Directory.CreateDirectory(daemons.Store.StateDirectory("vscode"));
-
-        await Assert.That(daemons.Store.DeleteOwned()).IsTrue();
-        await Assert.That(Directory.Exists(daemons.Store.Directory)).IsFalse();
+        await Assert.That(File.Exists(held)).IsTrue();
+        await Assert.That(File.Exists(pid)).IsTrue();
+        await Assert.That(File.Exists(state)).IsTrue();
     }
 }
