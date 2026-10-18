@@ -64,34 +64,111 @@ public class McpJudgeServerTests : IDisposable {
     }
 
     [Test]
-    public async Task get_session_errors_forwards_session_id_and_chain_flag() {
+    public async Task get_session_errors_forwards_the_chain_flag_and_pages_the_digest() {
         _server.Given(Request.Create()
                 .WithPath("/api/sessions/abc-123/errors")
                 .WithParam("chain", "true")
                 .UsingGet())
             .RespondWith(Response.Create()
                 .WithStatusCode(200)
-                .WithBody("""[{"turn":42,"error":"exit 1"}]"""));
+                .WithBody("""
+                    [{"session_id":"abc-123","event_number":4,"tool_name":"Bash","tool_input":{"command":"make"},"error":"exit 1"},
+                     {"session_id":"abc-123","event_number":9,"tool_name":"Bash","tool_input":{"command":"make"},"error":"exit 2"}]
+                    """));
+
+        using var doc = JsonDocument.Parse(await CallText("get_session_errors",
+            new JsonObject { ["session_id"] = "abc-123", ["offset"] = 1, ["limit"] = 1 }));
+        var root = doc.RootElement;
+
+        await Assert.That(root.GetProperty("total_failures").GetInt32()).IsEqualTo(2);
+        await Assert.That(root.GetProperty("failures").GetArrayLength()).IsEqualTo(1);
+        await Assert.That(root.GetProperty("failures")[0].GetProperty("ref").GetString()).IsEqualTo("#9");
+        await Assert.That(root.TryGetProperty("next_offset", out _)).IsFalse();
+    }
+
+    [Test]
+    [Arguments("get_session_errors", "limit", 0)]
+    [Arguments("get_session_errors", "limit", 101)]
+    [Arguments("get_session_errors", "offset", -1)]
+    [Arguments("get_tool_result", "offset", -1)]
+    [Arguments("get_session_summary", "offset", -1)]
+    public async Task an_out_of_range_page_argument_is_a_tool_error(string tool, string argument, int value) {
+        _server.Given(Request.Create().UsingGet()).RespondWith(Response.Create().WithStatusCode(200).WithBody("[]"));
 
         using var http = new HttpClient();
-
         var result = await McpJudgeServer.HandleToolCallForTests(
-            toolName: "get_session_errors",
-            arguments: new JsonObject { ["session_id"] = "abc-123" },
-            client: http,
-            baseUrl: _server.Url!,
-            expectedSessionId: "abc-123"
-        );
+            tool, new JsonObject { ["session_id"] = "abc-123", ["call_id"] = "toolu_1", [argument] = value }, http, _server.Url!, "abc-123");
 
         using var doc = JsonDocument.Parse(result);
+        var content = doc.RootElement.GetProperty("result");
+        await Assert.That(content.GetProperty("isError").GetBoolean()).IsTrue();
+        await Assert.That(content.GetProperty("content")[0].GetProperty("text").GetString()).StartsWith($"Error: {argument} must be");
+    }
 
-        await Assert.That(
-                doc.RootElement.GetProperty("result")
-                    .GetProperty("content")[0]
-                    .GetProperty("text")
-                    .GetString()
-            )
-            .IsEqualTo("""[{"turn":42,"error":"exit 1"}]""");
+    [Test]
+    public async Task an_oversized_result_is_cut_with_a_hint_instead_of_spilling() {
+        var events = new string('x', JudgeResultCap.MaxChars * 2);
+        _server.Given(Request.Create().WithPath("/api/review/sessions/abc-123/transcript").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(events));
+
+        var text = await CallText("get_transcript", new JsonObject { ["session_id"] = "abc-123" });
+
+        await Assert.That(text.Length).IsLessThan(JudgeResultCap.MaxChars + 200);
+        await Assert.That(text).EndsWith("Pass a smaller take, or skip past what you have read.]");
+    }
+
+    [Test]
+    public async Task get_tool_result_pages_the_output_inside_its_envelope() {
+        var output = new string('a', JudgeResultCap.MaxChars) + "TAIL";
+        _server.Given(Request.Create().WithPath("/api/sessions/abc-123/tool-results/toolu_xyz").WithParam("agent_id", "ag1").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                $$"""{"call_id":"toolu_xyz","tool":"Bash","is_error":true,"output_bytes":{{output.Length}},"output":"{{output}}"}"""));
+
+        static JsonObject Args(int? offset) => new() { ["session_id"] = "abc-123", ["call_id"] = "toolu_xyz", ["agent_id"] = "ag1", ["offset"] = offset };
+
+        using var first  = JsonDocument.Parse(await CallText("get_tool_result", Args(null)));
+        using var second = JsonDocument.Parse(await CallText("get_tool_result", Args(first.RootElement.GetProperty("next_offset").GetInt32())));
+
+        await Assert.That(first.RootElement.GetProperty("tool").GetString()).IsEqualTo("Bash");
+        await Assert.That(first.RootElement.GetProperty("output").GetString() + second.RootElement.GetProperty("output").GetString()).IsEqualTo(output);
+        await Assert.That(second.RootElement.TryGetProperty("next_offset", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task get_tool_result_keeps_an_escaped_page_within_the_cap() {
+        var output = string.Concat(Enumerable.Repeat("\\n", 30_000));
+        _server.Given(Request.Create().WithPath("/api/sessions/abc-123/tool-results/toolu_nl").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                $$"""{"call_id":"toolu_nl","tool":"Bash","is_error":false,"output_bytes":30000,"output":"{{output}}"}"""));
+
+        var text = await CallText("get_tool_result", new JsonObject { ["session_id"] = "abc-123", ["call_id"] = "toolu_nl" });
+        using var page = JsonDocument.Parse(text);
+
+        await Assert.That(text.Length).IsLessThanOrEqualTo(JudgeResultCap.MaxChars);
+        await Assert.That(page.RootElement.GetProperty("next_offset").GetInt32())
+            .IsEqualTo(page.RootElement.GetProperty("output").GetString()!.Length);
+    }
+
+    [Test]
+    public async Task search_session_cuts_a_whole_event_snippet_to_a_window_around_the_term() {
+        var snippet = new string('a', 2_000) + " NEEDLE " + new string('b', 2_000);
+        _server.Given(Request.Create().WithPath("/api/sessions/abc-123/search").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                $$"""{"session_id":"abc-123","query":"needle","total_candidates":1,"results":[{"event_index":3,"snippet":"{{snippet}}","score":0.5}]}"""));
+
+        using var doc = JsonDocument.Parse(await CallText("search_session", new JsonObject { ["session_id"] = "abc-123", ["query"] = "needle" }));
+        var hit = doc.RootElement.GetProperty("results")[0];
+
+        await Assert.That(hit.GetProperty("snippet").GetString()!).Contains("NEEDLE");
+        await Assert.That(hit.GetProperty("snippet").GetString()!.Length).IsLessThan(600);
+        await Assert.That(hit.GetProperty("event_index").GetInt32()).IsEqualTo(3);
+    }
+
+    async Task<string> CallText(string tool, JsonObject arguments) {
+        using var http = new HttpClient();
+        var result = await McpJudgeServer.HandleToolCallForTests(tool, arguments, http, _server.Url!, "abc-123");
+        using var doc = JsonDocument.Parse(result);
+        return doc.RootElement.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
     }
 
     [Test]

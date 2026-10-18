@@ -56,8 +56,10 @@ sealed class DaemonServiceCommands(
     /// Runs the ensure ladder for the browser flow, or <b>null on a platform with no service
     /// manager</b> — the caller renders that as its own refusal rather than as a failed transaction.
     /// </summary>
-    internal static async Task<ServiceEnsureJson?> FlowEnsureAsync(
-            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time) {
+    /// <param name="previousName">The daemon name the profile carried before this run saved its own; its
+    /// service, when installed, is retired in the same transaction as the install.</param>
+    internal static async Task<FlowEnsure?> FlowEnsureAsync(
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time, string? previousName = null) {
         DaemonServiceCommands verbs;
 
         try {
@@ -66,9 +68,42 @@ sealed class DaemonServiceCommands(
             return null;
         }
 
-        var (result, _) = await verbs.EvaluateEnsureAsync(profiles.Resolution.ProfileName);
+        return await verbs.EvaluateFlowEnsureAsync(profiles.Resolution.ProfileName, previousName);
+    }
 
-        return result;
+    Task<FlowEnsure> EvaluateFlowEnsureAsync(string? profileName, string? previousName) =>
+        RetiringEnsureAsync(
+            id, previousName,
+            canRetire: manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager,
+            manager.Query,
+            async retire => (await EvaluateEnsureAsync(profileName, retire)).Result);
+
+    /// <summary>
+    /// The ensure ladder for <paramref name="id"/>, retiring the service <paramref name="previousName"/>
+    /// left installed when the platform's verify engine can. Only an installed unit is a candidate: a
+    /// daemon started by hand has none, and the engine refuses one pinned to another profile.
+    ///
+    /// <para>A refused or contended retire changed nothing, so the ladder runs again without it: the name
+    /// setup saved still gets its daemon. The old service is reported as left installed only once the new
+    /// one is up; before that it is the only daemon the machine has.</para>
+    /// </summary>
+    internal static async Task<FlowEnsure> RetiringEnsureAsync(
+            string id, string? previousName, bool canRetire, Func<string, ServiceQuery> query,
+            Func<string?, Task<ServiceEnsureJson>> ensure) {
+        var previous = string.IsNullOrWhiteSpace(previousName) ? null : DaemonStore.Sanitize(previousName);
+
+        if (previous is null || previous == id || !HasUnit(query(previous))) return new(await ensure(null));
+
+        var result = await ensure(canRetire ? previous : null);
+        if (canRetire && result.Reason is "verify_retire_refused" or "verify_contended") result = await ensure(null);
+
+        var after = query(previous);
+
+        return HasUnit(after) ? (FlowEnsure.IsUp(result) ? new(result, LeftInstalled: previous) : new(result))
+            : after.Probe == LabelProbe.Absent ? new(result, Retired: previous)
+            : new(result);
+
+        static bool HasUnit(ServiceQuery q) => q.Probe == LabelProbe.Loaded || q.UnitPresent;
     }
 
     /// <summary>The flow's own resolution of the manager and the service id. The id is the name setup
@@ -680,7 +715,9 @@ sealed class DaemonServiceCommands(
     /// tokens to stderr; what this method drops is the verb's own reporting, not the transaction's
     /// diagnostics. A caller that owns the terminal has to stop competing for it first.</para>
     /// </summary>
-    internal async Task<(ServiceEnsureJson Result, int Exit)> EvaluateEnsureAsync(string? profileName) {
+    /// <param name="retireServiceId">Retired by the install arm's transaction; the start arms never retire.</param>
+    internal async Task<(ServiceEnsureJson Result, int Exit)> EvaluateEnsureAsync(
+            string? profileName, string? retireServiceId = null) {
         var query     = manager.Query(id);
         var daemonPid = DaemonPidProbe.ValidatedPid(store, id);
         var txnActive = ServiceTxnLock.IsHeld(store, id);
@@ -710,7 +747,7 @@ sealed class DaemonServiceCommands(
             case EnsureAction.Attention:
                 return (new ServiceEnsureJson(id, state, "none", "attention", null, decision.Reason), 1);
             case EnsureAction.Install:
-                return await EnsureInstall(profileName, state);
+                return await EnsureInstall(profileName, state, retireServiceId);
             case EnsureAction.Start:
                 return await EnsureStart(profileName, state);
             default:
@@ -783,8 +820,9 @@ sealed class DaemonServiceCommands(
 
     /// <summary>Install arm of <see cref="Ensure"/>: force-bake the born-<c>prompt</c> directive (and the
     /// expected-server pin the identity half of the start gate re-reads), then run the verified
-    /// transaction on launchd or a plain install elsewhere.</summary>
-    async Task<(ServiceEnsureJson, int)> EnsureInstall(string? profileName, string state) {
+    /// transaction on launchd (or on Windows when retiring a renamed service) or a plain install
+    /// elsewhere.</summary>
+    async Task<(ServiceEnsureJson, int)> EnsureInstall(string? profileName, string state, string? retireServiceId) {
         var serverUrl = await ResolveServerUrlAsync(profileName);
         if (serverUrl is null)
             return (new ServiceEnsureJson(id, state, "install", "refused", null, "no_server_configured"), 1);
@@ -803,24 +841,31 @@ sealed class DaemonServiceCommands(
         StartGateReason? gateReason = null;
         string? viabilityReason = null;
         string? bootRefusalToken = null;
+        var verified = manager is LaunchdServiceManager;
         int exit;
         if (manager is LaunchdServiceManager) {
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
             var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
                 n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
                 time, profileViable: () => profileUrlValid, gateEnv: EnsureGateEnv(profileName, serverUrl));
-            exit = await engine.InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current());
+            exit = await engine.InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current(), retireServiceId);
             // InstallVerifiedAsync never returns StartGate — its gated refusals are viability/drift —
             // so gateReason stays null here and StartGate recovery never fires from the install arm.
             gateReason       = engine.LastGateReason;
             viabilityReason  = engine.LastViabilityReason;
             bootRefusalToken = engine.LastBootRefusalToken;
+        } else if (retireServiceId is not null && manager is WindowsScheduledTaskServiceManager) {
+            // Only the verified install retires on Windows, so a rename takes it over the plain one.
+            var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
+            exit = await NewWindowsVerify(() => profileUrlValid)
+                .InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current(), retireServiceId);
+            verified = true;
         } else {
             exit = await InstallPlain(spec, startNow: true);
         }
 
-        if (exit != 0) return EnsureFailure(exit, gateReason, state, "install", viabilityReason, bootRefusalToken);
-        return (new ServiceEnsureJson(id, state, "install", "installed", Verified: manager is LaunchdServiceManager), 0);
+        if (exit != 0) return EnsureFailure(exit, gateReason, state, "install", viabilityReason, bootRefusalToken, verified);
+        return (new ServiceEnsureJson(id, state, "install", "installed", Verified: verified), 0);
     }
 
     /// <summary>Pure: whether a launchd ensure run must refuse for want of a profile name. The start
@@ -896,8 +941,8 @@ sealed class DaemonServiceCommands(
     /// flag matches this run's transaction (true on the launchd arms), and the exit code always
     /// passes through unchanged.</summary>
     (ServiceEnsureJson, int) EnsureFailure(int exit, StartGateReason? gateReason, string state, string action,
-            string? viabilityReason = null, string? bootRefusalToken = null) {
-        var verified = manager is LaunchdServiceManager;
+            string? viabilityReason = null, string? bootRefusalToken = null, bool? verifiedRun = null) {
+        var verified = verifiedRun ?? manager is LaunchdServiceManager;
         var (recovery, reason) = EnsureFailureMap.Map(exit, gateReason, verified, viabilityReason, bootRefusalToken);
         return (new ServiceEnsureJson(id, state, action, "refused", recovery, reason, Verified: verified), exit);
     }

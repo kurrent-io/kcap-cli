@@ -207,7 +207,13 @@ KCAP_DAEMON_NAME, else the profile's daemon name, else this machine's name;
 when a daemon on another machine of your account holds it, the first free
 of name-1, name-2, and so on. Setup then installs the daemon as a background
 service and starts it, so it runs after a restart and the service manager
-restarts it if it dies. After a browser answer the terminal asks nothing more:
+restarts it if it dies. When the name differs from the one the profile had,
+the old name's service is removed in the same step on macOS and Windows, so
+the machine keeps one daemon; one that belongs to another profile, or whose
+daemon is busy, or any when the new name already had a service, is left in
+place, as it is on Linux, and setup prints the `kcap daemon service uninstall
+--name` command that removes it. After a browser answer the terminal asks
+nothing more:
 the suggested name is used as it is. The provider API key setting is kept as
 it is; change it with `kcap config set use_provider_api_key true|false`. A
 finished browser flow with no import answer skips the import prompt and names

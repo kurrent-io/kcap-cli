@@ -164,7 +164,8 @@ public class WizardCompositionHappyPathTests {
             connect.ServerInputText = ServerUrl;
             await Assert.That(connect.Validate()).IsTrue(); // a valid intent is staged before sign-in
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Welcome -> Sign-in
+            await graph.Steps.OfType<EditionStepViewModel>().Single().SignInCommand.Execute().ToTask(); // Edition -> Sign-in
+            await graph.ViewModel.PendingAdvanceForTesting;
 
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(10));
