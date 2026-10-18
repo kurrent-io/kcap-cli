@@ -128,8 +128,8 @@ public sealed partial class DaemonStore(string directory) {
     /// Deletes everything in the directory, then the directory, or nothing at all when a daemon, a start
     /// or a service transaction holds one of its locks. All three locks of every name an entry could
     /// carry are held until the rest is gone, so none can be taken meanwhile; unlinking a held lock lets
-    /// the next taker lock a fresh file. A link is removed itself, never followed. Entries that appear
-    /// after the snapshot are left. Call it only on a directory kcap owns, which
+    /// the next taker lock a fresh file. A refused cleanup can leave lock files it created, which are
+    /// inert. A link is removed itself, never followed. Entries that appear after the snapshot are left. Call it only on a directory kcap owns, which
     /// <see cref="DefaultDirectory"/> is. Returns whether the directory is gone.
     /// </summary>
     public bool DeleteAll() {
@@ -145,14 +145,11 @@ public sealed partial class DaemonStore(string directory) {
             .SelectMany(name => LockExtensions.Select(extension => File(name, extension)))
             .Distinct(StringComparer.Ordinal)
             .ToList();
-        var held    = new List<FileStream>();
-        var created = new List<string>();
-        var deleted = false;
+        var held = new List<FileStream>();
 
         try {
             foreach (var path in locks) {
                 if (new FileInfo(path).LinkTarget is not null) return false;
-                if (!System.IO.File.Exists(path)) created.Add(path);
 
                 try {
                     // Delete sharing lets the lock file go while it is still held.
@@ -170,10 +167,8 @@ public sealed partial class DaemonStore(string directory) {
             }
 
             foreach (var path in locks) System.IO.File.Delete(path);
-            deleted = true;
         } finally {
             foreach (var stream in held) stream.Dispose();
-            if (!deleted) foreach (var path in created) System.IO.File.Delete(path);
         }
 
         if (root.EnumerateFileSystemInfos().Any()) return false;
